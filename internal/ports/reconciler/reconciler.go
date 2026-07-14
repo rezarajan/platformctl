@@ -26,10 +26,29 @@ type CDCCapableProvider interface {
 }
 
 // SinkCapableProvider is declared by a provider that can sit behind a
-// `mode: sink` Binding.
+// `mode: sink` Binding targeting a Dataset (object-store location).
 type SinkCapableProvider interface {
 	Provider
 	SupportedSinkFormats() []string
+}
+
+// DatabaseSinkCapableProvider is declared by a provider that can sit behind
+// a `mode: sink` Binding targeting a Source (an engine-backed database used
+// in its sink role — e.g. JDBC-style connectors). No v1.0.0 provider
+// implements it; the seam exists so database sinks land additively.
+type DatabaseSinkCapableProvider interface {
+	Provider
+	SupportedSinkEngines() []string
+}
+
+// IngestCapableProvider is declared by a provider that can sit behind a
+// `mode: ingest` Binding reading a Dataset (object-store location used in
+// its origin role — e.g. S3 source connectors) into an EventStream. No
+// v1.0.0 provider implements it; the seam exists so object-store ingest
+// lands additively.
+type IngestCapableProvider interface {
+	Provider
+	SupportedIngestFormats() []string
 }
 
 // ProviderResourceAware is optionally implemented by providers that need

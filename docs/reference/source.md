@@ -2,7 +2,7 @@
 
 `datascape.io/v1alpha1`
 
-A data origin. spec.engine is an open discriminator pairing with an engine-named nested block (e.g. spec.postgres), so new engines bring their own fields without a core schema change.
+An engine-backed database asset. spec.engine is an open discriminator pairing with an engine-named nested block (e.g. spec.postgres), so new engines bring their own fields without a core schema change. Role-neutral despite the historical name: a Source is the origin of cdc-mode Bindings and a legitimate target of sink-mode ones.
 
 | Field | Type | Required | Description |
 |---|---|---|---|

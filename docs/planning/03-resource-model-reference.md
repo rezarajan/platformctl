@@ -240,18 +240,32 @@ spec:
 
 ### 7.1 Mode → Kind pairing (structural rule, enforced regardless of provider)
 
+The pairing is a **relation, not a function**: a `mode` names the movement
+mechanism, and several endpoint pairings can realize it. The asset kinds are
+role-neutral — a `Source` (an engine-backed database) is a legitimate
+*target* of a sink-mode Binding, and a `Dataset` (an object-store location)
+a legitimate *origin* of an ingest-mode one. Direction lives in
+`sourceRef`/`targetRef`, never in the noun. (Revised pre-v1.0.0: the
+original one-pair-per-mode table would have made database-as-sink and
+object-store-as-source breaking changes after GA; as a relation they are
+additive provider work.)
+
 | `mode` | `sourceRef` resolves to | `targetRef` resolves to | Status in v1.0.0 |
 |---|---|---|---|
 | `cdc` | `Source` | `EventStream` | Implemented |
 | `sink` | `EventStream` | `Dataset` | Implemented |
+| `sink` | `EventStream` | `Source` | Schema/pairing accepted; no shipped provider declares the capability yet |
+| `ingest` | `Dataset` | `EventStream` | Schema/pairing accepted; no shipped provider declares the capability yet |
 | `batch` | `Source` | `Dataset` | Reserved, not implemented |
 
-### 7.2 Provider capability (checked in addition to the structural rule above)
+### 7.2 Provider capability (checked per matched pairing, in addition to the structural rule above)
 
-| `mode` | Capability interface | Declares | Checked against |
+| `mode` / pairing | Capability interface | Declares | Checked against |
 |---|---|---|---|
 | `cdc` | `CDCCapableProvider` | `SupportedSourceEngines() []string` | `Source.spec.engine` |
-| `sink` | `SinkCapableProvider` | `SupportedSinkFormats() []string` | `Dataset.spec.format` |
+| `sink` → `Dataset` | `SinkCapableProvider` | `SupportedSinkFormats() []string` | `Dataset.spec.format` |
+| `sink` → `Source` | `DatabaseSinkCapableProvider` | `SupportedSinkEngines() []string` | `Source.spec.engine` (of the target) |
+| `ingest` | `IngestCapableProvider` | `SupportedIngestFormats() []string` | `Dataset.spec.format` (of the origin) |
 
 A `Binding` that fails either check is rejected at `validate`/`plan` time with a message naming
 the `Binding`, the `Provider`, its type, and what it actually supports — never discovered only

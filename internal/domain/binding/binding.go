@@ -12,9 +12,10 @@ import (
 type Mode string
 
 const (
-	ModeCDC   Mode = "cdc"   // sourceRef -> Source, targetRef -> EventStream
-	ModeSink  Mode = "sink"  // sourceRef -> EventStream, targetRef -> Dataset
-	ModeBatch Mode = "batch" // reserved, unimplemented
+	ModeCDC    Mode = "cdc"    // log-based change capture out of a database
+	ModeSink   Mode = "sink"   // continuous delivery from a stream into a durable target
+	ModeIngest Mode = "ingest" // continuous pickup from a durable origin into a stream
+	ModeBatch  Mode = "batch"  // reserved, unimplemented
 )
 
 // KindPair is the structural rule of the Binding kind itself: which Kinds are
@@ -23,9 +24,21 @@ const (
 // application/compatibility.
 type KindPair struct{ SourceKind, TargetKind string }
 
-var AllowedKindPairs = map[Mode]KindPair{
-	ModeCDC:  {SourceKind: "Source", TargetKind: "EventStream"},
-	ModeSink: {SourceKind: "EventStream", TargetKind: "Dataset"},
+// AllowedKindPairs is deliberately a relation, not a function: a mode names
+// the movement mechanism, and several endpoint pairings can realize it. The
+// asset kinds themselves are role-neutral — a Source (an engine-backed
+// database) is a legitimate *target* of a sink-mode Binding, and a Dataset
+// (an object-store location) a legitimate *origin* of an ingest-mode one.
+// Direction lives in sourceRef/targetRef, never in the noun.
+var AllowedKindPairs = map[Mode][]KindPair{
+	ModeCDC: {{SourceKind: "Source", TargetKind: "EventStream"}},
+	ModeSink: {
+		{SourceKind: "EventStream", TargetKind: "Dataset"},
+		{SourceKind: "EventStream", TargetKind: "Source"}, // database as sink (e.g. JDBC-style connectors)
+	},
+	ModeIngest: {
+		{SourceKind: "Dataset", TargetKind: "EventStream"}, // object store as source (e.g. S3 source connectors)
+	},
 }
 
 type Binding struct {
@@ -51,11 +64,11 @@ func FromEnvelope(e resource.Envelope) (Binding, error) {
 
 func (b Binding) validate(name string) error {
 	switch b.Mode {
-	case ModeCDC, ModeSink:
+	case ModeCDC, ModeSink, ModeIngest:
 	case ModeBatch:
 		return fmt.Errorf("Binding %q: mode \"batch\" is reserved and not implemented in v1", name)
 	default:
-		return fmt.Errorf("Binding %q: spec.mode must be one of: cdc, sink (batch is reserved)", name)
+		return fmt.Errorf("Binding %q: spec.mode must be one of: cdc, sink, ingest (batch is reserved)", name)
 	}
 	if b.SourceRef == "" {
 		return fmt.Errorf("Binding %q: spec.sourceRef is required", name)

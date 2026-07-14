@@ -2,31 +2,77 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://datascape.io/schemas/v1alpha1/source.json",
   "title": "Source",
-  "description": "A data origin. spec.engine is an open discriminator pairing with an engine-named nested block (e.g. spec.postgres), so new engines bring their own fields without a core schema change.",
+  "description": "An engine-backed database asset. spec.engine is an open discriminator pairing with an engine-named nested block (e.g. spec.postgres), so new engines bring their own fields without a core schema change. Role-neutral despite the historical name: a Source is the origin of cdc-mode Bindings and a legitimate target of sink-mode ones.",
   "type": "object",
   "properties": {
-    "apiVersion": { "const": "datascape.io/v1alpha1" },
-    "kind": { "const": "Source" },
-    "metadata": { "$ref": "meta.json" },
+    "apiVersion": {
+      "const": "datascape.io/v1alpha1"
+    },
+    "kind": {
+      "const": "Source"
+    },
+    "metadata": {
+      "$ref": "meta.json"
+    },
     "spec": {
       "type": "object",
       "properties": {
-        "engine": { "type": "string", "minLength": 1, "description": "Open-ended engine discriminator (postgres, mysql, ...). Names the sibling engine-specific block." },
-        "providerRef": { "$ref": "meta.json#/$defs/nameRef", "description": "The Provider realizing this source. Required unless external." },
-        "external": { "type": "boolean", "description": "The database lives outside the platform; Datascape never creates or deletes it." },
-        "connectionRef": { "$ref": "meta.json#/$defs/nameRef", "description": "SecretReference describing how to reach an external source. Required when external." }
+        "engine": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Open-ended engine discriminator (postgres, mysql, ...). Names the sibling engine-specific block."
+        },
+        "providerRef": {
+          "$ref": "meta.json#/$defs/nameRef",
+          "description": "The Provider realizing this source. Required unless external."
+        },
+        "external": {
+          "type": "boolean",
+          "description": "The database lives outside the platform; Datascape never creates or deletes it."
+        },
+        "connectionRef": {
+          "$ref": "meta.json#/$defs/nameRef",
+          "description": "SecretReference describing how to reach an external source. Required when external."
+        }
       },
-      "required": ["engine"],
-      "additionalProperties": { "type": "object", "description": "Engine-specific block named after spec.engine (e.g. postgres: {database, schema})." },
+      "required": [
+        "engine"
+      ],
+      "additionalProperties": {
+        "type": "object",
+        "description": "Engine-specific block named after spec.engine (e.g. postgres: {database, schema})."
+      },
       "allOf": [
         {
-          "if": { "properties": { "external": { "const": true } }, "required": ["external"] },
-          "then": { "required": ["connectionRef"] },
-          "else": { "required": ["providerRef"] }
+          "if": {
+            "properties": {
+              "external": {
+                "const": true
+              }
+            },
+            "required": [
+              "external"
+            ]
+          },
+          "then": {
+            "required": [
+              "connectionRef"
+            ]
+          },
+          "else": {
+            "required": [
+              "providerRef"
+            ]
+          }
         }
       ]
     }
   },
-  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
   "additionalProperties": false
 }

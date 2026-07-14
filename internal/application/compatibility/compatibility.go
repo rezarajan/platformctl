@@ -41,7 +41,7 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 		}
 		bindingName := e.Metadata.Name
 
-		pair, ok := binding.AllowedKindPairs[b.Mode]
+		pairs, ok := binding.AllowedKindPairs[b.Mode]
 		if !ok {
 			return fmt.Errorf("Binding %q: mode %q has no allowed Kind pairing", bindingName, b.Mode)
 		}
@@ -50,16 +50,25 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 		if !ok {
 			return fmt.Errorf("Binding %q: sourceRef %q does not resolve to any resource", bindingName, b.SourceRef)
 		}
-		if srcEnv.Kind != pair.SourceKind {
-			return fmt.Errorf("Binding %q: mode %q requires sourceRef to resolve to a %s, got %s %q", bindingName, b.Mode, pair.SourceKind, srcEnv.Kind, b.SourceRef)
-		}
-
 		tgtEnv, ok := byName[b.TargetRef]
 		if !ok {
 			return fmt.Errorf("Binding %q: targetRef %q does not resolve to any resource", bindingName, b.TargetRef)
 		}
-		if tgtEnv.Kind != pair.TargetKind {
-			return fmt.Errorf("Binding %q: mode %q requires targetRef to resolve to a %s, got %s %q", bindingName, b.Mode, pair.TargetKind, tgtEnv.Kind, b.TargetRef)
+		matched := false
+		var pair binding.KindPair
+		for _, p := range pairs {
+			if srcEnv.Kind == p.SourceKind && tgtEnv.Kind == p.TargetKind {
+				pair, matched = p, true
+				break
+			}
+		}
+		if !matched {
+			allowed := make([]string, len(pairs))
+			for i, p := range pairs {
+				allowed[i] = p.SourceKind + "->" + p.TargetKind
+			}
+			return fmt.Errorf("Binding %q: mode %q does not connect %s %q to %s %q (allowed pairings: %s)",
+				bindingName, b.Mode, srcEnv.Kind, b.SourceRef, tgtEnv.Kind, b.TargetRef, strings.Join(allowed, ", "))
 		}
 
 		provEnv, ok := byName[b.ProviderRef]
@@ -75,8 +84,10 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 			return fmt.Errorf("Binding %q: %w", bindingName, err)
 		}
 
-		switch b.Mode {
-		case binding.ModeCDC:
+		// Capability is checked per matched pairing: the same mode makes
+		// different demands of a provider depending on the endpoint kinds.
+		switch {
+		case b.Mode == binding.ModeCDC:
 			src, err := source.FromEnvelope(srcEnv)
 			if err != nil {
 				return err
@@ -89,7 +100,7 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 			if !contains(engines, src.Engine) {
 				return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support source engine %q (supported: %s)", bindingName, b.ProviderRef, p.Type, src.Engine, joinSorted(engines))
 			}
-		case binding.ModeSink:
+		case b.Mode == binding.ModeSink && pair.TargetKind == "Dataset":
 			ds, err := dataset.FromEnvelope(tgtEnv)
 			if err != nil {
 				return err
@@ -101,6 +112,32 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 			formats := sink.SupportedSinkFormats()
 			if !contains(formats, ds.Format) {
 				return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support sink format %q (supported: %s)", bindingName, b.ProviderRef, p.Type, ds.Format, joinSorted(formats))
+			}
+		case b.Mode == binding.ModeSink && pair.TargetKind == "Source":
+			src, err := source.FromEnvelope(tgtEnv)
+			if err != nil {
+				return err
+			}
+			dbSink, ok := impl.(reconciler.DatabaseSinkCapableProvider)
+			if !ok {
+				return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support mode \"sink\" into a Source (provider implements no database-sink capability)", bindingName, b.ProviderRef, p.Type)
+			}
+			engines := dbSink.SupportedSinkEngines()
+			if !contains(engines, src.Engine) {
+				return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support sink engine %q (supported: %s)", bindingName, b.ProviderRef, p.Type, src.Engine, joinSorted(engines))
+			}
+		case b.Mode == binding.ModeIngest:
+			ds, err := dataset.FromEnvelope(srcEnv)
+			if err != nil {
+				return err
+			}
+			ing, ok := impl.(reconciler.IngestCapableProvider)
+			if !ok {
+				return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support mode \"ingest\" (provider implements no ingest capability)", bindingName, b.ProviderRef, p.Type)
+			}
+			formats := ing.SupportedIngestFormats()
+			if !contains(formats, ds.Format) {
+				return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support ingest format %q (supported: %s)", bindingName, b.ProviderRef, p.Type, ds.Format, joinSorted(formats))
 			}
 		}
 	}

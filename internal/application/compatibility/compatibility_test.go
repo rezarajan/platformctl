@@ -165,3 +165,109 @@ func TestSupportedSinkFormatAccepted(t *testing.T) {
 		t.Fatalf("valid sink binding rejected: %v", err)
 	}
 }
+
+type dbSinkStub struct{ stubProvider }
+
+func (dbSinkStub) SupportedSinkEngines() []string { return []string{"postgres"} }
+
+type ingestStub struct{ stubProvider }
+
+func (ingestStub) SupportedIngestFormats() []string { return []string{"json", "parquet"} }
+
+func dbSinkManifests(engine string) []resource.Envelope {
+	return []resource.Envelope{
+		envelope("Provider", "jdbc-sink", map[string]any{
+			"type":    "jdbcsink",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Provider", "local-postgres", map[string]any{
+			"type":    "postgres",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("EventStream", "attendance-events", map[string]any{
+			"providerRef": map[string]any{"name": "jdbc-sink"},
+		}),
+		envelope("Source", "reporting-db", map[string]any{
+			"engine":      engine,
+			"providerRef": map[string]any{"name": "local-postgres"},
+		}),
+		envelope("Binding", "events-to-reporting-db", map[string]any{
+			"mode":        "sink",
+			"sourceRef":   map[string]any{"name": "attendance-events"},
+			"targetRef":   map[string]any{"name": "reporting-db"},
+			"providerRef": map[string]any{"name": "jdbc-sink"},
+		}),
+	}
+}
+
+// TestDatabaseAsSink: a Source (an engine-backed database) is a legitimate
+// sink-mode target — the taxonomy encodes direction in the Binding, not the
+// noun. Capability gates which providers can realize it.
+func TestDatabaseAsSink(t *testing.T) {
+	if err := Check(dbSinkManifests("postgres"), resolver(dbSinkStub{stubProvider{"jdbcsink"}})); err != nil {
+		t.Fatalf("sink Binding into a Source rejected despite capability: %v", err)
+	}
+	err := Check(dbSinkManifests("postgres"), resolver(sinkStub{stubProvider{"s3sink"}}))
+	if err == nil || !strings.Contains(err.Error(), "database-sink capability") {
+		t.Errorf("provider without DatabaseSinkCapableProvider accepted, err = %v", err)
+	}
+	err = Check(dbSinkManifests("mysql"), resolver(dbSinkStub{stubProvider{"jdbcsink"}}))
+	if err == nil || !strings.Contains(err.Error(), `does not support sink engine "mysql"`) {
+		t.Errorf("unsupported sink engine accepted, err = %v", err)
+	}
+}
+
+func ingestManifests() []resource.Envelope {
+	return []resource.Envelope{
+		envelope("Provider", "s3-ingest", map[string]any{
+			"type":    "s3source",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Provider", "local-minio", map[string]any{
+			"type":    "minio",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Dataset", "landed-files", map[string]any{
+			"providerRef": map[string]any{"name": "local-minio"},
+			"bucket":      "raw",
+			"format":      "json",
+		}),
+		envelope("EventStream", "replayed-events", map[string]any{
+			"providerRef": map[string]any{"name": "s3-ingest"},
+		}),
+		envelope("Binding", "files-to-events", map[string]any{
+			"mode":        "ingest",
+			"sourceRef":   map[string]any{"name": "landed-files"},
+			"targetRef":   map[string]any{"name": "replayed-events"},
+			"providerRef": map[string]any{"name": "s3-ingest"},
+		}),
+	}
+}
+
+// TestObjectStoreAsSource: a Dataset is a legitimate ingest-mode origin.
+func TestObjectStoreAsSource(t *testing.T) {
+	if err := Check(ingestManifests(), resolver(ingestStub{stubProvider{"s3source"}})); err != nil {
+		t.Fatalf("ingest Binding from a Dataset rejected despite capability: %v", err)
+	}
+	err := Check(ingestManifests(), resolver(stubProvider{"redpanda"}))
+	if err == nil || !strings.Contains(err.Error(), "ingest capability") {
+		t.Errorf("provider without IngestCapableProvider accepted, err = %v", err)
+	}
+}
+
+// TestDisallowedPairingListsAlternatives: nonsense pairings name what the
+// mode actually connects.
+func TestDisallowedPairingListsAlternatives(t *testing.T) {
+	ms := ingestManifests()
+	// ingest with the refs swapped: EventStream -> Dataset is not an ingest pairing.
+	ms[4] = envelope("Binding", "files-to-events", map[string]any{
+		"mode":        "ingest",
+		"sourceRef":   map[string]any{"name": "replayed-events"},
+		"targetRef":   map[string]any{"name": "landed-files"},
+		"providerRef": map[string]any{"name": "s3-ingest"},
+	})
+	err := Check(ms, resolver(ingestStub{stubProvider{"s3source"}}))
+	if err == nil || !strings.Contains(err.Error(), "allowed pairings: Dataset->EventStream") {
+		t.Errorf("swapped ingest refs accepted or unclear, err = %v", err)
+	}
+}
