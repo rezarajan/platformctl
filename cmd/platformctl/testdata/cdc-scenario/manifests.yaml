@@ -1,0 +1,102 @@
+# Phase 3 integration scenario: Postgres CDC via Debezium into Redpanda.
+# Host ports are deliberately non-default to avoid collisions on shared dev
+# machines (see checkpoint notes): Postgres 15544, Connect 18183, Kafka 19193.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: cdc-pg-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: cdc-pg-repl
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-cdc-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-cdc-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
+    kafkaPort: 19193
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-cdc-pg
+spec:
+  type: postgres
+  runtime:
+    type: docker
+    network: datascape-cdc-net
+  configuration:
+    image: postgres:16
+    port: 15544
+    superuserSecretRef: cdc-pg-admin
+    replicationSecretRef: cdc-pg-repl
+  secretRefs: [cdc-pg-admin, cdc-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-cdc-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape-cdc-net
+  configuration:
+    image: quay.io/debezium/connect:2.7
+    connectPort: 18183
+    bootstrapServers: datascape-cdc-rp:29092
+    replicationSecretRef: cdc-pg-repl
+  secretRefs: [cdc-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: cdc-students
+spec:
+  engine: postgres
+  providerRef:
+    name: datascape-cdc-pg
+  postgres:
+    database: attendance
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: cdc-attendance-events
+spec:
+  providerRef:
+    name: datascape-cdc-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: cdc-students-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: cdc-students
+  targetRef:
+    name: cdc-attendance-events
+  providerRef:
+    name: datascape-cdc-dbz
+  options:
+    tables: [students]
+    snapshotMode: initial

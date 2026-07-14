@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/adapters/kafkaconnect"
 	"github.com/rezarajan/platformctl/internal/domain/binding"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
@@ -19,7 +20,9 @@ import (
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
-const defaultImage = "debezium/connect:2.7"
+// Debezium container images are published on quay.io (the Docker Hub
+// mirror stopped receiving 2.x tags).
+const defaultImage = "quay.io/debezium/connect:2.7"
 
 type Provider struct {
 	providerRes resource.Envelope
@@ -205,6 +208,10 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		"value.converter":                "org.apache.kafka.connect.json.JsonConverter",
 		"key.converter.schemas.enable":   "false",
 		"value.converter.schemas.enable": "false",
+		// Redpanda does not auto-create topics by default; let Connect create
+		// per-table CDC topics itself (single-node replication).
+		"topic.creation.default.replication.factor": "1",
+		"topic.creation.default.partitions":         "1",
 	}
 	if tables, ok := b.Options["tables"].([]any); ok && len(tables) > 0 {
 		qualified := make([]string, 0, len(tables))
@@ -220,12 +227,12 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 	}
 	p.applyLineage(config)
 
-	if err := putConnectorConfig(ctx, p.connectURL(), connectorName, config); err != nil {
+	if err := kafkaconnect.PutConnectorConfig(ctx, p.connectURL(), connectorName, config); err != nil {
 		return st, err
 	}
 	p.lastConnector = connectorName
 
-	state, err := waitConnectorRunning(ctx, p.connectURL(), connectorName, 90*time.Second)
+	state, err := kafkaconnect.WaitConnectorRunning(ctx, p.connectURL(), connectorName, 90*time.Second)
 	now := time.Now()
 	if err != nil {
 		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorNotRunning", Message: err.Error()}, now)
@@ -245,12 +252,12 @@ func (p *Provider) ConfigureLineage(ctx context.Context, endpoint lineage.Lineag
 	if p.lastConnector == "" {
 		return nil // worker-level reconcile; endpoint applies at next connector registration
 	}
-	current, err := getConnectorConfig(ctx, p.connectURL(), p.lastConnector)
+	current, err := kafkaconnect.GetConnectorConfig(ctx, p.connectURL(), p.lastConnector)
 	if err != nil {
 		return err
 	}
 	p.applyLineage(current)
-	return putConnectorConfig(ctx, p.connectURL(), p.lastConnector, current)
+	return kafkaconnect.PutConnectorConfig(ctx, p.connectURL(), p.lastConnector, current)
 }
 
 func (p *Provider) applyLineage(config map[string]string) {
@@ -274,7 +281,7 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		_ = rt.RemoveNetwork(ctx, p.network())
 		return nil
 	case "Binding":
-		return deleteConnector(ctx, p.connectURL(), res.Metadata.Name)
+		return kafkaconnect.DeleteConnector(ctx, p.connectURL(), res.Metadata.Name)
 	default:
 		return fmt.Errorf("debezium provider cannot destroy kind %s", res.Kind)
 	}
@@ -299,7 +306,7 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		}
 		return st, nil
 	case "Binding":
-		state, err := connectorState(ctx, p.connectURL(), res.Metadata.Name)
+		state, err := kafkaconnect.ConnectorState(ctx, p.connectURL(), res.Metadata.Name)
 		if err != nil {
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorMissing", Message: err.Error()}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorMissing"}, now)

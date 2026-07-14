@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(go test *)",
+      "Bash(docker info *)",
+      "Bash(go get *)",
+      "Bash(docker pull *)",
+      "Bash(git add *)",
+      "Bash(git commit -m '\\(phase3\\): verify CDC scenario end-to-end against real containers *)"
+    ]
+  }
+}

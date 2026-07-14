@@ -127,6 +127,12 @@ func secretRefFrom(env resource.Envelope) secret.SecretReference {
 }
 
 func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) error {
+	// SecretReference is a pure declaration with no provider or runtime
+	// behind it: reconciling one means verifying it resolves.
+	if env.Kind == "SecretReference" {
+		return e.reconcileSecretReference(ctx, entry, env, st)
+	}
+
 	prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
 	if err != nil {
 		return err
@@ -172,6 +178,33 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 	return e.StateStore.Save(ctx, *st)
 }
 
+// reconcileSecretReference verifies the reference resolves through the
+// configured SecretStore (without storing any secret material) and records it
+// Ready in state.
+func (e *Engine) reconcileSecretReference(ctx context.Context, entry plan.Entry, env resource.Envelope, st *state.State) error {
+	ref := secretRefFrom(env)
+	if err := ref.Validate(); err != nil {
+		return err
+	}
+	if e.SecretStore == nil {
+		return fmt.Errorf("SecretReference %q: no secret store is configured", env.Metadata.Name)
+	}
+	if _, err := e.SecretStore.Resolve(ctx, ref); err != nil {
+		return err
+	}
+	newStatus := status.Status{}
+	now := e.Clock.Now()
+	newStatus.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "SecretResolvable"}, now)
+	newStatus.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.Resources[env.Key()] = state.ResourceState{
+		SpecHash:  entry.SpecHash,
+		Status:    newStatus,
+		Lifecycle: resource.LifecycleOf(env, st.Resources[env.Key()].Imported).String(),
+		Imported:  st.Resources[env.Key()].Imported,
+	}
+	return e.StateStore.Save(ctx, *st)
+}
+
 // Destroy executes a destroy plan in reverse dependency order. The engine is
 // the single enforcement point for NFR-3: External resources are never
 // destroyed unless the plan explicitly marked them.
@@ -193,6 +226,15 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 		}
 		env, ok := byKey[entry.Key]
 		if !ok {
+			continue
+		}
+		if env.Kind == "SecretReference" {
+			delete(st.Resources, entry.Key)
+			if err := e.StateStore.Save(ctx, st); err != nil {
+				return res, err
+			}
+			res.Succeeded = append(res.Succeeded, entry.Key)
+			e.logf("ok   destroy %s", entry.Key)
 			continue
 		}
 		prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)

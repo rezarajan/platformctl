@@ -1,4 +1,6 @@
-package debezium
+// Package kafkaconnect wraps the Kafka Connect REST API operations shared by
+// every Connect-worker-based provider (debezium, s3sink).
+package kafkaconnect
 
 import (
 	"bytes"
@@ -12,9 +14,9 @@ import (
 
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 
-// putConnectorConfig registers or updates a connector; PUT to
+// PutConnectorConfig registers or updates a connector; PUT to
 // /connectors/<name>/config is an idempotent upsert in the Connect REST API.
-func putConnectorConfig(ctx context.Context, baseURL, name string, config map[string]string) error {
+func PutConnectorConfig(ctx context.Context, baseURL, name string, config map[string]string) error {
 	body, err := json.Marshal(config)
 	if err != nil {
 		return err
@@ -36,7 +38,7 @@ func putConnectorConfig(ctx context.Context, baseURL, name string, config map[st
 	return nil
 }
 
-func getConnectorConfig(ctx context.Context, baseURL, name string) (map[string]string, error) {
+func GetConnectorConfig(ctx context.Context, baseURL, name string) (map[string]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/connectors/"+name+"/config", nil)
 	if err != nil {
 		return nil, err
@@ -57,7 +59,7 @@ func getConnectorConfig(ctx context.Context, baseURL, name string) (map[string]s
 	return config, nil
 }
 
-func deleteConnector(ctx context.Context, baseURL, name string) error {
+func DeleteConnector(ctx context.Context, baseURL, name string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, baseURL+"/connectors/"+name, nil)
 	if err != nil {
 		return err
@@ -74,10 +76,10 @@ func deleteConnector(ctx context.Context, baseURL, name string) error {
 	return nil
 }
 
-// connectorState returns the connector's aggregate state (RUNNING, FAILED,
+// ConnectorState returns the connector's aggregate state (RUNNING, FAILED,
 // PAUSED, ...); the connector state and every task's state must agree for
 // RUNNING to be reported.
-func connectorState(ctx context.Context, baseURL, name string) (string, error) {
+func ConnectorState(ctx context.Context, baseURL, name string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/connectors/"+name+"/status", nil)
 	if err != nil {
 		return "", err
@@ -112,14 +114,14 @@ func connectorState(ctx context.Context, baseURL, name string) (string, error) {
 	return state, nil
 }
 
-// waitConnectorRunning polls with bounded backoff until the connector and all
+// WaitConnectorRunning polls with bounded backoff until the connector and all
 // its tasks are RUNNING. Connector registration is inherently async; generous
 // documented timeouts, not tight retries (roadmap risk register).
-func waitConnectorRunning(ctx context.Context, baseURL, name string, timeout time.Duration) (string, error) {
+func WaitConnectorRunning(ctx context.Context, baseURL, name string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	lastState := "UNKNOWN"
 	for {
-		state, err := connectorState(ctx, baseURL, name)
+		state, err := ConnectorState(ctx, baseURL, name)
 		if err == nil {
 			lastState = state
 			if state == "RUNNING" {

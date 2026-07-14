@@ -181,6 +181,12 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope) (
 			return st, err
 		}
 	}
+	// The publication lives in the source database itself, created by the
+	// superuser so the replication role never needs table ownership.
+	// "dbz_publication" is Debezium's default publication.name.
+	if err := ensurePublication(ctx, connString("localhost", p.hostPort(), suUser, suPass, dbName), "dbz_publication"); err != nil {
+		return st, err
+	}
 	if err := verifyLogicalWAL(ctx, admin); err != nil {
 		return st, err
 	}

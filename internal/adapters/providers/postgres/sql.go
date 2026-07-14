@@ -70,10 +70,36 @@ func ensureReplicationRole(ctx context.Context, adminConn, user, pass string) er
 		if _, err := c.Exec(ctx, fmt.Sprintf(`CREATE ROLE %s WITH LOGIN REPLICATION PASSWORD '%s'`, quotedUser, escapeLiteral(pass))); err != nil {
 			return fmt.Errorf("create replication role %q: %w", user, err)
 		}
+	} else if _, err := c.Exec(ctx, fmt.Sprintf(`ALTER ROLE %s WITH LOGIN REPLICATION PASSWORD '%s'`, quotedUser, escapeLiteral(pass))); err != nil {
+		return fmt.Errorf("update replication role %q: %w", user, err)
+	}
+	// Snapshot reads need SELECT on current and future tables; the role is
+	// deliberately not a superuser.
+	if _, err := c.Exec(ctx, fmt.Sprintf(`GRANT pg_read_all_data TO %s`, quotedUser)); err != nil {
+		return fmt.Errorf("grant pg_read_all_data to %q: %w", user, err)
+	}
+	return nil
+}
+
+// ensurePublication pre-creates the pgoutput publication in the source
+// database as the superuser. Debezium's autocreate path would otherwise need
+// the replication role to own every table (or be superuser); pre-creating it
+// is the documented least-privilege setup.
+func ensurePublication(ctx context.Context, dbConn, name string) error {
+	c, err := connect(ctx, dbConn)
+	if err != nil {
+		return err
+	}
+	defer c.Close(ctx)
+	var count int
+	if err := c.QueryRow(ctx, `SELECT count(*) FROM pg_publication WHERE pubname = $1`, name).Scan(&count); err != nil {
+		return fmt.Errorf("check publication %q: %w", name, err)
+	}
+	if count > 0 {
 		return nil
 	}
-	if _, err := c.Exec(ctx, fmt.Sprintf(`ALTER ROLE %s WITH LOGIN REPLICATION PASSWORD '%s'`, quotedUser, escapeLiteral(pass))); err != nil {
-		return fmt.Errorf("update replication role %q: %w", user, err)
+	if _, err := c.Exec(ctx, fmt.Sprintf(`CREATE PUBLICATION %s FOR ALL TABLES`, pgx.Identifier{name}.Sanitize())); err != nil {
+		return fmt.Errorf("create publication %q: %w", name, err)
 	}
 	return nil
 }
