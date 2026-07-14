@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -308,5 +309,74 @@ func TestDestroyExternalGuard(t *testing.T) {
 	eng.AllowDestructive = true
 	if _, err := eng.Destroy(context.Background(), p, envelopes, g); err != nil {
 		t.Fatalf("destroy with AllowDestructive failed: %v", err)
+	}
+}
+
+// slowProvider counts concurrent Reconcile executions.
+type slowProvider struct {
+	noop.Provider
+	mu      sync.Mutex
+	active  int
+	maxSeen int
+}
+
+func (s *slowProvider) Type() string { return "slow" }
+
+func (s *slowProvider) Reconcile(_ context.Context, _ resource.Envelope, _ runtime.ContainerRuntime) (status.Status, error) {
+	s.mu.Lock()
+	s.active++
+	if s.active > s.maxSeen {
+		s.maxSeen = s.active
+	}
+	s.mu.Unlock()
+	time.Sleep(30 * time.Millisecond)
+	s.mu.Lock()
+	s.active--
+	s.ReconcileCount++
+	s.mu.Unlock()
+	st := status.Status{}
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "SlowReconciled"}, time.Now())
+	return st, nil
+}
+
+// TestParallelReconciliation covers Phase 6: independent resources in the
+// same topological level reconcile concurrently, bounded by Parallelism,
+// with all state persisted correctly.
+func TestParallelReconciliation(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	prov := &slowProvider{}
+	reg.RegisterProvider("slow", func() reconciler.Provider { return prov }, "")
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+
+	var envelopes []resource.Envelope
+	for _, n := range []string{"a", "b", "c", "d", "e", "f"} {
+		envelopes = append(envelopes, envelope("Provider", "p-"+n, map[string]any{
+			"type":    "slow",
+			"runtime": map[string]any{"type": "fake"},
+		}))
+	}
+
+	eng := newTestEngine(t, reg)
+	eng.Parallelism = 4
+	result := applyAll(t, eng, envelopes)
+	if len(result.Succeeded) != len(envelopes) {
+		t.Fatalf("succeeded = %d, want %d (failed: %v)", len(result.Succeeded), len(envelopes), result.Failed)
+	}
+	if prov.maxSeen < 2 {
+		t.Errorf("max concurrent reconciles = %d; parallelism 4 over 6 independent resources should overlap", prov.maxSeen)
+	}
+	if prov.maxSeen > 4 {
+		t.Errorf("max concurrent reconciles = %d, exceeding the parallelism bound of 4", prov.maxSeen)
+	}
+
+	st, err := eng.StateStore.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Resources) != len(envelopes) {
+		t.Errorf("state has %d resources, want %d", len(st.Resources), len(envelopes))
 	}
 }

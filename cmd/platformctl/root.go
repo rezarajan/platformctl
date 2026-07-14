@@ -11,6 +11,9 @@ import (
 	"github.com/spf13/cobra"
 
 	envsecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/env"
+	filesecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/file"
+	secretrouter "github.com/rezarajan/platformctl/internal/adapters/secrets/router"
+	vaultsecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/vault"
 	"github.com/rezarajan/platformctl/internal/adapters/state/localfile"
 	"github.com/rezarajan/platformctl/internal/application/compatibility"
 	"github.com/rezarajan/platformctl/internal/application/docsgen"
@@ -22,6 +25,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/cliutil"
 	"github.com/rezarajan/platformctl/internal/domain/graph"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
+	"github.com/rezarajan/platformctl/internal/domain/secret"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/clock"
 )
@@ -169,10 +173,16 @@ func (a *app) loadAndValidate(path string) ([]resource.Envelope, *graph.Graph, e
 }
 
 func (a *app) newEngine() *engine.Engine {
+	secrets := secretrouter.New().
+		Register(secret.BackendEnv, envsecrets.New()).
+		Register(secret.BackendFile, filesecrets.New())
+	if a.gates.Enabled("VaultSecretBackend") {
+		secrets.Register(secret.BackendVault, vaultsecrets.New())
+	}
 	return &engine.Engine{
 		Registry:    a.reg,
 		StateStore:  localfile.New(a.stateFile),
-		SecretStore: envsecrets.New(),
+		SecretStore: secrets,
 		Clock:       clock.Real{},
 		Log: func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, format+"\n", args...)
@@ -232,6 +242,7 @@ func newPlanCmd(a *app) *cobra.Command {
 func newApplyCmd(a *app) *cobra.Command {
 	var autoApprove bool
 	var haltOnError bool
+	var parallelism int
 	cmd := &cobra.Command{
 		Use:   "apply [path]",
 		Short: "Compute the plan, then execute it",
@@ -279,9 +290,15 @@ func newApplyCmd(a *app) *cobra.Command {
 					}
 				}
 			}
+			if parallelism > 1 {
+				if err := a.gates.Require("ParallelReconciliation"); err != nil {
+					return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("--parallelism: %w", err))
+				}
+			}
 			eng := a.newEngine()
 			eng.HaltOnError = haltOnError
 			eng.HealDrift = healDrift
+			eng.Parallelism = parallelism
 			result, err := eng.Apply(cmd.Context(), p, envelopes, g)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
@@ -293,6 +310,7 @@ func newApplyCmd(a *app) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip the interactive confirmation (for CI)")
 	cmd.Flags().BoolVar(&haltOnError, "halt-on-error", false, "stop the whole apply on the first failure")
+	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max concurrent reconciliations within a dependency level (>1 requires the ParallelReconciliation gate)")
 	return cmd
 }
 

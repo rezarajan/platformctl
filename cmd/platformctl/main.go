@@ -63,6 +63,9 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	gates.Register("DriftDetection", featuregate.Beta, true)
 	gates.Register("ExternalResourceConfiguration", featuregate.Beta, true)
 	gates.Register("ImportedResources", featuregate.Alpha, false)
+	// Phase 6.
+	gates.Register("ParallelReconciliation", featuregate.Alpha, false)
+	gates.Register("VaultSecretBackend", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")

@@ -7,6 +7,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/application/plan"
@@ -38,8 +39,16 @@ type Engine struct {
 	// sets it when both --include-external and
 	// --yes-i-understand-this-is-destructive were passed.
 	AllowDestructive bool
+	// Parallelism bounds concurrent reconciliation within a topological
+	// level (resources in the same level share no dependency relationship).
+	// Values <= 1 mean fully sequential. Gated by ParallelReconciliation.
+	Parallelism int
 	// Log receives one line per reconciliation action; nil disables.
 	Log func(format string, args ...any)
+
+	// stateMu serializes state-map access and persistence when levels
+	// execute concurrently; reconciliation itself runs unlocked.
+	stateMu sync.Mutex
 }
 
 type Result struct {
@@ -74,54 +83,98 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 	}
 
 	blocked := make(map[resource.Key]bool)
+	var mu sync.Mutex // guards res and blocked during a concurrent level
+
+	// processEntry runs one plan entry; resources in the same topological
+	// level share no dependency relationship, so entries within a level are
+	// safe to run concurrently (bounded by Parallelism).
+	processEntry := func(key resource.Key, entry plan.Entry) {
+		mu.Lock()
+		isBlocked := blocked[key]
+		mu.Unlock()
+		if isBlocked {
+			mu.Lock()
+			res.Skipped = append(res.Skipped, key)
+			mu.Unlock()
+			e.logf("skip %s: a dependency failed", key)
+			return
+		}
+		env := byKey[key]
+		if entry.Action == plan.ActionNoop {
+			// The spec is unchanged, but the infrastructure may not be:
+			// probe, and re-reconcile on drift. Managed resources only —
+			// externals are never mutated uninvited.
+			if !e.HealDrift {
+				return
+			}
+			e.stateMu.Lock()
+			rs, inState := st.Resources[key]
+			e.stateMu.Unlock()
+			if !inState || resource.LifecycleOf(env, rs.Imported) != resource.Managed {
+				return
+			}
+			probed := e.probeOne(ctx, env, byKey)
+			if !HasDrift(probed) {
+				return
+			}
+			if c, ok := probed.Condition(status.DriftDetected); ok {
+				e.logf("drift %s (%s); healing", key, c.Reason)
+			}
+		}
+
+		start := time.Now()
+		err := e.reconcileOne(ctx, entry, env, byKey, &st)
+		if err != nil {
+			mu.Lock()
+			res.Failed[key] = err
+			for dep := range depGraph.Dependents(key) {
+				blocked[dep] = true
+			}
+			mu.Unlock()
+			e.logf("fail %s (%s) after %s: %v", key, entry.Action, time.Since(start).Round(time.Millisecond), err)
+			return
+		}
+		mu.Lock()
+		res.Succeeded = append(res.Succeeded, key)
+		mu.Unlock()
+		e.logf("ok   %s (%s) in %s", key, entry.Action, time.Since(start).Round(time.Millisecond))
+	}
+
+	parallelism := e.Parallelism
+	if parallelism < 1 {
+		parallelism = 1
+	}
 
 	for _, level := range p.Levels {
+		if parallelism == 1 {
+			for _, key := range level {
+				if entry, ok := entryByKey[key]; ok {
+					processEntry(key, entry)
+				}
+				if e.HaltOnError && len(res.Failed) > 0 {
+					return res, fmt.Errorf("%d resource(s) failed to reconcile (halting: --halt-on-error)", len(res.Failed))
+				}
+			}
+			continue
+		}
+		sem := make(chan struct{}, parallelism)
+		var wg sync.WaitGroup
 		for _, key := range level {
 			entry, ok := entryByKey[key]
 			if !ok {
 				continue
 			}
-			if blocked[key] {
-				res.Skipped = append(res.Skipped, key)
-				e.logf("skip %s: a dependency failed", key)
-				continue
-			}
-			env := byKey[key]
-			if entry.Action == plan.ActionNoop {
-				// The spec is unchanged, but the infrastructure may not be:
-				// probe, and re-reconcile on drift. Managed resources only —
-				// externals are never mutated uninvited.
-				if !e.HealDrift {
-					continue
-				}
-				rs, inState := st.Resources[key]
-				if !inState || resource.LifecycleOf(env, rs.Imported) != resource.Managed {
-					continue
-				}
-				probed := e.probeOne(ctx, env, byKey)
-				if !HasDrift(probed) {
-					continue
-				}
-				if c, ok := probed.Condition(status.DriftDetected); ok {
-					e.logf("drift %s (%s); healing", key, c.Reason)
-				}
-			}
-
-			start := time.Now()
-			err := e.reconcileOne(ctx, entry, env, byKey, &st)
-			if err != nil {
-				res.Failed[key] = err
-				e.logf("fail %s (%s) after %s: %v", key, entry.Action, time.Since(start).Round(time.Millisecond), err)
-				if e.HaltOnError {
-					return res, fmt.Errorf("%s: %w (halting: --halt-on-error)", key, err)
-				}
-				for dep := range depGraph.Dependents(key) {
-					blocked[dep] = true
-				}
-				continue
-			}
-			res.Succeeded = append(res.Succeeded, key)
-			e.logf("ok   %s (%s) in %s", key, entry.Action, time.Since(start).Round(time.Millisecond))
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(key resource.Key, entry plan.Entry) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				processEntry(key, entry)
+			}(key, entry)
+		}
+		wg.Wait()
+		if e.HaltOnError && len(res.Failed) > 0 {
+			return res, fmt.Errorf("%d resource(s) failed to reconcile (halting: --halt-on-error)", len(res.Failed))
 		}
 	}
 
@@ -198,6 +251,8 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 		}
 	}
 
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
 	lifecycle := resource.LifecycleOf(env, st.Resources[env.Key()].Imported)
 	st.Resources[env.Key()] = state.ResourceState{
 		SpecHash:  entry.SpecHash,
@@ -320,6 +375,8 @@ func (e *Engine) reconcileSecretReference(ctx context.Context, entry plan.Entry,
 	now := e.Clock.Now()
 	newStatus.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "SecretResolvable"}, now)
 	newStatus.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
 	st.Resources[env.Key()] = state.ResourceState{
 		SpecHash:  entry.SpecHash,
 		Status:    newStatus,
@@ -389,6 +446,8 @@ func (e *Engine) reconcileExternal(ctx context.Context, entry plan.Entry, env re
 			return fmt.Errorf("%s: %s", env.Key(), c.Message)
 		}
 	}
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
 	st.Resources[env.Key()] = state.ResourceState{
 		SpecHash:  entry.SpecHash,
 		Status:    probed,
