@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/v1alpha1/binding.json",
+  "title": "Binding",
+  "description": "A relationship/data-movement contract realized by a Provider. spec.mode fixes which Kinds sourceRef/targetRef may resolve to (cdc: Source→EventStream, sink: EventStream→Dataset) and which provider capability is checked at validate time.",
+  "type": "object",
+  "properties": {
+    "apiVersion": { "const": "datascape.io/v1alpha1" },
+    "kind": { "const": "Binding" },
+    "metadata": { "$ref": "meta.json" },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["cdc", "sink", "batch"], "description": "batch is schema-reserved and rejected by validation in v1." },
+        "sourceRef": { "$ref": "meta.json#/$defs/nameRef" },
+        "targetRef": { "$ref": "meta.json#/$defs/nameRef" },
+        "providerRef": { "$ref": "meta.json#/$defs/nameRef", "description": "Must implement the capability interface matching spec.mode (CDCCapableProvider / SinkCapableProvider)." },
+        "options": {
+          "type": "object",
+          "description": "Mode/provider-specific options (e.g. cdc: tables, snapshotMode, databaseHostname/databasePort for external sources).",
+          "additionalProperties": true
+        }
+      },
+      "required": ["mode", "sourceRef", "targetRef", "providerRef"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false
+}

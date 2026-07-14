@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/v1alpha1/provider.json",
+  "title": "Provider",
+  "description": "Declares a technology (spec.type) and where it runs (spec.runtime). The provider implementation selected by spec.type defines the shape of spec.configuration.",
+  "type": "object",
+  "properties": {
+    "apiVersion": { "const": "datascape.io/v1alpha1" },
+    "kind": { "const": "Provider" },
+    "metadata": { "$ref": "meta.json" },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider implementation to construct. Shipped in v1.0.0: redpanda, postgres, debezium, s3, minio, s3sink (plus noop/container for testing). Open-ended: unknown types fail at registry construction, not schema validation.",
+          "x-known-values": ["redpanda", "postgres", "debezium", "s3", "minio", "s3sink", "openlineage", "noop", "container"]
+        },
+        "runtime": {
+          "type": "object",
+          "description": "Where the provider's backing objects run. Fields beyond type are runtime-specific (e.g. network for docker).",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["docker", "fake", "kubernetes", "external", "terraform"],
+              "description": "docker and fake (testing) are implemented; kubernetes/external/terraform are accepted for forward compatibility and rejected at registry construction as planned-but-unavailable."
+            },
+            "network": { "type": "string", "description": "docker-specific: the shared network name (default: datascape)." }
+          },
+          "required": ["type"],
+          "additionalProperties": true
+        },
+        "configuration": {
+          "type": "object",
+          "description": "Provider-specific configuration, keyed by spec.type (e.g. image, ports, *SecretRef names). Never contains secret values.",
+          "additionalProperties": true
+        },
+        "secretRefs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Names of SecretReference resources resolved by the engine and passed to the provider."
+        },
+        "external": { "type": "boolean", "description": "External lifecycle: Datascape never creates or deletes the backing system." },
+        "connectionRef": { "$ref": "meta.json#/$defs/nameRef" }
+      },
+      "required": ["type", "runtime"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false
+}

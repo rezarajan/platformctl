@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/v1alpha1/meta.json",
+  "title": "metadata",
+  "description": "Common metadata envelope shared by every Kind.",
+  "type": "object",
+  "properties": {
+    "name": { "type": "string", "minLength": 1, "description": "Unique per Kind within a manifest set." },
+    "labels": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Free-form." },
+    "annotations": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Free-form." },
+    "observers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nameRef" },
+      "description": "Provider names whose connection details are resolved to LineageEndpoints and forwarded to this resource's provider if it is LineageAware."
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false,
+  "$defs": {
+    "nameRef": {
+      "type": "object",
+      "properties": { "name": { "type": "string", "minLength": 1 } },
+      "required": ["name"],
+      "additionalProperties": false
+    }
+  }
+}

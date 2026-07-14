@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/v1alpha1/eventstream.json",
+  "title": "EventStream",
+  "description": "A durable, partitioned event log (a topic), realized by a streaming Provider such as redpanda.",
+  "type": "object",
+  "properties": {
+    "apiVersion": { "const": "datascape.io/v1alpha1" },
+    "kind": { "const": "EventStream" },
+    "metadata": { "$ref": "meta.json" },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "providerRef": { "$ref": "meta.json#/$defs/nameRef" },
+        "partitions": { "type": "integer", "minimum": 1, "description": "Partition count; increases apply in place, decreases are rejected by the broker." },
+        "retention": {
+          "type": "object",
+          "properties": {
+            "duration": { "type": "string", "pattern": "^[0-9]+[smhd]$", "description": "Retention window, e.g. 7d, 12h, 30m, 45s." }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["providerRef"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false
+}

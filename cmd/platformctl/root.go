@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -11,6 +13,7 @@ import (
 	envsecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/env"
 	"github.com/rezarajan/platformctl/internal/adapters/state/localfile"
 	"github.com/rezarajan/platformctl/internal/application/compatibility"
+	"github.com/rezarajan/platformctl/internal/application/docsgen"
 	"github.com/rezarajan/platformctl/internal/application/engine"
 	"github.com/rezarajan/platformctl/internal/application/featuregate"
 	"github.com/rezarajan/platformctl/internal/application/manifest"
@@ -66,8 +69,70 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 		newDriftCmd(a),
 		newImportCmd(a),
 		newGraphCmd(a),
+		newDocsCmd(),
 	)
 	return root
+}
+
+func newDocsCmd() *cobra.Command {
+	docs := &cobra.Command{
+		Use:   "docs",
+		Short: "Generate and serve the resource reference from schemas/",
+	}
+	var outDir string
+	build := &cobra.Command{
+		Use:   "build",
+		Short: "Render the reference (one markdown file per Kind + index) from the embedded schemas",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			pages, err := docsgen.Build()
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitExecution, err)
+			}
+			if err := os.MkdirAll(outDir, 0o755); err != nil {
+				return cliutil.Exit(cliutil.ExitExecution, err)
+			}
+			for name, content := range pages {
+				if err := os.WriteFile(filepath.Join(outDir, name), []byte(content), 0o644); err != nil {
+					return cliutil.Exit(cliutil.ExitExecution, err)
+				}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "wrote %d page(s) to %s\n", len(pages), outDir)
+			return nil
+		},
+	}
+	build.Flags().StringVar(&outDir, "out", "docs/reference", "output directory")
+
+	var addr string
+	serve := &cobra.Command{
+		Use:   "serve",
+		Short: "Serve the generated reference over HTTP (markdown rendered as plain text)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			pages, err := docsgen.Build()
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitExecution, err)
+			}
+			mux := http.NewServeMux()
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				name := strings.TrimPrefix(r.URL.Path, "/")
+				if name == "" {
+					name = "index.md"
+				}
+				content, ok := pages[name]
+				if !ok {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+				fmt.Fprint(w, content)
+			})
+			fmt.Fprintf(cmd.OutOrStdout(), "serving resource reference on http://%s (index.md, provider.md, ...)\n", addr)
+			return http.ListenAndServe(addr, mux) //nolint:gosec
+		},
+	}
+	serve.Flags().StringVar(&addr, "addr", "127.0.0.1:8180", "listen address")
+
+	docs.AddCommand(build, serve)
+	return docs
 }
 
 // checkExternalGate rejects manifest sets that declare External resources

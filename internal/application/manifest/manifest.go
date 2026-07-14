@@ -60,6 +60,9 @@ func Load(path string) ([]resource.Envelope, error) {
 			if len(raw) == 0 {
 				continue
 			}
+			if err := validateAgainstSchema(raw); err != nil {
+				return nil, fmt.Errorf("%s (document %d): %w", f, docIndex+1, err)
+			}
 			env, err := envelopeFrom(raw)
 			if err != nil {
 				return nil, fmt.Errorf("%s (document %d): %w", f, docIndex+1, err)

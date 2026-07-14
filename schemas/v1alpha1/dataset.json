@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/v1alpha1/dataset.json",
+  "title": "Dataset",
+  "description": "A durable landing zone (bucket/prefix + format) realized by an object-store Provider (s3/minio); populated by sink-mode Bindings.",
+  "type": "object",
+  "properties": {
+    "apiVersion": { "const": "datascape.io/v1alpha1" },
+    "kind": { "const": "Dataset" },
+    "metadata": { "$ref": "meta.json" },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "providerRef": { "$ref": "meta.json#/$defs/nameRef" },
+        "bucket": { "type": "string", "minLength": 1 },
+        "prefix": { "type": "string" },
+        "format": { "type": "string", "minLength": 1, "description": "Validated against the sink provider's SupportedSinkFormats() (e.g. json, jsonl, csv, parquet)." },
+        "external": { "type": "boolean" }
+      },
+      "required": ["bucket", "format"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "external": { "const": true } }, "required": ["external"] },
+          "then": {},
+          "else": { "required": ["providerRef"] }
+        }
+      ]
+    }
+  },
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false
+}
