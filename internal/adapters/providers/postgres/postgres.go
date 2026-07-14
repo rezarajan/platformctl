@@ -119,7 +119,11 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/var/lib/postgresql/data"}},
 		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: 5432}},
 		HealthCheck: &runtime.HealthCheck{
-			Test:     []string{"CMD-SHELL", "pg_isready -U " + user},
+			// Force a TCP check: the plain unix-socket pg_isready answers
+			// during the image's initdb temp-server phase, before the real
+			// server listens on TCP — reporting healthy while connections
+			// from the host are still refused.
+			Test:     []string{"CMD-SHELL", "pg_isready -h 127.0.0.1 -U " + user},
 			Interval: 2 * time.Second,
 			Timeout:  5 * time.Second,
 			Retries:  30,
@@ -138,7 +142,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
 	st.ProviderState = map[string]any{
 		"containerId":  ctrState.ID,
-		"hostAddr":     "localhost:" + strconv.Itoa(p.hostPort()),
+		"hostAddr":     "127.0.0.1:" + strconv.Itoa(p.hostPort()),
 		"internalAddr": name + ":5432",
 	}
 	return st, nil
@@ -172,7 +176,10 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope) (
 		replUser, replPass = creds["username"], creds["password"]
 	}
 
-	admin := connString("localhost", p.hostPort(), suUser, suPass, "postgres")
+	admin := connString("127.0.0.1", p.hostPort(), suUser, suPass, "postgres")
+	if err := waitReady(ctx, admin, 30*time.Second); err != nil {
+		return st, err
+	}
 	if err := ensureDatabase(ctx, admin, dbName); err != nil {
 		return st, err
 	}
@@ -184,7 +191,7 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope) (
 	// The publication lives in the source database itself, created by the
 	// superuser so the replication role never needs table ownership.
 	// "dbz_publication" is Debezium's default publication.name.
-	if err := ensurePublication(ctx, connString("localhost", p.hostPort(), suUser, suPass, dbName), "dbz_publication"); err != nil {
+	if err := ensurePublication(ctx, connString("127.0.0.1", p.hostPort(), suUser, suPass, dbName), "dbz_publication"); err != nil {
 		return st, err
 	}
 	if err := verifyLogicalWAL(ctx, admin); err != nil {
@@ -247,7 +254,7 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if err != nil {
 			return st, err
 		}
-		exists, err := databaseExists(ctx, connString("localhost", p.hostPort(), suUser, suPass, "postgres"), dbName)
+		exists, err := databaseExists(ctx, connString("127.0.0.1", p.hostPort(), suUser, suPass, "postgres"), dbName)
 		if err != nil {
 			return st, err
 		}

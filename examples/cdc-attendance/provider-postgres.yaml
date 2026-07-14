@@ -9,6 +9,7 @@ spec:
     network: datascape
   configuration:
     image: postgres:16
+    port: 15432
     superuserSecretRef: postgres-admin-creds
     replicationSecretRef: postgres-replication-creds
   secretRefs: [postgres-admin-creds, postgres-replication-creds]

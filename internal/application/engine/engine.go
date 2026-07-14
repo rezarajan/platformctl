@@ -205,10 +205,19 @@ func (e *Engine) reconcileSecretReference(ctx context.Context, entry plan.Entry,
 	return e.StateStore.Save(ctx, *st)
 }
 
+// DependencyResolver is the subset of domain/graph Destroy needs to block
+// teardown of resources whose dependents failed to destroy.
+type DependencyResolver interface {
+	Dependencies(k resource.Key) map[resource.Key]bool
+}
+
 // Destroy executes a destroy plan in reverse dependency order. The engine is
 // the single enforcement point for NFR-3: External resources are never
-// destroyed unless the plan explicitly marked them.
-func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.Envelope) (Result, error) {
+// destroyed unless the plan explicitly marked them. When a resource fails to
+// destroy, everything it depends on is skipped — deleting a connector's
+// broker or a provider's secrets out from under it would strand the survivor
+// in an unrecoverable state.
+func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.Envelope, deps DependencyResolver) (Result, error) {
 	res := Result{Failed: make(map[resource.Key]error)}
 	byKey := make(map[resource.Key]resource.Envelope, len(envelopes))
 	for _, env := range envelopes {
@@ -220,12 +229,27 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 		return res, err
 	}
 
+	blocked := make(map[resource.Key]bool)
+	block := func(k resource.Key) {
+		if deps == nil {
+			return
+		}
+		for dep := range deps.Dependencies(k) {
+			blocked[dep] = true
+		}
+	}
+
 	for _, entry := range p.Entries {
 		if entry.Action != plan.ActionDelete {
 			continue
 		}
 		env, ok := byKey[entry.Key]
 		if !ok {
+			continue
+		}
+		if blocked[entry.Key] {
+			res.Skipped = append(res.Skipped, entry.Key)
+			e.logf("skip destroy %s: a resource depending on it failed to destroy", entry.Key)
 			continue
 		}
 		if env.Kind == "SecretReference" {
@@ -240,11 +264,14 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 		prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
 		if err != nil {
 			res.Failed[entry.Key] = err
+			e.logf("fail destroy %s: %v", entry.Key, err)
+			block(entry.Key)
 			continue
 		}
 		if err := prov.Destroy(ctx, env, rt); err != nil {
 			res.Failed[entry.Key] = err
 			e.logf("fail destroy %s: %v", entry.Key, err)
+			block(entry.Key)
 			continue
 		}
 		delete(st.Resources, entry.Key)

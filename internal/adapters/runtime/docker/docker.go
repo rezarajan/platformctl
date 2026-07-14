@@ -5,9 +5,12 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -16,6 +19,7 @@ import (
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
@@ -92,7 +96,7 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpe
 
 	existing, err := r.cli.ContainerInspect(ctx, spec.Name)
 	if err == nil {
-		if existing.Config != nil && existing.Config.Labels[specGenLabel] == desiredHash {
+		if existing.Config != nil && existing.Config.Labels[specGenLabel] == desiredHash && networksAttached(existing, spec.Networks) {
 			if existing.State != nil && existing.State.Running {
 				return stateFromInspect(existing), nil // matches and running — no-op
 			}
@@ -101,7 +105,8 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpe
 			}
 			return r.inspectState(ctx, spec.Name)
 		}
-		// Spec changed: replace. Refuse to touch unmanaged containers.
+		// Spec changed (or network attachment drifted): replace. Refuse to
+		// touch unmanaged containers.
 		if existing.Config == nil || existing.Config.Labels[runtime.LabelManagedBy] != runtime.ManagedByValue {
 			return runtime.ContainerState{}, fmt.Errorf("container %q exists but is not managed by platformctl; refusing to replace it", spec.Name)
 		}
@@ -187,11 +192,11 @@ func (r *Runtime) WaitHealthy(ctx context.Context, name string, timeout time.Dur
 				return nil
 			}
 			if info.State.Dead || (info.State.Status == "exited") {
-				return fmt.Errorf("container %q exited before becoming healthy", name)
+				return fmt.Errorf("container %q exited before becoming healthy%s", name, r.tailLogs(ctx, name))
 			}
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("container %q did not become healthy within %s", name, timeout)
+			return fmt.Errorf("container %q did not become healthy within %s%s", name, timeout, r.tailLogs(ctx, name))
 		}
 		select {
 		case <-ctx.Done():
@@ -199,6 +204,51 @@ func (r *Runtime) WaitHealthy(ctx context.Context, name string, timeout time.Dur
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// networksAttached reports whether the container is attached to every network
+// the spec declares. A stopped container whose network was removed out-of-band
+// keeps its matching spec hash but loses the endpoint — restarting it would
+// bring up a container that cannot resolve its peers.
+func networksAttached(info container.InspectResponse, want []string) bool {
+	if len(want) == 0 {
+		return true
+	}
+	if info.NetworkSettings == nil {
+		return false
+	}
+	for _, n := range want {
+		if _, ok := info.NetworkSettings.Networks[n]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// tailLogs returns the container's last log lines formatted for inclusion in
+// an error message, or "" if logs are unavailable. Failing containers are
+// otherwise a black box to the CLI user.
+func (r *Runtime) tailLogs(ctx context.Context, name string) string {
+	rc, err := r.cli.ContainerLogs(ctx, name, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       "10",
+	})
+	if err != nil {
+		return ""
+	}
+	defer rc.Close()
+	var buf bytes.Buffer
+	// Container logs arrive stdout/stderr-multiplexed; demux into one stream.
+	_, _ = stdcopy.StdCopy(&buf, &buf, io.LimitReader(rc, 64*1024))
+	out := strings.TrimSpace(buf.String())
+	if out == "" {
+		return ""
+	}
+	if len(out) > 2000 {
+		out = out[len(out)-2000:]
+	}
+	return "; last log lines:\n" + out
 }
 
 func (r *Runtime) Inspect(ctx context.Context, name string) (runtime.ContainerState, bool, error) {

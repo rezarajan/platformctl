@@ -51,7 +51,7 @@ func (p *Provider) hostPort() int {
 }
 
 // HostAddr is the broker address reachable from the host (admin operations).
-func (p *Provider) HostAddr() string { return "localhost:" + strconv.Itoa(p.hostPort()) }
+func (p *Provider) HostAddr() string { return "127.0.0.1:" + strconv.Itoa(p.hostPort()) }
 
 // InternalAddr is the broker address reachable from containers on the shared
 // network (Debezium, sink connectors).
@@ -105,7 +105,7 @@ func (p *Provider) reconcileBroker(ctx context.Context, rt runtime.ContainerRunt
 			"--overprovisioned", "--smp", "1", "--memory", "512M", "--reserve-memory", "0M",
 			"--node-id", "0", "--check=false",
 			"--kafka-addr", fmt.Sprintf("INTERNAL://0.0.0.0:%d,EXTERNAL://0.0.0.0:%d", internalKafkaPort, externalKafkaPort),
-			"--advertise-kafka-addr", fmt.Sprintf("INTERNAL://%s:%d,EXTERNAL://localhost:%d", name, internalKafkaPort, hostPort),
+			"--advertise-kafka-addr", fmt.Sprintf("INTERNAL://%s:%d,EXTERNAL://127.0.0.1:%d", name, internalKafkaPort, hostPort),
 		},
 		Networks: []string{p.network()},
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/var/lib/redpanda/data"}},

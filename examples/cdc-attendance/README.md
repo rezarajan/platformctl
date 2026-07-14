@@ -48,12 +48,12 @@ platformctl status   examples/cdc-attendance/
 Then generate some change traffic and watch it land:
 
 ```sh
-psql postgres://admin:admin-pw@localhost:5432/studentdb \
+psql postgres://admin:admin-pw@localhost:15432/studentdb \
   -c "CREATE TABLE students (id serial PRIMARY KEY, name text);
       INSERT INTO students (name) VALUES ('alice'), ('bob');"
 
 # objects appear under raw-events/attendance/ within ~30s
-mc alias set local http://localhost:9000 minioadmin minioadmin-pw
+mc alias set local http://localhost:19000 minioadmin minioadmin-pw
 mc ls --recursive local/raw-events/
 ```
 
@@ -66,9 +66,11 @@ platformctl destroy examples/cdc-attendance/ --auto-approve
 ## Host ports
 
 Everything shares the `datascape` Docker network internally; these host
-ports are published: Redpanda Kafka 9092, Postgres 5432, Debezium Connect
-8083, sink Connect 8084, MinIO 9000. Adjust the `configuration` blocks
-(`kafkaPort`, `port`, `connectPort`) if any are taken on your machine.
+ports are published, chosen away from the services' well-known defaults so
+the example coexists with whatever Postgres/Kafka/MinIO you already have
+running: Redpanda Kafka 19093, Postgres 15432, Debezium Connect 18083, sink
+Connect 18084, MinIO 19000. Adjust the `configuration` blocks (`kafkaPort`,
+`port`, `connectPort`) if any are taken on your machine.
 
 ## Deviations from the spec document's sketch
 

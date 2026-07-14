@@ -11,8 +11,8 @@ spec:
     # Build this image first — see README.md (stock Connect images ship no
     # S3 sink plugin).
     image: datascape-s3sink-connect:local
-    # The Debezium Connect worker (postgres-cdc) already holds host port 8083.
-    connectPort: 8084
+    # The Debezium Connect worker (postgres-cdc) already holds 18083.
+    connectPort: 18084
     bootstrapServers: local-redpanda:29092
     credentialsSecretRef: minio-root-creds
   secretRefs: [minio-root-creds]

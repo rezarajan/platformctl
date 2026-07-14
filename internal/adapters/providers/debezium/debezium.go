@@ -66,7 +66,7 @@ func (p *Provider) connectPort() int {
 	return 8083
 }
 
-func (p *Provider) connectURL() string { return "http://localhost:" + strconv.Itoa(p.connectPort()) }
+func (p *Provider) connectURL() string { return "http://127.0.0.1:" + strconv.Itoa(p.connectPort()) }
 
 func (p *Provider) network() string {
 	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {

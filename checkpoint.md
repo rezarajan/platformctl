@@ -114,8 +114,10 @@ edges. New this session:
 3. **Port collisions on a shared dev machine** — test scenarios use
    non-default host ports (cdc: pg 15544 / connect 18183 / kafka 19193;
    sink: pg 15545 / connect 18185+18186 / kafka 19194 / minio 19101).
-   `examples/cdc-attendance/` uses the real defaults (5432/8083/8084/9092/
-   9000) since it's user-facing.
+   `examples/cdc-attendance/` also moved off the well-known defaults
+   (pg 15432 / connect 18083+18084 / kafka 19093 / minio 19000) after a
+   real user machine had Postgres/Connect/MinIO already holding
+   5432/8083/9000 — see errors.md for the full post-mortem.
 4. **`.claude/rules/schema-changes.md` still never fires** (no `schemas/`).
 5. **minio image is `minio/minio:latest`** in the example and sink test —
    pin a release tag once one is chosen for v1.0.0.

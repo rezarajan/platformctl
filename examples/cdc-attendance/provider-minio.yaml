@@ -9,5 +9,6 @@ spec:
     network: datascape
   configuration:
     image: minio/minio:latest
+    port: 19000
     rootSecretRef: minio-root-creds
   secretRefs: [minio-root-creds]

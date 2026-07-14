@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -29,7 +30,17 @@ func bucketExists(ctx context.Context, cl *minio.Client, bucket string) (bool, e
 }
 
 func ensureBucket(ctx context.Context, cl *minio.Client, bucket string) error {
+	// Container health and host-port reachability are not the same instant
+	// on every runtime; tolerate a short gap after WaitHealthy.
 	exists, err := bucketExists(ctx, cl, bucket)
+	for deadline := time.Now().Add(30 * time.Second); err != nil && time.Now().Before(deadline); {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+		exists, err = bucketExists(ctx, cl, bucket)
+	}
 	if err != nil || exists {
 		return err
 	}

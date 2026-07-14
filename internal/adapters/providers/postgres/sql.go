@@ -22,6 +22,30 @@ func connect(ctx context.Context, conn string) (*pgx.Conn, error) {
 	return c, nil
 }
 
+// waitReady ping-loops until the server accepts connections. Container
+// health and host-port reachability are not the same instant on every
+// runtime; provisioning right after WaitHealthy must tolerate the gap.
+func waitReady(ctx context.Context, conn string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		c, err := connect(ctx, conn)
+		if err == nil {
+			_ = c.Close(ctx)
+			return nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return fmt.Errorf("postgres not reachable within %s: %w", timeout, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 func ensureDatabase(ctx context.Context, adminConn, name string) error {
 	exists, err := databaseExists(ctx, adminConn, name)
 	if err != nil {

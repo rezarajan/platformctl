@@ -9,6 +9,7 @@ spec:
     network: datascape
   configuration:
     image: quay.io/debezium/connect:2.7
+    connectPort: 18083
     bootstrapServers: local-redpanda:29092
     replicationSecretRef: postgres-replication-creds
   secretRefs: [postgres-replication-creds]

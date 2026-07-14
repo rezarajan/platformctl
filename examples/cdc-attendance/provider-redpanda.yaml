@@ -9,3 +9,4 @@ spec:
     network: datascape
   configuration:
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
+    kafkaPort: 19093

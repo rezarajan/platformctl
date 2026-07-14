@@ -249,11 +249,11 @@ func newDestroyCmd(a *app) *cobra.Command {
 					return nil
 				}
 			}
-			result, err := a.newEngine().Destroy(cmd.Context(), p, envelopes)
+			result, err := a.newEngine().Destroy(cmd.Context(), p, envelopes, g)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "destroyed: %d succeeded, %d failed\n", len(result.Succeeded), len(result.Failed))
+			fmt.Fprintf(cmd.OutOrStdout(), "destroyed: %d succeeded, %d failed, %d skipped\n", len(result.Succeeded), len(result.Failed), len(result.Skipped))
 			return nil
 		},
 	}

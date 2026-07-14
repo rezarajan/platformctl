@@ -157,6 +157,22 @@ func (g *Graph) Dependents(k resource.Key) map[resource.Key]bool {
 	return out
 }
 
+// Dependencies returns the transitive set of resources k depends on.
+func (g *Graph) Dependencies(k resource.Key) map[resource.Key]bool {
+	out := make(map[resource.Key]bool)
+	var walk func(resource.Key)
+	walk = func(cur resource.Key) {
+		for _, d := range g.Edges[cur] {
+			if !out[d] {
+				out[d] = true
+				walk(d)
+			}
+		}
+	}
+	walk(k)
+	return out
+}
+
 func (g *Graph) findCycle() []resource.Key {
 	const (
 		white = 0

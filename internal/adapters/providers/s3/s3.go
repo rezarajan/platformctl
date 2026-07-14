@@ -141,7 +141,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
 	st.ProviderState = map[string]any{
 		"containerId":  ctrState.ID,
-		"hostEndpoint": "localhost:" + strconv.Itoa(p.hostPort()),
+		"hostEndpoint": "127.0.0.1:" + strconv.Itoa(p.hostPort()),
 		"internalUrl":  "http://" + name + ":" + strconv.Itoa(apiPort),
 	}
 	return st, nil
@@ -157,7 +157,7 @@ func (p *Provider) reconcileDataset(ctx context.Context, res resource.Envelope) 
 	if err != nil {
 		return st, err
 	}
-	cl, err := newClient("localhost:"+strconv.Itoa(p.hostPort()), user, pass)
+	cl, err := newClient("127.0.0.1:"+strconv.Itoa(p.hostPort()), user, pass)
 	if err != nil {
 		return st, err
 	}
@@ -193,7 +193,7 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		if err != nil {
 			return err
 		}
-		cl, err := newClient("localhost:"+strconv.Itoa(p.hostPort()), user, pass)
+		cl, err := newClient("127.0.0.1:"+strconv.Itoa(p.hostPort()), user, pass)
 		if err != nil {
 			return err
 		}
@@ -229,7 +229,7 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if err != nil {
 			return st, err
 		}
-		cl, err := newClient("localhost:"+strconv.Itoa(p.hostPort()), user, pass)
+		cl, err := newClient("127.0.0.1:"+strconv.Itoa(p.hostPort()), user, pass)
 		if err != nil {
 			return st, err
 		}
