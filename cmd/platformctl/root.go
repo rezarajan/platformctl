@@ -64,9 +64,23 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 		newDestroyCmd(a),
 		newStatusCmd(a),
 		newDriftCmd(a),
+		newImportCmd(a),
 		newGraphCmd(a),
 	)
 	return root
+}
+
+// checkExternalGate rejects manifest sets that declare External resources
+// while the ExternalResourceConfiguration gate is off.
+func (a *app) checkExternalGate(envelopes []resource.Envelope) error {
+	for _, e := range envelopes {
+		if ext, _ := e.Spec["external"].(bool); ext {
+			if err := a.gates.Require("ExternalResourceConfiguration"); err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("%s declares spec.external: %w", e.Key(), err))
+			}
+		}
+	}
+	return nil
 }
 
 // loadAndValidate runs the full validate pipeline: manifests → kind
@@ -82,6 +96,9 @@ func (a *app) loadAndValidate(path string) ([]resource.Envelope, *graph.Graph, e
 	}
 	if err := compatibility.Check(envelopes, a.reg.Provider); err != nil {
 		return nil, nil, cliutil.Exit(cliutil.ExitValidation, err)
+	}
+	if err := a.checkExternalGate(envelopes); err != nil {
+		return nil, nil, err
 	}
 	return envelopes, g, nil
 }
@@ -259,7 +276,9 @@ func newDestroyCmd(a *app) *cobra.Command {
 					return nil
 				}
 			}
-			result, err := a.newEngine().Destroy(cmd.Context(), p, envelopes, g)
+			eng := a.newEngine()
+			eng.AllowDestructive = includeExternal && destructiveOK
+			result, err := eng.Destroy(cmd.Context(), p, envelopes, g)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
@@ -338,6 +357,53 @@ func newDriftCmd(a *app) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newImportCmd(a *app) *cobra.Command {
+	var from string
+	cmd := &cobra.Command{
+		Use:   "import <Kind>/<name> [path]",
+		Short: "Adopt an existing, out-of-band-created resource into state as Imported",
+		Long: "Probes the pre-existing backing object (never creating anything) and records\n" +
+			"the resource in state as Imported with the manifest's current spec hash — a\n" +
+			"subsequent apply plans a no-op, not a create. v1 adopts by name: --from must\n" +
+			"equal metadata.name, the name providers derive backing objects from.",
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.gates.Require("ImportedResources"); err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
+			}
+			kind, name, ok := strings.Cut(args[0], "/")
+			if !ok || kind == "" || name == "" {
+				return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("first argument must be <Kind>/<name>, got %q", args[0]))
+			}
+			envelopes, _, err := a.loadAndValidate(pathArg(args[1:]))
+			if err != nil {
+				return err
+			}
+			store := localfile.New(a.stateFile)
+			unlock, err := store.Lock(cmd.Context())
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitLockHeld, err)
+			}
+			defer unlock() //nolint:errcheck
+
+			key := resource.Key{Kind: kind, Name: name}
+			probed, err := a.newEngine().Import(cmd.Context(), envelopes, key, from)
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitExecution, err)
+			}
+			reason := ""
+			if c, ok := probed.Condition(status.Ready); ok {
+				reason = c.Reason
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "imported %s (Ready: %s)\n", key, reason)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&from, "from", "", "name of the existing backing object to adopt (must equal metadata.name in v1)")
+	_ = cmd.MarkFlagRequired("from")
+	return cmd
 }
 
 func newStatusCmd(a *app) *cobra.Command {

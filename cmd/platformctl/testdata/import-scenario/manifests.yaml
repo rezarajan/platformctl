@@ -1,0 +1,25 @@
+# Phase 5 import scenario: the Provider's backing Postgres container is
+# created out-of-band (unlabeled, by `docker run`) and adopted via
+# `platformctl import`. Host port 15546.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: imp-pg-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-imp-pg
+spec:
+  type: postgres
+  runtime:
+    type: docker
+    network: datascape-imp-net
+  configuration:
+    image: postgres:16
+    port: 15546
+    superuserSecretRef: imp-pg-admin
+  secretRefs: [imp-pg-admin]

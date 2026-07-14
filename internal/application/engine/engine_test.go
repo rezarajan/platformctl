@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,5 +263,50 @@ func TestProbeRecordsDrift(t *testing.T) {
 	}
 	if c, _ := rs.Status.Condition(status.Ready); c.Status != status.False {
 		t.Errorf("probed Ready not persisted, got %+v", c)
+	}
+}
+
+// TestDestroyExternalGuard covers NFR-3's engine half: even when a plan
+// marks an External resource for deletion, the engine refuses unless the
+// destructive double opt-in was given.
+func TestDestroyExternalGuard(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	eng := newTestEngine(t, reg)
+
+	envelopes := []resource.Envelope{
+		envelope("Source", "prod-db", map[string]any{
+			"engine":        "postgres",
+			"external":      true,
+			"connectionRef": map[string]any{"name": "prod-db-conn"},
+		}),
+	}
+	g, err := graph.Build(envelopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := eng.StateStore.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := plan.ComputeDestroy(envelopes, st, g, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := eng.Destroy(context.Background(), p, envelopes, g)
+	if err == nil {
+		t.Fatal("engine destroyed an External resource without AllowDestructive")
+	}
+	ferr, ok := result.Failed[envelopes[0].Key()]
+	if !ok || !strings.Contains(ferr.Error(), "yes-i-understand-this-is-destructive") {
+		t.Errorf("guard error missing or unclear: %v", ferr)
+	}
+
+	// With the double opt-in, an external-no-provider resource is only
+	// forgotten, never touched.
+	eng.AllowDestructive = true
+	if _, err := eng.Destroy(context.Background(), p, envelopes, g); err != nil {
+		t.Fatalf("destroy with AllowDestructive failed: %v", err)
 	}
 }

@@ -1,0 +1,81 @@
+# Phase 5 external-source scenario: the Postgres database lives outside the
+# platform (created out-of-band as datascape-ext-outofband-pg on the shared
+# network); Datascape only registers a CDC connector against it. Host ports:
+# Kafka 19195, Connect 18187.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: ext-db-conn
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-ext-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-ext-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
+    kafkaPort: 19195
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-ext-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape-ext-net
+  configuration:
+    image: quay.io/debezium/connect:2.7
+    connectPort: 18187
+    bootstrapServers: datascape-ext-rp:29092
+    replicationSecretRef: ext-db-conn
+  secretRefs: [ext-db-conn]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: ext-students
+spec:
+  engine: postgres
+  external: true
+  connectionRef:
+    name: ext-db-conn
+  postgres:
+    database: attendance
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: ext-attendance-events
+spec:
+  providerRef:
+    name: datascape-ext-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: ext-students-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: ext-students
+  targetRef:
+    name: ext-attendance-events
+  providerRef:
+    name: datascape-ext-dbz
+  options:
+    databaseHostname: datascape-ext-outofband-pg
+    tables: [students]
+    snapshotMode: initial

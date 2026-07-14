@@ -33,6 +33,11 @@ type Engine struct {
 	// infrastructure and re-reconcile the ones that drifted (gated by
 	// DriftDetection). Without it, apply trusts recorded state.
 	HealDrift bool
+	// AllowDestructive permits Destroy to act on External-lifecycle
+	// resources. It is the engine half of NFR-3's double lock: the CLI only
+	// sets it when both --include-external and
+	// --yes-i-understand-this-is-destructive were passed.
+	AllowDestructive bool
 	// Log receives one line per reconciliation action; nil disables.
 	Log func(format string, args ...any)
 }
@@ -151,6 +156,12 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 	// behind it: reconciling one means verifying it resolves.
 	if env.Kind == "SecretReference" {
 		return e.reconcileSecretReference(ctx, entry, env, st)
+	}
+	// An External resource without a providerRef lives entirely outside
+	// Datascape: "reconciling" it means verifying its connection is
+	// resolvable, never creating anything (plan.ActionConfigure path).
+	if isExternalNoProvider(env) {
+		return e.reconcileExternal(ctx, entry, env, byKey, st)
 	}
 
 	prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
@@ -274,6 +285,10 @@ func (e *Engine) probeOne(ctx context.Context, env resource.Envelope, byKey map[
 		return st
 	}
 
+	if isExternalNoProvider(env) {
+		return e.externalConnectionStatus(ctx, env, byKey)
+	}
+
 	prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
 	if err == nil {
 		var probed status.Status
@@ -320,6 +335,114 @@ type DependencyResolver interface {
 	Dependencies(k resource.Key) map[resource.Key]bool
 }
 
+// isExternalNoProvider reports whether the resource declares
+// spec.external: true and names no providerRef — i.e. nothing in the
+// platform realizes it; only its reachability can be verified.
+func isExternalNoProvider(env resource.Envelope) bool {
+	ext, _ := env.Spec["external"].(bool)
+	if !ext {
+		return false
+	}
+	if ref, ok := env.Spec["providerRef"].(map[string]any); ok {
+		if name, _ := ref["name"].(string); name != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// externalConnectionStatus verifies the resource's connectionRef resolves to
+// a SecretReference whose keys resolve through the secret store.
+func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope) status.Status {
+	now := e.Clock.Now()
+	st := status.Status{}
+	connName := ""
+	if ref, ok := env.Spec["connectionRef"].(map[string]any); ok {
+		connName, _ = ref["name"].(string)
+	}
+	var err error
+	if connName != "" {
+		refEnv, ok := byKey[resource.Key{Kind: "SecretReference", Name: connName}]
+		switch {
+		case !ok:
+			err = fmt.Errorf("connectionRef %q does not resolve to a SecretReference in the manifest set", connName)
+		case e.SecretStore == nil:
+			err = fmt.Errorf("no secret store is configured")
+		default:
+			_, err = e.SecretStore.Resolve(ctx, secretRefFrom(refEnv))
+		}
+	}
+	if err != nil {
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ExternalConnectionUnresolvable", Message: err.Error()}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ExternalConnectionUnresolvable"}, now)
+		return st
+	}
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ExternalConnectionResolvable"}, now)
+	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+	return st
+}
+
+func (e *Engine) reconcileExternal(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) error {
+	probed := e.externalConnectionStatus(ctx, env, byKey)
+	if !probed.IsReady() {
+		if c, ok := probed.Condition(status.Ready); ok {
+			return fmt.Errorf("%s: %s", env.Key(), c.Message)
+		}
+	}
+	st.Resources[env.Key()] = state.ResourceState{
+		SpecHash:  entry.SpecHash,
+		Status:    probed,
+		Lifecycle: resource.External.String(),
+		Imported:  st.Resources[env.Key()].Imported,
+	}
+	return e.StateStore.Save(ctx, *st)
+}
+
+// Import adopts a pre-existing, out-of-band-created resource into state as
+// Imported: it is probed (never created) and recorded with the manifest's
+// current spec hash, so a subsequent apply plans a no-op rather than a
+// create. v1 adopts by name: the backing object must carry the name the
+// provider derives from metadata.name, which is what `from` must equal.
+func (e *Engine) Import(ctx context.Context, envelopes []resource.Envelope, key resource.Key, from string) (status.Status, error) {
+	byKey := make(map[resource.Key]resource.Envelope, len(envelopes))
+	for _, env := range envelopes {
+		byKey[env.Key()] = env
+	}
+	env, ok := byKey[key]
+	if !ok {
+		return status.Status{}, fmt.Errorf("%s is not declared in the manifest set", key)
+	}
+	if from != env.Metadata.Name {
+		return status.Status{}, fmt.Errorf("--from %q: v1 adopts by name — the backing object must be named %q (the name providers derive from metadata.name)", from, env.Metadata.Name)
+	}
+
+	probed := e.probeOne(ctx, env, byKey)
+	if !probed.IsReady() {
+		msg := "backing object not found or unhealthy"
+		if c, ok := probed.Condition(status.Ready); ok && c.Message != "" {
+			msg = c.Message
+		}
+		return probed, fmt.Errorf("cannot import %s: %s", key, msg)
+	}
+
+	hash, err := plan.SpecHash(env)
+	if err != nil {
+		return probed, err
+	}
+	st, err := e.StateStore.Load(ctx)
+	if err != nil {
+		return probed, err
+	}
+	st.Resources[key] = state.ResourceState{
+		SpecHash:  hash,
+		Status:    probed,
+		Lifecycle: resource.Imported.String(),
+		Imported:  true,
+		Provider:  probed.ProviderState,
+	}
+	return probed, e.StateStore.Save(ctx, st)
+}
+
 // Destroy executes a destroy plan in reverse dependency order. The engine is
 // the single enforcement point for NFR-3: External resources are never
 // destroyed unless the plan explicitly marked them. When a resource fails to
@@ -360,6 +483,29 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 			res.Skipped = append(res.Skipped, entry.Key)
 			e.logf("skip destroy %s: a resource depending on it failed to destroy", entry.Key)
 			continue
+		}
+		// NFR-3, engine-enforced (not per-provider convention): External
+		// resources are never destroyed without the explicit double opt-in,
+		// even if a plan claims otherwise.
+		if resource.LifecycleOf(env, st.Resources[entry.Key].Imported) == resource.External {
+			if !e.AllowDestructive {
+				err := fmt.Errorf("%s is External: destroying it requires both --include-external and --yes-i-understand-this-is-destructive", entry.Key)
+				res.Failed[entry.Key] = err
+				e.logf("fail destroy %s: %v", entry.Key, err)
+				block(entry.Key)
+				continue
+			}
+			if isExternalNoProvider(env) {
+				// Nothing in the platform realizes it; forgetting it is all
+				// destroy can (and should) do.
+				delete(st.Resources, entry.Key)
+				if err := e.StateStore.Save(ctx, st); err != nil {
+					return res, err
+				}
+				res.Succeeded = append(res.Succeeded, entry.Key)
+				e.logf("ok   destroy %s (external: removed from state only)", entry.Key)
+				continue
+			}
 		}
 		if env.Kind == "SecretReference" {
 			delete(st.Resources, entry.Key)

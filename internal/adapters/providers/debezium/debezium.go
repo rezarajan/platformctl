@@ -182,6 +182,14 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 	if h, ok := b.Options["databaseHostname"].(string); ok && h != "" {
 		dbHost = h // explicit override (external sources)
 	}
+	if v, ok := b.Options["databasePort"]; ok {
+		switch n := v.(type) {
+		case int:
+			dbPort = n
+		case float64:
+			dbPort = int(n)
+		}
+	}
 	if dbHost == "" {
 		return st, fmt.Errorf("Binding %q: cannot determine database hostname (no providerRef on Source and no options.databaseHostname)", res.Metadata.Name)
 	}
