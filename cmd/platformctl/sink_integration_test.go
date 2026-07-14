@@ -191,12 +191,19 @@ func insertRows(t *testing.T, ctx context.Context) {
 	}
 }
 
-// waitForObject polls the bucket until an object appears under prefix and
-// returns its contents.
+// waitForObject polls the sink scenario's bucket until an object appears
+// under prefix and returns its contents.
 func waitForObject(t *testing.T, ctx context.Context, bucket, prefix string, timeout time.Duration) string {
 	t.Helper()
-	cl, err := minio.New(sinkMinioAddr, &minio.Options{
-		Creds:  credentials.NewStaticV4("datascape_minio", "minio-secret-pw", ""),
+	return waitForObjectAt(t, ctx, sinkMinioAddr, "datascape_minio", "minio-secret-pw", bucket, prefix, timeout)
+}
+
+// waitForObjectAt polls an arbitrary MinIO endpoint until an object appears
+// under bucket/prefix and returns its contents.
+func waitForObjectAt(t *testing.T, ctx context.Context, addr, user, pass, bucket, prefix string, timeout time.Duration) string {
+	t.Helper()
+	cl, err := minio.New(addr, &minio.Options{
+		Creds:  credentials.NewStaticV4(user, pass, ""),
 		Secure: false,
 	})
 	if err != nil {

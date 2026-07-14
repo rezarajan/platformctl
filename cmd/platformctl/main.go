@@ -24,8 +24,13 @@ import (
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
+// version is the binary's semantic version; overridable at build time via
+// -ldflags "-X main.version=...".
+var version = "v1.0.0"
+
 func main() {
 	root := newRootCmd(defaultWiring)
+	root.Version = version
 	if err := root.Execute(); err != nil {
 		var exitErr cliutil.ExitError
 		if errors.As(err, &exitErr) {
@@ -42,20 +47,19 @@ func main() {
 // defaultWiring registers every adapter this build ships. This is the single
 // place concrete adapters are wired to the registry.
 func defaultWiring(gates *featuregate.Registry) *registry.Registry {
-	// Defaults follow the feature-gate master table in
-	// docs/planning/04-roadmap-and-feature-gates.md §12.
+	// Stages follow the feature-gate master table in
+	// docs/planning/04-roadmap-and-feature-gates.md §12 at the close of
+	// Phase 5 (v1.0.0): the seven phase-1..4 gates graduate to GA.
 	gates.Register("CoreReconciler", featuregate.GA, true)
-	gates.Register("DockerRuntime", featuregate.Alpha, true)
+	gates.Register("DockerRuntime", featuregate.GA, true)
 	gates.Register("ContainerProvider", featuregate.Alpha, false) // not in the master table; test-only provider
-	gates.Register("RedpandaProvider", featuregate.Alpha, true)
-	gates.Register("PostgresProvider", featuregate.Alpha, true)
-	gates.Register("DebeziumCDCProvider", featuregate.Alpha, true)
-	gates.Register("CDCBinding", featuregate.Alpha, true)
-	gates.Register("LineageObservability", featuregate.Alpha, false)
-	gates.Register("ObjectStoreProvider", featuregate.Alpha, true)
-	gates.Register("SinkBinding", featuregate.Alpha, true)
-	// Beta at the close of Phase 5 per the master table (it was briefly
-	// registered Alpha/enabled ahead of schedule — see checkpoint.md).
+	gates.Register("RedpandaProvider", featuregate.GA, true)
+	gates.Register("PostgresProvider", featuregate.GA, true)
+	gates.Register("DebeziumCDCProvider", featuregate.GA, true)
+	gates.Register("CDCBinding", featuregate.GA, true)
+	gates.Register("LineageObservability", featuregate.Alpha, false) // Beta in Phase 6 only with a real backend provider
+	gates.Register("ObjectStoreProvider", featuregate.GA, true)
+	gates.Register("SinkBinding", featuregate.GA, true)
 	gates.Register("DriftDetection", featuregate.Beta, true)
 	gates.Register("ExternalResourceConfiguration", featuregate.Beta, true)
 	gates.Register("ImportedResources", featuregate.Alpha, false)
