@@ -1,0 +1,251 @@
+// Package s3 reconciles an S3-API-compatible object store (MinIO is the
+// reference target): instance lifecycle on the container runtime plus Dataset
+// (bucket/prefix) reconciliation via the S3 API (Phase 4).
+package s3
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/rezarajan/platformctl/internal/domain/dataset"
+	"github.com/rezarajan/platformctl/internal/domain/provider"
+	"github.com/rezarajan/platformctl/internal/domain/resource"
+	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/ports/runtime"
+)
+
+const (
+	defaultImage = "minio/minio:latest"
+	apiPort      = 9000
+)
+
+type Provider struct {
+	providerRes resource.Envelope
+	cfg         provider.Provider
+	secrets     map[string]map[string]string
+}
+
+func New() *Provider { return &Provider{} }
+
+func (p *Provider) Type() string { return "s3" }
+
+func (p *Provider) SetProviderResource(env resource.Envelope) {
+	p.providerRes = env
+	p.cfg, _ = provider.FromEnvelope(env)
+}
+
+func (p *Provider) SetSecrets(secrets map[string]map[string]string) { p.secrets = secrets }
+
+func (p *Provider) containerName() string { return p.providerRes.Metadata.Name }
+
+func (p *Provider) hostPort() int {
+	if v, ok := p.cfg.Configuration["port"]; ok {
+		switch n := v.(type) {
+		case int:
+			return n
+		case float64:
+			return int(n)
+		}
+	}
+	return apiPort
+}
+
+func (p *Provider) network() string {
+	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
+		return n
+	}
+	return "datascape"
+}
+
+// rootCredentials returns the MinIO root credentials: the SecretReference
+// named by configuration.rootSecretRef, or the first declared secretRef.
+func (p *Provider) rootCredentials() (user, pass string, err error) {
+	refName, _ := p.cfg.Configuration["rootSecretRef"].(string)
+	if refName == "" && len(p.cfg.SecretRefs) > 0 {
+		refName = p.cfg.SecretRefs[0]
+	}
+	creds, ok := p.secrets[refName]
+	if !ok {
+		return "", "", fmt.Errorf("Provider %q (type: s3): no resolved credentials for secretRef %q", p.containerName(), refName)
+	}
+	user, pass = creds["username"], creds["password"]
+	if user == "" || pass == "" {
+		return "", "", fmt.Errorf("Provider %q: secretRef %q must provide username and password keys", p.containerName(), refName)
+	}
+	return user, pass, nil
+}
+
+func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+	switch res.Kind {
+	case "Provider":
+		return p.reconcileInstance(ctx, rt)
+	case "Dataset":
+		return p.reconcileDataset(ctx, res)
+	default:
+		return status.Status{}, fmt.Errorf("s3 provider cannot reconcile kind %s", res.Kind)
+	}
+}
+
+func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRuntime) (status.Status, error) {
+	st := status.Status{}
+	name := p.containerName()
+	image, _ := p.cfg.Configuration["image"].(string)
+	if image == "" {
+		image = defaultImage
+	}
+	user, pass, err := p.rootCredentials()
+	if err != nil {
+		return st, err
+	}
+	labels := map[string]string{
+		runtime.LabelManagedBy:  runtime.ManagedByValue,
+		runtime.LabelGeneration: name,
+	}
+
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
+		return st, err
+	}
+	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name + "-data", Labels: labels}); err != nil {
+		return st, err
+	}
+	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
+		Name:  name,
+		Image: image,
+		Cmd:   []string{"server", "/data"},
+		Env: map[string]string{
+			"MINIO_ROOT_USER":     user,
+			"MINIO_ROOT_PASSWORD": pass,
+		},
+		Networks: []string{p.network()},
+		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/data"}},
+		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: apiPort}},
+		HealthCheck: &runtime.HealthCheck{
+			Test:     []string{"CMD-SHELL", fmt.Sprintf("curl -sf http://localhost:%d/minio/health/live || exit 1", apiPort)},
+			Interval: 2 * time.Second,
+			Timeout:  5 * time.Second,
+			Retries:  30,
+		},
+		Labels: labels,
+	})
+	if err != nil {
+		return st, err
+	}
+	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
+		return st, err
+	}
+
+	now := time.Now()
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.ProviderState = map[string]any{
+		"containerId":  ctrState.ID,
+		"hostEndpoint": "localhost:" + strconv.Itoa(p.hostPort()),
+		"internalUrl":  "http://" + name + ":" + strconv.Itoa(apiPort),
+	}
+	return st, nil
+}
+
+func (p *Provider) reconcileDataset(ctx context.Context, res resource.Envelope) (status.Status, error) {
+	st := status.Status{}
+	ds, err := dataset.FromEnvelope(res)
+	if err != nil {
+		return st, err
+	}
+	user, pass, err := p.rootCredentials()
+	if err != nil {
+		return st, err
+	}
+	cl, err := newClient("localhost:"+strconv.Itoa(p.hostPort()), user, pass)
+	if err != nil {
+		return st, err
+	}
+	if err := ensureBucket(ctx, cl, ds.Bucket); err != nil {
+		return st, err
+	}
+
+	now := time.Now()
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "DatasetProvisioned"}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.ProviderState = map[string]any{"bucket": ds.Bucket, "prefix": ds.Prefix, "format": ds.Format}
+	return st, nil
+}
+
+func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) error {
+	switch res.Kind {
+	case "Provider":
+		name := p.containerName()
+		if err := rt.Remove(ctx, name); err != nil {
+			return err
+		}
+		if err := rt.RemoveVolume(ctx, name+"-data"); err != nil {
+			return err
+		}
+		_ = rt.RemoveNetwork(ctx, p.network())
+		return nil
+	case "Dataset":
+		ds, err := dataset.FromEnvelope(res)
+		if err != nil {
+			return err
+		}
+		user, pass, err := p.rootCredentials()
+		if err != nil {
+			return err
+		}
+		cl, err := newClient("localhost:"+strconv.Itoa(p.hostPort()), user, pass)
+		if err != nil {
+			return err
+		}
+		return removeDataset(ctx, cl, ds.Bucket, ds.Prefix)
+	default:
+		return fmt.Errorf("s3 provider cannot destroy kind %s", res.Kind)
+	}
+}
+
+func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+	st := status.Status{}
+	now := time.Now()
+	switch res.Kind {
+	case "Provider":
+		ctrState, found, err := rt.Inspect(ctx, p.containerName())
+		if err != nil {
+			return st, err
+		}
+		if !found || !ctrState.Healthy {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "InstanceUnhealthy"}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "InstanceUnhealthy"}, now)
+			return st, nil
+		}
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		return st, nil
+	case "Dataset":
+		ds, err := dataset.FromEnvelope(res)
+		if err != nil {
+			return st, err
+		}
+		user, pass, err := p.rootCredentials()
+		if err != nil {
+			return st, err
+		}
+		cl, err := newClient("localhost:"+strconv.Itoa(p.hostPort()), user, pass)
+		if err != nil {
+			return st, err
+		}
+		exists, err := bucketExists(ctx, cl, ds.Bucket)
+		if err != nil {
+			return st, err
+		}
+		if !exists {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "BucketMissing"}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "BucketMissing"}, now)
+		} else {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "DatasetHealthy"}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		}
+		return st, nil
+	default:
+		return st, fmt.Errorf("s3 provider cannot probe kind %s", res.Kind)
+	}
+}

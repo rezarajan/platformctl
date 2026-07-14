@@ -1,0 +1,167 @@
+# Phase 4 integration scenario: the Phase 3 CDC set extended with a MinIO
+# object store, a Dataset, and a Binding(mode: sink). Distinct names and host
+# ports from cdc-scenario so the two tests never collide:
+# Postgres 15545, Debezium Connect 18185, Kafka 19194, MinIO 19101, sink
+# Connect 18186.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: sink-pg-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: sink-pg-repl
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: sink-minio-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-sink-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-sink-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
+    kafkaPort: 19194
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-sink-pg
+spec:
+  type: postgres
+  runtime:
+    type: docker
+    network: datascape-sink-net
+  configuration:
+    image: postgres:16
+    port: 15545
+    superuserSecretRef: sink-pg-admin
+    replicationSecretRef: sink-pg-repl
+  secretRefs: [sink-pg-admin, sink-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-sink-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape-sink-net
+  configuration:
+    image: quay.io/debezium/connect:2.7
+    connectPort: 18185
+    bootstrapServers: datascape-sink-rp:29092
+    replicationSecretRef: sink-pg-repl
+  secretRefs: [sink-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-sink-minio
+spec:
+  type: minio
+  runtime:
+    type: docker
+    network: datascape-sink-net
+  configuration:
+    image: minio/minio:latest
+    port: 19101
+    rootSecretRef: sink-minio-root
+  secretRefs: [sink-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-sink-s3
+spec:
+  type: s3sink
+  runtime:
+    type: docker
+    network: datascape-sink-net
+  configuration:
+    image: datascape-s3sink-connect:test
+    connectPort: 18186
+    bootstrapServers: datascape-sink-rp:29092
+    credentialsSecretRef: sink-minio-root
+  secretRefs: [sink-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: sink-students
+spec:
+  engine: postgres
+  providerRef:
+    name: datascape-sink-pg
+  postgres:
+    database: attendance
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: sink-attendance-events
+spec:
+  providerRef:
+    name: datascape-sink-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: attendance-raw
+spec:
+  providerRef:
+    name: datascape-sink-minio
+  bucket: raw-events
+  prefix: attendance/
+  format: json
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: sink-students-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: sink-students
+  targetRef:
+    name: sink-attendance-events
+  providerRef:
+    name: datascape-sink-dbz
+  options:
+    tables: [students]
+    snapshotMode: initial
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: sink-events-to-lake
+spec:
+  mode: sink
+  sourceRef:
+    name: sink-attendance-events
+  targetRef:
+    name: attendance-raw
+  providerRef:
+    name: datascape-sink-s3

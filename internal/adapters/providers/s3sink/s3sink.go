@@ -1,0 +1,300 @@
+// Package s3sink reconciles a Kafka Connect worker carrying an S3 sink
+// connector plugin (Aiven's s3-connector-for-apache-kafka is the reference)
+// and registers/updates sink connectors realizing Binding(mode: sink):
+// EventStream topics land as objects under a Dataset's bucket/prefix.
+// Implements SinkCapableProvider (Phase 4).
+package s3sink
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/rezarajan/platformctl/internal/adapters/kafkaconnect"
+	"github.com/rezarajan/platformctl/internal/domain/binding"
+	"github.com/rezarajan/platformctl/internal/domain/dataset"
+	"github.com/rezarajan/platformctl/internal/domain/provider"
+	"github.com/rezarajan/platformctl/internal/domain/resource"
+	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/ports/runtime"
+)
+
+// The stock Debezium/Connect images ship no S3 sink plugin, so there is no
+// usable default image — spec.configuration.image is required and must
+// contain the Aiven S3 sink connector on the plugin path.
+const connectorClass = "io.aiven.kafka.connect.s3.AivenKafkaConnectS3SinkConnector"
+
+type Provider struct {
+	providerRes resource.Envelope
+	cfg         provider.Provider
+	secrets     map[string]map[string]string
+	resources   map[resource.Key]resource.Envelope
+}
+
+func New() *Provider { return &Provider{} }
+
+func (p *Provider) Type() string { return "s3sink" }
+
+// SupportedSinkFormats implements SinkCapableProvider. These are the output
+// formats of the Aiven S3 sink connector; parquet additionally requires
+// schema-carrying records at runtime.
+func (p *Provider) SupportedSinkFormats() []string {
+	return []string{"json", "jsonl", "csv", "parquet"}
+}
+
+func (p *Provider) SetProviderResource(env resource.Envelope) {
+	p.providerRes = env
+	p.cfg, _ = provider.FromEnvelope(env)
+}
+
+func (p *Provider) SetSecrets(secrets map[string]map[string]string) { p.secrets = secrets }
+
+func (p *Provider) SetResourceSet(byKey map[resource.Key]resource.Envelope) { p.resources = byKey }
+
+func (p *Provider) containerName() string { return p.providerRes.Metadata.Name }
+
+func (p *Provider) connectPort() int {
+	if v, ok := p.cfg.Configuration["connectPort"]; ok {
+		switch n := v.(type) {
+		case int:
+			return n
+		case float64:
+			return int(n)
+		}
+	}
+	return 8083
+}
+
+func (p *Provider) connectURL() string { return "http://localhost:" + strconv.Itoa(p.connectPort()) }
+
+func (p *Provider) network() string {
+	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
+		return n
+	}
+	return "datascape"
+}
+
+func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+	switch res.Kind {
+	case "Provider":
+		return p.reconcileWorker(ctx, rt)
+	case "Binding":
+		return p.reconcileConnector(ctx, res)
+	default:
+		return status.Status{}, fmt.Errorf("s3sink provider cannot reconcile kind %s", res.Kind)
+	}
+}
+
+func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRuntime) (status.Status, error) {
+	st := status.Status{}
+	name := p.containerName()
+	image, _ := p.cfg.Configuration["image"].(string)
+	if image == "" {
+		return st, fmt.Errorf("Provider %q (type: s3sink): spec.configuration.image is required (a Connect image carrying the S3 sink plugin)", name)
+	}
+	bootstrap, _ := p.cfg.Configuration["bootstrapServers"].(string)
+	if bootstrap == "" {
+		return st, fmt.Errorf("Provider %q (type: s3sink): spec.configuration.bootstrapServers is required", name)
+	}
+	labels := map[string]string{
+		runtime.LabelManagedBy:  runtime.ManagedByValue,
+		runtime.LabelGeneration: name,
+	}
+
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
+		return st, err
+	}
+	_, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
+		Name:  name,
+		Image: image,
+		Env: map[string]string{
+			"BOOTSTRAP_SERVERS":                      bootstrap,
+			"GROUP_ID":                               name,
+			"CONFIG_STORAGE_TOPIC":                   name + "-configs",
+			"OFFSET_STORAGE_TOPIC":                   name + "-offsets",
+			"STATUS_STORAGE_TOPIC":                   name + "-status",
+			"CONFIG_STORAGE_REPLICATION_FACTOR":      "1",
+			"OFFSET_STORAGE_REPLICATION_FACTOR":      "1",
+			"STATUS_STORAGE_REPLICATION_FACTOR":      "1",
+			"KEY_CONVERTER":                          "org.apache.kafka.connect.json.JsonConverter",
+			"VALUE_CONVERTER":                        "org.apache.kafka.connect.json.JsonConverter",
+			"CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE":   "false",
+			"CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE": "false",
+			// Sink files are written on offset commit; the 60s default makes
+			// every reconcile-and-verify cycle glacial.
+			"OFFSET_FLUSH_INTERVAL_MS": "5000",
+			// topics.regex subscriptions only discover topics created after
+			// connector registration on consumer metadata refresh — the 5min
+			// default would stall CDC topics that appear on first table event.
+			"CONNECT_CONSUMER_METADATA_MAX_AGE_MS": "10000",
+		},
+		Networks: []string{p.network()},
+		Ports:    []runtime.PortBinding{{HostPort: p.connectPort(), ContainerPort: 8083}},
+		HealthCheck: &runtime.HealthCheck{
+			Test:     []string{"CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"},
+			Interval: 3 * time.Second,
+			Timeout:  5 * time.Second,
+			Retries:  40,
+		},
+		Labels: labels,
+	})
+	if err != nil {
+		return st, err
+	}
+	if err := rt.WaitHealthy(ctx, name, 180*time.Second); err != nil {
+		return st, err
+	}
+
+	now := time.Now()
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectWorkerHealthy"}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.ProviderState = map[string]any{"connectUrl": p.connectURL()}
+	return st, nil
+}
+
+// reconcileConnector registers or updates the S3 sink connector realizing a
+// Binding(mode: sink), then verifies it reaches RUNNING.
+func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope) (status.Status, error) {
+	st := status.Status{}
+	b, err := binding.FromEnvelope(res)
+	if err != nil {
+		return st, err
+	}
+	if b.Mode != binding.ModeSink {
+		return st, fmt.Errorf("Binding %q: s3sink realizes mode \"sink\" only, got %q", res.Metadata.Name, b.Mode)
+	}
+
+	if _, ok := p.resources[resource.Key{Kind: "EventStream", Name: b.SourceRef}]; !ok {
+		return st, fmt.Errorf("Binding %q: sourceRef %q not found", res.Metadata.Name, b.SourceRef)
+	}
+	dsEnv, ok := p.resources[resource.Key{Kind: "Dataset", Name: b.TargetRef}]
+	if !ok {
+		return st, fmt.Errorf("Binding %q: targetRef %q not found", res.Metadata.Name, b.TargetRef)
+	}
+	ds, err := dataset.FromEnvelope(dsEnv)
+	if err != nil {
+		return st, err
+	}
+
+	endpoint, err := p.objectStoreEndpoint(ds, b)
+	if err != nil {
+		return st, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
+	}
+
+	credsRefName, _ := p.cfg.Configuration["credentialsSecretRef"].(string)
+	creds, ok := p.secrets[credsRefName]
+	if !ok {
+		return st, fmt.Errorf("Binding %q: s3sink Provider %q needs configuration.credentialsSecretRef naming a declared secretRef", res.Metadata.Name, p.containerName())
+	}
+
+	connectorName := res.Metadata.Name
+	config := map[string]string{
+		"connector.class":       connectorClass,
+		"tasks.max":             "1",
+		"aws.access.key.id":     creds["username"],
+		"aws.secret.access.key": creds["password"],
+		"aws.s3.bucket.name":    ds.Bucket,
+		"aws.s3.endpoint":       endpoint,
+		"aws.s3.region":         "us-east-1",
+		// CDC traffic arrives on per-table topics prefixed with the
+		// EventStream name (<stream>.<schema>.<table>); match the stream's own
+		// topic and any prefixed ones.
+		"topics.regex":                   "^" + b.SourceRef + "(\\..*)?$",
+		"format.output.type":             ds.Format,
+		"format.output.fields":           "value",
+		"file.compression.type":          "none",
+		"key.converter":                  "org.apache.kafka.connect.json.JsonConverter",
+		"value.converter":                "org.apache.kafka.connect.json.JsonConverter",
+		"key.converter.schemas.enable":   "false",
+		"value.converter.schemas.enable": "false",
+	}
+	if ds.Prefix != "" {
+		config["aws.s3.prefix"] = ds.Prefix
+	}
+
+	if err := kafkaconnect.PutConnectorConfig(ctx, p.connectURL(), connectorName, config); err != nil {
+		return st, err
+	}
+
+	state, err := kafkaconnect.WaitConnectorRunning(ctx, p.connectURL(), connectorName, 90*time.Second)
+	now := time.Now()
+	if err != nil {
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorNotRunning", Message: err.Error()}, now)
+		st.SetCondition(status.Condition{Type: status.Degraded, Status: status.True, Reason: "ConnectorState" + state}, now)
+		return st, err
+	}
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectorRunning"}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.ProviderState = map[string]any{"connector": connectorName, "state": state}
+	return st, nil
+}
+
+// objectStoreEndpoint resolves the S3 endpoint reachable from the Connect
+// worker container: an explicit options.endpoint wins (external stores),
+// otherwise the Dataset's Provider container on the shared network.
+func (p *Provider) objectStoreEndpoint(ds dataset.Dataset, b binding.Binding) (string, error) {
+	if ep, ok := b.Options["endpoint"].(string); ok && ep != "" {
+		return ep, nil
+	}
+	if ds.ProviderRef == "" {
+		return "", fmt.Errorf("cannot determine object-store endpoint (no providerRef on Dataset and no options.endpoint)")
+	}
+	if _, ok := p.resources[resource.Key{Kind: "Provider", Name: ds.ProviderRef}]; !ok {
+		return "", fmt.Errorf("Dataset providerRef %q not found", ds.ProviderRef)
+	}
+	// The s3 provider always serves the S3 API on 9000 inside the network.
+	return "http://" + ds.ProviderRef + ":9000", nil
+}
+
+func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) error {
+	switch res.Kind {
+	case "Provider":
+		if err := rt.Remove(ctx, p.containerName()); err != nil {
+			return err
+		}
+		_ = rt.RemoveNetwork(ctx, p.network())
+		return nil
+	case "Binding":
+		return kafkaconnect.DeleteConnector(ctx, p.connectURL(), res.Metadata.Name)
+	default:
+		return fmt.Errorf("s3sink provider cannot destroy kind %s", res.Kind)
+	}
+}
+
+func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+	st := status.Status{}
+	now := time.Now()
+	switch res.Kind {
+	case "Provider":
+		ctrState, found, err := rt.Inspect(ctx, p.containerName())
+		if err != nil {
+			return st, err
+		}
+		if found && ctrState.Healthy {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectWorkerHealthy"}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		} else {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectWorkerUnhealthy"}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectWorkerUnhealthy"}, now)
+		}
+		return st, nil
+	case "Binding":
+		state, err := kafkaconnect.ConnectorState(ctx, p.connectURL(), res.Metadata.Name)
+		if err != nil {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorMissing", Message: err.Error()}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorMissing"}, now)
+			return st, nil
+		}
+		if state == "RUNNING" {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectorRunning"}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		} else {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorState" + state}, now)
+			st.SetCondition(status.Condition{Type: status.Degraded, Status: status.True, Reason: "ConnectorState" + state}, now)
+		}
+		return st, nil
+	default:
+		return st, fmt.Errorf("s3sink provider cannot probe kind %s", res.Kind)
+	}
+}

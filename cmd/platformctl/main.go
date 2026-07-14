@@ -13,6 +13,8 @@ import (
 	"github.com/rezarajan/platformctl/internal/adapters/providers/placeholder"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/postgres"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/redpanda"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/s3"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/s3sink"
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	fakeruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/fake"
 	"github.com/rezarajan/platformctl/internal/application/featuregate"
@@ -50,6 +52,8 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	gates.Register("DebeziumCDCProvider", featuregate.Alpha, true)
 	gates.Register("CDCBinding", featuregate.Alpha, true)
 	gates.Register("LineageObservability", featuregate.Alpha, false)
+	gates.Register("ObjectStoreProvider", featuregate.Alpha, true)
+	gates.Register("SinkBinding", featuregate.Alpha, true)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
@@ -57,6 +61,11 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	reg.RegisterProvider("redpanda", func() reconciler.Provider { return redpanda.New() }, "RedpandaProvider")
 	reg.RegisterProvider("postgres", func() reconciler.Provider { return postgres.New() }, "PostgresProvider")
 	reg.RegisterProvider("debezium", func() reconciler.Provider { return debezium.New() }, "DebeziumCDCProvider")
+	// "s3" and "minio" are the same adapter: MinIO is the reference
+	// S3-API-compatible target (05-v1-first-version-spec.md §3).
+	reg.RegisterProvider("s3", func() reconciler.Provider { return s3.New() }, "ObjectStoreProvider")
+	reg.RegisterProvider("minio", func() reconciler.Provider { return s3.New() }, "ObjectStoreProvider")
+	reg.RegisterProvider("s3sink", func() reconciler.Provider { return s3sink.New() }, "ObjectStoreProvider")
 	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
 		return fakeruntime.New(), nil
 	})

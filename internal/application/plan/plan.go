@@ -59,6 +59,13 @@ func Compute(envelopes []resource.Envelope, st state.State, g *graph.Graph) (Pla
 	levels := g.TopologicalLevels()
 	p := Plan{Levels: levels}
 
+	// changed tracks non-noop keys so changes cascade to dependents:
+	// a resource realized *from* another (e.g. a Binding whose Dataset's
+	// format changed) must re-reconcile even though its own spec is
+	// unchanged. Levels are topological, so one pass sees every dependency
+	// before its dependents.
+	changed := make(map[resource.Key]bool)
+
 	for _, level := range levels {
 		for _, key := range level {
 			e := byKey[key]
@@ -88,6 +95,18 @@ func Compute(envelopes []resource.Envelope, st state.State, g *graph.Graph) (Pla
 			default:
 				entry.Action = ActionNoop
 				entry.Reason = "spec unchanged"
+			}
+			if entry.Action == ActionNoop && lifecycle == resource.Managed {
+				for _, dep := range g.Edges[key] {
+					if changed[dep] {
+						entry.Action = ActionUpdate
+						entry.Reason = fmt.Sprintf("dependency %s changed", dep)
+						break
+					}
+				}
+			}
+			if entry.Action != ActionNoop {
+				changed[key] = true
 			}
 			p.Entries = append(p.Entries, entry)
 		}

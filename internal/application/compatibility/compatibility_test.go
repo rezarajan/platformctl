@@ -28,6 +28,10 @@ type cdcStub struct{ stubProvider }
 
 func (cdcStub) SupportedSourceEngines() []string { return []string{"postgres", "mysql", "mongodb"} }
 
+type sinkStub struct{ stubProvider }
+
+func (sinkStub) SupportedSinkFormats() []string { return []string{"parquet", "json"} }
+
 func envelope(kind, name string, spec map[string]any) resource.Envelope {
 	e := resource.Envelope{}
 	e.APIVersion = "datascape.io/v1alpha1"
@@ -97,5 +101,67 @@ func TestNonCDCCapableProviderRejected(t *testing.T) {
 func TestSupportedEngineAccepted(t *testing.T) {
 	if err := Check(cdcManifests("postgres"), resolver(cdcStub{stubProvider{"debezium"}})); err != nil {
 		t.Fatalf("valid CDC binding rejected: %v", err)
+	}
+}
+
+func sinkManifests(format string) []resource.Envelope {
+	return []resource.Envelope{
+		envelope("Provider", "s3-sink", map[string]any{
+			"type":    "s3sink",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Provider", "local-minio", map[string]any{
+			"type":    "minio",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("EventStream", "attendance-events", map[string]any{
+			"providerRef": map[string]any{"name": "s3-sink"},
+		}),
+		envelope("Dataset", "attendance-raw", map[string]any{
+			"providerRef": map[string]any{"name": "local-minio"},
+			"bucket":      "raw-events",
+			"format":      format,
+		}),
+		envelope("Binding", "attendance-events-to-lake", map[string]any{
+			"mode":        "sink",
+			"sourceRef":   map[string]any{"name": "attendance-events"},
+			"targetRef":   map[string]any{"name": "attendance-raw"},
+			"providerRef": map[string]any{"name": "s3-sink"},
+		}),
+	}
+}
+
+// TestUnsupportedSinkFormatErrorFormat covers the Phase 4 exit criterion:
+// a Binding(mode: sink) whose Dataset format the provider cannot write fails
+// at validate with the documented error shape
+// (docs/planning/02-architecture.md §5.2).
+func TestUnsupportedSinkFormatErrorFormat(t *testing.T) {
+	err := Check(sinkManifests("avro"), resolver(sinkStub{stubProvider{"s3sink"}}))
+	if err == nil {
+		t.Fatal("validate accepted an unsupported sink format")
+	}
+	want := `Binding "attendance-events-to-lake": Provider "s3-sink" (type: s3sink)
+does not support sink format "avro" (supported: json, parquet)`
+	if err.Error() != want {
+		t.Errorf("error format mismatch\ngot:\n%s\nwant:\n%s", err.Error(), want)
+	}
+}
+
+// TestNonSinkCapableProviderRejected: a Binding(mode: sink) referencing a
+// Provider that does not implement SinkCapableProvider fails at validate,
+// not apply.
+func TestNonSinkCapableProviderRejected(t *testing.T) {
+	err := Check(sinkManifests("json"), resolver(stubProvider{"redpanda"}))
+	if err == nil {
+		t.Fatal("validate accepted a non-sink-capable provider behind a sink Binding")
+	}
+	if !strings.Contains(err.Error(), `does not support mode "sink"`) {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestSupportedSinkFormatAccepted(t *testing.T) {
+	if err := Check(sinkManifests("json"), resolver(sinkStub{stubProvider{"s3sink"}})); err != nil {
+		t.Fatalf("valid sink binding rejected: %v", err)
 	}
 }
