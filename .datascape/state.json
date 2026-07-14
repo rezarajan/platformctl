@@ -1,4 +1,383 @@
 {
   "version": 1,
-  "resources": {}
+  "resources": {
+    "Binding/attendance-events-to-lake": {
+      "specHash": "540d2d8e1d125346756a4eee70c3749c81e90a1df033a56dbb68ab889162b9ec",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "ConnectorRunning",
+            "lastTransitionTime": "2026-07-14T08:08:35.106699787-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:35.106699787-04:00"
+          }
+        ],
+        "observedGeneration": 0,
+        "providerState": {
+          "connector": "attendance-events-to-lake",
+          "state": "RUNNING"
+        }
+      },
+      "lifecycle": "Managed",
+      "providerState": {
+        "connector": "attendance-events-to-lake",
+        "state": "RUNNING"
+      }
+    },
+    "Binding/student-db-to-events": {
+      "specHash": "26df1e06fb35d02947af72639d2f02143cecdc97ed22f67d40997bde28128758",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "ConnectorRunning",
+            "lastTransitionTime": "2026-07-14T08:08:35.274034459-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:35.274034459-04:00"
+          }
+        ],
+        "observedGeneration": 0,
+        "providerState": {
+          "connector": "student-db-to-events",
+          "state": "RUNNING"
+        }
+      },
+      "lifecycle": "Managed",
+      "providerState": {
+        "connector": "student-db-to-events",
+        "state": "RUNNING"
+      }
+    },
+    "Dataset/attendance-raw": {
+      "specHash": "ce0bd138d8dea877b6ba9ea871beda0edb42d14e86488aa11bcd85b8bf7b2fee",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "DatasetProvisioned",
+            "lastTransitionTime": "2026-07-14T08:08:34.956437834-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:34.956437834-04:00"
+          }
+        ],
+        "observedGeneration": 0,
+        "providerState": {
+          "bucket": "raw-events",
+          "format": "json",
+          "prefix": "attendance/"
+        }
+      },
+      "lifecycle": "Managed",
+      "providerState": {
+        "bucket": "raw-events",
+        "format": "json",
+        "prefix": "attendance/"
+      }
+    },
+    "EventStream/attendance-events": {
+      "specHash": "d07ae3f089ce976d1d1a1c52d9ee1825d6d6110aab1df2ec515313e3f880fcf9",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "TopicReconciled",
+            "lastTransitionTime": "2026-07-14T08:08:16.203961364-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:16.203961364-04:00"
+          }
+        ],
+        "observedGeneration": 0,
+        "providerState": {
+          "partitions": 6,
+          "topic": "attendance-events"
+        }
+      },
+      "lifecycle": "Managed",
+      "providerState": {
+        "partitions": 6,
+        "topic": "attendance-events"
+      }
+    },
+    "Provider/local-minio": {
+      "specHash": "68c0b39f447d2c219ba4f3ce768b8c683ee02ec7b04b9b415ab8bb24515111d7",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "InstanceHealthy",
+            "lastTransitionTime": "2026-07-14T08:08:18.855982357-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:18.855982357-04:00"
+          }
+        ],
+        "observedGeneration": 0,
+        "providerState": {
+          "containerId": "75bc367409e0d6f2abf0e33de31f9e1d87749c61fa886b2769efe7724dd1dca6",
+          "hostEndpoint": "127.0.0.1:19000",
+          "internalUrl": "http://local-minio:9000"
+        }
+      },
+      "lifecycle": "Managed",
+      "providerState": {
+        "containerId": "75bc367409e0d6f2abf0e33de31f9e1d87749c61fa886b2769efe7724dd1dca6",
+        "hostEndpoint": "127.0.0.1:19000",
+        "internalUrl": "http://local-minio:9000"
+      }
+    },
+    "Provider/local-postgres": {
+      "specHash": "f3affa5f222e978ce8df4edff365f264a3245f14f5f706646138b692739db0c6",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "InstanceHealthy",
+            "lastTransitionTime": "2026-07-14T08:08:21.52866341-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:21.52866341-04:00"
+          }
+        ],
+        "observedGeneration": 0,
+        "providerState": {
+          "containerId": "7cd5fc4498d0a36fa5978605b1ef33b55aad8319269099ce6578576854cecda1",
+          "hostAddr": "127.0.0.1:15432",
+          "internalAddr": "local-postgres:5432"
+        }
+      },
+      "lifecycle": "Managed",
+      "providerState": {
+        "containerId": "7cd5fc4498d0a36fa5978605b1ef33b55aad8319269099ce6578576854cecda1",
+        "hostAddr": "127.0.0.1:15432",
+        "internalAddr": "local-postgres:5432"
+      }
+    },
+    "Provider/local-redpanda": {
+      "specHash": "a0f90498ec4f6e31f10aa9e8d94030aaceef47abb2bf4c0c373b968f341b9f42",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "BrokerHealthy",
+            "lastTransitionTime": "2026-07-14T08:08:15.990379989-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:15.990379989-04:00"
+          }
+        ],
+        "observedGeneration": 0,
+        "providerState": {
+          "containerId": "3e264915f96d2d8c10786878c999fe26cb3541738677d2a01be5a071611543a5",
+          "internalAddr": "local-redpanda:29092",
+          "kafkaAddr": "127.0.0.1:19093"
+        }
+      },
+      "lifecycle": "Managed",
+      "providerState": {
+        "containerId": "3e264915f96d2d8c10786878c999fe26cb3541738677d2a01be5a071611543a5",
+        "internalAddr": "local-redpanda:29092",
+        "kafkaAddr": "127.0.0.1:19093"
+      }
+    },
+    "Provider/postgres-cdc": {
+      "specHash": "c00bdc967e9eb84ab213940aa68f4eef3bf2a1ca6a6d757fb85767d803fa8765",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "ConnectWorkerHealthy",
+            "lastTransitionTime": "2026-07-14T08:08:28.235774685-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:28.235774685-04:00"
+          }
+        ],
+        "observedGeneration": 0,
+        "providerState": {
+          "connectUrl": "http://127.0.0.1:18083"
+        }
+      },
+      "lifecycle": "Managed",
+      "providerState": {
+        "connectUrl": "http://127.0.0.1:18083"
+      }
+    },
+    "Provider/s3-sink": {
+      "specHash": "89d0cec64e5483fd2e0e5833d2d7b61cae35d0f1375215d5c85d792b38312a6d",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "ConnectWorkerHealthy",
+            "lastTransitionTime": "2026-07-14T08:08:34.950870777-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:34.950870777-04:00"
+          }
+        ],
+        "observedGeneration": 0,
+        "providerState": {
+          "connectUrl": "http://127.0.0.1:18084"
+        }
+      },
+      "lifecycle": "Managed",
+      "providerState": {
+        "connectUrl": "http://127.0.0.1:18084"
+      }
+    },
+    "Provider/test-lineage-fake": {
+      "specHash": "8aa58b7a99cb2e0bcd9b0af88ea6b4831257ac7457430b8d93562be808f15230",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "NoopReconciled",
+            "lastTransitionTime": "2026-07-14T08:08:15.997627001-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:15.997627001-04:00"
+          }
+        ],
+        "observedGeneration": 0
+      },
+      "lifecycle": "Managed"
+    },
+    "SecretReference/minio-root-creds": {
+      "specHash": "3b1fea13e8f00ae6c133862e2ca6ed4775d381be84796c2a05aa850d1bb8ecda",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "SecretResolvable",
+            "lastTransitionTime": "2026-07-14T08:08:15.998343403-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:15.998343403-04:00"
+          }
+        ],
+        "observedGeneration": 0
+      },
+      "lifecycle": "Managed"
+    },
+    "SecretReference/postgres-admin-creds": {
+      "specHash": "5769663042f274d9070800401ac26ee0ea8a2c719428fec0cf36da229cd87388",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "SecretResolvable",
+            "lastTransitionTime": "2026-07-14T08:08:15.998946924-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:15.998946924-04:00"
+          }
+        ],
+        "observedGeneration": 0
+      },
+      "lifecycle": "Managed"
+    },
+    "SecretReference/postgres-replication-creds": {
+      "specHash": "65fecb6fa5bd971499163fc519e1699e1ce7acd6f5830231a1a13f2ac014fd02",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "SecretResolvable",
+            "lastTransitionTime": "2026-07-14T08:08:15.999574802-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:15.999574802-04:00"
+          }
+        ],
+        "observedGeneration": 0
+      },
+      "lifecycle": "Managed"
+    },
+    "Source/student-database": {
+      "specHash": "5b738346758af66bac67a0fdf187f75a518ae2ac0b357c925552fa687e9a0107",
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "SourceProvisioned",
+            "lastTransitionTime": "2026-07-14T08:08:35.043121035-04:00"
+          },
+          {
+            "type": "Progressing",
+            "status": "False",
+            "reason": "ReconcileComplete",
+            "lastTransitionTime": "2026-07-14T08:08:35.043121035-04:00"
+          }
+        ],
+        "observedGeneration": 0,
+        "providerState": {
+          "database": "studentdb",
+          "replicationUser": "repl"
+        }
+      },
+      "lifecycle": "Managed",
+      "providerState": {
+        "database": "studentdb",
+        "replicationUser": "repl"
+      }
+    }
+  }
 }

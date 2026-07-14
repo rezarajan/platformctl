@@ -45,7 +45,9 @@ platformctl apply    examples/cdc-attendance/ --auto-approve
 platformctl status   examples/cdc-attendance/
 ```
 
-Then generate some change traffic and watch it land:
+Then generate some change traffic and watch it land (`students` is one of
+the tables the CDC Binding declares — see
+[Capturing another table](#capturing-another-table)):
 
 ```sh
 psql postgres://admin:admin-pw@localhost:15432/studentdb \
@@ -62,6 +64,48 @@ Tear down:
 ```sh
 platformctl destroy examples/cdc-attendance/ --auto-approve
 ```
+
+## Capturing another table
+
+**Only tables declared on the CDC Binding are captured.** The Binding in
+`binding-cdc.yaml` declares:
+
+```yaml
+  options:
+    tables: [students, attendance]
+```
+
+which becomes the Debezium connector's `table.include.list`
+(`public.students,public.attendance`). Creating some other table and
+inserting rows produces **nothing** in the stream or the sink — the
+connector filters it out. That's the declarative model: the manifest, not
+the database, decides what is part of the platform.
+
+To capture a new table, declare it and re-apply:
+
+```yaml
+  options:
+    tables: [students, attendance, grades]
+```
+
+```sh
+platformctl apply examples/cdc-attendance/ --auto-approve
+# → ok   Binding/student-db-to-events (update)   — connector reconfigured in
+#   place; Postgres, Redpanda, and the Connect workers are not restarted.
+```
+
+Rows inserted into `grades` from then on stream to
+`attendance-events.public.grades` and land under
+`raw-events/attendance/` within ~30s. Omitting `tables` entirely captures
+every table in the database.
+
+**Caveat — pre-existing rows:** widening the table list does not re-run the
+initial snapshot. Rows that were already in the new table may or may not
+replay (it depends on how far the connector's WAL position has advanced),
+so treat declared-late tables as streaming-only from the moment of
+re-apply. If you need a full backfill, destroy and re-apply the Binding so
+its connector snapshots from scratch, or use Debezium incremental
+snapshots (not wired up in v1).
 
 ## Host ports
 

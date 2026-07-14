@@ -241,7 +241,14 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 	}
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectorRunning"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
-	st.ProviderState = map[string]any{"connector": connectorName, "state": state}
+	st.ProviderState = map[string]any{
+		"connector": connectorName,
+		"state":     state,
+		// Which tables the connector actually captures — empty means every
+		// table in the publication. Surfaced so `status -o json` answers
+		// "why isn't my table streaming" without a Connect API call.
+		"tableIncludeList": config["table.include.list"],
+	}
 	return st, nil
 }
 

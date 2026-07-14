@@ -161,6 +161,11 @@ mc alias set local http://localhost:19000 minioadmin minioadmin-pw
 mc ls --recursive local/raw-events/       # objects appear within ~30s
 ```
 
+Only tables declared on the CDC Binding (`options.tables`) are captured —
+add a table there and re-apply to widen the stream; the connector is
+reconfigured in place. See the
+[example README](examples/cdc-attendance/README.md#capturing-another-table).
+
 Tear it all down (reverse dependency order, labeled objects only):
 
 ```sh
