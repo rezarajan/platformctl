@@ -11,7 +11,7 @@ of YAML.*
 [![CI](https://github.com/rezarajan/platformctl/actions/workflows/ci.yml/badge.svg)](https://github.com/rezarajan/platformctl/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/go-1.22%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Runtime](https://img.shields.io/badge/runtime-Docker-2496ED?logo=docker&logoColor=white)](#architecture)
-[![Status](https://img.shields.io/badge/phases-0–4_verified-brightgreen)](docs/planning/04-roadmap-and-feature-gates.md)
+[![Version](https://img.shields.io/badge/release-v1.0.0-blue)](docs/planning/05-v1-first-version-spec.md)
 
 </div>
 
@@ -60,7 +60,8 @@ applied: 14 succeeded, 0 failed, 0 skipped
   converges even when half the platform is already dead. All of it enforced
   by a chaos-monkey integration suite in CI.
 - **Secrets stay out of manifests** — `SecretReference` resources resolve
-  through pluggable backends (`env` today); specs carry names, never values.
+  through pluggable backends (`env`, `file`, and gated `vault`); specs carry
+  names, never values, and the schemas make a plaintext value unrepresentable.
 - **Lineage-aware by design** — `metadata.observers` forwards a resolved
   `LineageEndpoint` to providers that consume one (Debezium's native
   OpenLineage integration), and degrades to an informational condition when
@@ -123,10 +124,14 @@ Source(postgres) ──Binding(mode: cdc)──▶ EventStream ──Binding(mod
                                                                           SecretReference(env) ⤴
 ```
 
-`Binding` is the connective tissue: its `mode` fixes which Kinds it may join
-(`cdc`: Source→EventStream, `sink`: EventStream→Dataset), and the referenced
-provider must declare the matching capability interface
-(`CDCCapableProvider`, `SinkCapableProvider`) — both enforced at `validate`.
+`Binding` is the connective tissue: a directed edge whose `mode` names the
+movement mechanism, admitting a *set* of Kind pairings (`cdc`:
+Source→EventStream; `sink`: EventStream→Dataset or EventStream→Source —
+databases are legitimate sinks; `ingest`: Dataset→EventStream — object
+stores are legitimate sources). The referenced provider must declare the
+capability interface matching the pairing — all enforced at `validate`.
+Asset kinds are role-neutral; direction lives in the Binding
+(docs/design/001-bindings-are-directed-edges.md).
 
 ## 🚀 Quickstart
 
@@ -188,6 +193,8 @@ bin/platformctl destroy examples/cdc-attendance/ --auto-approve
 | `status <dir>` | Per-resource `Ready`/`DRIFT`/conditions/lifecycle from recorded state. |
 | `drift <dir>` | Probe live infrastructure, record observed conditions into state, report drift. Exit `1` when drift is found; run `apply` to heal it. |
 | `graph <dir> -o dot\|mermaid` | Render the dependency DAG. |
+| `import <Kind>/<name> --from <name>` | Adopt a pre-existing backing object into state as Imported (probe, never create). Gated by `ImportedResources`. |
+| `docs build\|serve` | Generate/serve the resource reference from `schemas/`. |
 | `destroy <dir>` | Reverse-order teardown. `--include-external` additionally requires `--yes-i-understand-this-is-destructive`. |
 
 Global flags: `--state-file` (default `.datascape/state.json`),
@@ -228,10 +235,16 @@ The `docs/planning/` package is the source of truth:
 | [04-roadmap-and-feature-gates](docs/planning/04-roadmap-and-feature-gates.md) | Phases 0–8 with checkable exit criteria. |
 | [05-v1-first-version-spec](docs/planning/05-v1-first-version-spec.md) | The precise v1.0.0 definition of done. |
 
-**Roadmap status:** Phases 0–4 (foundations, Docker runtime, Redpanda,
-CDC + lineage mechanism, object-storage sink) are complete and verified
-end-to-end. Phase 5 (imported/external lifecycles, drift detection) is in
-progress; its completion declares v1.0.0.
+**Roadmap status:** v1.0.0 is declared — phases 0–5 (foundations, Docker
+runtime, Redpanda, CDC + lineage mechanism, object-storage sink,
+import/external lifecycles + drift) are complete with every exit criterion
+automated, and the spec §6 acceptance scenario runs in CI against the
+literal example manifests. Phase 6's committed scope (parallel
+reconciliation behind the ParallelReconciliation gate, vault and file
+secret backends) is done; the optional openlineage provider is future work.
+Binding taxonomy is a relation over role-neutral asset kinds — database-as-
+sink and object-store-as-source are schema-stable pairings awaiting
+providers (see docs/design/001-bindings-are-directed-edges.md).
 
 ---
 
