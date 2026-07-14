@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	envsecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/env"
 	"github.com/rezarajan/platformctl/internal/adapters/state/localfile"
 	"github.com/rezarajan/platformctl/internal/application/compatibility"
 	"github.com/rezarajan/platformctl/internal/application/engine"
@@ -85,9 +86,10 @@ func (a *app) loadAndValidate(path string) ([]resource.Envelope, *graph.Graph, e
 
 func (a *app) newEngine() *engine.Engine {
 	return &engine.Engine{
-		Registry:   a.reg,
-		StateStore: localfile.New(a.stateFile),
-		Clock:      clock.Real{},
+		Registry:    a.reg,
+		StateStore:  localfile.New(a.stateFile),
+		SecretStore: envsecrets.New(),
+		Clock:       clock.Real{},
 		Log: func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, format+"\n", args...)
 		},

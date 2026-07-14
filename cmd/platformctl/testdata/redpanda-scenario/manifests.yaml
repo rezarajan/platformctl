@@ -1,0 +1,23 @@
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-rp-test
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-rp-test-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
+    kafkaPort: 19192
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: datascape-test-events
+spec:
+  providerRef:
+    name: datascape-rp-test
+  partitions: 3
+  retention:
+    duration: 7d

@@ -1,0 +1,12 @@
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-phase1-probe
+spec:
+  type: container
+  runtime:
+    type: docker
+    network: datascape-phase1
+  configuration:
+    image: alpine:3.20
+    cmd: ["sleep", "600"]

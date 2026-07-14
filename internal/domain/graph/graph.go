@@ -66,6 +66,20 @@ func Build(envelopes []resource.Envelope) (*Graph, error) {
 			}
 			g.Edges[from] = append(g.Edges[from], to)
 		}
+		// secretRefs (Provider kind) create edges to SecretReferences.
+		if refs, ok := e.Spec["secretRefs"].([]any); ok {
+			for _, r := range refs {
+				name, ok := r.(string)
+				if !ok || name == "" {
+					continue
+				}
+				target := resource.Key{Kind: "SecretReference", Name: name}
+				if _, exists := g.Nodes[target]; !exists {
+					return nil, fmt.Errorf("%s: spec.secretRefs entry %q does not resolve to a SecretReference", from, name)
+				}
+				g.Edges[from] = append(g.Edges[from], target)
+			}
+		}
 		// observers create edges too: the resource depends on the observed provider
 		// being reconciled first so its endpoint is resolvable.
 		for _, obs := range e.Metadata.Observers {

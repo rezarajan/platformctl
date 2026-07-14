@@ -32,6 +32,35 @@ type SinkCapableProvider interface {
 	SupportedSinkFormats() []string
 }
 
+// ProviderResourceAware is optionally implemented by providers that need
+// their own Provider resource's spec (configuration, runtime block) when
+// reconciling dependent resources — e.g. redpanda needs the broker address it
+// declared when reconciling an EventStream. The engine calls
+// SetProviderResource after construction, before any Reconcile/Destroy/Probe.
+// (Implementation-revealed addition; pending doc amendment to 02-architecture.md §4.2.)
+type ProviderResourceAware interface {
+	Provider
+	SetProviderResource(env resource.Envelope)
+}
+
+// SecretsAware is optionally implemented by providers whose Provider resource
+// declares spec.secretRefs. The engine resolves each named SecretReference via
+// the SecretStore port and calls SetSecrets (keyed by reference name, then by
+// key) before any Reconcile/Destroy/Probe.
+type SecretsAware interface {
+	Provider
+	SetSecrets(secrets map[string]map[string]string)
+}
+
+// ResourceSetAware is optionally implemented by providers that must resolve
+// other resources while reconciling one — e.g. debezium reconciling a Binding
+// needs the Source's provider (database host) and the EventStream's provider
+// (broker address). The engine passes the full validated resource set.
+type ResourceSetAware interface {
+	Provider
+	SetResourceSet(byKey map[resource.Key]resource.Envelope)
+}
+
 // LineageAware is declared by a provider that knows how to consume a lineage
 // backend's connection details and wire them into its own, real integration.
 // Implemented by `debezium` in v1.0.0.

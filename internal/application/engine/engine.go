@@ -14,16 +14,19 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
+	"github.com/rezarajan/platformctl/internal/domain/secret"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/clock"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/ports/secretstore"
 	"github.com/rezarajan/platformctl/internal/ports/state"
 )
 
 type Engine struct {
 	Registry    *registry.Registry
 	StateStore  state.StateStore
+	SecretStore secretstore.SecretStore // nil disables secretRefs resolution
 	Clock       clock.Clock
 	HaltOnError bool
 	// Log receives one line per reconciliation action; nil disables.
@@ -109,8 +112,22 @@ type DependencyGraph interface {
 	Dependents(k resource.Key) map[resource.Key]bool
 }
 
+func secretRefFrom(env resource.Envelope) secret.SecretReference {
+	ref := secret.SecretReference{Name: env.Metadata.Name}
+	backend, _ := env.Spec["backend"].(string)
+	ref.Backend = secret.Backend(backend)
+	if keys, ok := env.Spec["keys"].([]any); ok {
+		for _, k := range keys {
+			if s, ok := k.(string); ok {
+				ref.Keys = append(ref.Keys, s)
+			}
+		}
+	}
+	return ref
+}
+
 func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) error {
-	prov, rt, err := e.resolveProviderAndRuntime(env, byKey)
+	prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
 	if err != nil {
 		return err
 	}
@@ -178,7 +195,7 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 		if !ok {
 			continue
 		}
-		prov, rt, err := e.resolveProviderAndRuntime(env, byKey)
+		prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
 		if err != nil {
 			res.Failed[entry.Key] = err
 			continue
@@ -204,7 +221,7 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 
 // resolveProviderAndRuntime resolves the resource's Provider (via providerRef,
 // or the resource itself if it is a Provider) and constructs its runtime.
-func (e *Engine) resolveProviderAndRuntime(env resource.Envelope, byKey map[resource.Key]resource.Envelope) (reconciler.Provider, runtime.ContainerRuntime, error) {
+func (e *Engine) resolveProviderAndRuntime(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope) (reconciler.Provider, runtime.ContainerRuntime, error) {
 	provEnv := env
 	if env.Kind != "Provider" {
 		refName := ""
@@ -228,6 +245,31 @@ func (e *Engine) resolveProviderAndRuntime(env resource.Envelope, byKey map[reso
 	prov, err := e.Registry.Provider(p.Type)
 	if err != nil {
 		return nil, nil, err
+	}
+	if aware, ok := prov.(reconciler.ProviderResourceAware); ok {
+		aware.SetProviderResource(provEnv)
+	}
+	if aware, ok := prov.(reconciler.ResourceSetAware); ok {
+		aware.SetResourceSet(byKey)
+	}
+	if aware, ok := prov.(reconciler.SecretsAware); ok && len(p.SecretRefs) > 0 {
+		if e.SecretStore == nil {
+			return nil, nil, fmt.Errorf("Provider %q declares secretRefs but no secret store is configured", provEnv.Metadata.Name)
+		}
+		secrets := make(map[string]map[string]string, len(p.SecretRefs))
+		for _, refName := range p.SecretRefs {
+			refEnv, ok := byKey[resource.Key{Kind: "SecretReference", Name: refName}]
+			if !ok {
+				return nil, nil, fmt.Errorf("Provider %q: secretRef %q does not resolve to a SecretReference", provEnv.Metadata.Name, refName)
+			}
+			ref := secretRefFrom(refEnv)
+			resolved, err := e.SecretStore.Resolve(ctx, ref)
+			if err != nil {
+				return nil, nil, err
+			}
+			secrets[refName] = resolved
+		}
+		aware.SetSecrets(secrets)
 	}
 	rt, err := e.Registry.Runtime(p.RuntimeType, p.RuntimeConfig)
 	if err != nil {

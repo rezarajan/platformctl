@@ -36,6 +36,7 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 	ctrSpec := runtime.ContainerSpec{
 		Name:     namePrefix + "-ctr",
 		Image:    "alpine:3.20",
+		Cmd:      []string{"sleep", "300"}, // must outlive the suite against a real daemon
 		Networks: []string{netSpec.Name},
 		Labels:   labels,
 	}

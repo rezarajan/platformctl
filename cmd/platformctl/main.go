@@ -8,7 +8,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/debezium"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/noop"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/placeholder"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/postgres"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/redpanda"
+	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	fakeruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/fake"
 	"github.com/rezarajan/platformctl/internal/application/featuregate"
 	"github.com/rezarajan/platformctl/internal/application/registry"
@@ -32,15 +37,34 @@ func main() {
 	}
 }
 
-// defaultWiring registers every adapter this build ships. Phase 0: the noop
-// provider and the fake runtime. Phase 1+ adds docker here.
+// defaultWiring registers every adapter this build ships. This is the single
+// place concrete adapters are wired to the registry.
 func defaultWiring(gates *featuregate.Registry) *registry.Registry {
+	// Defaults follow the feature-gate master table in
+	// docs/planning/04-roadmap-and-feature-gates.md §12.
 	gates.Register("CoreReconciler", featuregate.GA, true)
+	gates.Register("DockerRuntime", featuregate.Alpha, true)
+	gates.Register("ContainerProvider", featuregate.Alpha, false) // not in the master table; test-only provider
+	gates.Register("RedpandaProvider", featuregate.Alpha, true)
+	gates.Register("PostgresProvider", featuregate.Alpha, true)
+	gates.Register("DebeziumCDCProvider", featuregate.Alpha, true)
+	gates.Register("CDCBinding", featuregate.Alpha, true)
+	gates.Register("LineageObservability", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
+	reg.RegisterProvider("container", func() reconciler.Provider { return placeholder.New() }, "ContainerProvider")
+	reg.RegisterProvider("redpanda", func() reconciler.Provider { return redpanda.New() }, "RedpandaProvider")
+	reg.RegisterProvider("postgres", func() reconciler.Provider { return postgres.New() }, "PostgresProvider")
+	reg.RegisterProvider("debezium", func() reconciler.Provider { return debezium.New() }, "DebeziumCDCProvider")
 	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
 		return fakeruntime.New(), nil
+	})
+	reg.RegisterRuntime("docker", func(cfg map[string]any) (runtime.ContainerRuntime, error) {
+		if err := gates.Require("DockerRuntime"); err != nil {
+			return nil, err
+		}
+		return dockerruntime.New(cfg)
 	})
 	return reg
 }
