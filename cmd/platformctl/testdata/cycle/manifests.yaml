@@ -1,0 +1,21 @@
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: resource-a
+spec:
+  engine: postgres
+  providerRef:
+    name: resource-b
+  postgres:
+    database: db
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: resource-b
+spec:
+  type: noop
+  runtime:
+    type: fake
+  providerRef:
+    name: resource-a

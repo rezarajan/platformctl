@@ -1,0 +1,19 @@
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: test-noop-provider
+spec:
+  type: noop
+  runtime:
+    type: fake
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: test-events
+spec:
+  providerRef:
+    name: test-noop-provider
+  partitions: 3
+  retention:
+    duration: 7d

@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "key": {
+        "Kind": "Provider",
+        "Name": "test-noop-provider"
+      },
+      "action": "create",
+      "reason": "not present in state",
+      "specHash": "e5e1aefca5b94528b5d0cc0c86b2e97d11f1d60f87766c095df98c47c31793a0"
+    },
+    {
+      "key": {
+        "Kind": "EventStream",
+        "Name": "test-events"
+      },
+      "action": "create",
+      "reason": "not present in state",
+      "specHash": "4b9d058b94c3ba83077c5cccd6a122bf003ae3e134d687861a07b3493643c887"
+    }
+  ]
+}
