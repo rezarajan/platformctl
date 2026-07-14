@@ -1,0 +1,10 @@
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: attendance-events
+spec:
+  providerRef:
+    name: local-redpanda
+  partitions: 6
+  retention:
+    duration: 7d

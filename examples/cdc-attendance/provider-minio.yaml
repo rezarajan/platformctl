@@ -1,0 +1,13 @@
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: local-minio
+spec:
+  type: minio
+  runtime:
+    type: docker
+    network: datascape
+  configuration:
+    image: minio/minio:latest
+    rootSecretRef: minio-root-creds
+  secretRefs: [minio-root-creds]

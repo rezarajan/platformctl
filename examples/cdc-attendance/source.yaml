@@ -1,0 +1,11 @@
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: student-database
+spec:
+  engine: postgres
+  providerRef:
+    name: local-postgres
+  postgres:
+    database: studentdb
+    schema: public

@@ -1,0 +1,13 @@
+# A stand-in lineage backend Provider: it reconciles nothing real (type:
+# noop on the fake runtime) but gives metadata.observers a resolvable
+# endpoint, proving the LineageAware forwarding mechanism without Marquez.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: test-lineage-fake
+spec:
+  type: noop
+  runtime:
+    type: fake
+  configuration:
+    url: http://localhost:8080/api/v1/lineage

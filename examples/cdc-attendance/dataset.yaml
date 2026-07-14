@@ -1,0 +1,12 @@
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: attendance-raw
+spec:
+  providerRef:
+    name: local-minio
+  bucket: raw-events
+  prefix: attendance/
+  # json is the format that works end-to-end with schemaless CDC records;
+  # parquet requires schema-carrying records (see README).
+  format: json

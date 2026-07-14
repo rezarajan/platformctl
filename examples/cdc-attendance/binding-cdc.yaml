@@ -1,0 +1,17 @@
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: student-db-to-events
+  observers:
+    - name: test-lineage-fake
+spec:
+  mode: cdc
+  sourceRef:
+    name: student-database
+  targetRef:
+    name: attendance-events
+  providerRef:
+    name: postgres-cdc
+  options:
+    tables: [students, attendance]
+    snapshotMode: initial

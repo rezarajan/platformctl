@@ -1,0 +1,14 @@
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: postgres-cdc
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape
+  configuration:
+    image: quay.io/debezium/connect:2.7
+    bootstrapServers: local-redpanda:29092
+    replicationSecretRef: postgres-replication-creds
+  secretRefs: [postgres-replication-creds]
