@@ -19,6 +19,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/cliutil"
 	"github.com/rezarajan/platformctl/internal/domain/graph"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
+	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/clock"
 )
 
@@ -62,6 +63,7 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 		newApplyCmd(a),
 		newDestroyCmd(a),
 		newStatusCmd(a),
+		newDriftCmd(a),
 		newGraphCmd(a),
 	)
 	return root
@@ -172,24 +174,32 @@ func newApplyCmd(a *app) *cobra.Command {
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
+			healDrift := a.gates.Enabled("DriftDetection")
 			if !p.HasChanges() {
-				fmt.Fprintln(cmd.OutOrStdout(), "no changes; nothing to apply")
-				return nil
-			}
-			if err := printPlan(cmd, a.output, p); err != nil {
-				return err
-			}
-			if !autoApprove {
-				fmt.Fprint(cmd.OutOrStdout(), "\nApply these changes? Only 'yes' is accepted: ")
-				var answer string
-				fmt.Fscanln(cmd.InOrStdin(), &answer) //nolint:errcheck
-				if answer != "yes" {
-					fmt.Fprintln(cmd.OutOrStdout(), "apply cancelled")
+				if !healDrift {
+					fmt.Fprintln(cmd.OutOrStdout(), "no changes; nothing to apply")
 					return nil
+				}
+				// Healing only re-converges resources to the spec already in
+				// state, so no approval prompt: nothing new is being applied.
+				fmt.Fprintln(cmd.OutOrStdout(), "no changes; probing for drift")
+			} else {
+				if err := printPlan(cmd, a.output, p); err != nil {
+					return err
+				}
+				if !autoApprove {
+					fmt.Fprint(cmd.OutOrStdout(), "\nApply these changes? Only 'yes' is accepted: ")
+					var answer string
+					fmt.Fscanln(cmd.InOrStdin(), &answer) //nolint:errcheck
+					if answer != "yes" {
+						fmt.Fprintln(cmd.OutOrStdout(), "apply cancelled")
+						return nil
+					}
 				}
 			}
 			eng := a.newEngine()
 			eng.HaltOnError = haltOnError
+			eng.HealDrift = healDrift
 			result, err := eng.Apply(cmd.Context(), p, envelopes, g)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
@@ -264,6 +274,72 @@ func newDestroyCmd(a *app) *cobra.Command {
 	return cmd
 }
 
+func newDriftCmd(a *app) *cobra.Command {
+	return &cobra.Command{
+		Use:   "drift [path]",
+		Short: "Probe live infrastructure and report drift against recorded state",
+		Long: "Probes every applied resource against the actual runtime (containers, topics,\n" +
+			"connectors, buckets) and records the observed Ready/DriftDetected conditions\n" +
+			"into state, so a subsequent `status` reflects reality. Never mutates\n" +
+			"infrastructure; run `apply` to heal reported drift. Exits 1 when drift is found.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := a.gates.Require("DriftDetection"); err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
+			}
+			envelopes, _, err := a.loadAndValidate(pathArg(args))
+			if err != nil {
+				return err
+			}
+			store := localfile.New(a.stateFile)
+			unlock, err := store.Lock(cmd.Context())
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitLockHeld, err)
+			}
+			defer unlock() //nolint:errcheck
+
+			results, err := a.newEngine().Probe(cmd.Context(), envelopes)
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitExecution, err)
+			}
+
+			rows := [][]string{{"RESOURCE", "READY", "DRIFT", "REASON"}}
+			type driftRow struct {
+				Resource string `json:"resource"`
+				Ready    string `json:"ready"`
+				Drift    string `json:"drift"`
+				Reason   string `json:"reason"`
+			}
+			var data []driftRow
+			drifted := 0
+			for _, r := range results {
+				row := driftRow{Resource: r.Key.String(), Ready: "Unknown", Drift: "Unknown"}
+				if c, ok := r.Status.Condition(status.Ready); ok {
+					row.Ready = string(c.Status)
+				}
+				if c, ok := r.Status.Condition(status.DriftDetected); ok {
+					row.Drift = string(c.Status)
+					row.Reason = c.Reason
+				}
+				if engine.HasDrift(r.Status) {
+					drifted++
+				}
+				data = append(data, row)
+				rows = append(rows, []string{row.Resource, row.Ready, row.Drift, row.Reason})
+			}
+			if err := cliutil.WriteOutput(cmd.OutOrStdout(), a.output, data, rows); err != nil {
+				return err
+			}
+			if drifted > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "\ndrift detected on %d resource(s); run apply to reconcile\n", drifted)
+				return cliutil.Exit(cliutil.ExitPlanChanges, nil)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "\nno drift detected")
+			return nil
+		},
+	}
+}
+
 func newStatusCmd(a *app) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status [path]",
@@ -278,28 +354,33 @@ func newStatusCmd(a *app) *cobra.Command {
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
-			rows := [][]string{{"RESOURCE", "READY", "REASON", "LIFECYCLE"}}
+			rows := [][]string{{"RESOURCE", "READY", "DRIFT", "REASON", "LIFECYCLE"}}
 			type statusRow struct {
 				Resource  string `json:"resource"`
 				Ready     string `json:"ready"`
+				Drift     string `json:"drift"`
 				Reason    string `json:"reason"`
 				Lifecycle string `json:"lifecycle"`
 			}
 			var data []statusRow
 			for _, e := range envelopes {
 				key := e.Key()
-				row := statusRow{Resource: key.String(), Ready: "Unknown", Lifecycle: resource.LifecycleOf(e, false).String()}
+				row := statusRow{Resource: key.String(), Ready: "Unknown", Drift: "-", Lifecycle: resource.LifecycleOf(e, false).String()}
 				if rs, ok := st.Resources[key]; ok {
 					row.Lifecycle = rs.Lifecycle
 					if c, found := rs.Status.Condition("Ready"); found {
 						row.Ready = string(c.Status)
 						row.Reason = c.Reason
 					}
+					// Recorded by the last `drift` probe; "-" means never probed.
+					if c, found := rs.Status.Condition(status.DriftDetected); found {
+						row.Drift = string(c.Status)
+					}
 				} else {
 					row.Reason = "NotApplied"
 				}
 				data = append(data, row)
-				rows = append(rows, []string{row.Resource, row.Ready, row.Reason, row.Lifecycle})
+				rows = append(rows, []string{row.Resource, row.Ready, row.Drift, row.Reason, row.Lifecycle})
 			}
 			return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, data, rows)
 		},

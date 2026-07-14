@@ -53,6 +53,12 @@ applied: 14 succeeded, 0 failed, 0 skipped
   never destroyed without explicit, separate opt-in flags; failed destroys
   block teardown of their dependencies; unmanaged Docker objects are never
   touched (everything Datascape owns is labeled).
+- **Built for out-of-band failure** — `drift` probes live infrastructure
+  and records what it finds; `apply` heals drifted resources (a killed
+  container is recreated, a stopped one restarted, a failed connector
+  restarted) while `plan` stays deterministic and never mutates; `destroy`
+  converges even when half the platform is already dead. All of it enforced
+  by a chaos-monkey integration suite in CI.
 - **Secrets stay out of manifests** — `SecretReference` resources resolve
   through pluggable backends (`env` today); specs carry names, never values.
 - **Lineage-aware by design** — `metadata.observers` forwards a resolved
@@ -179,7 +185,8 @@ bin/platformctl destroy examples/cdc-attendance/ --auto-approve
 | `validate <dir>` | Schema + graph (cycles) + Binding capability checks. No state, no runtime calls. |
 | `plan <dir>` | Deterministic diff of manifests vs. state. Exit `1` when changes are pending. |
 | `apply <dir>` | Reconcile in topological order; state persisted after every resource. |
-| `status <dir>` | Per-resource `Ready`/conditions/lifecycle from recorded state. |
+| `status <dir>` | Per-resource `Ready`/`DRIFT`/conditions/lifecycle from recorded state. |
+| `drift <dir>` | Probe live infrastructure, record observed conditions into state, report drift. Exit `1` when drift is found; run `apply` to heal it. |
 | `graph <dir> -o dot\|mermaid` | Render the dependency DAG. |
 | `destroy <dir>` | Reverse-order teardown. `--include-external` additionally requires `--yes-i-understand-this-is-destructive`. |
 
@@ -198,7 +205,9 @@ just check             # gofmt + go vet (both build-tag variants)
 The integration suite stands up real Postgres, Debezium, Redpanda, and MinIO
 containers on non-default host ports and verifies the roadmap's exit
 criteria literally — including "re-apply makes zero mutating calls" and
-"destroy leaves no orphans".
+"destroy leaves no orphans". A chaos-monkey suite additionally kills and
+stops managed containers out-of-band (and SIGKILLs the CLI mid-apply) and
+requires drift reporting, healing, recovery, and convergent teardown.
 
 **Adding a provider:** implement `reconciler.Provider` (plus capability
 interfaces you support), register it in `application/registry` wiring behind

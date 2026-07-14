@@ -177,6 +177,12 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		_ = rt.RemoveNetwork(ctx, p.network())
 		return nil
 	case "EventStream":
+		// A dead broker takes its topics with it; requiring a live admin
+		// API here would make destroy unable to converge after out-of-band
+		// failures.
+		if ctr, found, err := rt.Inspect(ctx, p.brokerName()); err != nil || !found || !ctr.Running {
+			return err
+		}
 		return deleteTopic(ctx, p.HostAddr(), res.Metadata.Name)
 	default:
 		return fmt.Errorf("redpanda provider cannot destroy kind %s", res.Kind)

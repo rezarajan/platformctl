@@ -256,6 +256,12 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		_ = rt.RemoveNetwork(ctx, p.network())
 		return nil
 	case "Binding":
+		// A dead Connect worker takes its connectors with it; requiring a
+		// live REST API here would make destroy unable to converge after
+		// out-of-band failures.
+		if ctr, found, err := rt.Inspect(ctx, p.containerName()); err != nil || !found || !ctr.Running {
+			return err
+		}
 		return kafkaconnect.DeleteConnector(ctx, p.connectURL(), res.Metadata.Name)
 	default:
 		return fmt.Errorf("s3sink provider cannot destroy kind %s", res.Kind)
@@ -290,8 +296,10 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectorRunning"}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
 		} else {
+			// Declared state is a RUNNING connector; anything else is drift.
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorState" + state}, now)
 			st.SetCondition(status.Condition{Type: status.Degraded, Status: status.True, Reason: "ConnectorState" + state}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorState" + state}, now)
 		}
 		return st, nil
 	default:

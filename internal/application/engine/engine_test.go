@@ -162,3 +162,105 @@ func TestLineageNotConsumedCondition(t *testing.T) {
 		t.Errorf("missing %s condition; conditions: %+v", status.ReasonLineageNotConsumed, rs.Status.Conditions)
 	}
 }
+
+// driftingProvider reports drift until it has been reconciled a second time,
+// simulating a resource killed out-of-band and then healed.
+type driftingProvider struct {
+	noop.Provider
+}
+
+func (d *driftingProvider) Type() string { return "drifty" }
+
+func (d *driftingProvider) Probe(_ context.Context, _ resource.Envelope, _ runtime.ContainerRuntime) (status.Status, error) {
+	st := status.Status{}
+	now := time.Now()
+	if d.ReconcileCount < 2 {
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "GoneMissing"}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "GoneMissing"}, now)
+		return st, nil
+	}
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "Healthy"}, now)
+	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+	return st, nil
+}
+
+func driftFixture(t *testing.T) (*Engine, *driftingProvider, []resource.Envelope) {
+	t.Helper()
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	prov := &driftingProvider{}
+	reg.RegisterProvider("drifty", func() reconciler.Provider { return prov }, "")
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+	envelopes := []resource.Envelope{
+		envelope("Provider", "drifter", map[string]any{
+			"type":    "drifty",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+	}
+	return newTestEngine(t, reg), prov, envelopes
+}
+
+// TestApplyHealsDrift: an unchanged manifest set re-applied with HealDrift
+// probes plan-noop resources and re-reconciles the drifted ones.
+func TestApplyHealsDrift(t *testing.T) {
+	eng, prov, envelopes := driftFixture(t)
+	applyAll(t, eng, envelopes)
+	if prov.ReconcileCount != 1 {
+		t.Fatalf("ReconcileCount after first apply = %d, want 1", prov.ReconcileCount)
+	}
+
+	eng.HealDrift = true
+	result := applyAll(t, eng, envelopes)
+	if prov.ReconcileCount != 2 {
+		t.Errorf("ReconcileCount after healing apply = %d, want 2 (drift must trigger re-reconcile)", prov.ReconcileCount)
+	}
+	if len(result.Succeeded) != 1 {
+		t.Errorf("healed resources reported = %d, want 1", len(result.Succeeded))
+	}
+
+	// No drift anymore: a further apply must be a true no-op.
+	applyAll(t, eng, envelopes)
+	if prov.ReconcileCount != 2 {
+		t.Errorf("ReconcileCount after clean apply = %d, want 2 (no drift, no reconcile)", prov.ReconcileCount)
+	}
+}
+
+// TestApplyWithoutHealDriftLeavesDrift: with the gate off, apply trusts
+// recorded state and never probes.
+func TestApplyWithoutHealDriftLeavesDrift(t *testing.T) {
+	eng, prov, envelopes := driftFixture(t)
+	applyAll(t, eng, envelopes)
+	applyAll(t, eng, envelopes)
+	if prov.ReconcileCount != 1 {
+		t.Errorf("ReconcileCount = %d, want 1 (HealDrift off must not reconcile)", prov.ReconcileCount)
+	}
+}
+
+// TestProbeRecordsDrift: Probe merges observed DriftDetected/Ready
+// conditions into recorded state so `status` reflects the last observation.
+func TestProbeRecordsDrift(t *testing.T) {
+	eng, _, envelopes := driftFixture(t)
+	applyAll(t, eng, envelopes)
+
+	results, err := eng.Probe(context.Background(), envelopes)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(results) != 1 || !HasDrift(results[0].Status) {
+		t.Fatalf("probe results = %+v, want one drifted resource", results)
+	}
+
+	st, err := eng.StateStore.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := st.Resources[envelopes[0].Key()]
+	if !HasDrift(rs.Status) {
+		t.Errorf("DriftDetected not persisted to state: %+v", rs.Status.Conditions)
+	}
+	if c, _ := rs.Status.Condition(status.Ready); c.Status != status.False {
+		t.Errorf("probed Ready not persisted, got %+v", c)
+	}
+}

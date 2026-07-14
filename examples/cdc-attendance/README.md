@@ -65,6 +65,26 @@ Tear down:
 platformctl destroy examples/cdc-attendance/ --auto-approve
 ```
 
+## When something dies out-of-band
+
+Containers fail, get OOM-killed, or get `docker rm -f`'d by a human. Plain
+`status` reports the *recorded* state (that determinism is the tool's
+contract); to check reality, probe:
+
+```sh
+docker rm -f local-minio          # simulate an external failure
+
+platformctl drift  examples/cdc-attendance/   # observes it: DRIFT=True, exits 1
+platformctl status examples/cdc-attendance/   # DRIFT column now reflects the observation
+platformctl apply  examples/cdc-attendance/ --auto-approve   # heals: recreates the
+                                  # container (its volume, so its data, survived),
+                                  # restarts stopped workers and failed connectors
+```
+
+`plan` never restarts anything — it only diffs specs. `destroy` converges
+even when parts of the platform are already dead: a Dataset whose object
+store was killed doesn't strand the teardown.
+
 ## Capturing another table
 
 **Only tables declared on the CDC Binding are captured.** The Binding in

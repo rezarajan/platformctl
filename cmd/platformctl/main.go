@@ -54,6 +54,11 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	gates.Register("LineageObservability", featuregate.Alpha, false)
 	gates.Register("ObjectStoreProvider", featuregate.Alpha, true)
 	gates.Register("SinkBinding", featuregate.Alpha, true)
+	// Master-table default is disabled until Phase 5 closes, but real usage
+	// showed out-of-band failures are the common case, not the exception —
+	// enabled by default so `drift` and apply-side healing work out of the
+	// box (deviation recorded in checkpoint.md).
+	gates.Register("DriftDetection", featuregate.Alpha, true)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")

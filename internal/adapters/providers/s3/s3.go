@@ -185,6 +185,12 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		_ = rt.RemoveNetwork(ctx, p.network())
 		return nil
 	case "Dataset":
+		// If the backing store is already gone (killed out-of-band), its
+		// data went with it — nothing left to remove, and failing here
+		// would strand the Dataset in state forever.
+		if ctr, found, err := rt.Inspect(ctx, p.containerName()); err != nil || !found || !ctr.Running {
+			return err
+		}
 		ds, err := dataset.FromEnvelope(res)
 		if err != nil {
 			return err

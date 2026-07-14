@@ -45,7 +45,10 @@ type Status struct {
 // when the status value actually changes.
 func (s *Status) SetCondition(c Condition, now time.Time) {
 	for i, existing := range s.Conditions {
-		if existing.Type == c.Type && existing.Reason == c.Reason {
+		// Conditions are keyed by Type alone (Kubernetes semantics): Reason
+		// and Message are payload. Matching on Reason too would accumulate
+		// duplicate conditions whenever the reason changes.
+		if existing.Type == c.Type {
 			if existing.Status == c.Status {
 				c.LastTransitionTime = existing.LastTransitionTime
 			} else {

@@ -69,6 +69,42 @@ and a failed destroy did not block teardown of the resources it depends on
 under the Connect worker — mirroring apply-side dependency blocking).
 
 ## External errors are not detected against state, and are thus not reconciled correctly
+
+**Status: resolved.** Drift detection is now a first-class path (the Phase 5
+roadmap item, pulled forward):
+
+- **`platformctl drift`** probes every applied resource against the live
+  runtime — container present/healthy, topic present, connector RUNNING,
+  bucket reachable — records the observed `Ready`/`DriftDetected` conditions
+  into state, prints a report, and exits 1 when drift is found. A resource
+  whose backing provider is unreachable (the killed-MinIO Dataset case
+  below) is reported as drifted with `ProbeFailed`, not left `Ready`:
+  unreachable *is* drift.
+- **`platformctl status`** gained a `DRIFT` column showing the last recorded
+  observation (`-` until the first probe). Plain `status` remains
+  state-based by design — determinism is the tool's core contract — but it
+  no longer *hides* what `drift` observed.
+- **`platformctl apply` heals drift**: resources whose spec is unchanged
+  (plan no-op) are probed, and drifted ones are re-reconciled — a manually
+  removed container is recreated (its volume, and therefore data, persists),
+  a stopped one restarted, a failed connector restarted. `plan` still never
+  mutates. Gated by `DriftDetection` (enabled by default; deviation from the
+  master table recorded in checkpoint.md).
+- **`destroy` converges when infrastructure is already dead**: deleting a
+  Dataset/EventStream/Binding whose backing store, broker, or Connect worker
+  no longer exists is treated as already done rather than failing forever —
+  this is exactly what stranded `Dataset/attendance-raw`,
+  `Provider/local-minio`, and `minio-root-creds` in the reported state.
+- A latent `status.SetCondition` bug surfaced by this work is fixed:
+  conditions were keyed by Type+Reason, so an observation with a different
+  reason appended a duplicate condition instead of replacing it.
+
+The whole matrix is enforced by `cmd/platformctl/chaos_integration_test.go`
+(chaos monkey: out-of-band kills/stops, drift → plan → heal → drift-clean,
+destroy with dead infra, and a SIGKILL mid-apply recoverability check),
+which runs in CI's integration job.
+
+### Original report
 Manual removal of a container does not get reflected in the platformctl state check; the utility does not check against the current running status of the containers. External failures are not observed and thus impossible to reconcile. Furthermore, in this state when issuing the destroy command, containers are removed but the state does not correctly reflect that. Furthermore, assets like the Dataset and Provider/local-minio show as 'Ready' although the containers are no longer available. This is illogical since, firstly the S3 provider local-minio was killed externally, and thus there is no way for the tool to ascertain the availability of the Dataset/attendance-raw, which resides in S3 in this case.
 
 Expected result: The status command must correctly consider the existing state against the declared/saved state. Things fail all the time, out-of-band from platformctl, and the tool must be designed to expect this. Dependencies must have a proper way of resolving state, and assessing state for assets dependent on parents.

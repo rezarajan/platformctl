@@ -38,12 +38,7 @@ func TestSinkEndToEnd(t *testing.T) {
 	t.Setenv("DATASCAPE_SECRET_SINK_MINIO_ROOT_USERNAME", "datascape_minio")
 	t.Setenv("DATASCAPE_SECRET_SINK_MINIO_ROOT_PASSWORD", "minio-secret-pw")
 
-	// The sink Connect worker image = Debezium Connect + Aiven S3 sink plugin;
-	// built locally, cached across runs.
-	build := exec.Command("docker", "build", "-t", "datascape-s3sink-connect:test", "testdata/s3sink-image")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build sink connect image: %v\n%s", err, out)
-	}
+	buildSinkConnectImage(t)
 
 	rt, err := dockerruntime.New(nil)
 	if err != nil {
@@ -168,6 +163,16 @@ func TestSinkEndToEnd(t *testing.T) {
 		if strings.HasPrefix(m.Name, "datascape-sink-") {
 			t.Errorf("orphaned managed container after destroy: %s", m.Name)
 		}
+	}
+}
+
+// buildSinkConnectImage builds the Connect worker image carrying the Aiven
+// S3 sink plugin (stock Connect images ship none); cached across runs.
+func buildSinkConnectImage(t *testing.T) {
+	t.Helper()
+	build := exec.Command("docker", "build", "-t", "datascape-s3sink-connect:test", "testdata/s3sink-image")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build sink connect image: %v\n%s", err, out)
 	}
 }
 

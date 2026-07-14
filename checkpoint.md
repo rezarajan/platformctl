@@ -18,7 +18,7 @@ this build follows. `CLAUDE.md` is the always-loaded summary of the same.
 | 2 — Redpanda Provider | **Done, verified** | Full exit criteria pass against a live daemon (`cmd/platformctl/redpanda_integration_test.go`). |
 | 3 — Postgres + Debezium CDC + Lineage | **Done, verified** | `cmd/platformctl/cdc_integration_test.go` covers every exit criterion against real containers (apply-to-Ready ~15s with pre-pulled images, connector verified RUNNING, idempotent re-apply, in-place `options.tables` update, clean reverse-order destroy). Lineage forwarding + not-consumed condition covered in `application/engine` tests; capability error shapes in `application/compatibility` tests. |
 | 4 — Object Storage Sink | **Done, verified** | `s3` (+`minio` alias) and `s3sink` providers; `cmd/platformctl/sink_integration_test.go` runs the extended 11-resource scenario: real CDC rows land as objects in MinIO (~40s incl. traffic), `Dataset.spec.format` change updates the connector without touching broker/db/store, sink capability failures at validate, clean destroy. |
-| 5 — External/Imported + Drift | **Not started** | `import`/`drift` commands don't exist; only the `Lifecycle` enum and `plan.ActionConfigure` groundwork are in place. **This is the next phase.** |
+| 5 — External/Imported + Drift | **Drift portion done, verified; import/external remain** | `platformctl drift` (probes live infra, records DriftDetected into state, exit 1 on drift), `status` DRIFT column, apply-side drift healing (probe plan-noop resources, re-reconcile drifted ones), and destroy convergence against dead backing infra all exist and are verified by `cmd/platformctl/chaos_integration_test.go` (out-of-band kills/stops + SIGKILL-mid-apply NFR-9 check). Pulled forward from Phase 5 after a real user hit unobservable external failures. **Still to do: `import` command, `Source.spec.external: true` end-to-end, NFR-3 engine destroy guard + flags, `ImportedResources`/`ExternalResourceConfiguration` gates.** |
 | 6+ | Not in scope for v1.0.0 | Ignore. |
 
 **Also not yet done, needed before v1.0.0 sign-off regardless of phase:**
@@ -60,10 +60,17 @@ CDCBinding             Alpha   enabled
 LineageObservability   Alpha   disabled
 ObjectStoreProvider    Alpha   enabled    (gates "s3", "minio", "s3sink")
 SinkBinding            Alpha   enabled
+DriftDetection         Alpha   enabled    (master table says disabled — deliberate deviation, see below)
 ```
 
+**Deviation:** the master table introduces `DriftDetection` default-disabled;
+it is registered default-enabled because real usage showed out-of-band
+failures are the common case and an unobservable platform was judged worse
+than an early Alpha behavior being on. Flag at v1.0.0 sign-off: either amend
+the master table or flip the default.
+
 Still to register in Phase 5: `ImportedResources`,
-`ExternalResourceConfiguration`, `DriftDetection` (all Alpha/disabled).
+`ExternalResourceConfiguration` (both Alpha/disabled).
 
 ## Implementation-revealed deviations (not yet reflected in planning docs)
 

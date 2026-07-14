@@ -29,6 +29,10 @@ type Engine struct {
 	SecretStore secretstore.SecretStore // nil disables secretRefs resolution
 	Clock       clock.Clock
 	HaltOnError bool
+	// HealDrift makes Apply probe plan-noop resources against live
+	// infrastructure and re-reconcile the ones that drifted (gated by
+	// DriftDetection). Without it, apply trusts recorded state.
+	HealDrift bool
 	// Log receives one line per reconciliation action; nil disables.
 	Log func(format string, args ...any)
 }
@@ -77,11 +81,27 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 				e.logf("skip %s: a dependency failed", key)
 				continue
 			}
+			env := byKey[key]
 			if entry.Action == plan.ActionNoop {
-				continue
+				// The spec is unchanged, but the infrastructure may not be:
+				// probe, and re-reconcile on drift. Managed resources only —
+				// externals are never mutated uninvited.
+				if !e.HealDrift {
+					continue
+				}
+				rs, inState := st.Resources[key]
+				if !inState || resource.LifecycleOf(env, rs.Imported) != resource.Managed {
+					continue
+				}
+				probed := e.probeOne(ctx, env, byKey)
+				if !HasDrift(probed) {
+					continue
+				}
+				if c, ok := probed.Condition(status.DriftDetected); ok {
+					e.logf("drift %s (%s); healing", key, c.Reason)
+				}
 			}
 
-			env := byKey[key]
 			start := time.Now()
 			err := e.reconcileOne(ctx, entry, env, byKey, &st)
 			if err != nil {
@@ -176,6 +196,95 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 		Provider:  newStatus.ProviderState,
 	}
 	return e.StateStore.Save(ctx, *st)
+}
+
+// ProbeResult pairs a resource with its live-probed status.
+type ProbeResult struct {
+	Key    resource.Key
+	Status status.Status
+}
+
+// HasDrift reports whether a status carries DriftDetected=True.
+func HasDrift(s status.Status) bool {
+	c, ok := s.Condition(status.DriftDetected)
+	return ok && c.Status == status.True
+}
+
+// Probe checks every state-recorded resource against live infrastructure,
+// merges the observed Ready/DriftDetected conditions into recorded state,
+// and persists it — so `status` reflects the last observation. Probing never
+// mutates infrastructure. Resources not yet applied are skipped: there is
+// nothing recorded to compare against.
+func (e *Engine) Probe(ctx context.Context, envelopes []resource.Envelope) ([]ProbeResult, error) {
+	st, err := e.StateStore.Load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byKey := make(map[resource.Key]resource.Envelope, len(envelopes))
+	for _, env := range envelopes {
+		byKey[env.Key()] = env
+	}
+
+	var results []ProbeResult
+	for _, env := range envelopes {
+		key := env.Key()
+		rs, ok := st.Resources[key]
+		if !ok {
+			continue
+		}
+		probed := e.probeOne(ctx, env, byKey)
+		merged := rs.Status
+		for _, c := range probed.Conditions {
+			merged.SetCondition(c, e.Clock.Now())
+		}
+		rs.Status = merged
+		st.Resources[key] = rs
+		results = append(results, ProbeResult{Key: key, Status: merged})
+	}
+	if err := e.StateStore.Save(ctx, st); err != nil {
+		return results, err
+	}
+	return results, nil
+}
+
+// probeOne asks the provider for the resource's live status. It never
+// returns an error: an unreachable or unresolvable resource *is* drift —
+// things failing out-of-band is the expected case, not an exception.
+func (e *Engine) probeOne(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope) status.Status {
+	now := e.Clock.Now()
+	st := status.Status{}
+
+	if env.Kind == "SecretReference" {
+		ref := secretRefFrom(env)
+		err := ref.Validate()
+		if err == nil {
+			if e.SecretStore == nil {
+				err = fmt.Errorf("no secret store is configured")
+			} else {
+				_, err = e.SecretStore.Resolve(ctx, ref)
+			}
+		}
+		if err != nil {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "SecretUnresolvable", Message: err.Error()}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "SecretUnresolvable"}, now)
+			return st
+		}
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "SecretResolvable"}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		return st
+	}
+
+	prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
+	if err == nil {
+		var probed status.Status
+		probed, err = prov.Probe(ctx, env, rt)
+		if err == nil {
+			return probed
+		}
+	}
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ProbeFailed", Message: err.Error()}, now)
+	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ProbeFailed"}, now)
+	return st
 }
 
 // reconcileSecretReference verifies the reference resolves through the
