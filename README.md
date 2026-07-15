@@ -47,10 +47,16 @@ applied: 14 succeeded, 0 failed, 0 skipped
   (OpenLineage backend), and a proxy surface giving external systems stable
   platform-owned entrypoints. Rows inserted into Postgres land as objects
   in a bucket with nothing hand-wired in between.
-- **Orchestrator-ready** — `examples/soak-lakehouse/` stands up the
-  infrastructure a Dagster deployment runs against (object store + Iceberg
-  catalog + lineage backend + relational stores + external-source
-  entrypoints) and documents every endpoint your orchestrator connects to.
+- **Orchestrator-ready** — `examples/lakehouse/` stands up the
+  infrastructure a Dagster deployment runs against: object store, an
+  Iceberg `Catalog`, a lineage backend, relational stores, and a managed
+  `Connection` giving an external database a stable platform-owned
+  entrypoint (with CDC flowing through it) — every endpoint your
+  orchestrator connects to, documented.
+- **Provider-agnostic resource model** — the manifests speak nouns
+  (`Catalog`, `Connection`, `Source`, `EventStream`, `Dataset`);
+  technologies (Nessie, socat, Postgres, Redpanda) are engines *realizing*
+  them, capability-checked at `validate`.
 - **Capability-checked bindings** — a `Binding(mode: cdc)` against a
   provider that can't do CDC, or a `sink` to a format the connector can't
   write, fails at `validate` with a precise error — not at 2 a.m. during
@@ -121,13 +127,18 @@ flowchart LR
 
 ### The resource model
 
-Six kinds, one worked scenario:
+Eight kinds, one worked scenario:
 
 ```
 Source(postgres) ──Binding(mode: cdc)──▶ EventStream ──Binding(mode: sink)──▶ Dataset(bucket/prefix)
       │                    │                  │                  │                    │
   Provider(postgres)  Provider(debezium)  Provider(redpanda)  Provider(s3sink)   Provider(minio)
                                                                           SecretReference(env) ⤴
+
+Catalog(engine: nessie)      # a table catalog as a noun — engines realize it
+Connection(port, target)     # a stable entrypoint to a system that lives elsewhere;
+                             # external resources integrate through it (address here,
+                             # credentials in the SecretReference its secretRef names)
 ```
 
 `Binding` is the connective tissue: a directed edge whose `mode` names the

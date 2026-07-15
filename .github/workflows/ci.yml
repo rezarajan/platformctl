@@ -61,6 +61,10 @@ jobs:
           docker pull postgres:16 &
           docker pull quay.io/debezium/connect:2.7 &
           docker pull minio/minio:latest &
+          docker pull mysql:8.4 &
+          docker pull ghcr.io/projectnessie/nessie:latest &
+          docker pull marquezproject/marquez:latest &
+          docker pull alpine/socat:latest &
           wait
 
       # Includes the chaos-monkey suite (cmd/platformctl/chaos_integration_test.go):

@@ -44,14 +44,16 @@ func TestImportEndToEnd(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/import-scenario"
 
-	// Without the gate, import refuses.
-	out, _, code := run(t, "import", "Provider/datascape-imp-pg", manifests, "--from", "datascape-imp-pg", "--state-file", stateFile)
+	// With the gate disabled (Beta/enabled by default since Phase 6.5),
+	// import refuses and names the gate.
+	out, _, code := run(t, "import", "Provider/datascape-imp-pg", manifests, "--from", "datascape-imp-pg",
+		"--state-file", stateFile, "--feature-gates", "ImportedResources=false")
 	if code == 0 {
-		t.Fatalf("import without ImportedResources gate should refuse:\n%s", out)
+		t.Fatalf("import with ImportedResources=false should refuse:\n%s", out)
 	}
 
 	out, err, code = run(t, "import", "Provider/datascape-imp-pg", manifests, "--from", "datascape-imp-pg",
-		"--state-file", stateFile, "--feature-gates", "ImportedResources=true")
+		"--state-file", stateFile)
 	if err != nil || code != 0 {
 		t.Fatalf("import failed (code %d): %v\n%s", code, err, out)
 	}

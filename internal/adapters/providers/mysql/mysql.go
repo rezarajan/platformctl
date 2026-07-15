@@ -1,7 +1,7 @@
 // Package mysql reconciles a MySQL or MariaDB container (the provider is
 // registered under both types — same protocol, per-type image and binlog
 // flags) and provisions databases and replication-capable users from
-// SecretReference-sourced credentials (Phase 6.5, soak).
+// SecretReference-sourced credentials (Phase 6.5).
 package mysql
 
 import (

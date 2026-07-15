@@ -28,7 +28,6 @@ var httpClient = &http.Client{Timeout: 10 * time.Second}
 type Provider struct {
 	providerRes resource.Envelope
 	cfg         provider.Provider
-	secrets     map[string]map[string]string
 }
 
 func New() *Provider { return &Provider{} }
@@ -39,8 +38,6 @@ func (p *Provider) SetProviderResource(env resource.Envelope) {
 	p.providerRes = env
 	p.cfg, _ = provider.FromEnvelope(env)
 }
-
-func (p *Provider) SetSecrets(secrets map[string]map[string]string) { p.secrets = secrets }
 
 func (p *Provider) name() string   { return p.providerRes.Metadata.Name }
 func (p *Provider) dbName() string { return p.name() + "-db" }
@@ -64,20 +61,13 @@ func (p *Provider) network() string {
 	return "datascape"
 }
 
-func (p *Provider) dbCredentials() (user, pass string, err error) {
-	refName, _ := p.cfg.Configuration["dbSecretRef"].(string)
-	if refName == "" && len(p.cfg.SecretRefs) > 0 {
-		refName = p.cfg.SecretRefs[0]
-	}
-	creds, ok := p.secrets[refName]
-	if !ok {
-		return "", "", fmt.Errorf("Provider %q (type: openlineage): no resolved credentials for secretRef %q", p.name(), refName)
-	}
-	if creds["username"] == "" || creds["password"] == "" {
-		return "", "", fmt.Errorf("Provider %q: secretRef %q must provide username and password keys", p.name(), refName)
-	}
-	return creds["username"], creds["password"], nil
-}
+// marquezInternalCred is what the Marquez image's baked-in dev
+// configuration (marquez.dev.yml) hardcodes for its database user, password,
+// and database name — only host/port are substitutable via env. The
+// metadata store is a dedicated container internal to this provider (never
+// published to the host), so it carries these fixed credentials rather than
+// pretending a SecretReference could change them.
+const marquezInternalCred = "marquez"
 
 func (p *Provider) apiURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d/api/v1/namespaces", p.hostPort())
@@ -92,10 +82,6 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	if image == "" {
 		image = defaultImage
 	}
-	user, pass, err := p.dbCredentials()
-	if err != nil {
-		return st, err
-	}
 	labels := map[string]string{
 		runtime.LabelManagedBy:  runtime.ManagedByValue,
 		runtime.LabelGeneration: p.name(),
@@ -109,18 +95,18 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: p.dbName() + "-data", Labels: labels}); err != nil {
 		return st, err
 	}
-	_, err = rt.EnsureContainer(ctx, runtime.ContainerSpec{
+	_, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
 		Name:  p.dbName(),
 		Image: defaultDBImage,
 		Env: map[string]string{
-			"POSTGRES_USER":     user,
-			"POSTGRES_PASSWORD": pass,
+			"POSTGRES_USER":     marquezInternalCred,
+			"POSTGRES_PASSWORD": marquezInternalCred,
 			"POSTGRES_DB":       "marquez",
 		},
 		Networks: []string{p.network()},
 		Volumes:  []runtime.VolumeMount{{VolumeName: p.dbName() + "-data", MountPath: "/var/lib/postgresql/data"}},
 		HealthCheck: &runtime.HealthCheck{
-			Test:     []string{"CMD-SHELL", "pg_isready -h 127.0.0.1 -U " + user},
+			Test:     []string{"CMD-SHELL", "pg_isready -h 127.0.0.1 -U " + marquezInternalCred},
 			Interval: 2 * time.Second,
 			Timeout:  5 * time.Second,
 			Retries:  30,
@@ -143,8 +129,8 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 			"POSTGRES_HOST":      p.dbName(),
 			"POSTGRES_PORT":      "5432",
 			"POSTGRES_DB":        "marquez",
-			"POSTGRES_USER":      user,
-			"POSTGRES_PASSWORD":  pass,
+			"POSTGRES_USER":      marquezInternalCred,
+			"POSTGRES_PASSWORD":  marquezInternalCred,
 		},
 		Networks: []string{p.network()},
 		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: marquezAPIPort}},

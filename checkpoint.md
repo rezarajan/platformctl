@@ -1,8 +1,10 @@
-# Datascape build — checkpoint (v1.0.0 declared; Phase 6 committed scope done)
+# Datascape build — checkpoint (v1.0.0 declared; Phases 6 and 6.5 done)
 
-Written for whichever agent resumes work. Previous goal — ship v1.0.0 and
-complete Phase 6 — is **done** (see verification below). This file records
-exactly where everything stands and what a next session would pick up.
+Written for whichever agent resumes work. Goals to date — ship v1.0.0,
+complete Phase 6, and land Phase 6.5 (orchestrator-ready infrastructure,
+remodeled architecture-first per project-owner direction) — are **done**
+(see verification below). This file records exactly where everything stands
+and what a next session would pick up.
 
 **Read `docs/planning/06-agentic-execution-guide.md` first if you haven't.**
 `CLAUDE.md` is the always-loaded summary of layering rules and conventions.
@@ -18,7 +20,8 @@ exactly where everything stands and what a next session would pick up.
 | 4 — Object storage sink | Done | `sink_integration_test.go` (objects land from real CDC traffic) |
 | 5 — Import/External/Drift — **v1.0.0 declared** | Done | `phase5_integration_test.go`, `chaos_integration_test.go`, `drift` cmd, NFR-3 double lock (CLI + engine), `acceptance_integration_test.go` (spec §6 against `examples/cdc-attendance/`, steps 1–4 in ~22s vs 4-min NFR-8 budget) |
 | 6 — Scale-out (committed scope) | Done | `TestParallelReconciliation` (race-clean), vault backend vs real dev server (`vault_integration_test.go`), file backend + router unit tests |
-| 6 — optional openlineage provider | **Not built, by design** | Roadmap marks it optional ("not a gap in v1.0.0"); LineageObservability stays Alpha because its Beta graduation is contingent on this provider existing |
+| 6 — optional openlineage provider | Done (in 6.5) | Built as the `openlineage` provider (Marquez + dedicated Postgres); LineageObservability graduated to Beta |
+| 6.5 — Orchestrator-ready infrastructure | Done | `lakehouse_integration_test.go` against the literal `examples/lakehouse/`: Catalog(nessie) + managed Connection + external Source with CDC flowing through the entrypoint + MySQL + Marquez, incl. Connection drift-heal and clean destroy |
 | 7/8 — K8s runtime, plugins | Not started (future) | — |
 
 ## v1.0.0 Definition-of-Done ledger (spec §9)
@@ -34,10 +37,12 @@ exactly where everything stands and what a next session would pick up.
   correctness (objects land) — all automated.
 - Gates at GA: DockerRuntime, RedpandaProvider, PostgresProvider,
   DebeziumCDCProvider, CDCBinding, ObjectStoreProvider, SinkBinding.
-  Beta/enabled: DriftDetection, ExternalResourceConfiguration.
-  Alpha/disabled: ImportedResources (roadmap says Beta in Phase 6 — see
-  open items), ParallelReconciliation, VaultSecretBackend,
-  LineageObservability, ContainerProvider (test-only).
+  Beta/enabled: DriftDetection, ExternalResourceConfiguration,
+  ImportedResources, LineageObservability.
+  Alpha/enabled (Phase 6.5 hardening): MySQLProvider, NessieProvider,
+  OpenLineageProvider, ProxyProvider.
+  Alpha/disabled: ParallelReconciliation, VaultSecretBackend,
+  ContainerProvider (test-only).
 - `docs build`/`docs serve` generate the reference from `schemas/`
   (committed under `docs/reference/`); schema validation live in
   `manifest.Load` with negative-path tests.
@@ -55,6 +60,31 @@ Dataset→EventStream. Capability seams `DatabaseSinkCapableProvider` and
 validate structurally, then fail with the standard capability error.
 docs/planning/03 §7.1/§7.2 were deliberately revised to match (project-owner
 mandated, pre-GA).
+
+## The Catalog/Connection remodel (read before touching providers)
+
+Phase 6.5 was redirected mid-flight (project-owner direction; historical
+first cut recorded in `docs/design/002-*.md` + addendum): **extend the
+resource model before implementing functionality**. Two provider-agnostic
+kinds landed:
+
+- `Catalog` — engine-discriminated (`spec.engine: nessie | hive | ...`,
+  engine-named block), mirroring `Source`. The nessie provider realizes it
+  (instance + default-branch reconciliation) via
+  `CatalogCapableProvider.SupportedCatalogEngines()`.
+- `Connection` — non-secret "how to reach a system": managed (proxy
+  provider runs one socat forwarder per Connection, named after it,
+  network+host) or external (plain address record). `secretRef` names the
+  credentials. `connectionRef` fields resolve Connection-first,
+  SecretReference as v1.0.0 shorthand. Bindings on external Sources consume
+  the Connection automatically (endpoint + creds — the working provider
+  must list the Connection's secretRef in its `spec.secretRefs`).
+  `ConnectionCapableProvider.SupportedConnectionSchemes()` gates realization.
+
+Imported-vs-external distinction and the external-integration walkthrough
+live in docs/planning/03 §3.1–3.2; kind references in §8.1–8.2. "Soak" was
+removed from all product surfaces (it names nothing; retained only in the
+historical design note).
 
 ## Architecture facts an agent needs (beyond CLAUDE.md)
 
@@ -86,19 +116,20 @@ mandated, pre-GA).
 
 ## Known open items (next session's natural backlog)
 
-1. **ImportedResources → Beta** (roadmap says Beta in Phase 6): flip the
-   gate default + promote import out of Alpha once exercised more broadly.
-2. **Optional openlineage provider** (Marquez + its postgres as one
-   provider) — unlocks LineageObservability → Beta and an end-to-end
-   lineage demo. The LineageAware mechanism is already proven.
-3. **Providers for the new pairings**: `jdbcsink` (sink→Source) and an
+1. **Providers for the new pairings**: `jdbcsink` (sink→Source) and an
    s3-source provider (ingest) over the existing Connect-worker pattern —
    pure adapters, no schema work needed.
-4. **Parquet in the acceptance example** (deviates from the §6 sketch: uses
+2. **Parquet in the acceptance example** (deviates from the §6 sketch: uses
    json because the pipeline runs schemaless converters) — either accept
    json permanently or wire schema-carrying converters.
-5. minio image is `minio/minio:latest` in example + sink test — pin a tag.
-6. `ContainerProvider` test-only gate could be retired.
+3. minio image is `minio/minio:latest` in examples + sink test — pin a tag.
+4. `ContainerProvider` test-only gate could be retired.
+5. **Tunnel provider** for VPC reach: the `Connection` kind is the seam
+   (design note 002 addendum); a wireguard-typed provider chains a managed
+   Connection's egress — additive, no schema change.
+6. **Phase 6.5 gate graduations**: MySQL/Nessie/OpenLineage/Proxy providers
+   are Alpha/enabled for their hardening period; promote once proven in
+   real use.
 7. Tag exists locally? — see "Release mechanics" below; if the v1.0.0 tag
    isn't on the remote, push it (`git push origin v1.0.0 && git push`).
 
@@ -116,6 +147,7 @@ mandated, pre-GA).
 go build ./... && go vet ./... && go test ./...      # unit/contract — green
 go test -tags integration -timeout 2400s ./...       # full e2e incl. acceptance + chaos — green
 go run ./cmd/platformctl validate examples/cdc-attendance/
+go run ./cmd/platformctl validate examples/lakehouse/
 ```
 
-All green as of the v1.0.0 tag.
+All green as of the Phase 6.5 (Catalog/Connection) commits.

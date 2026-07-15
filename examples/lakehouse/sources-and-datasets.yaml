@@ -17,20 +17,23 @@ spec:
   providerRef: {name: lake-mysql}
   mysql: {database: eventsdb}
 ---
-# An external database, reached through the proxy's stable entrypoint.
-# Datascape never creates or destroys it (NFR-3 double lock applies).
+# The external orders database, integrated through its Connection: the
+# platform never creates or destroys it (NFR-3 double lock applies), but
+# actively configures against it — see the CDC Binding in
+# streams-and-bindings.yaml, which registers its connector at the
+# Connection's endpoint with the Connection's credentials.
 apiVersion: datascape.io/v1alpha1
 kind: Source
 metadata:
-  name: orders-db
+  name: orders
 spec:
   engine: postgres
   external: true
-  connectionRef: {name: ext-orders-conn}
-  postgres: {database: orders}
+  connectionRef: {name: orders-db}
+  postgres: {database: orders, schema: public}
 ---
 # The Iceberg warehouse bucket Dagster materializes assets into, cataloged
-# by Nessie.
+# by lakehouse-catalog.
 apiVersion: datascape.io/v1alpha1
 kind: Dataset
 metadata:

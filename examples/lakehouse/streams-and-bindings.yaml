@@ -1,0 +1,29 @@
+# Change events from the external orders database, landing on a managed
+# stream — CDC traffic flows through the orders-db Connection's forwarder,
+# so the platform-owned address is the only one anything is wired to.
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: orders-events
+spec:
+  providerRef: {name: lake-redpanda}
+  partitions: 3
+  retention: {duration: 3d}
+---
+# observers hands the lineage backend's endpoint to the CDC provider
+# (Debezium is LineageAware); the connector is registered with Marquez's
+# address wired into its native OpenLineage configuration.
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: orders-to-events
+  observers:
+    - name: lake-lineage
+spec:
+  mode: cdc
+  sourceRef: {name: orders}
+  targetRef: {name: orders-events}
+  providerRef: {name: orders-cdc}
+  options:
+    tables: [orders]
+    snapshotMode: initial

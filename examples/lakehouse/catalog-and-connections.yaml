@@ -1,0 +1,27 @@
+# The Iceberg catalog, as a noun: orchestrators reference "the catalog of
+# this platform", not a technology. Nessie is the engine realizing it; the
+# engine block carries engine-specific facts.
+apiVersion: datascape.io/v1alpha1
+kind: Catalog
+metadata:
+  name: lakehouse-catalog
+spec:
+  engine: nessie
+  providerRef: {name: catalog-svc}
+  nessie: {defaultBranch: main}
+---
+# The stable entrypoint to the external orders database. In-network
+# consumers (the CDC connector) address orders-db:15999; host tools
+# (Dagster, psql, Metabase) address 127.0.0.1:15999. Only spec.target knows
+# where the database actually lives — when it moves, this one line changes
+# and every consumer keeps its address. Credentials stay in the
+# SecretReference named by secretRef; the forwarder is transport only.
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: orders-db
+spec:
+  providerRef: {name: edge}
+  port: 15999
+  target: external-orders-db:5432
+  secretRef: {name: ext-orders-creds}

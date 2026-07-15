@@ -68,3 +68,24 @@ explicitly before Phase 7 (Kubernetes), added to
 04-roadmap-and-feature-gates.md. Kubernetes gains from the soak: by the
 time a second runtime exists, the provider set it must support is the one
 real orchestrators already exercised.
+
+## Addendum (2026-07-15) — remodeled before release; terminology retired
+
+Project-owner review redirected this design before it shipped, on two
+grounds; this note is retained as the historical record of the first cut.
+
+1. **Model first, providers second.** Nessie landed here as a bare provider
+   type and proxy routes as provider *configuration* — both provider-specific
+   surfaces. The shipped design instead extends the resource model with two
+   provider-agnostic kinds: **`Catalog`** (engine-discriminated, mirroring
+   `Source`; Nessie is `engine: nessie` behind it) and **`Connection`**
+   (the stable-entrypoint noun; one forwarder per Connection, realized by
+   the proxy provider via `ConnectionCapableProvider`). External resources'
+   `connectionRef` now resolves to a `Connection` first, and Bindings
+   against external Sources consume the Connection's endpoint and
+   credentials automatically. See docs/planning/03 §§3.1–3.2, 8.1–8.2.
+2. **"Soak" is not a product term.** The stage name leaked into manifests,
+   examples, tests, and the roadmap. The feature set is baseline GA-track
+   functionality: the example is `examples/lakehouse/`, the roadmap phase
+   is "Orchestrator-ready infrastructure", and the word survives only in
+   historical development documents such as this one.
