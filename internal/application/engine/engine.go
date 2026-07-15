@@ -12,6 +12,7 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/application/plan"
 	"github.com/rezarajan/platformctl/internal/application/registry"
+	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
@@ -408,8 +409,10 @@ func isExternalNoProvider(env resource.Envelope) bool {
 	return true
 }
 
-// externalConnectionStatus verifies the resource's connectionRef resolves to
-// a SecretReference whose keys resolve through the secret store.
+// externalConnectionStatus verifies the resource's connectionRef resolves:
+// preferably to a Connection (whose optional secretRef must itself resolve
+// through the secret store), or directly to a SecretReference — the v1.0.0
+// shorthand, still supported.
 func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope) status.Status {
 	now := e.Clock.Now()
 	st := status.Status{}
@@ -419,15 +422,7 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 	}
 	var err error
 	if connName != "" {
-		refEnv, ok := byKey[resource.Key{Kind: "SecretReference", Name: connName}]
-		switch {
-		case !ok:
-			err = fmt.Errorf("connectionRef %q does not resolve to a SecretReference in the manifest set", connName)
-		case e.SecretStore == nil:
-			err = fmt.Errorf("no secret store is configured")
-		default:
-			_, err = e.SecretStore.Resolve(ctx, secretRefFrom(refEnv))
-		}
+		err = e.resolveConnectionRef(ctx, connName, byKey)
 	}
 	if err != nil {
 		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ExternalConnectionUnresolvable", Message: err.Error()}, now)
@@ -437,6 +432,37 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ExternalConnectionResolvable"}, now)
 	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
 	return st
+}
+
+// resolveConnectionRef checks a connectionRef target: a Connection whose
+// credentials (if declared) resolve, or a bare SecretReference.
+func (e *Engine) resolveConnectionRef(ctx context.Context, connName string, byKey map[resource.Key]resource.Envelope) error {
+	if connEnv, ok := byKey[resource.Key{Kind: "Connection", Name: connName}]; ok {
+		conn, err := connection.FromEnvelope(connEnv)
+		if err != nil {
+			return err
+		}
+		if conn.SecretRef == nil {
+			return nil
+		}
+		refEnv, ok := byKey[resource.Key{Kind: "SecretReference", Name: *conn.SecretRef}]
+		if !ok {
+			return fmt.Errorf("Connection %q: secretRef %q does not resolve to a SecretReference in the manifest set", connName, *conn.SecretRef)
+		}
+		if e.SecretStore == nil {
+			return fmt.Errorf("no secret store is configured")
+		}
+		_, err = e.SecretStore.Resolve(ctx, secretRefFrom(refEnv))
+		return err
+	}
+	if refEnv, ok := byKey[resource.Key{Kind: "SecretReference", Name: connName}]; ok {
+		if e.SecretStore == nil {
+			return fmt.Errorf("no secret store is configured")
+		}
+		_, err := e.SecretStore.Resolve(ctx, secretRefFrom(refEnv))
+		return err
+	}
+	return fmt.Errorf("connectionRef %q does not resolve to a Connection or SecretReference in the manifest set", connName)
 }
 
 func (e *Engine) reconcileExternal(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) error {

@@ -41,10 +41,16 @@ applied: 14 succeeded, 0 failed, 0 skipped
   recorded state (never live probing), so it is deterministic and
   reviewable; `apply` reconciles in dependency order and re-applying an
   unchanged set makes **zero mutating calls**.
-- **A real pipeline, end-to-end** — five providers ship today: Redpanda,
-  Postgres (logical replication), Debezium CDC, MinIO/S3, and a
-  Kafka-Connect S3 sink. Rows inserted into Postgres land as objects in a
-  bucket with nothing hand-wired in between.
+- **A real pipeline, end-to-end** — the provider set covers a working
+  lakehouse: Redpanda, Postgres, MySQL/MariaDB, Debezium CDC, MinIO/S3, a
+  Kafka-Connect S3 sink, Nessie (Iceberg REST catalog), Marquez
+  (OpenLineage backend), and a proxy surface giving external systems stable
+  platform-owned entrypoints. Rows inserted into Postgres land as objects
+  in a bucket with nothing hand-wired in between.
+- **Orchestrator-ready** — `examples/soak-lakehouse/` stands up the
+  infrastructure a Dagster deployment runs against (object store + Iceberg
+  catalog + lineage backend + relational stores + external-source
+  entrypoints) and documents every endpoint your orchestrator connects to.
 - **Capability-checked bindings** — a `Binding(mode: cdc)` against a
   provider that can't do CDC, or a `sink` to a format the connector can't
   write, fails at `validate` with a precise error — not at 2 a.m. during

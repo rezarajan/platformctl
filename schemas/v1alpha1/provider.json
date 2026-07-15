@@ -5,17 +5,37 @@
   "description": "Declares a technology (spec.type) and where it runs (spec.runtime). The provider implementation selected by spec.type defines the shape of spec.configuration.",
   "type": "object",
   "properties": {
-    "apiVersion": { "const": "datascape.io/v1alpha1" },
-    "kind": { "const": "Provider" },
-    "metadata": { "$ref": "meta.json" },
+    "apiVersion": {
+      "const": "datascape.io/v1alpha1"
+    },
+    "kind": {
+      "const": "Provider"
+    },
+    "metadata": {
+      "$ref": "meta.json"
+    },
     "spec": {
       "type": "object",
       "properties": {
         "type": {
           "type": "string",
           "minLength": 1,
-          "description": "Provider implementation to construct. Shipped in v1.0.0: redpanda, postgres, debezium, s3, minio, s3sink (plus noop/container for testing). Open-ended: unknown types fail at registry construction, not schema validation.",
-          "x-known-values": ["redpanda", "postgres", "debezium", "s3", "minio", "s3sink", "openlineage", "noop", "container"]
+          "description": "Provider implementation to construct. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections) — plus noop/container for testing. Open-ended: unknown types fail at registry construction, not schema validation. Technology providers realize the provider-agnostic kinds; the model speaks Catalog/Connection, never a technology's name.",
+          "x-known-values": [
+            "redpanda",
+            "postgres",
+            "mysql",
+            "mariadb",
+            "debezium",
+            "s3",
+            "minio",
+            "s3sink",
+            "nessie",
+            "openlineage",
+            "proxy",
+            "noop",
+            "container"
+          ]
         },
         "runtime": {
           "type": "object",
@@ -23,12 +43,23 @@
           "properties": {
             "type": {
               "type": "string",
-              "enum": ["docker", "fake", "kubernetes", "external", "terraform"],
+              "enum": [
+                "docker",
+                "fake",
+                "kubernetes",
+                "external",
+                "terraform"
+              ],
               "description": "docker and fake (testing) are implemented; kubernetes/external/terraform are accepted for forward compatibility and rejected at registry construction as planned-but-unavailable."
             },
-            "network": { "type": "string", "description": "docker-specific: the shared network name (default: datascape)." }
+            "network": {
+              "type": "string",
+              "description": "docker-specific: the shared network name (default: datascape)."
+            }
           },
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "additionalProperties": true
         },
         "configuration": {
@@ -38,16 +69,32 @@
         },
         "secretRefs": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 },
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "description": "Names of SecretReference resources resolved by the engine and passed to the provider."
         },
-        "external": { "type": "boolean", "description": "External lifecycle: Datascape never creates or deletes the backing system." },
-        "connectionRef": { "$ref": "meta.json#/$defs/nameRef" }
+        "external": {
+          "type": "boolean",
+          "description": "External lifecycle: Datascape never creates or deletes the backing system."
+        },
+        "connectionRef": {
+          "$ref": "meta.json#/$defs/nameRef"
+        }
       },
-      "required": ["type", "runtime"],
+      "required": [
+        "type",
+        "runtime"
+      ],
       "additionalProperties": false
     }
   },
-  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
   "additionalProperties": false
 }

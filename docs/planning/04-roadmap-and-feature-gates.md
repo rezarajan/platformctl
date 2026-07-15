@@ -251,6 +251,64 @@ graduate to GA at the close of this phase.
 graduates Alpha → Beta here, contingent on the `openlineage` provider actually being built and
 exercised.
 
+## 9.5 Phase 6.5 — Orchestrator-ready infrastructure (post-v1.0.0, before Kubernetes)
+
+Added post-v1.0.0 by project-owner direction (see
+docs/design/002, the stage's design note): let the engine build the core
+infrastructure real orchestrators (Dagster and friends) run against, while
+users operate the orchestrator themselves. **Model first:** the stage
+extends the resource model with two provider-agnostic kinds before any
+provider code — technologies realize nouns, they never become nouns.
+
+**Resource-model deliverables:**
+- `Catalog` kind: a table/metadata catalog as an engine-discriminated noun
+  (`spec.engine: nessie | hive | glue | ...`), mirroring `Source`'s
+  extensibility exactly. Capability-checked at validate via
+  `CatalogCapableProvider.SupportedCatalogEngines()`.
+- `Connection` kind: a first-class, non-secret "how to reach a system"
+  record (address + `secretRef`), with two lifecycles from one shape —
+  managed (a stable platform-owned entrypoint forwarding to where the
+  system lives) and external (a plain address record). `connectionRef`
+  fields resolve to a `Connection` first, `SecretReference` as the v1.0.0
+  shorthand. Capability-checked via
+  `ConnectionCapableProvider.SupportedConnectionSchemes()`.
+
+**Provider deliverables:**
+- `mysql` provider (also registered as `mariadb`): instance lifecycle,
+  Source reconciliation (database + replication-capable user, binlog
+  verified); Debezium connector class resolved per `Source.spec.engine`.
+- `nessie` provider: realizes `Catalog(engine: nessie)` — instance
+  container plus catalog-level reconciliation (default branch) against the
+  Iceberg REST API.
+- `openlineage` provider (the Phase 6 optional item, now built): Marquez +
+  dedicated Postgres; endpoint published in provider state for
+  `metadata.observers`. `LineageObservability` graduates Alpha → Beta.
+- `proxy` provider: realizes managed `Connection`s as per-Connection TCP
+  forwarder containers on the shared network and the host. Bindings against
+  external Sources consume the Source's Connection automatically (endpoint
+  + credentials). Tunnel chaining for VPC reach is deliberately deferred;
+  the `Connection` kind is the seam it lands behind.
+- `ImportedResources` graduates to Beta/enabled (its Phase 6 graduation).
+- `examples/lakehouse/`: the orchestrator-ready stack with a README mapping
+  every resource to the endpoint Dagster/Metabase connect to, exercising
+  managed, imported, and external lifecycles side by side.
+
+**Exit criteria:**
+- [ ] The lakehouse example applies to Ready: MinIO + Catalog(nessie) +
+      Marquez + Postgres + MySQL + a managed Connection + an external
+      Source consumed through it.
+- [ ] Nessie and Marquez REST APIs answer on their published endpoints; the
+      Catalog's declared default branch exists.
+- [ ] A connection through the managed entrypoint reaches the external
+      database end-to-end (CDC Binding RUNNING against it).
+- [ ] Idempotent re-apply, drift healing, and clean destroy hold for every
+      new kind and provider (same bar as phases 1–4).
+
+**Feature gates introduced:** `MySQLProvider`, `NessieProvider`,
+`OpenLineageProvider`, `ProxyProvider` (Alpha, enabled — this stage is
+their hardening period). `LineageObservability` Alpha → Beta,
+`ImportedResources` Alpha → Beta.
+
 ## 10. Phase 7 — Kubernetes Runtime Adapter (future)
 
 A second implementation of a runtime port proves the design decision that providers never import
@@ -260,7 +318,7 @@ defect in the port boundary to fix, not a Kubernetes quirk to special-case. Rein
 storage vocabulary (`StorageClass`/`PersistentVolume`-equivalent) if and only if the Kubernetes
 adapter's volume model can't be expressed through the existing `VolumeSpec`.
 
-**Feature gates:** `KubernetesRuntime` (Alpha, long soak before Beta given blast radius).
+**Feature gates:** `KubernetesRuntime` (Alpha, long hardening period before Beta given blast radius).
 
 ## 11. Phase 8 — External/Terraform Adapter, Out-of-Process Provider Plugins (future)
 

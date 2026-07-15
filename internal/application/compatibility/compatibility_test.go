@@ -271,3 +271,88 @@ func TestDisallowedPairingListsAlternatives(t *testing.T) {
 		t.Errorf("swapped ingest refs accepted or unclear, err = %v", err)
 	}
 }
+
+type catalogStub struct{ stubProvider }
+
+func (catalogStub) SupportedCatalogEngines() []string { return []string{"nessie"} }
+
+type connStub struct{ stubProvider }
+
+func (connStub) SupportedConnectionSchemes() []string { return []string{"tcp"} }
+
+func catalogManifests(engine string) []resource.Envelope {
+	return []resource.Envelope{
+		envelope("Provider", "catalog-svc", map[string]any{
+			"type":    "nessie",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Catalog", "lakehouse-catalog", map[string]any{
+			"engine":      engine,
+			"providerRef": map[string]any{"name": "catalog-svc"},
+		}),
+	}
+}
+
+// TestCatalogEngineCapability: a Catalog names an engine its provider must
+// declare — the Catalog kind stays provider-agnostic, capability gates it.
+func TestCatalogEngineCapability(t *testing.T) {
+	if err := Check(catalogManifests("nessie"), resolver(catalogStub{stubProvider{"nessie"}})); err != nil {
+		t.Fatalf("valid catalog rejected: %v", err)
+	}
+	err := Check(catalogManifests("hive"), resolver(catalogStub{stubProvider{"nessie"}}))
+	if err == nil {
+		t.Fatal("validate accepted an unsupported catalog engine")
+	}
+	want := `Catalog "lakehouse-catalog": Provider "catalog-svc" (type: nessie)
+does not support catalog engine "hive" (supported: nessie)`
+	if err.Error() != want {
+		t.Errorf("error format mismatch\ngot:\n%s\nwant:\n%s", err.Error(), want)
+	}
+	if err := Check(catalogManifests("nessie"), resolver(stubProvider{"redpanda"})); err == nil {
+		t.Fatal("validate accepted a non-catalog-capable provider behind a Catalog")
+	}
+}
+
+func connectionManifests(scheme string) []resource.Envelope {
+	return []resource.Envelope{
+		envelope("Provider", "edge", map[string]any{
+			"type":    "proxy",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Connection", "orders-db", map[string]any{
+			"providerRef": map[string]any{"name": "edge"},
+			"scheme":      scheme,
+			"port":        15999,
+			"target":      "db.internal:5432",
+		}),
+	}
+}
+
+// TestConnectionSchemeCapability: a managed Connection's provider must
+// declare its transport scheme; external Connections are skipped (nothing
+// realizes them).
+func TestConnectionSchemeCapability(t *testing.T) {
+	if err := Check(connectionManifests("tcp"), resolver(connStub{stubProvider{"proxy"}})); err != nil {
+		t.Fatalf("valid connection rejected: %v", err)
+	}
+	err := Check(connectionManifests("udp"), resolver(connStub{stubProvider{"proxy"}}))
+	if err == nil {
+		t.Fatal("validate accepted an unsupported connection scheme")
+	}
+	if !strings.Contains(err.Error(), `does not support connection scheme "udp" (supported: tcp)`) {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if err := Check(connectionManifests("tcp"), resolver(stubProvider{"redpanda"})); err == nil {
+		t.Fatal("validate accepted a non-connection-capable provider behind a Connection")
+	}
+	external := []resource.Envelope{
+		envelope("Connection", "prod-db", map[string]any{
+			"external": true,
+			"host":     "db.corp.internal",
+			"port":     5432,
+		}),
+	}
+	if err := Check(external, resolver(stubProvider{"redpanda"})); err != nil {
+		t.Fatalf("external Connection must skip capability checks: %v", err)
+	}
+}

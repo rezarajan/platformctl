@@ -11,8 +11,9 @@ import (
 )
 
 // refFields are the spec fields that create dependency edges. The referencing
-// resource depends on the referenced one.
-var refFields = []string{"providerRef", "sourceRef", "targetRef", "connectionRef"}
+// resource depends on the referenced one. secretRef is the single-reference
+// form used by Connection; Provider's plural secretRefs is handled below.
+var refFields = []string{"providerRef", "sourceRef", "targetRef", "connectionRef", "secretRef"}
 
 // refKinds maps a ref field to the Kind(s) the name may resolve to. sourceRef
 // and targetRef are mode-dependent for Binding, so those resolve by name

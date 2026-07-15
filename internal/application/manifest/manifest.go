@@ -13,6 +13,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/rezarajan/platformctl/internal/domain/binding"
+	"github.com/rezarajan/platformctl/internal/domain/catalog"
+	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/dataset"
 	"github.com/rezarajan/platformctl/internal/domain/eventstream"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
@@ -29,6 +31,8 @@ var KnownKinds = map[string]bool{
 	"Binding":         true,
 	"Dataset":         true,
 	"SecretReference": true,
+	"Catalog":         true,
+	"Connection":      true,
 }
 
 // Load reads one path (file or directory) and returns validated envelopes.
@@ -85,7 +89,7 @@ func Validate(envelopes []resource.Envelope) error {
 			return err
 		}
 		if !KnownKinds[e.Kind] {
-			return fmt.Errorf("%s %q: unknown kind (known: Provider, Source, EventStream, Binding, Dataset, SecretReference)", e.Kind, e.Metadata.Name)
+			return fmt.Errorf("%s %q: unknown kind (known: Provider, Source, EventStream, Binding, Dataset, Catalog, Connection, SecretReference)", e.Kind, e.Metadata.Name)
 		}
 		if !strings.HasPrefix(e.APIVersion, "datascape.io/") {
 			return fmt.Errorf("%s %q: unsupported apiVersion %q (expected datascape.io/v1alpha1)", e.Kind, e.Metadata.Name, e.APIVersion)
@@ -108,6 +112,10 @@ func Validate(envelopes []resource.Envelope) error {
 			_, err = binding.FromEnvelope(e)
 		case "Dataset":
 			_, err = dataset.FromEnvelope(e)
+		case "Catalog":
+			_, err = catalog.FromEnvelope(e)
+		case "Connection":
+			_, err = connection.FromEnvelope(e)
 		case "SecretReference":
 			err = secretFromEnvelope(e)
 		}

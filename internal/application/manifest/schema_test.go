@@ -80,3 +80,45 @@ func TestSchemaAcceptsValidManifest(t *testing.T) {
 		t.Fatalf("valid manifest rejected: %v", err)
 	}
 }
+
+func TestSchemaValidatesNewKinds(t *testing.T) {
+	valid := []string{
+		// Managed catalog with an engine block.
+		"apiVersion: datascape.io/v1alpha1\nkind: Catalog\nmetadata: {name: c}\n" +
+			"spec:\n  engine: nessie\n  providerRef: {name: svc}\n  nessie: {defaultBranch: main}\n",
+		// External catalog through a connection.
+		"apiVersion: datascape.io/v1alpha1\nkind: Catalog\nmetadata: {name: c2}\n" +
+			"spec:\n  engine: glue\n  external: true\n  connectionRef: {name: conn}\n",
+		// Managed connection (stable entrypoint).
+		"apiVersion: datascape.io/v1alpha1\nkind: Connection\nmetadata: {name: n}\n" +
+			"spec:\n  providerRef: {name: edge}\n  port: 15999\n  target: db.internal:5432\n  secretRef: {name: creds}\n",
+		// External connection (plain address record).
+		"apiVersion: datascape.io/v1alpha1\nkind: Connection\nmetadata: {name: n2}\n" +
+			"spec:\n  external: true\n  host: db.corp.internal\n  port: 5432\n",
+	}
+	for i, doc := range valid {
+		if err := loadOne(t, doc); err != nil {
+			t.Errorf("valid manifest %d rejected: %v", i, err)
+		}
+	}
+
+	invalid := []string{
+		// Catalog without an engine.
+		"apiVersion: datascape.io/v1alpha1\nkind: Catalog\nmetadata: {name: c}\n" +
+			"spec:\n  providerRef: {name: svc}\n",
+		// Managed connection without a target.
+		"apiVersion: datascape.io/v1alpha1\nkind: Connection\nmetadata: {name: n}\n" +
+			"spec:\n  providerRef: {name: edge}\n  port: 15999\n",
+		// External connection without a host.
+		"apiVersion: datascape.io/v1alpha1\nkind: Connection\nmetadata: {name: n}\n" +
+			"spec:\n  external: true\n  port: 5432\n",
+		// Connection smuggling inline credentials.
+		"apiVersion: datascape.io/v1alpha1\nkind: Connection\nmetadata: {name: n}\n" +
+			"spec:\n  external: true\n  host: h\n  port: 5432\n  password: hunter2\n",
+	}
+	for i, doc := range invalid {
+		if err := loadOne(t, doc); err == nil {
+			t.Errorf("invalid manifest %d accepted", i)
+		}
+	}
+}

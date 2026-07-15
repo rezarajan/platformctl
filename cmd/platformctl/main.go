@@ -9,9 +9,13 @@ import (
 	"os"
 
 	"github.com/rezarajan/platformctl/internal/adapters/providers/debezium"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/mysql"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/nessie"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/noop"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/openlineage"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/placeholder"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/postgres"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/proxy"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/redpanda"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/s3"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/s3sink"
@@ -57,15 +61,20 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	gates.Register("PostgresProvider", featuregate.GA, true)
 	gates.Register("DebeziumCDCProvider", featuregate.GA, true)
 	gates.Register("CDCBinding", featuregate.GA, true)
-	gates.Register("LineageObservability", featuregate.Alpha, false) // Beta in Phase 6 only with a real backend provider
+	gates.Register("LineageObservability", featuregate.Beta, true) // Beta: the openlineage (Marquez) provider exists and is exercised
 	gates.Register("ObjectStoreProvider", featuregate.GA, true)
 	gates.Register("SinkBinding", featuregate.GA, true)
 	gates.Register("DriftDetection", featuregate.Beta, true)
 	gates.Register("ExternalResourceConfiguration", featuregate.Beta, true)
-	gates.Register("ImportedResources", featuregate.Alpha, false)
+	gates.Register("ImportedResources", featuregate.Beta, true) // Beta per the Phase 6 graduation
 	// Phase 6.
 	gates.Register("ParallelReconciliation", featuregate.Alpha, false)
 	gates.Register("VaultSecretBackend", featuregate.Alpha, false)
+	// Phase 6.5: orchestrator-ready infrastructure.
+	gates.Register("MySQLProvider", featuregate.Alpha, true)
+	gates.Register("NessieProvider", featuregate.Alpha, true)
+	gates.Register("OpenLineageProvider", featuregate.Alpha, true)
+	gates.Register("ProxyProvider", featuregate.Alpha, true)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
@@ -78,6 +87,13 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	reg.RegisterProvider("s3", func() reconciler.Provider { return s3.New() }, "ObjectStoreProvider")
 	reg.RegisterProvider("minio", func() reconciler.Provider { return s3.New() }, "ObjectStoreProvider")
 	reg.RegisterProvider("s3sink", func() reconciler.Provider { return s3sink.New() }, "ObjectStoreProvider")
+	// "mysql" and "mariadb" are the same adapter (same protocol; per-type
+	// image and binlog flags).
+	reg.RegisterProvider("mysql", func() reconciler.Provider { return mysql.New() }, "MySQLProvider")
+	reg.RegisterProvider("mariadb", func() reconciler.Provider { return mysql.New() }, "MySQLProvider")
+	reg.RegisterProvider("nessie", func() reconciler.Provider { return nessie.New() }, "NessieProvider")
+	reg.RegisterProvider("openlineage", func() reconciler.Provider { return openlineage.New() }, "OpenLineageProvider")
+	reg.RegisterProvider("proxy", func() reconciler.Provider { return proxy.New() }, "ProxyProvider")
 	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
 		return fakeruntime.New(), nil
 	})

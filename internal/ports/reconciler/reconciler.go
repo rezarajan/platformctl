@@ -51,6 +51,25 @@ type IngestCapableProvider interface {
 	SupportedIngestFormats() []string
 }
 
+// CatalogCapableProvider is declared by a provider that can realize a
+// Catalog resource. Checked against Catalog.spec.engine at validate time,
+// exactly as CDC capability is checked against Source.spec.engine — the
+// Catalog kind stays provider-agnostic; engines (nessie, hive, glue, ...)
+// are provider capability declarations.
+type CatalogCapableProvider interface {
+	Provider
+	SupportedCatalogEngines() []string
+}
+
+// ConnectionCapableProvider is declared by a provider that can realize a
+// managed Connection (a stable platform-owned entrypoint forwarding to
+// where a system actually lives). Checked against Connection.spec.scheme at
+// validate time.
+type ConnectionCapableProvider interface {
+	Provider
+	SupportedConnectionSchemes() []string
+}
+
 // ProviderResourceAware is optionally implemented by providers that need
 // their own Provider resource's spec (configuration, runtime block) when
 // reconciling dependent resources — e.g. redpanda needs the broker address it

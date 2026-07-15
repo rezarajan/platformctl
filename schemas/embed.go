@@ -18,5 +18,7 @@ var KindFiles = map[string]map[string]string{
 		"Binding":         "v1alpha1/binding.json",
 		"Dataset":         "v1alpha1/dataset.json",
 		"SecretReference": "v1alpha1/secretreference.json",
+		"Catalog":         "v1alpha1/catalog.json",
+		"Connection":      "v1alpha1/connection.json",
 	},
 }

@@ -307,6 +307,20 @@ type SinkCapableProvider interface {
     SupportedSinkFormats() []string
 }
 
+// Declared by a provider that can realize a Catalog resource; checked
+// against Catalog.spec.engine at validate time.
+type CatalogCapableProvider interface {
+    Provider
+    SupportedCatalogEngines() []string
+}
+
+// Declared by a provider that can realize a managed Connection (a stable
+// platform-owned entrypoint); checked against Connection.spec.scheme.
+type ConnectionCapableProvider interface {
+    Provider
+    SupportedConnectionSchemes() []string
+}
+
 // Declared by a provider that knows how to consume a lineage backend's
 // connection details and wire them into its own, real integration.
 // Implemented by `debezium` in v1.0.0; implementing it for other providers
@@ -319,7 +333,9 @@ type LineageAware interface {
 
 None of the capability interfaces are required by the base `Provider` interface — a provider
 that doesn't implement `CDCCapableProvider`/`SinkCapableProvider` simply can't be referenced from
-a `Binding` of that mode (caught at `validate` time, §5.2); a provider that doesn't implement
+a `Binding` of that mode, and one that doesn't implement `CatalogCapableProvider`/
+`ConnectionCapableProvider` can't be referenced from a `Catalog`/managed `Connection`
+(all caught at `validate` time, §5.2); a provider that doesn't implement
 `LineageAware` simply never receives a `LineageEndpoint` (no error, no behavior change).
 
 A `Runtime` is injected into `Reconcile`/`Destroy`/`Probe` based on the referenced `Provider`

@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/rezarajan/platformctl/internal/domain/binding"
+	"github.com/rezarajan/platformctl/internal/domain/catalog"
+	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/dataset"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
@@ -29,6 +31,10 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 	byName := make(map[string]resource.Envelope)
 	for _, e := range envelopes {
 		byName[e.Metadata.Name] = e
+	}
+
+	if err := checkResourceCapabilities(envelopes, byName, resolve); err != nil {
+		return err
 	}
 
 	for _, e := range envelopes {
@@ -138,6 +144,74 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 			formats := ing.SupportedIngestFormats()
 			if !contains(formats, ds.Format) {
 				return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support ingest format %q (supported: %s)", bindingName, b.ProviderRef, p.Type, ds.Format, joinSorted(formats))
+			}
+		}
+	}
+	return nil
+}
+
+// checkResourceCapabilities validates the provider capability behind
+// non-Binding, engine-discriminated kinds: a Catalog's provider must declare
+// its engine, a managed Connection's provider its scheme. External resources
+// are skipped — nothing realizes them.
+func checkResourceCapabilities(envelopes []resource.Envelope, byName map[string]resource.Envelope, resolve ProviderResolver) error {
+	resolveProviderImpl := func(kind, name, refName string) (reconciler.Provider, string, error) {
+		provEnv, ok := byName[refName]
+		if !ok || provEnv.Kind != "Provider" {
+			return nil, "", fmt.Errorf("%s %q: providerRef %q does not resolve to a Provider", kind, name, refName)
+		}
+		p, err := provider.FromEnvelope(provEnv)
+		if err != nil {
+			return nil, "", err
+		}
+		impl, err := resolve(p.Type)
+		if err != nil {
+			return nil, "", fmt.Errorf("%s %q: %w", kind, name, err)
+		}
+		return impl, p.Type, nil
+	}
+
+	for _, e := range envelopes {
+		switch e.Kind {
+		case "Catalog":
+			c, err := catalog.FromEnvelope(e)
+			if err != nil {
+				return err
+			}
+			if c.External {
+				continue
+			}
+			impl, provType, err := resolveProviderImpl("Catalog", e.Metadata.Name, *c.ProviderRef)
+			if err != nil {
+				return err
+			}
+			capable, ok := impl.(reconciler.CatalogCapableProvider)
+			if !ok {
+				return fmt.Errorf("Catalog %q: Provider %q (type: %s)\ndoes not support catalogs (provider implements no catalog capability)", e.Metadata.Name, *c.ProviderRef, provType)
+			}
+			engines := capable.SupportedCatalogEngines()
+			if !contains(engines, c.Engine) {
+				return fmt.Errorf("Catalog %q: Provider %q (type: %s)\ndoes not support catalog engine %q (supported: %s)", e.Metadata.Name, *c.ProviderRef, provType, c.Engine, joinSorted(engines))
+			}
+		case "Connection":
+			c, err := connection.FromEnvelope(e)
+			if err != nil {
+				return err
+			}
+			if c.External {
+				continue
+			}
+			impl, provType, err := resolveProviderImpl("Connection", e.Metadata.Name, *c.ProviderRef)
+			if err != nil {
+				return err
+			}
+			capable, ok := impl.(reconciler.ConnectionCapableProvider)
+			if !ok {
+				return fmt.Errorf("Connection %q: Provider %q (type: %s)\ndoes not support connections (provider implements no connection capability)", e.Metadata.Name, *c.ProviderRef, provType)
+			}
+			schemes := capable.SupportedConnectionSchemes()
+			if !contains(schemes, c.Scheme) {
+				return fmt.Errorf("Connection %q: Provider %q (type: %s)\ndoes not support connection scheme %q (supported: %s)", e.Metadata.Name, *c.ProviderRef, provType, c.Scheme, joinSorted(schemes))
 			}
 		}
 	}

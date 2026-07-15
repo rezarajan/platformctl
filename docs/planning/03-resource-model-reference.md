@@ -45,6 +45,44 @@ fact, if that provider knows what to do with one. See §9.
 | **External** | `spec.external: true` (+ a `connectionRef`/equivalent describing how to reach it) | Datascape never creates or deletes it. It may still be *configured* (e.g., a CDC binding registers a connector against an externally-running Kafka Connect) if the provider defines a configure-only path. `destroy` never touches it without `--include-external` **and** the resource-specific destructive-action flag. |
 | **Imported** | Not declared in the manifest directly — produced by `platformctl import <kind>/<name> --from ...`, which writes `status.imported: true` into state. | Behaves like Managed for update/reconcile purposes going forward, but its initial creation is never re-attempted; the first reconcile after import is a Probe + reconcile-in-place, not a create. |
 
+### 3.1 Imported vs External — which one do I want?
+
+The two non-Managed lifecycles answer different questions and are easy to
+conflate. The test: **who should own the resource going forward?**
+
+| | **Imported** | **External** |
+|---|---|---|
+| The resource was created… | out-of-band, but it *should* be platform-owned | and is operated by someone else, permanently |
+| Declared how | normal manifest + one-time `platformctl import <Kind>/<name> --from <name>` | `spec.external: true` + `connectionRef` in the manifest itself |
+| Reconcile | probe on adoption; updates/heals like Managed afterwards | never creates or mutates the real system; verifies its `Connection` resolves |
+| Drift | full probe/heal like Managed | observed (`drift` reports reachability), never healed by mutation |
+| Destroy | skipped unless `--include-imported` | refused without `--include-external` **and** `--yes-i-understand-this-is-destructive`; even then only *forgotten from state* when nothing realizes it |
+| Typical example | a Postgres you `docker run` last month and now want platformctl to manage | the production database another team operates |
+
+### 3.2 How External resources integrate into an active deployment
+
+An External resource is not a dead entry — the platform actively *configures
+against* it. The moving parts:
+
+1. The external resource (say a `Source`) declares `connectionRef`, which
+   resolves to a **`Connection`** (§8.2) — address and port here, credentials
+   in the `SecretReference` the Connection's `secretRef` names. (A
+   `connectionRef` may also point straight at a `SecretReference`; that is
+   the v1.0.0 shorthand, still supported.)
+2. A managed `Connection` gives the external system a **stable
+   platform-owned entrypoint**: a forwarder on the shared network (and the
+   host) whose `target` is the one place that knows where the system
+   actually lives. When the external endpoint moves, one manifest line
+   changes; every consumer keeps its address.
+3. Providers that *do work against* the external system consume the
+   Connection automatically — e.g. a `Binding(mode: cdc)` on an external
+   `Source` registers its Debezium connector at the Connection's endpoint
+   with the Connection's credentials. The provider carrying the work must
+   list the Connection's `secretRef` in its own `spec.secretRefs` (secrets
+   only ever flow through the engine's SecretStore resolution).
+4. `drift` probes reachability; `apply` heals the *managed* pieces (the
+   forwarder, the connector) but never mutates the external system itself.
+
 ## 4. Kind: `Provider`
 
 Declares a technology (`type`) and where it runs (`runtime`). This is the resource that replaces
@@ -57,7 +95,7 @@ kind: Provider
 metadata:
   name: local-redpanda
 spec:
-  type: redpanda                 # redpanda | postgres | debezium | s3 | minio | s3sink | openlineage(optional)
+  type: redpanda                 # redpanda | postgres | mysql | mariadb | debezium | s3 | minio | s3sink | nessie | openlineage | proxy
   runtime:
     type: docker                 # docker | kubernetes (future) | external (future)
     network: datascape           # docker-specific; ignored/validated per runtime.type
@@ -175,7 +213,7 @@ spec:
   engine: postgres
   external: true
   connectionRef:
-    name: production-student-db     # resolved via a Connection/SecretReference pair, not inline creds
+    name: production-student-db     # a Connection (§8.2) — or, shorthand, a SecretReference — never inline creds
 ```
 
 ## 6. Kind: `EventStream`
@@ -293,6 +331,93 @@ spec:
 
 `Dataset` reconciliation is a required v1.0.0 deliverable: `platformctl apply` creates the
 bucket/prefix via the `s3`/`minio` provider, and a `sink`-mode `Binding` populates it.
+
+## 8.1 Kind: `Catalog`
+
+A table/metadata catalog (Iceberg REST, Hive Metastore, Glue, ...) as a
+provider-agnostic noun. Exactly like `Source`, `spec.engine` is an open
+discriminator pairing with an engine-named nested block — Nessie is one
+engine *behind* the Catalog abstraction, never a shape of its own. The
+realizing provider must declare the engine in `SupportedCatalogEngines()`
+(checked at `validate`, same mechanism and error shape as Binding
+capability).
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Catalog
+metadata:
+  name: lakehouse-catalog
+spec:
+  engine: nessie                   # open-ended: nessie | hive | glue | ...
+  providerRef:
+    name: catalog-svc              # a catalog-capable Provider (type: nessie today)
+  nessie:                          # engine-specific block, validated per engine
+    defaultBranch: main
+```
+
+External example (a catalog operated elsewhere):
+
+```yaml
+spec:
+  engine: glue
+  external: true
+  connectionRef:
+    name: prod-glue                # a Connection; Datascape never creates/deletes the catalog
+```
+
+## 8.2 Kind: `Connection`
+
+A first-class, non-secret description of **how to reach a system** —
+address here, credentials in the `SecretReference` named by
+`spec.secretRef`. This is the "Connection/SecretReference pair" §5's
+external example always promised, promoted to a real kind. One shape, two
+lifecycles:
+
+```yaml
+# Managed: a stable platform-owned entrypoint, realized by a
+# connection-capable Provider (type: proxy today) as a forwarder listening
+# on spec.port — on the shared network at <name>:<port> and on the host at
+# 127.0.0.1:<port>. spec.target is the only place that knows where the
+# system actually lives.
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: orders-db
+spec:
+  providerRef:
+    name: edge                     # must declare "tcp" in SupportedConnectionSchemes()
+  scheme: tcp                      # default
+  port: 15999
+  target: db.corp.internal:5432
+  secretRef:
+    name: orders-db-creds
+---
+# External: a plain address record; nothing is created for it.
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: prod-warehouse
+spec:
+  external: true
+  host: warehouse.corp.internal
+  port: 9000
+  secretRef:
+    name: warehouse-creds
+```
+
+Field notes:
+- Consumers never address `spec.target` — they address the Connection
+  (managed: its own name / `127.0.0.1`; external: `spec.host`). Moving the
+  real system is a one-line manifest change.
+- `connectionRef` fields elsewhere (`Source`, `Catalog`, ...) resolve to a
+  `Connection` first, falling back to a bare `SecretReference` (the v1.0.0
+  shorthand).
+- Providers doing work against an external resource consume its Connection
+  automatically (see §3.2); the Connection's `secretRef` must appear in the
+  working provider's `spec.secretRefs` for the engine to resolve its values.
+- Tunnel chaining for VPC reach (a Connection egressing through another
+  provider) is deliberately deferred; the seam is the `Connection` kind
+  itself — additive when a tunnel-typed provider lands.
 
 ## 9. Lineage / observability schema
 

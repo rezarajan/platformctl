@@ -12,6 +12,7 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/adapters/kafkaconnect"
 	"github.com/rezarajan/platformctl/internal/domain/binding"
+	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
@@ -41,7 +42,9 @@ func New() *Provider { return &Provider{} }
 func (p *Provider) Type() string { return "debezium" }
 
 // SupportedSourceEngines implements CDCCapableProvider.
-func (p *Provider) SupportedSourceEngines() []string { return []string{"postgres", "mysql", "mongodb"} }
+func (p *Provider) SupportedSourceEngines() []string {
+	return []string{"postgres", "mysql", "mariadb", "mongodb"}
+}
 
 func (p *Provider) SetProviderResource(env resource.Envelope) {
 	p.providerRes = env
@@ -172,15 +175,35 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		schema = "public"
 	}
 
-	// The database host is the Source's Provider container name on the shared
-	// network; External sources use configuration from their connectionRef.
+	connectorClass, enginePort, err := connectorFor(src.Engine)
+	if err != nil {
+		return st, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
+	}
+
+	// The database address, in preference order: the Source's Connection
+	// (external sources — a managed Connection answers at its own name on
+	// the shared network, an external one at its declared host), the
+	// Source's Provider container name, then explicit options overrides.
 	dbHost := ""
-	dbPort := 5432
+	dbPort := enginePort
+	connSecretRef := ""
 	if src.ProviderRef != nil {
 		dbHost = *src.ProviderRef
 	}
+	if src.External && src.ConnectionRef != nil {
+		if connEnv, ok := p.resources[resource.Key{Kind: "Connection", Name: *src.ConnectionRef}]; ok {
+			conn, err := connection.FromEnvelope(connEnv)
+			if err != nil {
+				return st, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
+			}
+			dbHost, dbPort = conn.Endpoint(connEnv.Metadata.Name)
+			if conn.SecretRef != nil {
+				connSecretRef = *conn.SecretRef
+			}
+		}
+	}
 	if h, ok := b.Options["databaseHostname"].(string); ok && h != "" {
-		dbHost = h // explicit override (external sources)
+		dbHost = h // explicit override
 	}
 	if v, ok := b.Options["databasePort"]; ok {
 		switch n := v.(type) {
@@ -191,27 +214,31 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		}
 	}
 	if dbHost == "" {
-		return st, fmt.Errorf("Binding %q: cannot determine database hostname (no providerRef on Source and no options.databaseHostname)", res.Metadata.Name)
+		return st, fmt.Errorf("Binding %q: cannot determine database hostname (no providerRef or Connection on Source, and no options.databaseHostname)", res.Metadata.Name)
 	}
 
+	// Credentials: the Connection's secretRef when the Source declares one
+	// (and this provider lists it in spec.secretRefs so the engine resolved
+	// it), else the provider-level replicationSecretRef.
 	replRefName, _ := p.cfg.Configuration["replicationSecretRef"].(string)
-	creds, ok := p.secrets[replRefName]
+	creds, ok := p.secrets[connSecretRef]
 	if !ok {
-		return st, fmt.Errorf("Binding %q: debezium Provider %q needs configuration.replicationSecretRef naming a declared secretRef", res.Metadata.Name, p.containerName())
+		creds, ok = p.secrets[replRefName]
+	}
+	if !ok {
+		return st, fmt.Errorf("Binding %q: debezium Provider %q has no resolved credentials — declare the Connection's secretRef or configuration.replicationSecretRef in spec.secretRefs", res.Metadata.Name, p.containerName())
 	}
 
 	topicPrefix := b.TargetRef // topics become <EventStream name>.<schema>.<table>
 	connectorName := res.Metadata.Name
 
 	config := map[string]string{
-		"connector.class":                "io.debezium.connector.postgresql.PostgresConnector",
+		"connector.class":                connectorClass,
 		"database.hostname":              dbHost,
 		"database.port":                  strconv.Itoa(dbPort),
 		"database.user":                  creds["username"],
 		"database.password":              creds["password"],
-		"database.dbname":                dbName,
 		"topic.prefix":                   topicPrefix,
-		"plugin.name":                    "pgoutput",
 		"key.converter":                  "org.apache.kafka.connect.json.JsonConverter",
 		"value.converter":                "org.apache.kafka.connect.json.JsonConverter",
 		"key.converter.schemas.enable":   "false",
@@ -221,11 +248,26 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		"topic.creation.default.replication.factor": "1",
 		"topic.creation.default.partitions":         "1",
 	}
+	if src.Engine == "postgres" {
+		config["database.dbname"] = dbName
+		config["plugin.name"] = "pgoutput"
+	} else {
+		// MySQL/MariaDB: the connector filters by database, not dbname, and
+		// needs a unique server id per connector.
+		config["database.include.list"] = dbName
+		config["database.server.id"] = strconv.Itoa(184000 + len(connectorClass)) //nolint:mnd
+		config["schema.history.internal.kafka.bootstrap.servers"], _ = p.cfg.Configuration["bootstrapServers"].(string)
+		config["schema.history.internal.kafka.topic"] = topicPrefix + ".schema-history"
+	}
 	if tables, ok := b.Options["tables"].([]any); ok && len(tables) > 0 {
+		qualifier := schema
+		if src.Engine != "postgres" {
+			qualifier = dbName // MySQL/MariaDB qualify tables by database
+		}
 		qualified := make([]string, 0, len(tables))
 		for _, t := range tables {
 			if s, ok := t.(string); ok {
-				qualified = append(qualified, schema+"."+s)
+				qualified = append(qualified, qualifier+"."+s)
 			}
 		}
 		config["table.include.list"] = strings.Join(qualified, ",")
@@ -345,5 +387,20 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		return st, nil
 	default:
 		return st, fmt.Errorf("debezium provider cannot probe kind %s", res.Kind)
+	}
+}
+
+// connectorFor resolves the Debezium connector class and default port for a
+// Source engine. SupportedSourceEngines and this table must stay in step.
+func connectorFor(engine string) (class string, port int, err error) {
+	switch engine {
+	case "postgres":
+		return "io.debezium.connector.postgresql.PostgresConnector", 5432, nil
+	case "mysql", "mariadb":
+		return "io.debezium.connector.mysql.MySqlConnector", 3306, nil
+	case "mongodb":
+		return "io.debezium.connector.mongodb.MongoDbConnector", 27017, nil
+	default:
+		return "", 0, fmt.Errorf("no Debezium connector mapping for source engine %q", engine)
 	}
 }
