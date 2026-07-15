@@ -223,11 +223,12 @@ func TestChaosApplyKilledMidRun(t *testing.T) {
 		t.Fatalf("start apply: %v", err)
 	}
 
-	// Kill hard after the first resource completes.
+	// Kill hard after the first resource completes (the progress reporter
+	// prints a "✓" done line per finished step).
 	scanner := bufio.NewScanner(stderr)
 	killed := false
 	for scanner.Scan() {
-		if strings.HasPrefix(scanner.Text(), "ok   ") {
+		if strings.Contains(scanner.Text(), "✓") {
 			if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
 				t.Fatalf("kill apply: %v", err)
 			}

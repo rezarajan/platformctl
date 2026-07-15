@@ -1,5 +1,32 @@
 ## Better Progress Output
 
+**Status: delivered.** `apply` now streams a Docker-style progress display
+(a `Reporter` interface in the engine, rendered by
+`internal/cliutil/ProgressReporter`):
+
+```
+Reconciling 14 resources:
+  [1/14] ◐ create Provider/local-redpanda
+  [1/14] ✓ create Provider/local-redpanda (2.7s)
+  [2/14] ◐ create EventStream/attendance-events
+  [2/14] ✓ create EventStream/attendance-events (0.21s)
+  ...
+✓ 14 applied
+```
+
+- **Order + remaining**: every step is tagged `[n/total]`.
+- **Currently running**: a `◐` "started" line precedes each `✓`/`✗` "done"
+  line, so in-flight steps are visible (with `--parallelism>1`, multiple
+  show as started before they finish).
+- **Per-step timing** on completion; **drift-heal** (`⟳`) and dependency
+  **skip** (`⊘`) lines; a coloured final summary. Colour is TTY-gated and
+  honours `NO_COLOR`; non-TTY (CI, pipes) gets clean plain lines. A clean
+  re-apply stays quiet. Progress → stderr, so stdout stays scriptable.
+
+Tests: `internal/cliutil/progress_test.go`.
+
+### Original request
+
 The current implementation simply says ok/fail on apply steps, but does not list the order of steps, give the user an idea of remaining output, outlog status logs, or have an indicator showing a current step which is running (or those running in parallel). The idea is to have something like how docker's cli interface is.
 
 ## Interactive Service/Inventory Explorer

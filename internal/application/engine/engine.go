@@ -11,6 +11,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/application/plan"
@@ -47,8 +48,12 @@ type Engine struct {
 	// level (resources in the same level share no dependency relationship).
 	// Values <= 1 mean fully sequential. Gated by ParallelReconciliation.
 	Parallelism int
-	// Log receives one line per reconciliation action; nil disables.
+	// Log receives one line per reconciliation action; nil disables. Used by
+	// Destroy and for one-off messages.
 	Log func(format string, args ...any)
+	// Reporter receives structured apply progress events (start/done/skip)
+	// for a rich, ordered, countable CLI display. nil disables.
+	Reporter Reporter
 
 	// stateMu serializes state-map access and persistence when levels
 	// execute concurrently; reconciliation itself runs unlocked.
@@ -59,6 +64,26 @@ type Result struct {
 	Succeeded []resource.Key
 	Failed    map[resource.Key]error
 	Skipped   []resource.Key // dependents of failed resources
+}
+
+// Reporter receives structured apply progress so the CLI can render an
+// ordered, countable, Docker-style view. All methods must be safe to call
+// concurrently: with parallelism, several steps run at once. seq is the
+// 1-based order in which steps started; total is the planned step count
+// (healing steps discovered at runtime arrive with seq > total).
+type Reporter interface {
+	Begin(total int)
+	StepStarted(seq, total int, key resource.Key, action string)
+	StepFinished(seq, total int, key resource.Key, action string, d time.Duration, err error)
+	StepSkipped(key resource.Key, reason string)
+	StepHealing(key resource.Key, reason string)
+	End(succeeded, failed, skipped int)
+}
+
+func (e *Engine) report(fn func(Reporter)) {
+	if e.Reporter != nil {
+		fn(e.Reporter)
+	}
 }
 
 func (e *Engine) logf(format string, args ...any) {
@@ -86,8 +111,17 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 		return res, err
 	}
 
+	total := 0
+	for _, entry := range p.Entries {
+		if entry.Action != plan.ActionNoop {
+			total++
+		}
+	}
+	e.report(func(r Reporter) { r.Begin(total) })
+
 	blocked := make(map[resource.Key]bool)
 	var mu sync.Mutex // guards res and blocked during a concurrent level
+	var seq int64     // 1-based order in which steps started
 
 	// processEntry runs one plan entry; resources in the same topological
 	// level share no dependency relationship, so entries within a level are
@@ -101,6 +135,7 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 			res.Skipped = append(res.Skipped, key)
 			mu.Unlock()
 			e.logf("skip %s: a dependency failed", key)
+			e.report(func(r Reporter) { r.StepSkipped(key, "a dependency failed") })
 			return
 		}
 		env := byKey[key]
@@ -123,11 +158,16 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 			}
 			if c, ok := probed.Condition(status.DriftDetected); ok {
 				e.logf("drift %s (%s); healing", key, c.Reason)
+				reason := c.Reason
+				e.report(func(r Reporter) { r.StepHealing(key, reason) })
 			}
 		}
 
+		n := int(atomic.AddInt64(&seq, 1))
+		e.report(func(r Reporter) { r.StepStarted(n, total, key, string(entry.Action)) })
 		start := time.Now()
 		err := e.reconcileOne(ctx, entry, env, byKey, &st)
+		dur := time.Since(start).Round(time.Millisecond)
 		if err != nil {
 			mu.Lock()
 			res.Failed[key] = err
@@ -135,13 +175,16 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 				blocked[dep] = true
 			}
 			mu.Unlock()
-			e.logf("fail %s (%s) after %s: %v", key, entry.Action, time.Since(start).Round(time.Millisecond), err)
+			e.logf("fail %s (%s) after %s: %v", key, entry.Action, dur, err)
+			rerr := err
+			e.report(func(r Reporter) { r.StepFinished(n, total, key, string(entry.Action), dur, rerr) })
 			return
 		}
 		mu.Lock()
 		res.Succeeded = append(res.Succeeded, key)
 		mu.Unlock()
-		e.logf("ok   %s (%s) in %s", key, entry.Action, time.Since(start).Round(time.Millisecond))
+		e.logf("ok   %s (%s) in %s", key, entry.Action, dur)
+		e.report(func(r Reporter) { r.StepFinished(n, total, key, string(entry.Action), dur, nil) })
 	}
 
 	parallelism := e.Parallelism
@@ -182,6 +225,7 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 		}
 	}
 
+	e.report(func(r Reporter) { r.End(len(res.Succeeded), len(res.Failed), len(res.Skipped)) })
 	if len(res.Failed) > 0 {
 		return res, fmt.Errorf("%d resource(s) failed to reconcile", len(res.Failed))
 	}

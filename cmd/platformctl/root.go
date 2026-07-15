@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -346,12 +347,15 @@ func newApplyCmd(a *app) *cobra.Command {
 			eng.HaltOnError = haltOnError
 			eng.HealDrift = healDrift
 			eng.Parallelism = parallelism
-			result, err := eng.Apply(cmd.Context(), p, envelopes, g)
-			if err != nil {
+			// Stream ordered, countable progress to stderr; the reporter owns
+			// per-step output, so silence the raw log to avoid duplicate lines.
+			eng.Log = nil
+			eng.Reporter = cliutil.NewProgressReporter(cmd.ErrOrStderr(), isTTY(cmd.ErrOrStderr()))
+			if _, err := eng.Apply(cmd.Context(), p, envelopes, g); err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "applied: %d succeeded, %d failed, %d skipped\n",
-				len(result.Succeeded), len(result.Failed), len(result.Skipped))
+			// The reporter (stderr) already printed the streamed steps and a
+			// summary; success is also conveyed by the zero exit code.
 			return nil
 		},
 	}
@@ -718,4 +722,21 @@ func pathArg(args []string) string {
 		return args[0]
 	}
 	return "."
+}
+
+// isTTY reports whether w is an interactive terminal (a character device),
+// so colour is only emitted when a human is watching. Honours NO_COLOR.
+func isTTY(w io.Writer) bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
