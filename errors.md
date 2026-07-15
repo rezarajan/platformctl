@@ -127,3 +127,113 @@ SecretReference/postgres-replication-creds  Unknown  NotApplied          Managed
 SecretReference/minio-root-creds            True     SecretResolvable    Managed
 Source/student-database                     Unknown  NotApplied          Managed
 ```
+
+
+## Platformctl does not check for required dependencies like environment variables being set
+
+Running apply on an manifest without setting the required environment variables does not throw an error before running; this safeguard must exist so that the user cannot half-apply their infrastructure. Optionally, and env file can be used to host this information.
+
+``` text
+❯ ./bin/platformctl apply examples/lakehouse/
+RESOURCE                          ACTION     REASON
+Provider/catalog-svc              create     not present in state
+Provider/edge                     create     not present in state
+Provider/lake-lineage             create     not present in state
+Provider/lake-redpanda            create     not present in state
+SecretReference/ext-orders-creds  create     not present in state
+SecretReference/lake-minio-root   create     not present in state
+SecretReference/lake-mysql-root   create     not present in state
+SecretReference/lake-pg-admin     create     not present in state
+Catalog/lakehouse-catalog         create     not present in state
+Connection/orders-db              create     not present in state
+EventStream/orders-events         create     not present in state
+Provider/lake-minio               create     not present in state
+Provider/lake-mysql               create     not present in state
+Provider/lake-postgres            create     not present in state
+Provider/orders-cdc               create     not present in state
+Dataset/warehouse                 create     not present in state
+Source/app-db                     create     not present in state
+Source/events-db                  create     not present in state
+Source/orders                     configure  external resource; configuration differs from last applied
+Binding/orders-to-events          create     not present in state
+
+Apply these changes? Only 'yes' is accepted: yes
+ok   Provider/catalog-svc (create) in 4.607s
+ok   Provider/edge (create) in 2ms
+ok   Provider/lake-lineage (create) in 6.977s
+ok   Provider/lake-redpanda (create) in 2.706s
+fail SecretReference/ext-orders-creds (create) after 0s: SecretReference "ext-orders-creds": key "username" not found (expected env var DATASCAPE_SECRET_EXT_ORDERS_CREDS_USERNAME)
+fail SecretReference/lake-minio-root (create) after 0s: SecretReference "lake-minio-root": key "username" not found (expected env var DATASCAPE_SECRET_LAKE_MINIO_ROOT_USERNAME)
+fail SecretReference/lake-mysql-root (create) after 0s: SecretReference "lake-mysql-root": key "username" not found (expected env var DATASCAPE_SECRET_LAKE_MYSQL_ROOT_USERNAME)
+fail SecretReference/lake-pg-admin (create) after 0s: SecretReference "lake-pg-admin": key "username" not found (expected env var DATASCAPE_SECRET_LAKE_PG_ADMIN_USERNAME)
+ok   Catalog/lakehouse-catalog (create) in 122ms
+skip Connection/orders-db: a dependency failed
+ok   EventStream/orders-events (create) in 207ms
+skip Provider/lake-minio: a dependency failed
+skip Provider/lake-mysql: a dependency failed
+skip Provider/lake-postgres: a dependency failed
+skip Provider/orders-cdc: a dependency failed
+skip Dataset/warehouse: a dependency failed
+skip Source/app-db: a dependency failed
+skip Source/events-db: a dependency failed
+skip Source/orders: a dependency failed
+skip Binding/orders-to-events: a dependency failed
+error: 4 resource(s) failed to reconcile
+```
+
+Furthermore, when setting the environment variables and progressing, the drift status for the externally managed resource indicates False, which is illogical in this scenario where it was not provisioned, and the connector to it failed.
+
+```text
+Apply these changes? Only 'yes' is accepted: yes
+ok   SecretReference/ext-orders-creds (create) in 1ms
+ok   SecretReference/lake-minio-root (create) in 1ms
+ok   SecretReference/lake-mysql-root (create) in 1ms
+ok   SecretReference/lake-pg-admin (create) in 1ms
+ok   Connection/orders-db (create) in 204ms
+ok   Provider/lake-minio (create) in 2.666s
+ok   Provider/lake-mysql (create) in 6.671s
+ok   Provider/lake-postgres (create) in 2.734s
+ok   Provider/orders-cdc (create) in 6.726s
+ok   Dataset/warehouse (create) in 9ms
+ok   Source/app-db (create) in 50ms
+ok   Source/events-db (create) in 10ms
+ok   Source/orders (configure) in 1ms
+fail Binding/orders-to-events (create) after 1m31.087s: register connector "orders-to-events": HTTP 400: {"error_code":400,"message":"Connector configuration is invalid and contains the following 1 error(s):\nError while validating connector config: The connection attempt failed.\nYou can also find the above list of errors at the endpoint `/connector-plugins/{connectorType}/config/validate`"}
+error: 1 resource(s) failed to reconcile
+
+~/git/platformctl main* 1m 51s
+❯ ./bin/platformctl status examples/lakehouse/
+RESOURCE                          READY    DRIFT  REASON                        LIFECYCLE
+Catalog/lakehouse-catalog         True     -      CatalogProvisioned            Managed
+Connection/orders-db              True     -      Forwarding                    Managed
+Provider/lake-minio               True     -      InstanceHealthy               Managed
+Provider/catalog-svc              True     -      InstanceHealthy               Managed
+Provider/lake-lineage             True     -      LineageBackendHealthy         Managed
+Provider/lake-postgres            True     -      InstanceHealthy               Managed
+Provider/lake-mysql               True     -      InstanceHealthy               Managed
+Provider/edge                     True     -      EntrypointSurfaceReady        Managed
+Provider/lake-redpanda            True     -      BrokerHealthy                 Managed
+Provider/orders-cdc               True     -      ConnectWorkerHealthy          Managed
+SecretReference/lake-minio-root   True     -      SecretResolvable              Managed
+SecretReference/lake-pg-admin     True     -      SecretResolvable              Managed
+SecretReference/lake-mysql-root   True     -      SecretResolvable              Managed
+SecretReference/ext-orders-creds  True     -      SecretResolvable              Managed
+Source/app-db                     True     -      SourceProvisioned             Managed
+Source/events-db                  True     -      SourceProvisioned             Managed
+Source/orders                     True     False  ExternalConnectionResolvable  External
+Dataset/warehouse                 True     -      DatasetProvisioned            Managed
+EventStream/orders-events         True     -      TopicReconciled               Managed
+Binding/orders-to-events          Unknown  -      NotApplied                    Managed
+```
+
+## Postgres invalidity
+
+Some configuration is auto-configured internally, such as postgres-16. With postgres-16 the mount path is `/var/lib/postgres/data`, but with postgres-18 it is `/var/lib/postgres`. The Provider structure is too inflexible and unstructured in the sense that it can fix certain parameters yet allows for different images to be provided. This is in fact a poor practice. In Helm or Terraform, provider configurations are defined, specified in an immuatable, versioned way, and then referenced. This functionality is critical to ensuring stable deployments. The structure of this repository must follow this mechanism strictly, where applicable. Inventory the existing providers, see what actually qualifies for such mechanics (at the domain level), and refactor all providers to follow suit, updating documentation accordingly.
+
+## Graph does not render the logical/expected architecture
+
+The rendered graph functionality does not produce output that is structually expected of the overall architecture. Furthermore, some of the commands, like output, do not actually change the output format. This functionality must be checked for accuracy and completeness.
+
+## Docs generation does not output clean HTML
+
+The generated docs do not render any HTML with platformctl serve. This functionality must be reviewed for completeness and accuracy. Think of the developer experience. Structure docs in a way that a developer would actually use them, with search functionality as well. Use a popular framework for this, in Golang, which would avoid expending much effort on this task as it is not a core function, but necessary for accuracy, completeness and developer experience.
