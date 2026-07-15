@@ -55,4 +55,33 @@ The cli should have the ability to provide an overview of the service-level comp
 
 ## All components must interface through (or be defined by) a service/connector
 
+**Status: delivered**, across three pieces that together make port allocation
+error-free and give every resource a stable access identifier:
+
+1. **Host ports are optional and auto-allocated** (`internal/domain/hostport`).
+   Omit a provider's port and one is derived deterministically from the
+   component's unique name (range 20000–29999): different components never
+   collide, the same component is stable across reconciles and dependent
+   reconciles (no shared state needed), and nobody hand-picks a port to clash.
+   Pin a port only when an external tool needs a fixed one. Verified: a
+   redpanda provider with empty configuration published `9092 → 29798`
+   automatically.
+2. **Stable access identifiers** (`internal/domain/endpoint` + the
+   `Connection` kind). The in-network address (`<container>:<fixed-port>`) is
+   always stable; managed `Connection`s give external systems a fixed
+   platform-owned entrypoint. See the Inventory Explorer item.
+3. **Runtime-dependent materialization.** The provider *states* the port
+   intent; the runtime realises it — Docker publishes the port today, a
+   Kubernetes runtime would materialise the same intent as a Service. The
+   provider code is runtime-agnostic (it asks the `ContainerRuntime` port to
+   publish), so no provider changes when a second runtime lands.
+
+Discovery ties it together: `platformctl inventory` surfaces the actual
+allocated host port + the stable in-network address + the credential
+SecretReference for every component.
+
+Tests: `hostport_test.go`; inventory/endpoint tests; verified end-to-end.
+
+### Original request
+
 No provider should have to manually declare their port configurations - this is prone to definition errors when two components in a large platform accidentally manually specify the same port. All ports should be dynamically allocated, or specified manually through a service/connector configuration, similar to Kubernetes services. Note that this is NOT the same as a Kubernetes service, but rather configuration information that the provider can use - the actual materialization will depend on the runtime (e.g., Docker may expose ports through the instantiated provider, or use some sidecar connector proxy, while Kubernetes may actually instantiate a service and handle the rest itself. Refine this idea, and make it production-ready. Long-story short is that port allocation should be error-free and easy, while providing the user/other compoents with a stable access identifier for whatever resources they require access to.

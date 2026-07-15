@@ -11,6 +11,7 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/domain/dataset"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
+	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -42,15 +43,16 @@ func (p *Provider) SetSecrets(secrets map[string]map[string]string) { p.secrets 
 func (p *Provider) containerName() string { return p.providerRes.Metadata.Name }
 
 func (p *Provider) hostPort() int {
+	configured := 0
 	if v, ok := p.cfg.Configuration["port"]; ok {
 		switch n := v.(type) {
 		case int:
-			return n
+			configured = n
 		case float64:
-			return int(n)
+			configured = int(n)
 		}
 	}
-	return apiPort
+	return hostport.Resolve(configured, p.containerName())
 }
 
 func (p *Provider) network() string {

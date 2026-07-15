@@ -185,6 +185,14 @@ Field notes:
   image can never run with a mismatched data mount. An unknown version, or an `image` with no
   `version`, fails at `validate`. Providers without version-coupled internals stay single-profile
   (`image` only).
+- **Host ports are optional.** Omit a provider's host port and platformctl auto-allocates a stable
+  one, derived deterministically from the component's (unique) name — different components never
+  collide, the same component gets the same port on every reconcile, and no one hand-picks a port
+  to clash. The **in-network address** (`<container>:<fixed-port>`) is the stable access identifier;
+  the host port is a convenience surfaced by `platformctl inventory`. Pin a port explicitly only
+  when an external tool needs a fixed one. The Docker runtime publishes the port; another runtime
+  (Kubernetes) would realise the same intent as a Service — the provider states the desire, the
+  runtime materialises it.
 - `spec.runtime.type` selects which `ContainerRuntime` (or future non-container runtime port) is
   constructed and injected.
 - `spec.runtime` fields beyond `type` are runtime-specific and validated by the runtime adapter's

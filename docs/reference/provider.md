@@ -8,7 +8,7 @@ Declares a technology (spec.type) and where it runs (spec.runtime). The provider
 |---|---|---|---|
 | `metadata.name` | string | yes | Unique per Kind within a manifest set. |
 | `metadata.observers[].name` | string | no | Provider names resolved to LineageEndpoints and forwarded when this resource's provider is LineageAware. |
-| `spec.configuration` | object | no | Provider-specific configuration, keyed by spec.type (e.g. image, ports, *SecretRef names). Never contains secret values. |
+| `spec.configuration` | object | no | Provider-specific configuration, keyed by spec.type. Host ports are OPTIONAL: omit a port and platformctl auto-allocates a stable, per-component one (surfaced by `platformctl inventory`), so components never collide by hand-picked ports; pin a port only when an external tool needs a fixed one. Versioned providers (postgres, mysql/mariadb) take `version` (an immutable, tested profile pinning image+internals) rather than a raw image. Never contains secret values. |
 | `spec.connectionRef` | object `{name}` | no |  |
 | `spec.external` | boolean | no | External lifecycle: Datascape never creates or deletes the backing system. |
 | `spec.runtime` | object | yes | Where the provider's backing objects run. Fields beyond type are runtime-specific (e.g. network for docker). |

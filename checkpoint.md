@@ -114,6 +114,44 @@ historical design note).
 - Debezium images come from quay.io; example uses non-default host ports
   (pg 15432 / connect 18083+18084 / kafka 19093 / minio 19000).
 
+## Post-6.5 hardening (errors.md + feature-requests.md sweep)
+
+A round of reported errors and feature requests, all resolved and committed:
+
+- **Secret pre-flight + `--env-file`**: apply/import resolve every declared
+  SecretReference before touching infra (`SecretStore.Preflight`,
+  `Engine.PreflightSecrets`), aggregating all missing vars; a persistent
+  `--env-file` loads dotenv (shell env wins). Cannot half-apply for a
+  missing credential.
+- **Honest external reachability**: an external resource whose connectionRef
+  names a Connection is TCP-probed (`Connection.DialAddress` +
+  `probeTCPReachable`) — a dead-upstream forwarder reports
+  `ExternalEndpointUnreachable`, not Ready. reconcile retries 30s.
+- **`platformctl graph`** rewritten to render the *architecture*
+  (`internal/application/archview`): data-flow pipelines + technology layer,
+  honouring `-o tree|dot|mermaid|json` (the old `--format` flag ignored `-o`).
+- **`platformctl inventory`** (aliases services/endpoints): service-endpoint
+  explorer from state + the `internal/domain/endpoint` type every provider
+  publishes; surfaces host + in-network address + credential SecretReference.
+- **Docker-style apply progress**: `engine.Reporter` +
+  `cliutil.ProgressReporter` — `[n/total]`, ◐ started / ✓✗ done + timing,
+  ⟳ drift-heal, ⊘ skip; TTY-gated colour (NO_COLOR); stderr, stdout scriptable.
+- **Searchable HTML docs**: `docsgen.Site()` renders the schema markdown via
+  goldmark into a single self-contained page with sidebar + client-side
+  search; `docs serve` serves it, `docs build --html` writes it.
+- **Versioned providers** (`internal/domain/versionprofile`,
+  `reconciler.VersionedProvider`): postgres & mysql/mariadb pin
+  image+internals per version (postgres:16 mount /var/lib/postgresql/data,
+  18 /var/lib/postgresql). Manifests use `configuration.version`; image
+  without version fails validate. Other providers are single-profile.
+- **Auto-allocated host ports** (`internal/domain/hostport`): a port is
+  optional — omit it and a stable, per-name deterministic one (20000–29999)
+  is used; pin only when a fixed one is needed. In-network address is the
+  stable identifier; inventory surfaces the host port.
+
+All unit + integration suites green. The `verify` details are below;
+`errors.md` and `feature-requests.md` carry the per-item write-ups.
+
 ## Validate-time completeness (the DX contract)
 
 `platformctl validate` is the gate: a manifest set that validates must not

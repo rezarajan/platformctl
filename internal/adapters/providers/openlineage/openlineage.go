@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
+	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -44,15 +45,16 @@ func (p *Provider) name() string   { return p.providerRes.Metadata.Name }
 func (p *Provider) dbName() string { return p.name() + "-db" }
 
 func (p *Provider) hostPort() int {
+	configured := 0
 	if v, ok := p.cfg.Configuration["apiPort"]; ok {
 		switch n := v.(type) {
 		case int:
-			return n
+			configured = n
 		case float64:
-			return int(n)
+			configured = int(n)
 		}
 	}
-	return marquezAPIPort
+	return hostport.Resolve(configured, p.name())
 }
 
 func (p *Provider) network() string {

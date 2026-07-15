@@ -11,6 +11,7 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/eventstream"
+	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -40,15 +41,16 @@ func (p *Provider) SetProviderResource(env resource.Envelope) {
 func (p *Provider) brokerName() string { return p.providerRes.Metadata.Name }
 
 func (p *Provider) hostPort() int {
+	configured := 0
 	if v, ok := p.cfg.Configuration["kafkaPort"]; ok {
 		switch n := v.(type) {
 		case int:
-			return n
+			configured = n
 		case float64:
-			return int(n)
+			configured = int(n)
 		}
 	}
-	return externalKafkaPort
+	return hostport.Resolve(configured, p.brokerName())
 }
 
 // HostAddr is the broker address reachable from the host (admin operations).
