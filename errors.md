@@ -305,4 +305,20 @@ direction, realization edges, all four render formats, external targets).
 
 ## Docs generation does not output clean HTML
 
-The generated docs do not render any HTML with platformctl serve. This functionality must be reviewed for completeness and accuracy. Think of the developer experience. Structure docs in a way that a developer would actually use them, with search functionality as well. Use a popular framework for this, in Golang, which would avoid expending much effort on this task as it is not a core function, but necessary for accuracy, completeness and developer experience.
+**Status: resolved.** `docs serve` previously sent raw markdown with a
+`text/markdown` content-type, so browsers showed plain text. It now serves a
+proper, searchable HTML site:
+
+- **goldmark** (the CommonMark/GFM parser Hugo is built on — the popular Go
+  choice) renders the schema-generated markdown to HTML, including tables.
+- `internal/application/docsgen.Site()` assembles a **single self-contained
+  page**: a sticky sidebar listing every Kind, the rendered content, and a
+  **client-side full-text search box** that filters sections, shows a match
+  count, and highlights hits (`<mark>`). Light/dark aware, responsive, and
+  fully offline — no external assets, no CDN.
+- `platformctl docs serve` serves it (`text/html`); `platformctl docs build
+  --html` writes the same as a portable `index.html`. Plain-markdown
+  `docs build` (used to keep `docs/reference/` in the repo) is unchanged.
+
+Enforced by `internal/application/docsgen/site_test.go` (all Kinds present,
+tables rendered, search UI present, no leaked markdown).

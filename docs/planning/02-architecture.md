@@ -497,7 +497,7 @@ Cobra-based, subcommands:
 | `platformctl import <kind>/<name> --from ...` | Adopt an existing resource into state as `Imported` without creating anything. |
 | `platformctl inventory [path]` | List the service endpoints each applied component publishes (host + in-network address, scheme) with the SecretReference holding its credentials — the reference chart for configuring external tools (Dagster, Metabase, psql). `-o table\|json\|yaml`. Aliases: `services`, `endpoints`. |
 | `platformctl graph [path]` | Render the platform *architecture* — data-movement pipelines (Bindings as labelled source→target edges) and the technology layer (which Provider realizes each asset, external systems reached through Connections). `-o tree` (default, human-readable), `dot`, `mermaid`, or `json`. |
-| `platformctl docs build` / `docs serve` | Generates static reference docs from `schemas/`. |
+| `platformctl docs build [--html]` / `docs serve` | Generate the resource reference from `schemas/` — markdown (default) or a single searchable, self-contained HTML site (`--html`, and what `serve` serves). |
 
 Global flags: `--state-file`, `--feature-gates`, `-o/--output {table,json,yaml}`, `--log-level`.
 

@@ -127,15 +127,28 @@ func newDocsCmd() *cobra.Command {
 		Short: "Generate and serve the resource reference from schemas/",
 	}
 	var outDir string
+	var asHTML bool
 	build := &cobra.Command{
 		Use:   "build",
-		Short: "Render the reference (one markdown file per Kind + index) from the embedded schemas",
+		Short: "Render the reference from the embedded schemas (markdown, or --html for a static site)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			pages, err := docsgen.Build()
-			if err != nil {
+			if err := os.MkdirAll(outDir, 0o755); err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
-			if err := os.MkdirAll(outDir, 0o755); err != nil {
+			if asHTML {
+				site, err := docsgen.Site()
+				if err != nil {
+					return cliutil.Exit(cliutil.ExitExecution, err)
+				}
+				p := filepath.Join(outDir, "index.html")
+				if err := os.WriteFile(p, []byte(site), 0o644); err != nil {
+					return cliutil.Exit(cliutil.ExitExecution, err)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "wrote self-contained docs site to %s\n", p)
+				return nil
+			}
+			pages, err := docsgen.Build()
+			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
 			for name, content := range pages {
@@ -143,36 +156,32 @@ func newDocsCmd() *cobra.Command {
 					return cliutil.Exit(cliutil.ExitExecution, err)
 				}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "wrote %d page(s) to %s\n", len(pages), outDir)
+			fmt.Fprintf(cmd.OutOrStdout(), "wrote %d markdown page(s) to %s\n", len(pages), outDir)
 			return nil
 		},
 	}
 	build.Flags().StringVar(&outDir, "out", "docs/reference", "output directory")
+	build.Flags().BoolVar(&asHTML, "html", false, "render a single self-contained HTML site (index.html) with search instead of markdown")
 
 	var addr string
 	serve := &cobra.Command{
 		Use:   "serve",
-		Short: "Serve the generated reference over HTTP (markdown rendered as plain text)",
+		Short: "Serve the reference as a searchable HTML site",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			pages, err := docsgen.Build()
+			site, err := docsgen.Site()
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
 			mux := http.NewServeMux()
 			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-				name := strings.TrimPrefix(r.URL.Path, "/")
-				if name == "" {
-					name = "index.md"
-				}
-				content, ok := pages[name]
-				if !ok {
+				if r.URL.Path != "/" {
 					http.NotFound(w, r)
 					return
 				}
-				w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-				fmt.Fprint(w, content)
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				fmt.Fprint(w, site)
 			})
-			fmt.Fprintf(cmd.OutOrStdout(), "serving resource reference on http://%s (index.md, provider.md, ...)\n", addr)
+			fmt.Fprintf(cmd.OutOrStdout(), "serving searchable resource reference on http://%s\n", addr)
 			return http.ListenAndServe(addr, mux) //nolint:gosec
 		},
 	}
