@@ -36,6 +36,7 @@ type app struct {
 	stateFile    string
 	featureGates string
 	output       string
+	envFile      string
 	wire         wiringFunc
 
 	gates *featuregate.Registry
@@ -45,7 +46,45 @@ type app struct {
 func (a *app) init() error {
 	a.gates = featuregate.NewRegistry()
 	a.reg = a.wire(a.gates)
+	if a.envFile != "" {
+		if err := loadEnvFile(a.envFile); err != nil {
+			return cliutil.Exit(cliutil.ExitValidation, err)
+		}
+	}
 	return a.gates.Apply(a.featureGates)
+}
+
+// loadEnvFile reads KEY=VALUE lines (dotenv style: blank lines and #
+// comments ignored, optional surrounding quotes stripped, optional leading
+// "export ") into the process environment. A variable already set in the
+// shell environment is left untouched, so an explicit export always wins.
+func loadEnvFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("--env-file: %w", err)
+	}
+	for i, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			return fmt.Errorf("--env-file %s: line %d is not KEY=VALUE: %q", path, i+1, raw)
+		}
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(val)
+		if len(val) >= 2 && (val[0] == '"' && val[len(val)-1] == '"' || val[0] == '\'' && val[len(val)-1] == '\'') {
+			val = val[1 : len(val)-1]
+		}
+		if _, exists := os.LookupEnv(key); !exists {
+			if err := os.Setenv(key, val); err != nil {
+				return fmt.Errorf("--env-file: setting %s: %w", key, err)
+			}
+		}
+	}
+	return nil
 }
 
 func newRootCmd(wire wiringFunc) *cobra.Command {
@@ -63,6 +102,7 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 	root.PersistentFlags().StringVar(&a.stateFile, "state-file", ".datascape/state.json", "path to the state file")
 	root.PersistentFlags().StringVar(&a.featureGates, "feature-gates", "", "comma-separated Name=true|false overrides")
 	root.PersistentFlags().StringVarP(&a.output, "output", "o", "table", "output format: table|json|yaml")
+	root.PersistentFlags().StringVar(&a.envFile, "env-file", "", "load KEY=VALUE lines from a file into the environment before resolving secrets (shell environment wins on conflict)")
 
 	root.AddCommand(
 		newValidateCmd(a),
@@ -263,6 +303,12 @@ func newApplyCmd(a *app) *cobra.Command {
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
+			// Fail fast before touching any infrastructure: every declared
+			// secret must resolve, or the platform would half-apply.
+			eng := a.newEngine()
+			if err := eng.PreflightSecrets(cmd.Context(), envelopes); err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
+			}
 			p, err := planpkg.Compute(envelopes, st, g)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
@@ -295,7 +341,6 @@ func newApplyCmd(a *app) *cobra.Command {
 					return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("--parallelism: %w", err))
 				}
 			}
-			eng := a.newEngine()
 			eng.HaltOnError = haltOnError
 			eng.HealDrift = healDrift
 			eng.Parallelism = parallelism
@@ -471,8 +516,12 @@ func newImportCmd(a *app) *cobra.Command {
 			}
 			defer unlock() //nolint:errcheck
 
+			eng := a.newEngine()
+			if err := eng.PreflightSecrets(cmd.Context(), envelopes); err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
+			}
 			key := resource.Key{Kind: kind, Name: name}
-			probed, err := a.newEngine().Import(cmd.Context(), envelopes, key, from)
+			probed, err := eng.Import(cmd.Context(), envelopes, key, from)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}

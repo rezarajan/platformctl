@@ -38,3 +38,24 @@ func (s *Store) Resolve(_ context.Context, ref secret.SecretReference) (map[stri
 	}
 	return out, nil
 }
+
+func (s *Store) Preflight(_ context.Context, ref secret.SecretReference) error {
+	if ref.Backend != secret.BackendFile {
+		return fmt.Errorf("SecretReference %q: backend %q not resolvable by the file store", ref.Name, ref.Backend)
+	}
+	base := os.Getenv(dirEnv)
+	if base == "" {
+		return fmt.Errorf("SecretReference %q: %s is not set (the file backend reads <dir>/<name>/<key>)", ref.Name, dirEnv)
+	}
+	var missing []string
+	for _, key := range ref.Keys {
+		p := filepath.Join(base, ref.Name, key)
+		if _, err := os.Stat(p); err != nil {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("SecretReference %q: missing key file(s): %s", ref.Name, strings.Join(missing, ", "))
+	}
+	return nil
+}

@@ -38,3 +38,16 @@ func (r *Router) Resolve(ctx context.Context, ref secret.SecretReference) (map[s
 	}
 	return store.Resolve(ctx, ref)
 }
+
+func (r *Router) Preflight(ctx context.Context, ref secret.SecretReference) error {
+	store, ok := r.stores[ref.Backend]
+	if !ok {
+		names := make([]string, 0, len(r.stores))
+		for b := range r.stores {
+			names = append(names, string(b))
+		}
+		sort.Strings(names)
+		return fmt.Errorf("SecretReference %q: backend %q is not available in this configuration (available: %v)", ref.Name, ref.Backend, names)
+	}
+	return store.Preflight(ctx, ref)
+}

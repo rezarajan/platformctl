@@ -19,6 +19,7 @@ package connection
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 
 	"github.com/rezarajan/platformctl/internal/domain/resource"
@@ -97,6 +98,16 @@ func (c Connection) Endpoint(name string) (host string, port int) {
 func (c Connection) HostEndpoint() string {
 	if c.External {
 		return ""
+	}
+	return "127.0.0.1:" + strconv.Itoa(c.Port)
+}
+
+// DialAddress returns the host-reachable TCP address a liveness probe can
+// dial: the published forwarder port for a managed connection, the declared
+// host:port for an external one.
+func (c Connection) DialAddress() string {
+	if c.External {
+		return net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
 	}
 	return "127.0.0.1:" + strconv.Itoa(c.Port)
 }

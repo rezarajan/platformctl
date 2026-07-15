@@ -6,7 +6,10 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -189,6 +192,36 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 // engine depending on graph construction.
 type DependencyGraph interface {
 	Dependents(k resource.Key) map[resource.Key]bool
+}
+
+// PreflightSecrets checks that every SecretReference declared in the set
+// resolves through the configured store, aggregating all failures so the
+// user fixes them in one pass rather than one apply at a time. It touches no
+// infrastructure and materializes no secret values — the fail-fast guard
+// that a manifest set can never half-apply for want of a credential.
+func (e *Engine) PreflightSecrets(ctx context.Context, envelopes []resource.Envelope) error {
+	if e.SecretStore == nil {
+		return nil
+	}
+	var problems []string
+	for _, env := range envelopes {
+		if env.Kind != "SecretReference" {
+			continue
+		}
+		ref := secretRefFrom(env)
+		if err := ref.Validate(); err != nil {
+			problems = append(problems, err.Error())
+			continue
+		}
+		if err := e.SecretStore.Preflight(ctx, ref); err != nil {
+			problems = append(problems, err.Error())
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%d secret(s) cannot be resolved — apply would half-apply the platform, so nothing was changed:\n  - %s",
+			len(problems), strings.Join(problems, "\n  - "))
+	}
+	return nil
 }
 
 func secretRefFrom(env resource.Envelope) secret.SecretReference {
@@ -420,18 +453,69 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 	if ref, ok := env.Spec["connectionRef"].(map[string]any); ok {
 		connName, _ = ref["name"].(string)
 	}
-	var err error
+
+	// 1. The connection details (address + credentials) must resolve.
 	if connName != "" {
-		err = e.resolveConnectionRef(ctx, connName, byKey)
+		if err := e.resolveConnectionRef(ctx, connName, byKey); err != nil {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ExternalConnectionUnresolvable", Message: err.Error()}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ExternalConnectionUnresolvable"}, now)
+			return st
+		}
 	}
-	if err != nil {
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ExternalConnectionUnresolvable", Message: err.Error()}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ExternalConnectionUnresolvable"}, now)
-		return st
+
+	// 2. When the connectionRef names a Connection with an address, actually
+	// verify the endpoint answers — "resolvable" is not "reachable", and an
+	// external resource that isn't reachable must not report Ready
+	// (errors.md: an unreachable external source claiming health is a lie).
+	if connEnv, ok := byKey[resource.Key{Kind: "Connection", Name: connName}]; ok {
+		conn, err := connection.FromEnvelope(connEnv)
+		if err == nil {
+			if addr := conn.DialAddress(); addr != "" {
+				if derr := probeTCPReachable(ctx, addr); derr != nil {
+					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ExternalEndpointUnreachable", Message: derr.Error()}, now)
+					st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ExternalEndpointUnreachable"}, now)
+					return st
+				}
+				st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ExternalEndpointReachable"}, now)
+				st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+				return st
+			}
+		}
 	}
+
+	// Bare-SecretReference shorthand (no address to probe): the most we can
+	// assert is that the connection details resolve.
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ExternalConnectionResolvable"}, now)
 	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
 	return st
+}
+
+// probeTCPReachable verifies an endpoint answers a TCP connection. A managed
+// forwarder (socat) accepts the connection and then dials its upstream; if
+// the upstream is down it closes ours immediately, so an immediate EOF/reset
+// means unreachable. A live server that waits for the client to speak
+// (Postgres, MySQL) leaves the connection open, so a short read that times
+// out — or a server banner — means reachable.
+func probeTCPReachable(ctx context.Context, address string) error {
+	dctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	d := net.Dialer{}
+	conn, err := d.DialContext(dctx, "tcp", address)
+	if err != nil {
+		return fmt.Errorf("dial %s: %w", address, err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(750 * time.Millisecond))
+	buf := make([]byte, 1)
+	_, rerr := conn.Read(buf)
+	if rerr == nil {
+		return nil // server spoke first — reachable
+	}
+	var ne net.Error
+	if errors.As(rerr, &ne) && ne.Timeout() {
+		return nil // connection stayed open waiting for us — reachable
+	}
+	return fmt.Errorf("endpoint %s closed the connection immediately (upstream unreachable): %w", address, rerr)
 }
 
 // resolveConnectionRef checks a connectionRef target: a Connection whose
@@ -466,7 +550,20 @@ func (e *Engine) resolveConnectionRef(ctx context.Context, connName string, byKe
 }
 
 func (e *Engine) reconcileExternal(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) error {
+	// Reconcile is the "make it so" path: give a just-started external system
+	// (or its forwarder) a bounded window to come up before declaring it
+	// unreachable, rather than failing on the first dial. Drift/status use
+	// the single-shot check for a fast, honest snapshot.
+	deadline := time.Now().Add(30 * time.Second)
 	probed := e.externalConnectionStatus(ctx, env, byKey)
+	for !probed.IsReady() && time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+		probed = e.externalConnectionStatus(ctx, env, byKey)
+	}
 	if !probed.IsReady() {
 		if c, ok := probed.Condition(status.Ready); ok {
 			return fmt.Errorf("%s: %s", env.Key(), c.Message)

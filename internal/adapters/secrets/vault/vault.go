@@ -81,3 +81,11 @@ func (s *Store) Resolve(ctx context.Context, ref secret.SecretReference) (map[st
 	}
 	return out, nil
 }
+
+// Preflight resolves ref and discards the values: there is no cheaper
+// existence check against KV v2, and a real read also verifies connectivity
+// and the token before any infrastructure is touched.
+func (s *Store) Preflight(ctx context.Context, ref secret.SecretReference) error {
+	_, err := s.Resolve(ctx, ref)
+	return err
+}

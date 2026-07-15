@@ -80,8 +80,23 @@ against* it. The moving parts:
    with the Connection's credentials. The provider carrying the work must
    list the Connection's `secretRef` in its own `spec.secretRefs` (secrets
    only ever flow through the engine's SecretStore resolution).
-4. `drift` probes reachability; `apply` heals the *managed* pieces (the
-   forwarder, the connector) but never mutates the external system itself.
+4. **Health means reachable, not merely configured.** An external
+   resource whose `connectionRef` names a `Connection` with an address is
+   *reachability-probed*: the engine opens a TCP connection to the
+   Connection's host-reachable address (`DialAddress` — the published
+   forwarder port for a managed Connection, `host:port` for an external
+   one). A live endpoint that holds the connection reports
+   `Ready=True, ExternalEndpointReachable`; a forwarder whose upstream is
+   down closes the probe immediately and reports
+   `Ready=False, Drift=True, ExternalEndpointUnreachable`. An external
+   resource can never claim health while the system behind it is
+   unreachable, and its dependent Bindings are blocked rather than left to
+   fail slowly. (The bare-`SecretReference` shorthand has no address, so it
+   can only report `ExternalConnectionResolvable`.)
+5. `drift` takes a single fast snapshot; `apply` retries the reachability
+   probe for up to 30s (absorbing startup races) and heals the *managed*
+   pieces (the forwarder, the connector) but never mutates the external
+   system itself.
 
 ## 4. Kind: `Provider`
 

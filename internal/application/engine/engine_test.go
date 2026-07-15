@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"net"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/adapters/providers/noop"
 	fakeruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/fake"
+	"github.com/rezarajan/platformctl/internal/adapters/secrets/env"
 	"github.com/rezarajan/platformctl/internal/adapters/state/localfile"
 	"github.com/rezarajan/platformctl/internal/application/featuregate"
 	"github.com/rezarajan/platformctl/internal/application/plan"
@@ -382,5 +384,90 @@ func TestParallelReconciliation(t *testing.T) {
 	}
 	if len(st.Resources) != len(envelopes) {
 		t.Errorf("state has %d resources, want %d", len(st.Resources), len(envelopes))
+	}
+}
+
+// TestPreflightSecretsAggregates: every unresolvable secret is reported in a
+// single error so the user fixes them in one pass — the fail-fast guard that
+// apply cannot half-apply for want of a credential.
+func TestPreflightSecretsAggregates(t *testing.T) {
+	eng := newTestEngine(t, registry.New(featuregate.NewRegistry()))
+	eng.SecretStore = env.New()
+	envs := []resource.Envelope{
+		envelope("SecretReference", "creds-a", map[string]any{"backend": "env", "keys": []any{"username", "password"}}),
+		envelope("SecretReference", "creds-b", map[string]any{"backend": "env", "keys": []any{"token"}}),
+		envelope("Provider", "p", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}}),
+	}
+
+	err := eng.PreflightSecrets(context.Background(), envs)
+	if err == nil {
+		t.Fatal("preflight passed with no secrets set")
+	}
+	for _, want := range []string{
+		"DATASCAPE_SECRET_CREDS_A_USERNAME",
+		"DATASCAPE_SECRET_CREDS_A_PASSWORD",
+		"DATASCAPE_SECRET_CREDS_B_TOKEN",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("aggregated error missing %s:\n%s", want, err)
+		}
+	}
+
+	t.Setenv("DATASCAPE_SECRET_CREDS_A_USERNAME", "u")
+	t.Setenv("DATASCAPE_SECRET_CREDS_A_PASSWORD", "p")
+	t.Setenv("DATASCAPE_SECRET_CREDS_B_TOKEN", "t")
+	if err := eng.PreflightSecrets(context.Background(), envs); err != nil {
+		t.Errorf("preflight failed with all secrets set: %v", err)
+	}
+}
+
+// TestProbeTCPReachable distinguishes a live endpoint (holds the connection),
+// a dead-upstream forwarder (accepts then closes immediately), and nothing
+// listening — the basis for honest external-resource health.
+func TestProbeTCPReachable(t *testing.T) {
+	ctx := context.Background()
+
+	// Live server that waits for the client to speak (like Postgres).
+	live, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	go func() {
+		for {
+			c, err := live.Accept()
+			if err != nil {
+				return
+			}
+			// Hold it open without speaking.
+			go func(c net.Conn) { time.Sleep(2 * time.Second); c.Close() }(c)
+		}
+	}()
+	if err := probeTCPReachable(ctx, live.Addr().String()); err != nil {
+		t.Errorf("live endpoint reported unreachable: %v", err)
+	}
+
+	// Forwarder whose upstream is down: accept, then close immediately.
+	dead, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dead.Close()
+	go func() {
+		for {
+			c, err := dead.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	if err := probeTCPReachable(ctx, dead.Addr().String()); err == nil {
+		t.Error("dead-upstream forwarder reported reachable")
+	}
+
+	// Nothing listening.
+	if err := probeTCPReachable(ctx, "127.0.0.1:1"); err == nil {
+		t.Error("closed port reported reachable")
 	}
 }

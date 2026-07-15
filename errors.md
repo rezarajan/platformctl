@@ -131,6 +131,47 @@ Source/student-database                     Unknown  NotApplied          Managed
 
 ## Platformctl does not check for required dependencies like environment variables being set
 
+**Status: resolved.** Two fixes:
+
+1. **Secret pre-flight** — `apply` (and `import`) now resolve every declared
+   `SecretReference` through the configured store *before* touching any
+   infrastructure, via the new `SecretStore.Preflight` capability and
+   `Engine.PreflightSecrets`. All missing variables are aggregated into one
+   error (not one apply at a time), the command exits with the validation
+   code, and **no state file is written** — the platform can never
+   half-apply for want of a credential. Example:
+
+   ```
+   error: 4 secret(s) cannot be resolved — apply would half-apply the
+   platform, so nothing was changed:
+     - SecretReference "ext-orders-creds": unset environment variable(s): DATASCAPE_SECRET_EXT_ORDERS_CREDS_USERNAME, DATASCAPE_SECRET_EXT_ORDERS_CREDS_PASSWORD
+     - SecretReference "lake-minio-root": unset environment variable(s): ...
+   ```
+
+2. **`--env-file`** — a persistent flag on every command loads dotenv-style
+   `KEY=VALUE` lines (blank/`#`-comment lines ignored, optional `export`
+   prefix and surrounding quotes handled) into the environment before
+   secrets are resolved. A value already exported in the shell wins over the
+   file. `platformctl apply examples/lakehouse/ --env-file ./lakehouse.env`.
+
+3. **External drift honesty** — the second half of the report: an external
+   resource showed `Ready=True Drift=False` even though the connector to it
+   failed. `externalConnectionStatus` now does more than confirm the
+   connection *resolves*: when the `connectionRef` names a `Connection` with
+   an address, it TCP-probes the endpoint (`Connection.DialAddress`). A
+   managed forwarder with a dead upstream closes the probe immediately →
+   `Ready=False, Drift=True, ExternalEndpointUnreachable`; a live endpoint
+   holds the connection → `ExternalEndpointReachable`. Reconcile retries the
+   probe for up to 30s (startup races); `drift`/`status` take a single fast
+   snapshot. An unreachable external source no longer claims health, and its
+   dependent Binding is blocked rather than failing after 90s of connector
+   retries.
+
+Enforced by `TestPreflightSecretsAggregates`, `TestApplyRefusesOnMissingSecrets`,
+`TestEnvFileLoads`, and `TestProbeTCPReachable`.
+
+### Original report
+
 Running apply on an manifest without setting the required environment variables does not throw an error before running; this safeguard must exist so that the user cannot half-apply their infrastructure. Optionally, and env file can be used to host this information.
 
 ``` text

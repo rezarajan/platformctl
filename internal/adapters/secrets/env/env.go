@@ -32,6 +32,22 @@ func (s *Store) Resolve(_ context.Context, ref secret.SecretReference) (map[stri
 	return out, nil
 }
 
+func (s *Store) Preflight(_ context.Context, ref secret.SecretReference) error {
+	if ref.Backend != secret.BackendEnv {
+		return fmt.Errorf("SecretReference %q: backend %q not resolvable by the env store", ref.Name, ref.Backend)
+	}
+	var missing []string
+	for _, key := range ref.Keys {
+		if _, ok := os.LookupEnv(envVarName(ref.Name, key)); !ok {
+			missing = append(missing, envVarName(ref.Name, key))
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("SecretReference %q: unset environment variable(s): %s", ref.Name, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 func envVarName(refName, key string) string {
 	norm := func(s string) string {
 		return strings.ToUpper(strings.ReplaceAll(s, "-", "_"))
