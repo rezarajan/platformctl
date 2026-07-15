@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/domain/connection"
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -132,6 +133,9 @@ func (p *Provider) reconcileConnection(ctx context.Context, res resource.Envelop
 		"internal":    fmt.Sprintf("%s:%d", host, port),
 		"host":        conn.HostEndpoint(),
 		"target":      conn.Target,
+		endpoint.Key: endpoint.List{
+			{Name: "forward", Scheme: conn.Scheme, Host: conn.HostEndpoint(), Internal: fmt.Sprintf("%s:%d", host, port)},
+		}.ToState(),
 	}
 	return st, nil
 }

@@ -4,6 +4,26 @@ The current implementation simply says ok/fail on apply steps, but does not list
 
 ## Interactive Service/Inventory Explorer
 
+**Status: delivered.** Two complementary commands:
+
+- **`platformctl inventory [path]`** (aliases `services`, `endpoints`) reads
+  recorded state and prints every service endpoint each applied component
+  publishes — logical name, scheme, host-reachable address, in-network
+  address — paired with the SecretReference that holds its credentials. This
+  is the reference chart you configure Dagster/Metabase/psql against, no
+  YAML-parsing required. `-o table|json|yaml`. Providers publish structured
+  endpoints via the new `internal/domain/endpoint` type (a stable
+  access-identifier vocabulary independent of any technology's private port
+  conventions).
+- **`platformctl graph [path]`** now renders the actual architecture — data
+  pipelines and the technology layer — replacing the raw dependency dump
+  (see errors.md "Graph does not render…"). `-o tree|dot|mermaid|json`.
+
+Together they give a dependable, always-accurate view of the platform's
+service topology and connection details.
+
+### Original request
+
 The cli should have the ability to provide an overview of the service-level components of the platform, with the purpose of being able to reference this chart to configure external tools like orchestrators to connect. Having to manually parse the YAML configuration - especially without the ability to produce a dependable visual graph chain - is a terrible developer experience, prone to lots of errors.
 
 ## All components must interface through (or be defined by) a service/connector

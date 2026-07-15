@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/source"
@@ -140,10 +141,15 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	hostAddr := "127.0.0.1:" + strconv.Itoa(p.hostPort())
+	internalAddr := name + ":5432"
 	st.ProviderState = map[string]any{
 		"containerId":  ctrState.ID,
-		"hostAddr":     "127.0.0.1:" + strconv.Itoa(p.hostPort()),
-		"internalAddr": name + ":5432",
+		"hostAddr":     hostAddr,
+		"internalAddr": internalAddr,
+		endpoint.Key: endpoint.List{
+			{Name: "postgres", Scheme: "postgres", Host: hostAddr, Internal: internalAddr},
+		}.ToState(),
 	}
 	return st, nil
 }

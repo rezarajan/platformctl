@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -155,6 +156,9 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 		// URL OpenLineage transports post to.
 		"url":     fmt.Sprintf("http://%s:%d", p.name(), marquezAPIPort),
 		"hostApi": fmt.Sprintf("http://127.0.0.1:%d/api/v1", p.hostPort()),
+		endpoint.Key: endpoint.List{
+			{Name: "openlineage", Scheme: "http", Host: fmt.Sprintf("http://127.0.0.1:%d/api/v1", p.hostPort()), Internal: fmt.Sprintf("http://%s:%d/api/v1", p.name(), marquezAPIPort)},
+		}.ToState(),
 	}
 	return st, nil
 }

@@ -23,6 +23,7 @@ import (
 	planpkg "github.com/rezarajan/platformctl/internal/application/plan"
 	"github.com/rezarajan/platformctl/internal/application/registry"
 	"github.com/rezarajan/platformctl/internal/cliutil"
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/graph"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/secret"
@@ -113,6 +114,7 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 		newDriftCmd(a),
 		newImportCmd(a),
 		newGraphCmd(a),
+		newInventoryCmd(a),
 		newDocsCmd(),
 	)
 	return root
@@ -536,6 +538,100 @@ func newImportCmd(a *app) *cobra.Command {
 	cmd.Flags().StringVar(&from, "from", "", "name of the existing backing object to adopt (must equal metadata.name in v1)")
 	_ = cmd.MarkFlagRequired("from")
 	return cmd
+}
+
+func newInventoryCmd(a *app) *cobra.Command {
+	return &cobra.Command{
+		Use:     "inventory [path]",
+		Aliases: []string{"services", "endpoints"},
+		Short:   "List the service endpoints of an applied platform (for configuring external tools)",
+		Long: "Surfaces the reachable endpoints each applied component publishes — the stable\n" +
+			"access identifiers you point orchestrators (Dagster), BI tools (Metabase), or a\n" +
+			"psql/mc client at — with the SecretReference that holds each one's credentials.\n" +
+			"Reads recorded state; components not yet applied show no endpoints.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			envelopes, _, err := a.loadAndValidate(pathArg(args))
+			if err != nil {
+				return err
+			}
+			st, err := localfile.New(a.stateFile).Load(cmd.Context())
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitExecution, err)
+			}
+			creds := credentialRefs(envelopes)
+
+			type invRow struct {
+				Component string `json:"component"`
+				Endpoint  string `json:"endpoint"`
+				Scheme    string `json:"scheme"`
+				Host      string `json:"host"`
+				InNetwork string `json:"inNetwork"`
+				Secret    string `json:"credentials"`
+			}
+			rows := [][]string{{"COMPONENT", "ENDPOINT", "SCHEME", "HOST (from your machine)", "IN-NETWORK", "CREDENTIALS"}}
+			var data []invRow
+			for _, e := range envelopes {
+				rs, ok := st.Resources[e.Key()]
+				if !ok {
+					continue
+				}
+				for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
+					host := ep.Host
+					if host == "" {
+						host = "(in-network only)"
+					}
+					r := invRow{
+						Component: e.Key().String(),
+						Endpoint:  ep.Name,
+						Scheme:    ep.Scheme,
+						Host:      host,
+						InNetwork: ep.Internal,
+						Secret:    creds[e.Key()],
+					}
+					data = append(data, r)
+					rows = append(rows, []string{r.Component, r.Endpoint, r.Scheme, r.Host, r.InNetwork, dash(r.Secret)})
+				}
+			}
+			if len(data) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no service endpoints recorded — apply the platform first")
+				return nil
+			}
+			return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, data, rows)
+		},
+	}
+}
+
+// credentialRefs maps each resource to the SecretReference(s) holding its
+// credentials, so the inventory can tell a user which secret to read.
+func credentialRefs(envelopes []resource.Envelope) map[resource.Key]string {
+	out := map[resource.Key]string{}
+	for _, e := range envelopes {
+		var refs []string
+		if list, ok := e.Spec["secretRefs"].([]any); ok {
+			for _, r := range list {
+				if s, ok := r.(string); ok {
+					refs = append(refs, s)
+				}
+			}
+		}
+		if ref, ok := e.Spec["secretRef"].(map[string]any); ok {
+			if n, _ := ref["name"].(string); n != "" {
+				refs = append(refs, n)
+			}
+		}
+		if len(refs) > 0 {
+			out[e.Key()] = strings.Join(refs, ", ")
+		}
+	}
+	return out
+}
+
+func dash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func newStatusCmd(a *app) *cobra.Command {

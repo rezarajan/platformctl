@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/eventstream"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
@@ -132,6 +133,9 @@ func (p *Provider) reconcileBroker(ctx context.Context, rt runtime.ContainerRunt
 		"containerId":  ctrState.ID,
 		"kafkaAddr":    p.HostAddr(),
 		"internalAddr": p.InternalAddr(),
+		endpoint.Key: endpoint.List{
+			{Name: "kafka", Scheme: "kafka", Host: p.HostAddr(), Internal: p.InternalAddr()},
+		}.ToState(),
 	}
 	return st, nil
 }

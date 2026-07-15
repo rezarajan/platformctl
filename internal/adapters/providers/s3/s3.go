@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/domain/dataset"
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -143,6 +144,9 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		"containerId":  ctrState.ID,
 		"hostEndpoint": "127.0.0.1:" + strconv.Itoa(p.hostPort()),
 		"internalUrl":  "http://" + name + ":" + strconv.Itoa(apiPort),
+		endpoint.Key: endpoint.List{
+			{Name: "s3", Scheme: "http", Host: "http://127.0.0.1:" + strconv.Itoa(p.hostPort()), Internal: "http://" + name + ":" + strconv.Itoa(apiPort)},
+		}.ToState(),
 	}
 	return st, nil
 }

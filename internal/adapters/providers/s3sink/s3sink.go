@@ -14,6 +14,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/adapters/kafkaconnect"
 	"github.com/rezarajan/platformctl/internal/domain/binding"
 	"github.com/rezarajan/platformctl/internal/domain/dataset"
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -149,7 +150,12 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectWorkerHealthy"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
-	st.ProviderState = map[string]any{"connectUrl": p.connectURL()}
+	st.ProviderState = map[string]any{
+		"connectUrl": p.connectURL(),
+		endpoint.Key: endpoint.List{
+			{Name: "connect-rest", Scheme: "http", Host: p.connectURL(), Internal: fmt.Sprintf("http://%s:8083", p.containerName())},
+		}.ToState(),
+	}
 	return st, nil
 }
 

@@ -83,6 +83,15 @@ own — the same address the CDC connector uses in-network.
 
 ## Endpoints for your orchestrator
 
+Don't hand-maintain this — `platformctl` generates it from the applied
+state, with the SecretReference holding each credential:
+
+```sh
+platformctl inventory examples/lakehouse/     # or -o json for tooling
+```
+
+The table below is what that produces (abridged):
+
 | What | In-network (Dagster in a container) | From the host |
 |---|---|---|
 | Iceberg REST catalog | `http://catalog-svc:19120/iceberg` | `http://127.0.0.1:19121/iceberg` |

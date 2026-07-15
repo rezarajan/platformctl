@@ -495,6 +495,7 @@ Cobra-based, subcommands:
 | `platformctl status [path]` | Print conditions per resource (`-o table\|json\|yaml`), rolled up to overall health. |
 | `platformctl drift [path]` | Read-only: probe live state, report divergence from last-applied, exit non-zero if any found. |
 | `platformctl import <kind>/<name> --from ...` | Adopt an existing resource into state as `Imported` without creating anything. |
+| `platformctl inventory [path]` | List the service endpoints each applied component publishes (host + in-network address, scheme) with the SecretReference holding its credentials — the reference chart for configuring external tools (Dagster, Metabase, psql). `-o table\|json\|yaml`. Aliases: `services`, `endpoints`. |
 | `platformctl graph [path]` | Render the platform *architecture* — data-movement pipelines (Bindings as labelled source→target edges) and the technology layer (which Provider realizes each asset, external systems reached through Connections). `-o tree` (default, human-readable), `dot`, `mermaid`, or `json`. |
 | `platformctl docs build` / `docs serve` | Generates static reference docs from `schemas/`. |
 

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/source"
@@ -163,6 +164,9 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		"containerId":  ctrState.ID,
 		"hostAddr":     "127.0.0.1:" + strconv.Itoa(p.hostPort()),
 		"internalAddr": name + ":3306",
+		endpoint.Key: endpoint.List{
+			{Name: "mysql", Scheme: "mysql", Host: "127.0.0.1:" + strconv.Itoa(p.hostPort()), Internal: name + ":3306"},
+		}.ToState(),
 	}
 	return st, nil
 }

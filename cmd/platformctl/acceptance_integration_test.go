@@ -99,6 +99,24 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 		t.Logf("steps 1-4 completed in %s", elapsed.Round(time.Second))
 	}
 
+	// inventory surfaces the service endpoints an operator configures tools
+	// against, with the credential SecretReference.
+	out, err, code = run(t, "inventory", manifests, "--state-file", stateFile)
+	if err != nil || code != 0 {
+		t.Fatalf("inventory failed (code %d): %v\n%s", code, err, out)
+	}
+	for _, want := range []string{"Provider/local-redpanda", "kafka", "127.0.0.1:19093", "Provider/local-postgres", "postgres-admin-creds"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("inventory missing %q:\n%s", want, out)
+		}
+	}
+
+	// graph renders the architecture pipeline (Source→EventStream→Dataset).
+	out, _, code = run(t, "graph", manifests)
+	if code != 0 || !strings.Contains(out, "DATA FLOW") || !strings.Contains(out, "──[cdc") {
+		t.Errorf("graph did not render the data-flow architecture:\n%s", out)
+	}
+
 	// Step 5 (real half): the observers entry on the CDC Binding resolved
 	// test-lineage-fake's URL and Debezium (LineageAware) received it.
 	cfg := acceptanceConnectorConfig(t, "http://127.0.0.1:18083", "student-db-to-events")
