@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/postgres"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -432,5 +433,38 @@ func TestConnectionSecretRefTargetKind(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `secretRef "missing-creds" must resolve to a SecretReference`) {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestVersionedProviderValidation: a versioned provider's configuration is
+// checked at validate — unknown version rejected, image-without-version
+// rejected, valid version accepted. Uses the real registry resolver via a
+// stub that returns the postgres provider.
+func TestVersionedProviderValidation(t *testing.T) {
+	pg := func(cfg map[string]any) []resource.Envelope {
+		return []resource.Envelope{
+			envelope("Provider", "db", map[string]any{
+				"type":          "postgres",
+				"runtime":       map[string]any{"type": "docker"},
+				"configuration": cfg,
+				"secretRefs":    []any{"creds"},
+			}),
+			envelope("SecretReference", "creds", map[string]any{"backend": "env", "keys": []any{"username", "password"}}),
+		}
+	}
+	resolvePG := func(string) (reconciler.Provider, error) { return postgres.New(), nil }
+
+	// Valid version.
+	if err := Check(pg(map[string]any{"version": "18"}), resolvePG); err != nil {
+		t.Errorf("valid version rejected: %v", err)
+	}
+	// Unknown version.
+	if err := Check(pg(map[string]any{"version": "99"}), resolvePG); err == nil {
+		t.Error("unknown postgres version accepted")
+	}
+	// Image without version — the reported instability.
+	err := Check(pg(map[string]any{"image": "postgres:18"}), resolvePG)
+	if err == nil || !strings.Contains(err.Error(), "without configuration.version") {
+		t.Errorf("image-without-version not rejected: %v", err)
 	}
 }

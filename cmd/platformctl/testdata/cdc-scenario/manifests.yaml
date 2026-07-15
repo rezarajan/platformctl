@@ -40,7 +40,7 @@ spec:
     type: docker
     network: datascape-cdc-net
   configuration:
-    image: postgres:16
+    version: "16"
     port: 15544
     superuserSecretRef: cdc-pg-admin
     replicationSecretRef: cdc-pg-repl

@@ -8,7 +8,7 @@ spec:
     type: docker
     network: datascape
   configuration:
-    image: postgres:16
+    version: "16"
     port: 15432
     superuserSecretRef: postgres-admin-creds
     replicationSecretRef: postgres-replication-creds

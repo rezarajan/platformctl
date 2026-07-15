@@ -15,6 +15,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/source"
 	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/domain/versionprofile"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -40,11 +41,46 @@ func (p *Provider) containerName() string { return p.providerRes.Metadata.Name }
 // mariadb reports whether this Provider resource was declared type: mariadb.
 func (p *Provider) mariadb() bool { return p.cfg.Type == "mariadb" }
 
-func (p *Provider) defaultImage() string {
+// mysqlCatalog / mariadbCatalog pin each engine's supported versions. Both
+// store data at /var/lib/mysql across these versions; the catalog still
+// pins image↔internals so a future version whose datadir moves cannot be run
+// with a stale mount.
+var mysqlCatalog = versionprofile.Catalog{
+	Default: "8.4",
+	Profiles: map[string]versionprofile.Profile{
+		"8.0": {Version: "8.0", Image: "mysql:8.0", DataMount: "/var/lib/mysql"},
+		"8.4": {Version: "8.4", Image: "mysql:8.4", DataMount: "/var/lib/mysql"},
+	},
+}
+
+var mariadbCatalog = versionprofile.Catalog{
+	Default: "11",
+	Profiles: map[string]versionprofile.Profile{
+		"10.11": {Version: "10.11", Image: "mariadb:10.11", DataMount: "/var/lib/mysql"},
+		"11":    {Version: "11", Image: "mariadb:11", DataMount: "/var/lib/mysql"},
+	},
+}
+
+func (p *Provider) catalog() versionprofile.Catalog {
 	if p.mariadb() {
-		return "mariadb:11"
+		return mariadbCatalog
 	}
-	return "mysql:8.4"
+	return mysqlCatalog
+}
+
+// VersionCatalog implements reconciler.VersionedProvider.
+func (p *Provider) VersionCatalog() versionprofile.Catalog { return p.catalog() }
+
+func (p *Provider) profile() (versionprofile.Profile, error) {
+	version, _ := p.cfg.Configuration["version"].(string)
+	prof, err := p.catalog().Resolve(version)
+	if err != nil {
+		return prof, err
+	}
+	if img, _ := p.cfg.Configuration["image"].(string); img != "" {
+		prof.Image = img
+	}
+	return prof, nil
 }
 
 func (p *Provider) hostPort() int {
@@ -98,9 +134,9 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRuntime) (status.Status, error) {
 	st := status.Status{}
 	name := p.containerName()
-	image, _ := p.cfg.Configuration["image"].(string)
-	if image == "" {
-		image = p.defaultImage()
+	prof, err := p.profile()
+	if err != nil {
+		return st, fmt.Errorf("Provider %q (type: %s): %w", name, p.cfg.Type, err)
 	}
 	rootPass, err := p.rootPassword()
 	if err != nil {
@@ -130,11 +166,11 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	}
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
 		Name:     name,
-		Image:    image,
+		Image:    prof.Image,
 		Cmd:      cmd,
 		Env:      env,
 		Networks: []string{p.network()},
-		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/var/lib/mysql"}},
+		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: prof.DataMount}},
 		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: 3306}},
 		HealthCheck: &runtime.HealthCheck{
 			// TCP ping, no credentials required for liveness.
@@ -294,5 +330,11 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 	} else if len(cfg.SecretRefs) == 0 {
 		return fmt.Errorf("spec.secretRefs must name at least one SecretReference (the root credentials; configuration.rootSecretRef selects one explicitly)")
 	}
-	return nil
+	// ValidateSpec runs on a fresh instance (SetProviderResource not called),
+	// so pick the catalog from the passed spec's type, not p.cfg.
+	cat := mysqlCatalog
+	if cfg.Type == "mariadb" {
+		cat = mariadbCatalog
+	}
+	return cat.ValidateConfig(cfg.Configuration)
 }

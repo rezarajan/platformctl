@@ -269,7 +269,36 @@ Binding/orders-to-events          Unknown  -      NotApplied                    
 
 ## Postgres invalidity
 
-Some configuration is auto-configured internally, such as postgres-16. With postgres-16 the mount path is `/var/lib/postgres/data`, but with postgres-18 it is `/var/lib/postgres`. The Provider structure is too inflexible and unstructured in the sense that it can fix certain parameters yet allows for different images to be provided. This is in fact a poor practice. In Helm or Terraform, provider configurations are defined, specified in an immuatable, versioned way, and then referenced. This functionality is critical to ensuring stable deployments. The structure of this repository must follow this mechanism strictly, where applicable. Inventory the existing providers, see what actually qualifies for such mechanics (at the domain level), and refactor all providers to follow suit, updating documentation accordingly.
+**Status: resolved.** Confirmed the root cause against the images: postgres:16
+mounts its data volume at `/var/lib/postgresql/data`; postgres:18 moved it to
+`/var/lib/postgresql` (PGDATA → `/var/lib/postgresql/18/docker`). A free-form
+`image` paired with a hard-coded mount path silently breaks persistence.
+
+**Inventory:** only providers whose internals are coupled to the technology's
+major version qualify for versioned definitions — `postgres` and
+`mysql`/`mariadb` (data mount / datadir). The others (redpanda, s3/minio,
+nessie, openlineage, debezium, s3sink, proxy) have no version-coupled
+internals and remain single-profile (image only).
+
+**Mechanism** (`internal/domain/versionprofile`, the Helm/Terraform
+discipline): each versioned provider ships an immutable `Catalog` mapping a
+version identifier to a pinned `Profile` (image **and** its data mount,
+travelling together). The manifest references `configuration.version`, not a
+raw image:
+
+```yaml
+configuration: { version: "18" }   # image + mount pinned & tested together
+```
+
+- `version` defaults to a current release when omitted.
+- An `image` override is allowed *only* with a `version` (a private mirror of
+  that version), so internals always come from a validated profile.
+- Unknown version, or `image` without `version`, fails at `validate`
+  (`reconciler.VersionedProvider` checked in `application/compatibility`).
+
+Verified: postgres:18 applies and persists at the version-correct mount; all
+examples/testdata switched from `image: postgres:16` to `version: "16"`.
+Tests: `versionprofile_test.go`, `TestVersionedProviderValidation`.
 
 ## Graph does not render the logical/expected architecture
 

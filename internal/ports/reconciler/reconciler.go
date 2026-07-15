@@ -9,6 +9,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/domain/versionprofile"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -69,6 +70,19 @@ type CatalogCapableProvider interface {
 type ConnectionCapableProvider interface {
 	Provider
 	SupportedConnectionSchemes() []string
+}
+
+// VersionedProvider is implemented by providers whose internals are coupled
+// to the technology's major version (a data mount path, a data directory) —
+// the ones where pairing a free-form image with hard-coded internals would
+// silently break a deployment. The manifest references
+// configuration.version; the provider resolves the pinned Profile (image +
+// internals together) from the catalog, so an image can never be run with a
+// mismatched mount. Providers without version-coupled internals do not
+// implement this and remain single-profile (image-only).
+type VersionedProvider interface {
+	Provider
+	VersionCatalog() versionprofile.Catalog
 }
 
 // SpecValidator is optionally implemented by providers that can check their

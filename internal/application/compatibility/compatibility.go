@@ -194,8 +194,22 @@ func checkResourceCapabilities(envelopes []resource.Envelope, byName map[string]
 			if err != nil {
 				return fmt.Errorf("Provider %q: %w", e.Metadata.Name, err)
 			}
+			// Give the instance its resource so config-dependent capability
+			// methods (e.g. a mysql/mariadb version catalog keyed on type)
+			// report correctly, mirroring the engine.
+			if aware, ok := impl.(reconciler.ProviderResourceAware); ok {
+				aware.SetProviderResource(e)
+			}
 			if sv, ok := impl.(reconciler.SpecValidator); ok {
 				if err := sv.ValidateSpec(p); err != nil {
+					return fmt.Errorf("Provider %q (type: %s): %w", e.Metadata.Name, p.Type, err)
+				}
+			}
+			// A versioned provider's configuration.version must resolve, and
+			// an image override requires a pinned version — guaranteed here
+			// even if the provider skips it in ValidateSpec.
+			if vp, ok := impl.(reconciler.VersionedProvider); ok {
+				if err := vp.VersionCatalog().ValidateConfig(p.Configuration); err != nil {
 					return fmt.Errorf("Provider %q (type: %s): %w", e.Metadata.Name, p.Type, err)
 				}
 			}

@@ -50,7 +50,7 @@ spec:
     type: docker
     network: datascape-sink-net
   configuration:
-    image: postgres:16
+    version: "16"
     port: 15545
     superuserSecretRef: sink-pg-admin
     replicationSecretRef: sink-pg-repl

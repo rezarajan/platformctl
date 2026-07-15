@@ -176,6 +176,15 @@ spec:
 Field notes:
 - `spec.type` selects which `Provider` (reconciler) implementation and JSON Schema for
   `spec.configuration` apply.
+- **Versioned providers** (those whose internals are coupled to the technology's major
+  version — `postgres`, `mysql`/`mariadb`) require `configuration.version` rather than a raw
+  `image`. Each supported version is an immutable, tested profile that pins the image *and* its
+  version-specific internals together (e.g. postgres:16 stores data at `/var/lib/postgresql/data`,
+  postgres:18 at `/var/lib/postgresql`). `version` defaults to a current release when omitted; an
+  `image` override is permitted only alongside a `version` (a private mirror of that version) so an
+  image can never run with a mismatched data mount. An unknown version, or an `image` with no
+  `version`, fails at `validate`. Providers without version-coupled internals stay single-profile
+  (`image` only).
 - `spec.runtime.type` selects which `ContainerRuntime` (or future non-container runtime port) is
   constructed and injected.
 - `spec.runtime` fields beyond `type` are runtime-specific and validated by the runtime adapter's

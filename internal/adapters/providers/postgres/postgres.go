@@ -14,10 +14,40 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/source"
 	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/domain/versionprofile"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
-const defaultImage = "postgres:16"
+// catalog pins each supported major version to its image and the data mount
+// path that version's image declares as its VOLUME. postgres:18 moved data
+// under /var/lib/postgresql (PGDATA to a versioned subdir), so the mount
+// must move with the image — the exact coupling this catalog enforces.
+var catalog = versionprofile.Catalog{
+	Default: "16",
+	Profiles: map[string]versionprofile.Profile{
+		"16": {Version: "16", Image: "postgres:16", DataMount: "/var/lib/postgresql/data"},
+		"17": {Version: "17", Image: "postgres:17", DataMount: "/var/lib/postgresql/data"},
+		"18": {Version: "18", Image: "postgres:18", DataMount: "/var/lib/postgresql"},
+	},
+}
+
+// VersionCatalog implements reconciler.VersionedProvider.
+func (p *Provider) VersionCatalog() versionprofile.Catalog { return catalog }
+
+// profile resolves the pinned version profile, applying an optional image
+// override (a private mirror of the same version) while keeping the version's
+// internals.
+func (p *Provider) profile() (versionprofile.Profile, error) {
+	version, _ := p.cfg.Configuration["version"].(string)
+	prof, err := catalog.Resolve(version)
+	if err != nil {
+		return prof, err
+	}
+	if img, _ := p.cfg.Configuration["image"].(string); img != "" {
+		prof.Image = img
+	}
+	return prof, nil
+}
 
 type Provider struct {
 	providerRes resource.Envelope
@@ -89,9 +119,9 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRuntime) (status.Status, error) {
 	st := status.Status{}
 	name := p.containerName()
-	image, _ := p.cfg.Configuration["image"].(string)
-	if image == "" {
-		image = defaultImage
+	prof, err := p.profile()
+	if err != nil {
+		return st, fmt.Errorf("Provider %q (type: postgres): %w", name, err)
 	}
 	user, pass, err := p.superuser()
 	if err != nil {
@@ -110,14 +140,14 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	}
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
 		Name:  name,
-		Image: image,
+		Image: prof.Image,
 		Cmd:   []string{"postgres", "-c", "wal_level=logical"},
 		Env: map[string]string{
 			"POSTGRES_USER":     user,
 			"POSTGRES_PASSWORD": pass,
 		},
 		Networks: []string{p.network()},
-		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/var/lib/postgresql/data"}},
+		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: prof.DataMount}},
 		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: 5432}},
 		HealthCheck: &runtime.HealthCheck{
 			// Force a TCP check: the plain unix-socket pg_isready answers
@@ -290,5 +320,5 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 	if ref, _ := cfg.Configuration["replicationSecretRef"].(string); ref != "" && !cfg.HasSecretRef(ref) {
 		return fmt.Errorf("configuration.replicationSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
 	}
-	return nil
+	return catalog.ValidateConfig(cfg.Configuration)
 }

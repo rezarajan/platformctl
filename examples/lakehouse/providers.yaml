@@ -42,7 +42,7 @@ metadata:
 spec:
   type: postgres
   runtime: {type: docker, network: datascape}
-  configuration: {image: postgres:16, port: 15434, superuserSecretRef: lake-pg-admin}
+  configuration: {version: "16", port: 15434, superuserSecretRef: lake-pg-admin}
   secretRefs: [lake-pg-admin]
 ---
 apiVersion: datascape.io/v1alpha1
