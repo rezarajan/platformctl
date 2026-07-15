@@ -8,9 +8,12 @@ build:
 test:
     go test ./...
 
-# Integration tests against a live Docker daemon.
+# Integration tests against a live Docker daemon. The suite stands up the
+# full provider set several times over (acceptance, chaos, lakehouse);
+# budget an hour so a slow machine or cold image cache never aborts it
+# mid-run.
 test-integration:
-    go test -tags integration -timeout 600s ./...
+    go test -tags integration -timeout 3600s ./...
 
 # Format and vet.
 check:

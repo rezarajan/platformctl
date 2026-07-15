@@ -321,6 +321,15 @@ type ConnectionCapableProvider interface {
     SupportedConnectionSchemes() []string
 }
 
+// Optionally implemented: providers check their own Provider resource's
+// configuration at validate time (required keys, configuration.*SecretRef
+// entries that must also appear in spec.secretRefs) — a mis-wired Provider
+// fails at `validate`, never as a half-applied platform.
+type SpecValidator interface {
+    Provider
+    ValidateSpec(cfg provider.Provider) error
+}
+
 // Declared by a provider that knows how to consume a lineage backend's
 // connection details and wire them into its own, real integration.
 // Implemented by `debezium` in v1.0.0; implementing it for other providers

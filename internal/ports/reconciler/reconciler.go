@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
+	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
@@ -68,6 +69,17 @@ type CatalogCapableProvider interface {
 type ConnectionCapableProvider interface {
 	Provider
 	SupportedConnectionSchemes() []string
+}
+
+// SpecValidator is optionally implemented by providers that can check their
+// own Provider resource's spec at validate time — before anything is
+// scheduled. The canonical checks: required configuration keys (an image, a
+// bootstrap address) and configuration.*SecretRef entries that must also
+// appear in spec.secretRefs for the engine to resolve them. A failure here
+// surfaces at `validate`, never as a half-applied platform.
+type SpecValidator interface {
+	Provider
+	ValidateSpec(cfg provider.Provider) error
 }
 
 // ProviderResourceAware is optionally implemented by providers that need

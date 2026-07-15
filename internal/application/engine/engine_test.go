@@ -276,6 +276,10 @@ func TestDestroyExternalGuard(t *testing.T) {
 	eng := newTestEngine(t, reg)
 
 	envelopes := []resource.Envelope{
+		envelope("SecretReference", "prod-db-conn", map[string]any{
+			"backend": "env",
+			"keys":    []any{"username", "password"},
+		}),
 		envelope("Source", "prod-db", map[string]any{
 			"engine":        "postgres",
 			"external":      true,
@@ -299,7 +303,7 @@ func TestDestroyExternalGuard(t *testing.T) {
 	if err == nil {
 		t.Fatal("engine destroyed an External resource without AllowDestructive")
 	}
-	ferr, ok := result.Failed[envelopes[0].Key()]
+	ferr, ok := result.Failed[envelopes[1].Key()]
 	if !ok || !strings.Contains(ferr.Error(), "yes-i-understand-this-is-destructive") {
 		t.Errorf("guard error missing or unclear: %v", ferr)
 	}

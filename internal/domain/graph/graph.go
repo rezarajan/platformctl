@@ -55,9 +55,10 @@ func Build(envelopes []resource.Envelope) (*Graph, error) {
 			}
 			targets := byName[name]
 			if len(targets) == 0 {
-				if field == "connectionRef" {
-					continue // external connection, resolved via SecretReference at runtime
-				}
+				// Every reference — connectionRef included — must resolve
+				// in-set: the engine will demand it at apply time, and a
+				// dangling reference caught only then is a broken developer
+				// experience.
 				return nil, fmt.Errorf("%s: spec.%s %q does not resolve to any resource in the manifest set", from, field, name)
 			}
 			// Prefer the kind-appropriate target when a name is ambiguous.

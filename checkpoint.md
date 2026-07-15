@@ -114,6 +114,31 @@ historical design note).
 - Debezium images come from quay.io; example uses non-default host ports
   (pg 15432 / connect 18083+18084 / kafka 19093 / minio 19000).
 
+## Validate-time completeness (the DX contract)
+
+`platformctl validate` is the gate: a manifest set that validates must not
+be able to half-apply into a mis-wired platform. The mechanisms, in check
+order (all in `loadAndValidate`):
+
+1. JSON Schema per kind (shapes, required fields, no secret-bearing fields).
+2. Kind-specific Go validation (`FromEnvelope` per kind).
+3. Graph: every reference — providerRef/sourceRef/targetRef/connectionRef/
+   secretRef — must resolve in-set (connectionRef's old skip-if-missing is
+   gone; the engine demands resolution at apply, so validate does too).
+4. Compatibility: Binding mode↔Kind pairing relation + capability per
+   pairing; Catalog engine and Connection scheme capability; connectionRef
+   targets must be Connection|SecretReference; Connection.secretRef must be
+   a SecretReference; **`SpecValidator`** — providers validate their own
+   configuration (debezium/s3sink: bootstrapServers, s3sink: image +
+   credentialsSecretRef; postgres/mysql/s3: credential secretRefs declared
+   and cross-listed in spec.secretRefs).
+5. Feature gates: external-declaring sets need ExternalResourceConfiguration;
+   every Provider's type resolves through the gated registry at validate
+   (a disabled gate names itself and the enable flag).
+
+Adding a provider with required configuration? Implement
+`reconciler.SpecValidator` — apply-time-only config errors are regressions.
+
 ## Known open items (next session's natural backlog)
 
 1. **Providers for the new pairings**: `jdbcsink` (sink→Source) and an
@@ -123,6 +148,10 @@ historical design note).
    json because the pipeline runs schemaless converters) — either accept
    json permanently or wire schema-carrying converters.
 3. minio image is `minio/minio:latest` in examples + sink test — pin a tag.
+   Same for nessie/marquez/vault `latest` tags.
+3b. **mariadb is registered but untested**: it shares the mysql adapter
+   (image + binlog flags differ); no integration test applies a
+   `type: mariadb` Provider yet.
 4. `ContainerProvider` test-only gate could be retired.
 5. **Tunnel provider** for VPC reach: the `Connection` kind is the seam
    (design note 002 addendum); a wireguard-typed provider chains a managed
@@ -145,7 +174,7 @@ historical design note).
 
 ```bash
 go build ./... && go vet ./... && go test ./...      # unit/contract — green
-go test -tags integration -timeout 2400s ./...       # full e2e incl. acceptance + chaos — green
+just test-integration                                 # full e2e (-timeout 3600s) incl. acceptance, chaos, lakehouse — green
 go run ./cmd/platformctl validate examples/cdc-attendance/
 go run ./cmd/platformctl validate examples/lakehouse/
 ```

@@ -306,3 +306,23 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		return st, fmt.Errorf("s3sink provider cannot probe kind %s", res.Kind)
 	}
 }
+
+// ValidateSpec implements SpecValidator: this provider exists only to run
+// sink connectors, so everything a connector registration needs is required
+// up front — at validate, never as a half-applied platform.
+func (p *Provider) ValidateSpec(cfg provider.Provider) error {
+	if v, _ := cfg.Configuration["image"].(string); v == "" {
+		return fmt.Errorf("spec.configuration.image is required (a Connect image carrying the S3 sink plugin; no stock image ships one)")
+	}
+	if v, _ := cfg.Configuration["bootstrapServers"].(string); v == "" {
+		return fmt.Errorf("spec.configuration.bootstrapServers is required (the Kafka address the Connect worker joins)")
+	}
+	ref, _ := cfg.Configuration["credentialsSecretRef"].(string)
+	if ref == "" {
+		return fmt.Errorf("spec.configuration.credentialsSecretRef is required (the SecretReference carrying object-store credentials)")
+	}
+	if !cfg.HasSecretRef(ref) {
+		return fmt.Errorf("configuration.credentialsSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
+	}
+	return nil
+}

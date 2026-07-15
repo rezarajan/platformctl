@@ -255,3 +255,16 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		return st, fmt.Errorf("s3 provider cannot probe kind %s", res.Kind)
 	}
 }
+
+// ValidateSpec implements SpecValidator: the store cannot boot without root
+// credentials, so their wiring is checked at validate.
+func (p *Provider) ValidateSpec(cfg provider.Provider) error {
+	if ref, _ := cfg.Configuration["rootSecretRef"].(string); ref != "" {
+		if !cfg.HasSecretRef(ref) {
+			return fmt.Errorf("configuration.rootSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
+		}
+	} else if len(cfg.SecretRefs) == 0 {
+		return fmt.Errorf("spec.secretRefs must name at least one SecretReference (the root credentials; configuration.rootSecretRef selects one explicitly)")
+	}
+	return nil
+}

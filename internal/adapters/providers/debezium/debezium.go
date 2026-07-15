@@ -404,3 +404,15 @@ func connectorFor(engine string) (class string, port int, err error) {
 		return "", 0, fmt.Errorf("no Debezium connector mapping for source engine %q", engine)
 	}
 }
+
+// ValidateSpec implements SpecValidator: a mis-wired worker fails at
+// validate, never as a half-applied platform.
+func (p *Provider) ValidateSpec(cfg provider.Provider) error {
+	if v, _ := cfg.Configuration["bootstrapServers"].(string); v == "" {
+		return fmt.Errorf("spec.configuration.bootstrapServers is required (the Kafka address the Connect worker joins)")
+	}
+	if ref, _ := cfg.Configuration["replicationSecretRef"].(string); ref != "" && !cfg.HasSecretRef(ref) {
+		return fmt.Errorf("configuration.replicationSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
+	}
+	return nil
+}

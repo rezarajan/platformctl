@@ -172,7 +172,33 @@ func checkResourceCapabilities(envelopes []resource.Envelope, byName map[string]
 	}
 
 	for _, e := range envelopes {
+		// connectionRef, wherever it appears, must point at a Connection or
+		// a SecretReference (the v1.0.0 shorthand) — anything else resolves
+		// at apply time to nothing.
+		if ref, ok := e.Spec["connectionRef"].(map[string]any); ok {
+			if name, _ := ref["name"].(string); name != "" {
+				target := byName[name]
+				if target.Kind != "Connection" && target.Kind != "SecretReference" {
+					return fmt.Errorf("%s %q: connectionRef %q must resolve to a Connection or SecretReference, got %s", e.Kind, e.Metadata.Name, name, target.Kind)
+				}
+			}
+		}
+
 		switch e.Kind {
+		case "Provider":
+			p, err := provider.FromEnvelope(e)
+			if err != nil {
+				return err
+			}
+			impl, err := resolve(p.Type)
+			if err != nil {
+				return fmt.Errorf("Provider %q: %w", e.Metadata.Name, err)
+			}
+			if sv, ok := impl.(reconciler.SpecValidator); ok {
+				if err := sv.ValidateSpec(p); err != nil {
+					return fmt.Errorf("Provider %q (type: %s): %w", e.Metadata.Name, p.Type, err)
+				}
+			}
 		case "Catalog":
 			c, err := catalog.FromEnvelope(e)
 			if err != nil {
@@ -197,6 +223,11 @@ func checkResourceCapabilities(envelopes []resource.Envelope, byName map[string]
 			c, err := connection.FromEnvelope(e)
 			if err != nil {
 				return err
+			}
+			if c.SecretRef != nil {
+				if target := byName[*c.SecretRef]; target.Kind != "SecretReference" {
+					return fmt.Errorf("Connection %q: secretRef %q must resolve to a SecretReference, got %s", e.Metadata.Name, *c.SecretRef, target.Kind)
+				}
 			}
 			if c.External {
 				continue

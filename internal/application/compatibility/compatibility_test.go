@@ -2,9 +2,11 @@ package compatibility
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
@@ -354,5 +356,81 @@ func TestConnectionSchemeCapability(t *testing.T) {
 	}
 	if err := Check(external, resolver(stubProvider{"redpanda"})); err != nil {
 		t.Fatalf("external Connection must skip capability checks: %v", err)
+	}
+}
+
+type specValidatingStub struct{ stubProvider }
+
+func (specValidatingStub) ValidateSpec(cfg provider.Provider) error {
+	if v, _ := cfg.Configuration["bootstrapServers"].(string); v == "" {
+		return errors.New("spec.configuration.bootstrapServers is required")
+	}
+	return nil
+}
+
+// TestProviderSpecValidatedAtValidate: a provider's own configuration
+// requirements surface at validate — a developer can never reach apply with
+// a mis-wired Provider.
+func TestProviderSpecValidatedAtValidate(t *testing.T) {
+	manifests := []resource.Envelope{
+		envelope("Provider", "worker", map[string]any{
+			"type":    "debezium",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+	}
+	err := Check(manifests, resolver(specValidatingStub{stubProvider{"debezium"}}))
+	if err == nil {
+		t.Fatal("validate accepted a Provider failing its own spec validation")
+	}
+	if !strings.Contains(err.Error(), `Provider "worker" (type: debezium)`) || !strings.Contains(err.Error(), "bootstrapServers") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	manifests[0].Spec["configuration"] = map[string]any{"bootstrapServers": "broker:9092"}
+	if err := Check(manifests, resolver(specValidatingStub{stubProvider{"debezium"}})); err != nil {
+		t.Fatalf("valid provider spec rejected: %v", err)
+	}
+}
+
+// TestConnectionRefTargetKind: connectionRef must resolve to a Connection or
+// SecretReference — pointing it at anything else fails at validate.
+func TestConnectionRefTargetKind(t *testing.T) {
+	manifests := []resource.Envelope{
+		envelope("Provider", "not-a-connection", map[string]any{
+			"type":    "postgres",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Source", "prod-db", map[string]any{
+			"engine":        "postgres",
+			"external":      true,
+			"connectionRef": map[string]any{"name": "not-a-connection"},
+		}),
+	}
+	err := Check(manifests, resolver(stubProvider{"postgres"}))
+	if err == nil {
+		t.Fatal("validate accepted a connectionRef pointing at a Provider")
+	}
+	if !strings.Contains(err.Error(), "must resolve to a Connection or SecretReference") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestConnectionSecretRefTargetKind: a Connection's secretRef must resolve
+// to a SecretReference.
+func TestConnectionSecretRefTargetKind(t *testing.T) {
+	manifests := []resource.Envelope{
+		envelope("Connection", "orders-db", map[string]any{
+			"external":  true,
+			"host":      "db.corp.internal",
+			"port":      5432,
+			"secretRef": map[string]any{"name": "missing-creds"},
+		}),
+	}
+	err := Check(manifests, resolver(stubProvider{"proxy"}))
+	if err == nil {
+		t.Fatal("validate accepted a Connection secretRef resolving to nothing")
+	}
+	if !strings.Contains(err.Error(), `secretRef "missing-creds" must resolve to a SecretReference`) {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

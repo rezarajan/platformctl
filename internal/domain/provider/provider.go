@@ -45,3 +45,15 @@ func (p Provider) validate(name string) error {
 	}
 	return nil
 }
+
+// HasSecretRef reports whether name appears in spec.secretRefs — the
+// precondition for the engine resolving it and handing its values to the
+// provider.
+func (p Provider) HasSecretRef(name string) bool {
+	for _, r := range p.SecretRefs {
+		if r == name {
+			return true
+		}
+	}
+	return false
+}
