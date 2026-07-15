@@ -273,7 +273,35 @@ Some configuration is auto-configured internally, such as postgres-16. With post
 
 ## Graph does not render the logical/expected architecture
 
-The rendered graph functionality does not produce output that is structually expected of the overall architecture. Furthermore, some of the commands, like output, do not actually change the output format. This functionality must be checked for accuracy and completeness.
+**Status: resolved.** Two problems, both fixed:
+
+1. **`-o` was ignored** — `graph` had its own `--format dot|mermaid` flag, so
+   the documented `platformctl graph -o dot|mermaid` (spec §5) silently did
+   nothing (the inherited `-o` stayed `table`). `graph` now honours the
+   persistent `-o`: `tree` (default), `dot`, `mermaid`, `json`.
+
+2. **Raw reverse-dependency edges didn't read as the architecture** — the old
+   output was the reconcile DAG (X depends on Y), so a Binding rendered as a
+   hub pointing at three nodes. The new `internal/application/archview`
+   derives the *architecture*: Bindings collapse into labelled data-flow
+   edges (`Source ──[cdc · provider]──▶ EventStream`), Providers connect to
+   the assets they realize, Connections show the external system they
+   forward to, and observers show lineage. The default `tree` view groups it
+   into DATA FLOW / TECHNOLOGY LAYER / EXTERNAL ACCESS / STANDALONE PROVIDERS
+   — the picture you actually configure orchestrators against. Example:
+
+   ```
+   DATA FLOW
+     Source/student-database ──[cdc · postgres-cdc]──▶ EventStream/attendance-events   (lineage → test-lineage-fake)
+     EventStream/attendance-events ──[sink · s3-sink]──▶ Dataset/attendance-raw
+   TECHNOLOGY LAYER  (provider ─realizes→ asset)
+     Provider/local-postgres  (type: postgres)
+       └─ Source/student-database  (engine: postgres)
+     ...
+   ```
+
+Enforced by `internal/application/archview/archview_test.go` (pipeline
+direction, realization edges, all four render formats, external targets).
 
 ## Docs generation does not output clean HTML
 

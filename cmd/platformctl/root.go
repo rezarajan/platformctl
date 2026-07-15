@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -15,6 +14,7 @@ import (
 	secretrouter "github.com/rezarajan/platformctl/internal/adapters/secrets/router"
 	vaultsecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/vault"
 	"github.com/rezarajan/platformctl/internal/adapters/state/localfile"
+	"github.com/rezarajan/platformctl/internal/application/archview"
 	"github.com/rezarajan/platformctl/internal/application/compatibility"
 	"github.com/rezarajan/platformctl/internal/application/docsgen"
 	"github.com/rezarajan/platformctl/internal/application/engine"
@@ -586,46 +586,27 @@ func newStatusCmd(a *app) *cobra.Command {
 }
 
 func newGraphCmd(a *app) *cobra.Command {
-	var format string
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "graph [path]",
-		Short: "Print the dependency graph",
-		Args:  cobra.MaximumNArgs(1),
+		Short: "Render the platform architecture (data flow + technology layer)",
+		Long: "Renders the architecture the manifests describe — data-movement pipelines\n" +
+			"(Bindings collapse into labelled source→target edges) and the technology layer\n" +
+			"(which Provider realizes each asset, and how external systems are reached).\n" +
+			"This is the picture you configure orchestrators against, not the internal\n" +
+			"reconcile ordering. Choose the format with -o: tree (default), dot, mermaid, json.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, g, err := a.loadAndValidate(pathArg(args))
+			envelopes, _, err := a.loadAndValidate(pathArg(args))
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			keys := make([]resource.Key, 0, len(g.Nodes))
-			for k := range g.Nodes {
-				keys = append(keys, k)
-			}
-			sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
-			switch format {
-			case "dot":
-				fmt.Fprintln(out, "digraph datascape {")
-				for _, from := range keys {
-					for _, to := range g.Edges[from] {
-						fmt.Fprintf(out, "  %q -> %q;\n", from, to)
-					}
-				}
-				fmt.Fprintln(out, "}")
-			case "mermaid":
-				fmt.Fprintln(out, "flowchart TD")
-				for _, from := range keys {
-					for _, to := range g.Edges[from] {
-						fmt.Fprintf(out, "  %s --> %s\n", mermaidID(from), mermaidID(to))
-					}
-				}
-			default:
-				return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("unknown graph format %q (allowed: dot, mermaid)", format))
+			view := archview.Build(envelopes)
+			if err := view.Render(cmd.OutOrStdout(), a.output); err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&format, "format", "dot", "graph output format: dot|mermaid")
-	return cmd
 }
 
 func printPlan(cmd *cobra.Command, output string, p planpkg.Plan) error {
@@ -634,10 +615,6 @@ func printPlan(cmd *cobra.Command, output string, p planpkg.Plan) error {
 		rows = append(rows, []string{e.Key.String(), string(e.Action), e.Reason})
 	}
 	return cliutil.WriteOutput(cmd.OutOrStdout(), output, p, rows)
-}
-
-func mermaidID(k resource.Key) string {
-	return strings.NewReplacer("/", "_", "-", "_").Replace(k.String())
 }
 
 func pathArg(args []string) string {

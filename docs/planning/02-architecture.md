@@ -495,7 +495,7 @@ Cobra-based, subcommands:
 | `platformctl status [path]` | Print conditions per resource (`-o table\|json\|yaml`), rolled up to overall health. |
 | `platformctl drift [path]` | Read-only: probe live state, report divergence from last-applied, exit non-zero if any found. |
 | `platformctl import <kind>/<name> --from ...` | Adopt an existing resource into state as `Imported` without creating anything. |
-| `platformctl graph [path]` | Print the dependency graph (`-o dot\|mermaid`), including sink-mode edges, for documentation/debugging. |
+| `platformctl graph [path]` | Render the platform *architecture* — data-movement pipelines (Bindings as labelled source→target edges) and the technology layer (which Provider realizes each asset, external systems reached through Connections). `-o tree` (default, human-readable), `dot`, `mermaid`, or `json`. |
 | `platformctl docs build` / `docs serve` | Generates static reference docs from `schemas/`. |
 
 Global flags: `--state-file`, `--feature-gates`, `-o/--output {table,json,yaml}`, `--log-level`.
