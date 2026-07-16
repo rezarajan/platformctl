@@ -72,6 +72,15 @@ func (s *Store) Save(_ context.Context, st state.State) error {
 	if err := os.Rename(tmpName, s.Path); err != nil {
 		return fmt.Errorf("rename temp state file into place: %w", err)
 	}
+	// Fsync the directory so the rename itself is durable — without this a
+	// crash between rename and the next directory flush can lose the new
+	// entry even though the file's own data was synced
+	// (docs/planning/07 §1.4). Best-effort where the platform disallows
+	// opening directories.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 	return nil
 }
 
