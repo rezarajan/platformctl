@@ -125,6 +125,21 @@ func (r *Runtime) Logs(_ context.Context, name string, _ int) (string, error) {
 	return "", nil // fake containers produce no logs
 }
 
+func (r *Runtime) ReadFile(_ context.Context, name, path string) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	spec, ok := r.containers[name]
+	if !ok {
+		return nil, fmt.Errorf("container %q not found", name)
+	}
+	for _, f := range spec.Files {
+		if f.Path == path {
+			return f.Content, nil
+		}
+	}
+	return nil, fmt.Errorf("file %q not found in container %q", path, name)
+}
+
 func (r *Runtime) ListManaged(_ context.Context) ([]runtime.ContainerState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -5,6 +5,7 @@
 package docker
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"fmt"
@@ -208,10 +209,69 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpe
 	if err != nil {
 		return runtime.ContainerState{}, fmt.Errorf("create container %q: %w", spec.Name, err)
 	}
+	if err := r.copyFilesIn(ctx, created.ID, spec.Files); err != nil {
+		return runtime.ContainerState{}, fmt.Errorf("container %q: %w", spec.Name, err)
+	}
 	if err := r.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
 		return runtime.ContainerState{}, fmt.Errorf("start container %q: %w", spec.Name, err)
 	}
 	return r.inspectState(ctx, spec.Name)
+}
+
+// copyFilesIn places FileMount contents into a created-but-not-started
+// container via a tar stream — the file exists before PID 1 runs, so
+// entrypoint scripts (e.g. postgres's initdb reading *_FILE) see it.
+func (r *Runtime) copyFilesIn(ctx context.Context, containerID string, files []runtime.FileMount) error {
+	if len(files) == 0 {
+		return nil
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, f := range files {
+		if !strings.HasPrefix(f.Path, "/") {
+			return fmt.Errorf("file mount path %q must be absolute", f.Path)
+		}
+		mode := f.Mode
+		if mode == 0 {
+			mode = 0o444
+		}
+		hdr := &tar.Header{
+			Name: strings.TrimPrefix(f.Path, "/"),
+			Mode: int64(mode),
+			Size: int64(len(f.Content)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return fmt.Errorf("tar file mount %q: %w", f.Path, err)
+		}
+		if _, err := tw.Write(f.Content); err != nil {
+			return fmt.Errorf("tar file mount %q: %w", f.Path, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("tar file mounts: %w", err)
+	}
+	if err := r.cli.CopyToContainer(ctx, containerID, "/", &buf, container.CopyToContainerOptions{}); err != nil {
+		return fmt.Errorf("copy file mounts in: %w", err)
+	}
+	return nil
+}
+
+// ReadFile retrieves a file previously placed by ContainerSpec.Files.
+func (r *Runtime) ReadFile(ctx context.Context, name, path string) ([]byte, error) {
+	rc, _, err := r.cli.CopyFromContainer(ctx, name, path)
+	if err != nil {
+		return nil, fmt.Errorf("read %q from container %q: %w", path, name, err)
+	}
+	defer rc.Close()
+	tr := tar.NewReader(rc)
+	if _, err := tr.Next(); err != nil {
+		return nil, fmt.Errorf("read %q from container %q: %w", path, name, err)
+	}
+	data, err := io.ReadAll(io.LimitReader(tr, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read %q from container %q: %w", path, name, err)
+	}
+	return data, nil
 }
 
 func (r *Runtime) WaitHealthy(ctx context.Context, name string, timeout time.Duration) error {

@@ -208,6 +208,47 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		}
 	})
 
+	t.Run("FileMount_readable_by_process_and_ReadFile", func(t *testing.T) {
+		name := namePrefix + "-files-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		const path = "/run/datascape/secret-material"
+		const content = "hunter2-from-file"
+		spec := runtime.ContainerSpec{
+			Name:  name,
+			Image: "alpine:3.20",
+			// The container only stays alive (= healthy) if the mounted
+			// file exists with the exact expected content — proving the
+			// file is present before PID 1 runs, not injected after.
+			Cmd:      []string{"sh", "-c", `[ "$(cat ` + path + `)" = "` + content + `" ] && sleep 300`},
+			Networks: []string{netSpec.Name},
+			Files:    []runtime.FileMount{{Path: path, Content: []byte(content)}},
+			Labels:   labels,
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer with file mount: %v", err)
+		}
+		if err := rt.WaitHealthy(ctx, name, 30*time.Second); err != nil {
+			t.Fatalf("container did not see the mounted file content: %v", err)
+		}
+		got, err := rt.ReadFile(ctx, name, path)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if string(got) != content {
+			t.Errorf("ReadFile = %q, want %q", got, content)
+		}
+		// Secret material must not leak into inspectable env.
+		st, _, err := rt.Inspect(ctx, name)
+		if err != nil {
+			t.Fatalf("Inspect: %v", err)
+		}
+		for k, v := range st.Env {
+			if v == content {
+				t.Errorf("file-mounted secret material leaked into env var %q", k)
+			}
+		}
+	})
+
 	t.Run("Inspect_reports_observed_ports", func(t *testing.T) {
 		name := namePrefix + "-ports-ctr"
 		t.Cleanup(func() { _ = rt.Remove(ctx, name) })

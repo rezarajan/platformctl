@@ -1,6 +1,7 @@
 package kubernetes
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -74,6 +75,28 @@ func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash stri
 			},
 		})
 	}
+	if len(spec.Files) > 0 {
+		// Each FileMount is one key in the container's files Secret,
+		// surfaced at its absolute path via a subPath mount.
+		for i, f := range spec.Files {
+			container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+				Name:      "datascape-files",
+				MountPath: f.Path,
+				SubPath:   fileKey(i),
+				ReadOnly:  true,
+			})
+		}
+		mode := int32(0o444)
+		volumes = append(volumes, corev1.Volume{
+			Name: "datascape-files",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  filesSecretName(spec.Name),
+					DefaultMode: &mode,
+				},
+			},
+		})
+	}
 
 	replicas := one
 	return &appsv1.Deployment{
@@ -138,6 +161,36 @@ func buildService(namespace, serviceName string, spec runtimeport.ContainerSpec)
 			Selector: map[string]string{"app": spec.Name},
 			Ports:    ports,
 		},
+	}
+}
+
+func filesSecretName(containerName string) string { return containerName + "-files" }
+
+func fileKey(i int) string { return fmt.Sprintf("f%d", i) }
+
+// filePathsAnnotation records the FileMount path each Secret key holds so
+// ReadFile can map a path back to its key.
+const filePathsAnnotation = "io.datascape.file-paths"
+
+// buildFilesSecret renders spec.Files into the Secret the Deployment mounts.
+func buildFilesSecret(namespace string, spec runtimeport.ContainerSpec) *corev1.Secret {
+	data := make(map[string][]byte, len(spec.Files))
+	paths := make(map[string]string, len(spec.Files))
+	for i, f := range spec.Files {
+		data[fileKey(i)] = f.Content
+		paths[f.Path] = fileKey(i)
+	}
+	pathsJSON, _ := json.Marshal(paths)
+	labels := withOwnership(spec.Labels)
+	labels["app"] = spec.Name
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        filesSecretName(spec.Name),
+			Namespace:   namespace,
+			Labels:      labels,
+			Annotations: map[string]string{filePathsAnnotation: string(pathsJSON)},
+		},
+		Data: data,
 	}
 }
 

@@ -39,6 +39,18 @@ type VolumeMount struct {
 	MountPath  string
 }
 
+// FileMount places literal file content into the container at Path — the
+// runtime-supported safer channel for secret material than environment
+// variables, which any `docker inspect` reveals (docs/planning/07 Gate 1
+// checkbox 4, §2.5). Docker copies the content in before start; Kubernetes
+// mounts it from a Secret object. Content participates in the spec hash
+// (one-way), so changing it replaces the container like any other field.
+type FileMount struct {
+	Path    string // absolute path inside the container
+	Content []byte
+	Mode    uint32 // e.g. 0o444; 0 = default 0o444
+}
+
 type PortBinding struct {
 	HostIP        string
 	HostPort      int
@@ -114,6 +126,7 @@ type ContainerSpec struct {
 	// Kubernetes: additional Services selecting the same pod.
 	Aliases       []string
 	Volumes       []VolumeMount
+	Files         []FileMount
 	Env           map[string]string
 	Ports         []PortBinding
 	HealthCheck   *HealthCheck
@@ -177,6 +190,11 @@ type ContainerRuntime interface {
 	// stdout/stderr, for diagnostics (`platformctl doctor`, CLI log
 	// retrieval). tail <= 0 requests the runtime's default tail length.
 	Logs(ctx context.Context, name string, tail int) (string, error)
+	// ReadFile returns the content of a file previously placed by
+	// ContainerSpec.Files. Providers use it to recover bootstrap material
+	// (e.g. the previous admin password during rotation) without that
+	// material ever living in inspectable env vars.
+	ReadFile(ctx context.Context, name, path string) ([]byte, error)
 }
 
 // Datascape ownership labels — applied to every created object so

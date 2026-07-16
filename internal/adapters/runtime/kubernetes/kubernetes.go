@@ -311,6 +311,9 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.Containe
 	if err := r.ensureService(ctx, ns, spec); err != nil {
 		return runtimeport.ContainerState{}, err
 	}
+	if err := r.ensureFilesSecret(ctx, ns, spec); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
 
 	if deploymentNotFound {
 		created, err := r.clientset.AppsV1().Deployments(ns).Create(ctx, deployment, metav1.CreateOptions{})
@@ -344,6 +347,58 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.Containe
 // ensureService creates or updates the ClusterIP Service backing a
 // container's ports. A container with no ports declared gets no Service —
 // nothing else in the namespace needs to address it by name.
+// ensureFilesSecret creates or updates the Secret backing spec.Files, and
+// deletes it when the spec no longer declares files.
+func (r *Runtime) ensureFilesSecret(ctx context.Context, ns string, spec runtimeport.ContainerSpec) error {
+	name := filesSecretName(spec.Name)
+	if len(spec.Files) == 0 {
+		if err := r.clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete files secret %q: %w", name, err)
+		}
+		return nil
+	}
+	desired := buildFilesSecret(ns, spec)
+	existing, err := r.clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		if _, err := r.clientset.CoreV1().Secrets(ns).Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create files secret %q: %w", name, err)
+		}
+		return nil
+	case err != nil:
+		return fmt.Errorf("get files secret %q: %w", name, err)
+	default:
+		desired.ResourceVersion = existing.ResourceVersion
+		if _, err := r.clientset.CoreV1().Secrets(ns).Update(ctx, desired, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update files secret %q: %w", name, err)
+		}
+		return nil
+	}
+}
+
+// ReadFile maps the path back to its Secret key via the annotation
+// buildFilesSecret wrote, then returns that key's data.
+func (r *Runtime) ReadFile(ctx context.Context, name, path string) ([]byte, error) {
+	_, secret, err := findAcrossNamespaces(ctx, r, func(ns string) (*corev1.Secret, error) {
+		return r.clientset.CoreV1().Secrets(ns).Get(ctx, filesSecretName(name), metav1.GetOptions{})
+	})
+	if err != nil {
+		return nil, err
+	}
+	if secret == nil {
+		return nil, fmt.Errorf("no files secret for container %q", name)
+	}
+	var paths map[string]string
+	if err := json.Unmarshal([]byte(secret.Annotations[filePathsAnnotation]), &paths); err != nil {
+		return nil, fmt.Errorf("files secret for %q has no path index: %w", name, err)
+	}
+	key, ok := paths[path]
+	if !ok {
+		return nil, fmt.Errorf("file %q not found in container %q", path, name)
+	}
+	return secret.Data[key], nil
+}
+
 // ensureService ensures one ClusterIP Service per addressable name: the
 // container's own name plus each declared alias (Docker's per-network
 // endpoint aliases translated to Kubernetes DNS).
@@ -454,6 +509,9 @@ func (r *Runtime) Remove(ctx context.Context, name string) error {
 		if err := r.clientset.CoreV1().Services(ns).Delete(ctx, svc.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete service %q: %w", svc.Name, err)
 		}
+	}
+	if err := r.clientset.CoreV1().Secrets(ns).Delete(ctx, filesSecretName(name), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete files secret for %q: %w", name, err)
 	}
 	// Foreground propagation means the Deployment stays visible (with a
 	// deletionTimestamp) until its ReplicaSet/Pods are actually gone.
