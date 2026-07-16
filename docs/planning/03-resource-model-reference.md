@@ -345,6 +345,15 @@ additive provider work.)
 | `sink` → `Source` | `DatabaseSinkCapableProvider` | `SupportedSinkEngines() []string` | `Source.spec.engine` (of the target) |
 | `ingest` | `IngestCapableProvider` | `SupportedIngestFormats() []string` | `Dataset.spec.format` (of the origin) |
 
+**Provider availability (v1.x):** `cdc` (debezium) and `sink` → `Dataset`
+(s3sink) ship with real providers. **No shipped provider implements
+`DatabaseSinkCapableProvider` or `IngestCapableProvider`** — a `sink` →
+`Source` or `ingest` Binding validates structurally, then fails at
+`validate` with the standard capability error naming the missing
+capability. These pairings are model-complete seams for future providers
+(e.g. a Debezium JDBC sink over the existing Connect-worker pattern), not
+usable features today.
+
 A `Binding` that fails either check is rejected at `validate`/`plan` time with a message naming
 the `Binding`, the `Provider`, its type, and what it actually supports — never discovered only
 once `apply` starts touching real infrastructure. Example:

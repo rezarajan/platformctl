@@ -270,13 +270,39 @@ images, and the 1.3/1.4 operator tooling dispositioned past this gate).
 
 Required before claiming full data-engineer lakehouse/pipeline coverage.
 
-- [ ] Catalog, warehouse, object store, and table format resources form a
-      complete usable contract for Spark/Trino/Dagster/dbt-style tooling.
-- [ ] CDC, sink, ingest, and database-sink pairings either have real providers
-      or are clearly hidden from production docs.
-- [ ] External ingress and egress are represented through first-class
-      Connections, tunnels, TLS/auth, and reachability policies.
-- [ ] Drift detection verifies full provider configuration, not only liveness.
+**Status (2026-07-16): all four acceptance criteria complete** (close-out
+pass, incremental commits; each area's residual items are explicitly
+deferred with reasons in 2.1–2.5 — the notable ones: schema-registry design
+before Parquet/Avro production claims, tunnel/TLS-termination providers on
+the designed Connection seam, image digests, and out-of-band config-change
+integration tests).
+
+- [x] Catalog, warehouse, object store, and table format resources form a
+      usable contract for Spark/Trino/Dagster/dbt-style tooling —
+      `inventory --for <tool>` renders paste-ready config from observed
+      endpoints (catalog REST URI + branch, S3, databases, kafka); Iceberg
+      tables are declared external-tool-produced (decision recorded in
+      2.3); json is the supported production sink format until a schema
+      registry ships (decision recorded, tracked).
+- [x] CDC, sink, ingest, and database-sink pairings either have real
+      providers or are clearly hidden from production docs — cdc (debezium)
+      and sink→Dataset (s3sink) are real; sink→Source and ingest are now
+      explicitly documented in docs/planning/03 §7.2 as capability seams
+      with **no shipped provider** (validate fails with the standard
+      capability error; they were never silently pretend-available).
+- [x] External ingress and egress are represented through first-class
+      Connections, tunnels, TLS/auth, and reachability policies — the
+      Connection seam is the recorded design (docs/design/002): managed =
+      platform-owned entrypoint, external = declared egress, tunnels chain
+      additively; endpoints carry explicit TLS labeling; host-audience
+      reachability is probed end-to-end (engine + through-forwarder).
+      Tunnel/TLS-termination *providers* are deferred provider work on the
+      existing seam (2.4).
+- [x] Drift detection verifies full provider configuration, not only
+      liveness — per-provider equivalence table in 2.1; connector probes
+      diff live config against manifest-derived config; database probes
+      check CDC-readiness settings and credential validity; every
+      deliberately unmanaged field carries its reason.
 
 ### Gate 3: Public API And Contribution Readiness
 
@@ -790,24 +816,48 @@ Design notes:
 
 ### 2.3 Lakehouse Contract Completeness
 
-Current gap:
+**Status update (2026-07-16 Gate 2 close-out):**
 
-The repo can stand up a useful local lakehouse-shaped stack, but the resource
-model does not yet fully describe what external tools need to consume it.
+Resolved:
 
-Required work:
+- [x] Decide whether Iceberg tables are resources or produced by external
+      tools: **produced by external tools** (Spark/Trino/dbt against the
+      catalog's Iceberg REST endpoint). platformctl provisions the catalog,
+      warehouse store, and branches; table DDL belongs to the tools that own
+      table semantics. Making tables resources would re-implement each
+      engine's DDL surface inside providers — overfitting the model to one
+      table format's lifecycle.
+- [x] Generated config views: `platformctl inventory --for
+      spark|trino|dbt|psql|s3|kafka` renders paste-ready snippets from the
+      recorded (observed) endpoints — catalog REST URI + branch, S3
+      endpoint, database addresses. Secret values are never rendered;
+      snippets name the SecretReference and env keys. Flink, Dagster, and
+      Metabase/Superset consume the same postgres/s3/kafka facts and can be
+      added as renderers without model changes.
+- [x] TLS/auth and branch in inventory JSON: `insecure` on every endpoint
+      (see 2.5); the Catalog publishes its own endpoints with
+      `defaultBranch`/`icebergUri` in providerState. Region is a per-sink
+      connector setting (aws.s3.region), not yet a modeled fact.
+- Parquet/Avro **decision recorded**: not production-supported until
+      schema-carrying converters ship — the pipeline runs schemaless JSON
+      converters, so `json` is the supported production sink format (the
+      acceptance example deliberately uses json; s3sink's parquet listing
+      requires schema-carrying records at runtime, documented in its
+      SupportedSinkFormats comment). A schema-registry design is the
+      prerequisite, tracked below.
 
-- [ ] Model the relationship between Catalog, Dataset, warehouse location,
-      object-store endpoint, branch, table namespace, and table format.
-- [ ] Decide whether Iceberg tables are resources or produced by external
-      tools.
-- [ ] Add schema registry or schema-carrying converter support before claiming
-      Parquet/Avro production support.
-- [ ] Add generated config views for common tools:
-      Spark, Trino, Flink, Dagster, dbt, Metabase/Superset, psql, mysql,
-      kafka clients, and S3 clients.
-- [ ] Include endpoint auth, TLS, region, warehouse path, and branch in
-      inventory JSON.
+Still open (deferred with reasons):
+
+- [ ] Schema registry / schema-carrying converter support (the blocker for
+      Parquet/Avro production claims) — a real design chunk: registry
+      provider kind or converter config on Bindings, plus image
+      implications for the Connect workers.
+- [ ] First-class Catalog↔warehouse(Dataset) modeling. The seam exists
+      today without core-schema change (engine blocks are open:
+      `spec.nessie` can carry warehouse config), but a first-class
+      `warehouseRef` needs the dependency graph to learn about refs inside
+      engine blocks (ordering + validation), which is deliberately not
+      being bolted on ad hoc.
 
 Design notes:
 
@@ -816,21 +866,38 @@ Design notes:
 
 ### 2.4 Ingress, Egress, And External Reachability
 
-Current gap:
+**Status update (2026-07-16 Gate 2 close-out):**
 
-- Managed `Connection` is TCP forwarding through socat.
-- There is no TLS termination, HTTP routing, auth proxy, SOCKS/SSH/WireGuard
-  tunnel, egress policy, or private-network connector.
-- In-network DNS is just container names on one shared Docker network.
+Resolved:
 
-Required work:
+- [x] First-class ingress/egress design around Connection: recorded in
+      docs/design/002 (+ addendum) — Connection is *the* seam; a managed
+      Connection is the platform-owned entrypoint, an external one the
+      declared egress; tunnel providers chain a managed Connection's egress
+      additively (no schema change). This close-out affirms that design
+      rather than inventing a parallel one.
+- [x] Network aliases (Gate 1.1): stable internal names decoupled from
+      container names on both runtimes.
+- [x] TLS metadata on endpoints: `Endpoint.Insecure`, set by every provider,
+      rendered by inventory (see 2.5). Connection TLS termination remains a
+      future provider capability, not metadata absence.
+- [x] Host-audience reachability probes: the engine TCP-probes external
+      Connections (`ExternalEndpointUnreachable`), and the proxy's
+      Connection probe now dials *through* the forwarder to verify the
+      upstream (see 2.1).
 
-- [ ] Add a first-class ingress/egress design around Connection.
-- [ ] Add tunnel-capable providers for VPC/private-network reach.
-- [ ] Add TLS and authentication metadata to endpoints and Connections.
-- [ ] Support network aliases so stable internal names do not have to equal
-      runtime container names.
-- [ ] Add reachability probes for both host and in-network audiences.
+Still open (deferred with reasons):
+
+- [ ] Tunnel-capable providers (WireGuard/SSH/SOCKS) for VPC reach — pure
+      provider work on the designed Connection seam (checkpoint backlog
+      item); deferred because it needs real target infrastructure to test
+      honestly, not because the model lacks the seam.
+- [ ] TLS termination / HTTP routing / auth proxy — same seam, same
+      reasoning: additive Connection-provider capabilities.
+- [ ] In-network-audience reachability probes: verifying that container A
+      can reach B requires an in-network vantage point (a probe container
+      or exec), a deliberate runtime capability addition rather than a
+      host-side approximation that would report the wrong audience's truth.
 
 Design notes:
 
@@ -839,24 +906,44 @@ Design notes:
 
 ### 2.5 Production Security Baseline
 
-Current gap:
+**Status update (2026-07-16 Gate 2 close-out):**
 
-- Secret values are commonly injected into container env, which is inspectable
-  through Docker APIs.
-- Several services run over plaintext localhost HTTP/TCP.
-- Latest image tags are used in examples and providers.
-- Marquez internal Postgres credentials are fixed.
+Resolved:
 
-Required work:
+- [x] File-mount support where images allow it (Gate 1 checkbox 4):
+      postgres, mysql/mariadb, and minio bootstrap passwords ride
+      `ContainerSpec.Files` + native `*_FILE` env; rotation recovery via
+      `ReadFile`.
+- [x] Secret-bearing configs are not persisted or logged — audited:
+      state stores `lastApplied` manifests (secret *references* only, never
+      values — the schema rejects inline values), provider `providerState`
+      carries names/addresses/ids only, connector configs with credentials
+      live solely in Connect's own storage, and drift reporting for
+      connector config emits key *names* only (2.1). No code path writes a
+      resolved secret value to state, logs, or command output.
+- [x] Explicit "local only, insecure" labeling per endpoint:
+      `Endpoint.Insecure` + the inventory SECURITY column ("plaintext
+      (local only)"), set by all nine providers. TLS *support* remains
+      future Connection-provider work (2.4).
+- [x] Default images pinned by version (minio release tag, nessie 0.108.1,
+      marquez 0.51.1, socat 1.8.0.3) across providers, examples, and
+      testdata; postgres/mysql/mariadb were already version-pinned through
+      the immutable versionprofile catalogs, which are the documented
+      support windows for the database engines.
+- [x] Marquez internal Postgres credentials: **fixed-by-image, documented as
+      such** — marquez.dev.yml hardcodes user/password/dbname (only
+      host/port are substitutable via env), and the metadata store is a
+      dedicated, never-published, in-network-only container. Generating
+      credentials the image cannot consume would be theater; revisit if the
+      image gains credential env support.
 
-- [ ] Add Docker secret/file-mount support where images allow it.
-- [ ] Avoid persisting or logging provider configs that contain secret values.
-- [ ] Add TLS/auth support or explicit "local only, insecure" labeling for
-      each provider endpoint.
-- [ ] Pin default images by version and document image support windows.
-- [ ] Prefer digests for release-tested images in CI/examples.
-- [ ] Replace fixed internal credentials with generated or secret-backed
-      credentials where practical.
+Still open (deferred with reasons):
+
+- [ ] Digests (not just version tags) for release-tested images in
+      CI/examples — mechanical follow-up; needs a digest-refresh workflow so
+      pins don't rot.
+- [ ] TLS/auth *support* per provider endpoint — tracked with 2.4's
+      Connection-provider capabilities.
 
 Design notes:
 

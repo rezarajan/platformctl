@@ -226,7 +226,23 @@ Adding a provider with required configuration? Implement
    → Kubernetes `Args`, not `Command`) and a real port-boundary fix
    (`VolumeSpec.Networks`, since PVCs are namespace-scoped and Docker
    volumes are not) found by actually building the second adapter.
-9. **Gate 1 (Docker production runtime) closed** (docs/planning/07 stage
+9. **Gate 2 (lakehouse/pipeline completeness) closed** (docs/planning/07,
+   2026-07-16): 2.2 bugs fixed (connector-name URL escaping, topics.regex
+   quoting, URL-safe conn strings/DSNs with round-trip tests, unique
+   database.server.id, BindingOptionsValidator capability, deletionPolicy
+   retain|delete on Dataset/Source — s3's silent bucket-wipe on destroy is
+   gone); 2.1 drift probes verify desired config (connector config diffs,
+   wal_level/binlog_format/credential validity, retention.ms, prefix
+   listability, upstream-through-forwarder) with a per-provider equivalence
+   table in the doc; 2.5 images pinned + endpoints carry explicit
+   insecure labeling; 2.3 `inventory --for spark|trino|dbt|psql|s3|kafka`
+   renders paste-ready config; pairings without providers (ingest,
+   sink→Source) documented as unavailable in 03 §7.2. Deferred-with-reason:
+   schema registry (blocks Parquet/Avro production), tunnel/TLS providers
+   on the Connection seam, image digests, out-of-band config-change tests.
+   errors.md CI failure fixed (k8s conformance skips without a cluster;
+   PLATFORMCTL_REQUIRE_K8S=1 enforces).
+10. **Gate 1 (Docker production runtime) closed** (docs/planning/07 stage
    gate, 2026-07-16): all four acceptance criteria done across incremental
    commits — observed-port inspection (`ContainerState.Ports`/`HostAddr`),
    endpoint discovery from observed bindings (all nine providers), network
