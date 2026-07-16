@@ -344,30 +344,43 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.Containe
 // ensureService creates or updates the ClusterIP Service backing a
 // container's ports. A container with no ports declared gets no Service —
 // nothing else in the namespace needs to address it by name.
+// ensureService ensures one ClusterIP Service per addressable name: the
+// container's own name plus each declared alias (Docker's per-network
+// endpoint aliases translated to Kubernetes DNS).
 func (r *Runtime) ensureService(ctx context.Context, ns string, spec runtimeport.ContainerSpec) error {
-	desired := buildService(ns, spec)
-	existing, err := r.clientset.CoreV1().Services(ns).Get(ctx, spec.Name, metav1.GetOptions{})
+	names := append([]string{spec.Name}, spec.Aliases...)
+	for _, svcName := range names {
+		if err := r.ensureOneService(ctx, ns, svcName, spec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) ensureOneService(ctx context.Context, ns, svcName string, spec runtimeport.ContainerSpec) error {
+	desired := buildService(ns, svcName, spec)
+	existing, err := r.clientset.CoreV1().Services(ns).Get(ctx, svcName, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
 		if len(desired.Spec.Ports) == 0 {
 			return nil
 		}
 		if _, err := r.clientset.CoreV1().Services(ns).Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create service %q: %w", spec.Name, err)
+			return fmt.Errorf("create service %q: %w", svcName, err)
 		}
 		return nil
 	case err != nil:
-		return fmt.Errorf("get service %q: %w", spec.Name, err)
+		return fmt.Errorf("get service %q: %w", svcName, err)
 	case len(desired.Spec.Ports) == 0:
-		if err := r.clientset.CoreV1().Services(ns).Delete(ctx, spec.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete service %q: %w", spec.Name, err)
+		if err := r.clientset.CoreV1().Services(ns).Delete(ctx, svcName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete service %q: %w", svcName, err)
 		}
 		return nil
 	default:
 		desired.ResourceVersion = existing.ResourceVersion
 		desired.Spec.ClusterIP = existing.Spec.ClusterIP
 		if _, err := r.clientset.CoreV1().Services(ns).Update(ctx, desired, metav1.UpdateOptions{}); err != nil {
-			return fmt.Errorf("update service %q: %w", spec.Name, err)
+			return fmt.Errorf("update service %q: %w", svcName, err)
 		}
 		return nil
 	}
@@ -429,8 +442,18 @@ func (r *Runtime) Remove(ctx context.Context, name string) error {
 	if err := r.clientset.AppsV1().Deployments(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete deployment %q: %w", name, err)
 	}
-	if err := r.clientset.CoreV1().Services(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete service %q: %w", name, err)
+	// Delete every Service addressing this container — its own name plus
+	// alias Services, all labeled app=<name> by ensureService.
+	svcs, err := r.clientset.CoreV1().Services(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=" + name + "," + runtimeport.LabelManagedBy + "=" + runtimeport.ManagedByValue,
+	})
+	if err != nil {
+		return fmt.Errorf("list services for %q: %w", name, err)
+	}
+	for _, svc := range svcs.Items {
+		if err := r.clientset.CoreV1().Services(ns).Delete(ctx, svc.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete service %q: %w", svc.Name, err)
+		}
 	}
 	// Foreground propagation means the Deployment stays visible (with a
 	// deletionTimestamp) until its ReplicaSet/Pods are actually gone.

@@ -5,6 +5,7 @@ package docker
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
@@ -117,6 +118,57 @@ func TestEnsureVolumeRefusesUnmanagedExisting(t *testing.T) {
 	err = rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name})
 	if err == nil {
 		t.Fatal("EnsureVolume silently reused an unmanaged same-name volume; want refusal error")
+	}
+}
+
+// TestNetworkAliasResolvesInNetwork guards docs/planning/07 §1.1/§2.4: a
+// container's declared alias must be resolvable by peers on the same
+// network, so stable internal names can outlive container renames. The peer
+// only stays alive (and thus healthy) if resolving the alias succeeded.
+func TestNetworkAliasResolvesInNetwork(t *testing.T) {
+	rt, err := New(nil)
+	if err != nil {
+		t.Fatalf("connect to Docker: %v", err)
+	}
+	ctx := context.Background()
+	netName := "datascape-alias-net"
+	target := "datascape-alias-target"
+	probe := "datascape-alias-probe"
+	cleanup := func() {
+		_ = rt.Remove(ctx, probe)
+		_ = rt.Remove(ctx, target)
+		_ = rt.RemoveNetwork(ctx, netName)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	labels := map[string]string{runtime.LabelManagedBy: runtime.ManagedByValue}
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: netName, Labels: labels}); err != nil {
+		t.Fatalf("EnsureNetwork: %v", err)
+	}
+	if _, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
+		Name:     target,
+		Image:    "alpine:3.20",
+		Cmd:      []string{"sleep", "300"},
+		Networks: []string{netName},
+		Aliases:  []string{"stable-alias"},
+		Labels:   labels,
+	}); err != nil {
+		t.Fatalf("EnsureContainer target: %v", err)
+	}
+	if _, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
+		Name:     probe,
+		Image:    "alpine:3.20",
+		Cmd:      []string{"sh", "-c", "getent hosts stable-alias && sleep 300"},
+		Networks: []string{netName},
+		Labels:   labels,
+	}); err != nil {
+		t.Fatalf("EnsureContainer probe: %v", err)
+	}
+	// The probe exits immediately if the alias did not resolve; WaitHealthy
+	// fails on an exited container, so this only passes on real resolution.
+	if err := rt.WaitHealthy(ctx, probe, 30*time.Second); err != nil {
+		t.Fatalf("alias did not resolve in-network: %v", err)
 	}
 }
 

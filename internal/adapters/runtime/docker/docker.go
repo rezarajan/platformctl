@@ -199,7 +199,7 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpe
 	if len(spec.Networks) > 0 {
 		endpoints := make(map[string]*network.EndpointSettings, len(spec.Networks))
 		for _, n := range spec.Networks {
-			endpoints[n] = &network.EndpointSettings{}
+			endpoints[n] = &network.EndpointSettings{Aliases: spec.Aliases}
 		}
 		netCfg = &network.NetworkingConfig{EndpointsConfig: endpoints}
 	}

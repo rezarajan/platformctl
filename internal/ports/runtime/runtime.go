@@ -89,10 +89,15 @@ type LogConfig struct {
 }
 
 type ContainerSpec struct {
-	Name          string
-	Image         string
-	Cmd           []string // implementation-revealed addition: real providers need command/args; pending doc amendment to 02-architecture.md §4.1
-	Networks      []string
+	Name     string
+	Image    string
+	Cmd      []string // implementation-revealed addition: real providers need command/args; pending doc amendment to 02-architecture.md §4.1
+	Networks []string
+	// Aliases are additional in-network DNS names for this container beyond
+	// its Name, so a stable internal address can outlive a container rename
+	// (docs/planning/07 §1.1/§2.4). Docker: per-network endpoint aliases;
+	// Kubernetes: additional Services selecting the same pod.
+	Aliases       []string
 	Volumes       []VolumeMount
 	Env           map[string]string
 	Ports         []PortBinding

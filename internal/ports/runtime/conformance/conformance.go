@@ -181,6 +181,33 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		}
 	})
 
+	t.Run("EnsureContainer_aliases_idempotent", func(t *testing.T) {
+		name := namePrefix + "-alias-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		spec := runtime.ContainerSpec{
+			Name:     name,
+			Image:    "alpine:3.20",
+			Cmd:      []string{"sleep", "300"},
+			Networks: []string{netSpec.Name},
+			Aliases:  []string{namePrefix + "-stable-alias"},
+			Labels:   labels,
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("first EnsureContainer with aliases: %v", err)
+		}
+		mc, hasCounter := rt.(MutationCounter)
+		before := 0
+		if hasCounter {
+			before = mc.Mutations()
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("second EnsureContainer with aliases: %v", err)
+		}
+		if hasCounter && mc.Mutations() != before {
+			t.Fatalf("second EnsureContainer with identical alias spec mutated state (NFR-2 violation)")
+		}
+	})
+
 	t.Run("Inspect_reports_observed_ports", func(t *testing.T) {
 		name := namePrefix + "-ports-ctr"
 		t.Cleanup(func() { _ = rt.Remove(ctx, name) })

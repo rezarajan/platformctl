@@ -102,9 +102,12 @@ func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash stri
 	}, nil
 }
 
-// buildService creates the ClusterIP Service that gives the Deployment the
-// same "<name>:<port>" addressing Docker's embedded network DNS provides.
-func buildService(namespace string, spec runtimeport.ContainerSpec) *corev1.Service {
+// buildService creates a ClusterIP Service that gives the Deployment the
+// same "<serviceName>:<port>" addressing Docker's embedded network DNS
+// provides. serviceName is the container name or one of its aliases; either
+// way it selects the same pod and carries an "app" label pointing back at
+// the owning container so Remove can find alias Services by selector.
+func buildService(namespace, serviceName string, spec runtimeport.ContainerSpec) *corev1.Service {
 	var ports []corev1.ServicePort
 	for _, p := range spec.Ports {
 		proto := corev1.ProtocolTCP
@@ -118,11 +121,13 @@ func buildService(namespace string, spec runtimeport.ContainerSpec) *corev1.Serv
 			Protocol:   proto,
 		})
 	}
+	labels := withOwnership(spec.Labels)
+	labels["app"] = spec.Name
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      spec.Name,
+			Name:      serviceName,
 			Namespace: namespace,
-			Labels:    withOwnership(spec.Labels),
+			Labels:    labels,
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{"app": spec.Name},
