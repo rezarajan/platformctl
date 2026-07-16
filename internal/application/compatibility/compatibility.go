@@ -153,6 +153,15 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 				return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support ingest format %q (supported: %s)", bindingName, b.ProviderRef, p.Type, ds.Format, joinSorted(formats))
 			}
 		}
+
+		// Provider-specific option-block validation (the Binding half of the
+		// SpecValidator DX contract): apply-time-only option errors are
+		// validate-time regressions.
+		if bv, ok := impl.(reconciler.BindingOptionsValidator); ok {
+			if err := bv.ValidateBindingOptions(string(b.Mode), b.Options); err != nil {
+				return fmt.Errorf("Binding %q: %w", bindingName, err)
+			}
+		}
 	}
 	return nil
 }

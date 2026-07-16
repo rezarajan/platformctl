@@ -499,3 +499,45 @@ func TestVersionedProviderValidation(t *testing.T) {
 		t.Errorf("image-without-version not rejected: %v", err)
 	}
 }
+
+type optionsValidatingStub struct{ stubProvider }
+
+func (optionsValidatingStub) SupportedSourceEngines() []string { return []string{"postgres"} }
+func (optionsValidatingStub) ValidateBindingOptions(_ string, options map[string]any) error {
+	if v, ok := options["snapshotMode"]; ok {
+		if s, _ := v.(string); s == "bogus" {
+			return errors.New(`options.snapshotMode "bogus" is not a Debezium snapshot mode`)
+		}
+	}
+	return nil
+}
+
+// TestBindingOptionsValidated: a provider implementing
+// BindingOptionsValidator gets its Binding options checked at validate time
+// (docs/planning/07 §2.2) — a bad option block fails before apply.
+func TestBindingOptionsValidated(t *testing.T) {
+	manifests := cdcManifests("postgres")
+	// Inject a bad option block into the Binding.
+	for i := range manifests {
+		if manifests[i].Kind == "Binding" {
+			manifests[i].Spec["options"] = map[string]any{"snapshotMode": "bogus"}
+		}
+	}
+	err := Check(manifests, resolver(optionsValidatingStub{stubProvider{"debezium"}}))
+	if err == nil {
+		t.Fatal("validate accepted a Binding option the provider rejects")
+	}
+	if !strings.Contains(err.Error(), "snapshotMode") {
+		t.Fatalf("error does not name the bad option: %v", err)
+	}
+
+	// The same set with a good option block passes.
+	for i := range manifests {
+		if manifests[i].Kind == "Binding" {
+			manifests[i].Spec["options"] = map[string]any{"snapshotMode": "initial"}
+		}
+	}
+	if err := Check(manifests, resolver(optionsValidatingStub{stubProvider{"debezium"}})); err != nil {
+		t.Fatalf("valid option block rejected: %v", err)
+	}
+}

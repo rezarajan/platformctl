@@ -496,6 +496,56 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 	return nil
 }
 
+// ValidateBindingOptions implements reconciler.BindingOptionsValidator:
+// every option this provider consumes at reconcile time is checked at
+// validate time, so a typo'd snapshot mode or malformed table list fails
+// before any infrastructure is touched.
+func (p *Provider) ValidateBindingOptions(_ string, options map[string]any) error {
+	if v, ok := options["tables"]; ok {
+		list, ok := v.([]any)
+		if !ok || len(list) == 0 {
+			return fmt.Errorf("options.tables must be a non-empty list of table names")
+		}
+		for _, t := range list {
+			s, ok := t.(string)
+			if !ok || s == "" {
+				return fmt.Errorf("options.tables entries must be non-empty strings, got %v", t)
+			}
+		}
+	}
+	if v, ok := options["snapshotMode"]; ok {
+		mode, _ := v.(string)
+		// The union of modes Debezium's postgres and mysql connectors accept.
+		valid := map[string]bool{
+			"always": true, "initial": true, "initial_only": true, "no_data": true,
+			"never": true, "when_needed": true, "schema_only": true, "schema_only_recovery": true,
+		}
+		if !valid[mode] {
+			return fmt.Errorf("options.snapshotMode %q is not a Debezium snapshot mode (e.g. initial, never, when_needed, no_data)", mode)
+		}
+	}
+	if v, ok := options["databaseHostname"]; ok {
+		if s, _ := v.(string); s == "" {
+			return fmt.Errorf("options.databaseHostname must be a non-empty string when set")
+		}
+	}
+	if v, ok := options["databasePort"]; ok {
+		switch n := v.(type) {
+		case int:
+			if n < 1 || n > 65535 {
+				return fmt.Errorf("options.databasePort %d out of range 1-65535", n)
+			}
+		case float64:
+			if n != float64(int(n)) || n < 1 || n > 65535 {
+				return fmt.Errorf("options.databasePort %v must be an integer in 1-65535", n)
+			}
+		default:
+			return fmt.Errorf("options.databasePort must be an integer, got %T", v)
+		}
+	}
+	return nil
+}
+
 // serverID derives a stable, effectively-unique MySQL replication server id
 // from the connector name. MySQL requires every replication client on a
 // server to carry a distinct non-zero server_id; the previous formula

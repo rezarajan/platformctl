@@ -104,6 +104,17 @@ type SpecValidator interface {
 	ValidateSpec(cfg provider.Provider) error
 }
 
+// BindingOptionsValidator is optionally implemented by providers that can
+// check a Binding's provider-specific spec.options block at validate time —
+// the same DX contract as SpecValidator: any misconfiguration a provider
+// would reject at apply time (an unparsable table list, an unknown snapshot
+// mode, a malformed sink endpoint) is a validate-time regression if it only
+// surfaces after `platformctl validate` passes (docs/planning/07 §2.2, §3.1).
+type BindingOptionsValidator interface {
+	Provider
+	ValidateBindingOptions(mode string, options map[string]any) error
+}
+
 // ProviderResourceAware is optionally implemented by providers that need
 // their own Provider resource's spec (configuration, runtime block) when
 // reconciling dependent resources — e.g. redpanda needs the broker address it

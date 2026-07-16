@@ -8,6 +8,7 @@ package s3sink
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"time"
@@ -341,6 +342,23 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 	}
 	if !cfg.HasSecretRef(ref) {
 		return fmt.Errorf("configuration.credentialsSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
+	}
+	return nil
+}
+
+// ValidateBindingOptions implements reconciler.BindingOptionsValidator: the
+// sink endpoint override must be a well-formed URL at validate time, not an
+// apply-time connector failure.
+func (p *Provider) ValidateBindingOptions(_ string, options map[string]any) error {
+	if v, ok := options["endpoint"]; ok {
+		ep, _ := v.(string)
+		if ep == "" {
+			return fmt.Errorf("options.endpoint must be a non-empty URL when set")
+		}
+		u, err := url.Parse(ep)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf("options.endpoint %q is not a valid URL (need scheme://host[:port])", ep)
+		}
 	}
 	return nil
 }
