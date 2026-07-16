@@ -81,7 +81,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	case "Provider":
 		return p.reconcileInstance(ctx, rt)
 	case "Catalog":
-		return p.reconcileCatalog(ctx, res)
+		return p.reconcileCatalog(ctx, res, rt)
 	default:
 		return status.Status{}, fmt.Errorf("nessie provider cannot reconcile kind %s", res.Kind)
 	}
@@ -144,7 +144,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 // reconcileCatalog realizes a Catalog(engine: nessie): the REST API must
 // answer and the declared default branch must exist (created from main when
 // missing).
-func (p *Provider) reconcileCatalog(ctx context.Context, res resource.Envelope) (status.Status, error) {
+func (p *Provider) reconcileCatalog(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
 	st := status.Status{}
 	c, err := catalog.FromEnvelope(res)
 	if err != nil {
@@ -158,15 +158,31 @@ func (p *Provider) reconcileCatalog(ctx context.Context, res resource.Envelope) 
 		return st, err
 	}
 
+	// Observed host binding for the Catalog's own endpoints (the instance
+	// container publishes the port; the Catalog is what tools configure
+	// against, so inventory must answer from the Catalog resource —
+	// docs/planning/07 §2.3: "what exact config do I paste into my tool?").
+	hostIceberg, hostAPI := "", ""
+	if ctr, found, err := rt.Inspect(ctx, p.containerName()); err == nil && found {
+		if addr := ctr.HostAddr(apiPort); addr != "" {
+			hostIceberg = "http://" + addr + "/iceberg"
+			hostAPI = "http://" + addr + "/api/v2"
+		}
+	}
+
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "CatalogProvisioned"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
 	st.ProviderState = map[string]any{
 		"engine":        "nessie",
 		"defaultBranch": branch,
-		"hostApi":       p.apiURL(),
+		"hostApi":       hostAPI,
 		"internalApi":   fmt.Sprintf("http://%s:%d/api/v2", p.containerName(), apiPort),
 		"icebergUri":    fmt.Sprintf("http://%s:%d/iceberg", p.containerName(), apiPort),
+		endpoint.Key: endpoint.List{
+			{Name: "iceberg-rest", Scheme: "http", Host: hostIceberg, Internal: fmt.Sprintf("http://%s:%d/iceberg", p.containerName(), apiPort), Insecure: true},
+			{Name: "nessie-api", Scheme: "http", Host: hostAPI, Internal: fmt.Sprintf("http://%s:%d/api/v2", p.containerName(), apiPort), Insecure: true},
+		}.ToState(),
 	}
 	return st, nil
 }

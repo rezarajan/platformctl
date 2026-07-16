@@ -611,14 +611,18 @@ func newImportCmd(a *app) *cobra.Command {
 }
 
 func newInventoryCmd(a *app) *cobra.Command {
-	return &cobra.Command{
+	var forTool string
+	cmd := &cobra.Command{
 		Use:     "inventory [path]",
 		Aliases: []string{"services", "endpoints"},
 		Short:   "List the service endpoints of an applied platform (for configuring external tools)",
 		Long: "Surfaces the reachable endpoints each applied component publishes — the stable\n" +
 			"access identifiers you point orchestrators (Dagster), BI tools (Metabase), or a\n" +
 			"psql/mc client at — with the SecretReference that holds each one's credentials.\n" +
-			"Reads recorded state; components not yet applied show no endpoints.",
+			"Reads recorded state; components not yet applied show no endpoints.\n" +
+			"--for renders a paste-ready config snippet for a specific tool (" + toolNames() + ")\n" +
+			"from the same recorded endpoints; secret values are never rendered, only the\n" +
+			"SecretReference names holding them.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			envelopes, _, err := a.loadAndValidate(pathArg(args))
@@ -630,6 +634,12 @@ func newInventoryCmd(a *app) *cobra.Command {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
 			creds := credentialRefs(envelopes)
+			if forTool != "" {
+				if err := renderToolConfig(cmd.OutOrStdout(), forTool, gatherToolFacts(envelopes, st, creds)); err != nil {
+					return cliutil.Exit(cliutil.ExitValidation, err)
+				}
+				return nil
+			}
 
 			type invRow struct {
 				Component string `json:"component"`
@@ -685,6 +695,8 @@ func newInventoryCmd(a *app) *cobra.Command {
 			return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, data, rows)
 		},
 	}
+	cmd.Flags().StringVar(&forTool, "for", "", "render a paste-ready config snippet for a tool: "+toolNames())
+	return cmd
 }
 
 // credentialRefs maps each resource to the SecretReference(s) holding its
