@@ -220,6 +220,10 @@ spec:
   postgres:                        # engine-specific block, validated by a schema fragment
     database: studentdb
     schema: public
+  # deletionPolicy: retain | delete — what `destroy` does to the database
+  # itself. Default retain: destroying the platform's record of a source
+  # never destroys the data unless explicitly opted into (delete drops the
+  # database). Ignored for external sources, which are never touched.
 ```
 
 A hypothetical MySQL source, to make the extensibility concrete:
@@ -363,6 +367,11 @@ spec:
   bucket: raw-events
   prefix: attendance/
   format: parquet
+  # deletionPolicy: retain | delete — what `destroy` does to the stored
+  # objects. Default retain: destroying the platform's record of a dataset
+  # keeps every object; only an explicit delete wipes bucket/prefix.
+  # (Instance teardown — destroying the object-store Provider — removes the
+  # backing container and volume regardless.)
 ```
 
 `Dataset` reconciliation is a required v1.0.0 deliverable: `platformctl apply` creates the

@@ -114,6 +114,20 @@ func ensureDatabase(ctx context.Context, adminConn, name string) error {
 	return nil
 }
 
+// dropDatabase removes the database if it exists — only reached through an
+// explicit Source deletionPolicy: delete (docs/planning/07 §2.2).
+func dropDatabase(ctx context.Context, adminConn, name string) error {
+	db, err := open(adminConn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, "DROP DATABASE IF EXISTS "+quoteIdent(name)); err != nil {
+		return fmt.Errorf("drop database %q: %w", name, err)
+	}
+	return nil
+}
+
 func databaseExists(ctx context.Context, adminConn, name string) (bool, error) {
 	db, err := open(adminConn)
 	if err != nil {

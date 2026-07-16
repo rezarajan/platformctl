@@ -33,6 +33,11 @@
         "connectionRef": {
           "$ref": "meta.json#/$defs/nameRef",
           "description": "SecretReference describing how to reach an external source. Required when external."
+        },
+        "deletionPolicy": {
+          "type": "string",
+          "enum": ["retain", "delete"],
+          "description": "What Source destroy does to the database: retain (default) keeps it — destroying the platform's record of a source must not destroy the data; delete drops the database. Instance teardown (Provider destroy) removes the backing store regardless. Ignored for external sources (never touched)."
         }
       },
       "required": [

@@ -199,14 +199,21 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		_ = rt.RemoveNetwork(ctx, p.network())
 		return nil
 	case "Dataset":
+		ds, err := dataset.FromEnvelope(res)
+		if err != nil {
+			return err
+		}
+		// deletionPolicy governs the data (docs/planning/07 §2.2): retain
+		// (the default) forgets the record and keeps every object —
+		// destroying the platform's bookkeeping must not destroy data.
+		// Only an explicit `deletionPolicy: delete` wipes bucket/prefix.
+		if ds.DeletionPolicy != dataset.DeletionDelete {
+			return nil
+		}
 		// If the backing store is already gone (killed out-of-band), its
 		// data went with it — nothing left to remove, and failing here
 		// would strand the Dataset in state forever.
 		if ctr, found, err := rt.Inspect(ctx, p.containerName()); err != nil || !found || !ctr.Running {
-			return err
-		}
-		ds, err := dataset.FromEnvelope(res)
-		if err != nil {
 			return err
 		}
 		user, pass, err := p.rootCredentials()

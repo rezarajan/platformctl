@@ -303,10 +303,31 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		_ = rt.RemoveNetwork(ctx, p.network())
 		return nil
 	case "Source":
-		// Dropping the database on Source destroy would be data loss beyond
-		// the declared contract; the instance teardown (Provider destroy)
-		// removes everything anyway.
-		return nil
+		// deletionPolicy governs the data (docs/planning/07 §2.2): retain
+		// (the default) forgets the record and keeps the database; only an
+		// explicit `deletionPolicy: delete` drops it. External sources are
+		// engine-guarded before this is ever reached (NFR-3).
+		src, err := source.FromEnvelope(res)
+		if err != nil {
+			return err
+		}
+		if src.DeletionPolicy != source.DeletionDelete || src.External {
+			return nil
+		}
+		dbName, _ := src.EngineConfig["database"].(string)
+		if dbName == "" {
+			return nil
+		}
+		// Tolerate already-dead backing infra (Inspect-first guard, like
+		// every provider's sub-resource destroy).
+		if ctr, found, ierr := rt.Inspect(ctx, p.containerName()); ierr != nil || !found || !ctr.Running {
+			return ierr
+		}
+		user, pass, err := p.superuser()
+		if err != nil {
+			return err
+		}
+		return dropDatabase(ctx, connString("127.0.0.1", p.hostPort(), user, pass, "postgres"), dbName)
 	default:
 		return fmt.Errorf("postgres provider cannot destroy kind %s", res.Kind)
 	}

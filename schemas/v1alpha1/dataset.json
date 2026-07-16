@@ -15,7 +15,8 @@
         "bucket": { "type": "string", "minLength": 1 },
         "prefix": { "type": "string" },
         "format": { "type": "string", "minLength": 1, "description": "Validated against the sink provider's SupportedSinkFormats() (e.g. json, jsonl, csv, parquet)." },
-        "external": { "type": "boolean" }
+        "external": { "type": "boolean" },
+        "deletionPolicy": { "type": "string", "enum": ["retain", "delete"], "description": "What Dataset destroy does to the stored objects: retain (default) keeps bucket contents — destroying the platform's record of a dataset must not destroy the data; delete removes every object under bucket/prefix. Instance teardown (Provider destroy) removes the backing store regardless." }
       },
       "required": ["bucket", "format"],
       "additionalProperties": false,
