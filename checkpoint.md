@@ -226,6 +226,17 @@ Adding a provider with required configuration? Implement
    → Kubernetes `Args`, not `Command`) and a real port-boundary fix
    (`VolumeSpec.Networks`, since PVCs are namespace-scoped and Docker
    volumes are not) found by actually building the second adapter.
+9. **Gate 1 (Docker production runtime) closed** (docs/planning/07 stage
+   gate, 2026-07-16): all four acceptance criteria done across incremental
+   commits — observed-port inspection (`ContainerState.Ports`/`HostAddr`),
+   endpoint discovery from observed bindings (all nine providers), network
+   aliases (Docker endpoint aliases / K8s alias Services), image pull
+   policy + digest pinning, file-mounted secrets (`ContainerSpec.Files` +
+   `ReadFile`; postgres/mysql/minio bootstrap passwords no longer in
+   inspectable env — rotation recovery reads the file back, env fallback
+   for pre-change containers), state-dir fsync. Explicitly deferred with
+   rationale in the doc: registry auth, host-path mounts, 1.3 GC tooling,
+   1.4 state doctor/repair.
 
 ## Release mechanics
 

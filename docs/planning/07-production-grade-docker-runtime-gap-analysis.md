@@ -237,20 +237,34 @@ dedicated coverage.
 
 Required before positioning the Docker runtime as production-grade.
 
-- [~] Runtime specs cover restart policy, bind address, resource limits,
+**Status (2026-07-16): all four acceptance criteria complete** (close-out
+pass, incremental commits; per-area detail and residual items in 1.1–1.4
+below — the notable explicit deferrals are registry auth for private
+images, and the 1.3/1.4 operator tooling dispositioned past this gate).
+
+- [x] Runtime specs cover restart policy, bind address, resource limits,
       security context, network aliases, logs, image pull policy, and digest
-      pinning. **Partial (2026-07-16):** restart policy, resource limits,
-      security context, and log config are done (see 1.1); bind-address
-      *default* is done (see 0.7); network aliases, published-port
-      inspection, config/file mounts, and image pull policy/digest pinning
-      are still open (see 1.1's "still open" list).
+      pinning (see 1.1 — every named item done; registry auth for private
+      registries is the one explicit deferral in this area).
 - [x] Docker adapter refuses or adopts pre-existing networks and volumes
       consistently with the container ownership policy (see 0.7 — refuses,
       does not yet adopt; no adopt flow exists for networks/volumes).
-- [ ] Endpoint discovery reports actual published ports and bind addresses,
-      not only deterministic intent.
-- [ ] Secret material is not exposed through inspectable container environment
-      variables where a runtime-supported safer path exists.
+- [x] Endpoint discovery reports actual published ports and bind addresses,
+      not only deterministic intent — `ContainerState.Ports` (observed, from
+      inspect) + `HostAddr()`; all nine endpoint-publishing providers build
+      their inventory Host from the observed binding, and report
+      "(in-network only)" honestly on runtimes without host publishing.
+- [x] Secret material is not exposed through inspectable container
+      environment variables where a runtime-supported safer path exists —
+      postgres, mysql/mariadb, and minio bootstrap passwords now ride
+      `ContainerSpec.Files` + the images' native `*_FILE` env convention;
+      rotation recovery reads the file back via `ContainerRuntime.ReadFile`
+      (env fallback for containers created before the change). Verified by
+      the full CDC, sink, and lakehouse (rotation) integration suites.
+      Out of scope for this checkbox (no runtime-supported safer path /
+      different channel): Kafka Connect connector credentials travel in
+      connector REST configs (Gate 2.2), Marquez's fixed internal Postgres
+      credentials (Gate 2.5).
 
 ### Gate 2: Lakehouse And Pipeline Completeness
 
@@ -563,19 +577,36 @@ Resolved:
       already used internally for failure messages (`tailLogs`, now a thin
       wrapper over the shared `fetchLogs` helper).
 
-Still open (deliberately deferred — each is a larger, separable slice):
+Resolved in the Gate 1 close-out pass (2026-07-16, incremental commits):
 
-- [ ] Network aliases and explicit DNS names — `ContainerSpec.Networks` is
-      still `[]string` (network names only); no per-network alias list.
-- [ ] Host bind address and published-port *inspection* (as opposed to the
-      already-resolved bind-address *default* from §0.7) — `ContainerState`
-      still has no `Ports`/bind-address field, so nothing reports what
-      Docker actually bound versus what was requested.
-- [ ] Config/file mounts — `VolumeMount` only names a named volume; there is
-      no way to mount literal file content or a host path.
-- [ ] Image pull policy, registry auth, digest pinning, and local-only mode
-      — `ensureImage` only checks presence-by-reference and pulls if absent;
-      no policy knob, no digest-pinning enforcement.
+- [x] Network aliases (`ContainerSpec.Aliases`): Docker per-network endpoint
+      aliases; Kubernetes one ClusterIP Service per alias selecting the same
+      pod. Docker integration test proves a peer container resolves the
+      alias (`TestNetworkAliasResolvesInNetwork`).
+- [x] Host bind address and published-port *inspection*:
+      `ContainerState.Ports` reports observed bindings from Docker inspect
+      (`portsFromInspect`); `ContainerState.HostAddr(containerPort)` is the
+      provider-facing accessor. Conformance subtest
+      `Inspect_reports_observed_ports` runs on all three adapters.
+- [x] File mounts (`ContainerSpec.Files` + `ContainerRuntime.ReadFile`):
+      literal file content placed before PID 1 runs (Docker:
+      CopyToContainer pre-start; Kubernetes: per-container Secret with
+      subPath mounts). Conformance proves process-visibility, ReadFile
+      round-trip, and that content never appears in Inspect env.
+- [x] Image pull policy (`ContainerSpec.PullPolicy`: if-not-present default
+      / always / never) and digest pinning (any `repo@sha256:...` ref works
+      through the existing inspect/pull path; now the documented way to pin).
+      Kubernetes maps the default to IfNotPresent explicitly so `:latest`
+      behaves identically on both runtimes. `PullNever` fails fast
+      (`TestPullPolicyNeverFailsFastOnAbsentImage`).
+
+Still open (deliberately deferred):
+
+- [ ] Registry auth for private images — `ImagePull` sends no RegistryAuth
+      header; only daemon-level/ambient credentials work today.
+- [ ] Host-path mounts — `FileMount` covers literal content; mounting an
+      arbitrary host directory remains unsupported (deliberate: host paths
+      are not portable across runtimes).
 
 Design notes:
 
@@ -608,18 +639,21 @@ Resolved:
   already covered every field structurally without needing a matching
   update — new `ContainerSpec` fields are automatically part of the hash.
 
+Resolved in the Gate 1 close-out pass (2026-07-16):
+
+- [x] `ContainerState` expanded with observed `Ports` (bind address +
+      host/container port + protocol from Docker inspect), with conformance
+      coverage on all three adapters (`Inspect_reports_observed_ports`).
+
 Still open:
 
-- [ ] Docker `Inspect`/`ContainerState` still report only name, id, image,
-      running, healthy, and labels — no expansion of `ContainerState` or a
-      `ProbeContainerSpec` capability to compare desired vs. *actually
-      observed* runtime facts (as opposed to the spec-hash-label proxy for
-      "did EnsureContainer think it matched last time").
 - [ ] Provider probes (per-provider `Probe` methods) still mostly check
       liveness, not full desired-configuration equivalence — this is Gate
       2.1's concern, not Gate 1's, but the two are related.
-- [ ] No bind-address conformance coverage yet (tracked under 1.1's "host
-      bind address and published-port inspection").
+- [ ] A full `ProbeContainerSpec` capability (field-by-field desired vs.
+      observed diffing beyond ports/env/labels) remains future work; the
+      spec-hash label plus observed ports covers the practical drift cases
+      today.
 
 Design notes:
 
@@ -629,12 +663,15 @@ Design notes:
 
 ### 1.3 Garbage Collection And Orphan Inspection
 
-Current gap:
+**Disposition (2026-07-16 Gate 1 close-out): explicitly deferred past the
+Gate 1 stage-gate.** This is inspection/operator tooling, not a correctness
+or safety gap: ownership labels are on every created object, unlabeled
+objects are never touched, unmanaged same-name objects are refused, and
+authoritative apply already deletes state-tracked orphans. Nothing here can
+damage a shared daemon by its absence — it only makes cleanup of *pre-crash*
+stale objects more manual. Track as its own epic (issue slicing #4).
 
-`ListManaged` lists managed containers only. Networks, volumes, and stale
-runtime objects are not surfaced as a first-class inventory/GC view.
-
-Required work:
+Remaining work (unchanged):
 
 - [ ] Add managed network and volume listing.
 - [ ] Add `platformctl doctor` or `platformctl gc plan` to show orphaned
@@ -648,17 +685,19 @@ Design notes:
 
 ### 1.4 State Durability And Recoverability
 
-Current gap:
+Resolved in the Gate 1 close-out pass (2026-07-16):
 
-- Local state uses atomic temp-file rename, but does not fsync the directory.
-- State has no migration framework beyond version rejection.
-- Locking is local advisory `flock`; there is no stale lock diagnosis beyond
-  writing a PID to the lock file.
+- [x] Fsync the state directory after rename (best-effort where the
+      platform allows opening directories) — `localfile.Save`.
 
-Required work:
+**Disposition for the rest: explicitly deferred past the Gate 1 stage-gate.**
+Migration scaffolding already has a working precedent (the v1→v2 key
+migration in `state.Normalize`/`parseV1Key` with tests); formalizing it, the
+`state inspect/doctor/repair` helpers, and the remote-state decision are
+operator-tooling work tracked with the same epic as 1.3.
 
-- [ ] Fsync the state directory after rename where supported.
-- [ ] Add migration scaffolding and tests before changing state format.
+- [ ] Add migration scaffolding and tests before changing state format
+      (beyond the existing v1→v2 path).
 - [ ] Add `platformctl state inspect`, `state doctor`, and `state repair`
       helpers for corrupted or stale state.
 - [ ] Decide whether remote/shared state is in scope for Docker production.
