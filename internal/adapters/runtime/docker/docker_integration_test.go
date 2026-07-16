@@ -121,6 +121,30 @@ func TestEnsureVolumeRefusesUnmanagedExisting(t *testing.T) {
 	}
 }
 
+// TestPullPolicyNeverFailsFastOnAbsentImage guards docs/planning/07 §1.1:
+// PullNever must fail with a clear local-only error instead of reaching for
+// the network.
+func TestPullPolicyNeverFailsFastOnAbsentImage(t *testing.T) {
+	rt, err := New(nil)
+	if err != nil {
+		t.Fatalf("connect to Docker: %v", err)
+	}
+	ctx := context.Background()
+	name := "datascape-pullnever"
+	t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+
+	_, err = rt.EnsureContainer(ctx, runtime.ContainerSpec{
+		Name:       name,
+		Image:      "datascape.invalid/does-not-exist:v0",
+		PullPolicy: runtime.PullNever,
+		Cmd:        []string{"sleep", "300"},
+		Labels:     map[string]string{runtime.LabelManagedBy: runtime.ManagedByValue},
+	})
+	if err == nil {
+		t.Fatal("EnsureContainer with PullNever and an absent image succeeded; want a local-only failure")
+	}
+}
+
 // TestNetworkAliasResolvesInNetwork guards docs/planning/07 §1.1/§2.4: a
 // container's declared alias must be resolvable by peers on the same
 // network, so stable internal names can outlive container renames. The peer

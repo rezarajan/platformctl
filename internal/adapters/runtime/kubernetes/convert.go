@@ -25,9 +25,14 @@ func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash stri
 	labels := withOwnership(spec.Labels)
 	labels["app"] = spec.Name
 
+	pullPolicy, err := imagePullPolicy(spec.PullPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("container %q: %w", spec.Name, err)
+	}
 	container := corev1.Container{
-		Name:  spec.Name,
-		Image: spec.Image,
+		Name:            spec.Name,
+		Image:           spec.Image,
+		ImagePullPolicy: pullPolicy,
 		// ContainerSpec.Cmd is Docker's Config.Cmd — appended after the
 		// image's own ENTRYPOINT, never replacing it (the Docker adapter
 		// only ever sets Cmd, never Entrypoint). Kubernetes' "command"
@@ -133,6 +138,23 @@ func buildService(namespace, serviceName string, spec runtimeport.ContainerSpec)
 			Selector: map[string]string{"app": spec.Name},
 			Ports:    ports,
 		},
+	}
+}
+
+// imagePullPolicy maps the port's Pull* constants onto Kubernetes'. The
+// default maps to IfNotPresent explicitly rather than leaving it unset:
+// Kubernetes' own default flips to Always for :latest tags, which would
+// diverge from the Docker adapter's behavior for the same spec.
+func imagePullPolicy(policy string) (corev1.PullPolicy, error) {
+	switch policy {
+	case runtimeport.PullIfNotPresent:
+		return corev1.PullIfNotPresent, nil
+	case runtimeport.PullAlways:
+		return corev1.PullAlways, nil
+	case runtimeport.PullNever:
+		return corev1.PullNever, nil
+	default:
+		return "", fmt.Errorf("unknown image pull policy %q (allowed: %q, %q, %q)", policy, runtimeport.PullIfNotPresent, runtimeport.PullAlways, runtimeport.PullNever)
 	}
 }
 

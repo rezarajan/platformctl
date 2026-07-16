@@ -124,7 +124,7 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpe
 		return runtime.ContainerState{}, fmt.Errorf("inspect container %q: %w", spec.Name, err)
 	}
 
-	if err := r.ensureImage(ctx, spec.Image); err != nil {
+	if err := r.ensureImage(ctx, spec.Image, spec.PullPolicy); err != nil {
 		return runtime.ContainerState{}, err
 	}
 

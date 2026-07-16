@@ -88,11 +88,26 @@ type LogConfig struct {
 	Options map[string]string
 }
 
+// Image pull policies. The zero value defers to the runtime default
+// (if-not-present). Policy applies when a container is (re)created — the
+// idempotent no-op path of an already-matching container never re-pulls.
+const (
+	PullIfNotPresent = ""       // pull only when the image is absent locally (default)
+	PullAlways       = "always" // pull on every container (re)creation — mutable tags
+	PullNever        = "never"  // never pull; fail if the image is absent (air-gapped/local-only)
+)
+
 type ContainerSpec struct {
-	Name     string
-	Image    string
-	Cmd      []string // implementation-revealed addition: real providers need command/args; pending doc amendment to 02-architecture.md §4.1
-	Networks []string
+	Name string
+	// Image is any runtime-resolvable reference, including digest-pinned
+	// form ("repo@sha256:..."), which is the recommended way to guarantee
+	// an exact image (docs/planning/07 §1.1/§2.5) — a tag is mutable, a
+	// digest is not.
+	Image string
+	// PullPolicy is one of the Pull* constants above.
+	PullPolicy string
+	Cmd        []string // implementation-revealed addition: real providers need command/args; pending doc amendment to 02-architecture.md §4.1
+	Networks   []string
 	// Aliases are additional in-network DNS names for this container beyond
 	// its Name, so a stable internal address can outlive a container rename
 	// (docs/planning/07 §1.1/§2.4). Docker: per-network endpoint aliases;
