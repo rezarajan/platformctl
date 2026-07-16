@@ -9,9 +9,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+// connectorPath builds /connectors/<name><suffix> with the connector name
+// URL-escaped — names derive from resource names today (DNS-label-safe), but
+// the REST client must not silently corrupt a path if that ever changes
+// (docs/planning/07 §2.2).
+func connectorPath(baseURL, name, suffix string) string {
+	return baseURL + "/connectors/" + url.PathEscape(name) + suffix
+}
 
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 
@@ -42,7 +51,7 @@ func putConnectorConfigOnce(ctx context.Context, baseURL, name string, config ma
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, baseURL+"/connectors/"+name+"/config", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, connectorPath(baseURL, name, "/config"), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -67,7 +76,7 @@ func isTransientPutError(err error) bool {
 }
 
 func GetConnectorConfig(ctx context.Context, baseURL, name string) (map[string]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/connectors/"+name+"/config", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, connectorPath(baseURL, name, "/config"), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +97,7 @@ func GetConnectorConfig(ctx context.Context, baseURL, name string) (map[string]s
 }
 
 func DeleteConnector(ctx context.Context, baseURL, name string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, baseURL+"/connectors/"+name, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, connectorPath(baseURL, name, ""), nil)
 	if err != nil {
 		return err
 	}
@@ -109,7 +118,7 @@ func DeleteConnector(ctx context.Context, baseURL, name string) error {
 // backend, where re-PUTting an identical config is a no-op.
 func RestartConnector(ctx context.Context, baseURL, name string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		baseURL+"/connectors/"+name+"/restart?includeTasks=true&onlyFailed=true", nil)
+		connectorPath(baseURL, name, "/restart?includeTasks=true&onlyFailed=true"), nil)
 	if err != nil {
 		return err
 	}
@@ -129,7 +138,7 @@ func RestartConnector(ctx context.Context, baseURL, name string) error {
 // PAUSED, ...); the connector state and every task's state must agree for
 // RUNNING to be reported.
 func ConnectorState(ctx context.Context, baseURL, name string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/connectors/"+name+"/status", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, connectorPath(baseURL, name, "/status"), nil)
 	if err != nil {
 		return "", err
 	}

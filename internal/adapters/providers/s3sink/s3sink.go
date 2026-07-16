@@ -8,6 +8,7 @@ package s3sink
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -213,8 +214,10 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		"aws.s3.region":         "us-east-1",
 		// CDC traffic arrives on per-table topics prefixed with the
 		// EventStream name (<stream>.<schema>.<table>); match the stream's own
-		// topic and any prefixed ones.
-		"topics.regex":                   "^" + b.SourceRef + "(\\..*)?$",
+		// topic and any prefixed ones. The name is regex-quoted so a topic
+		// name containing regex metacharacters (e.g. a '.') matches
+		// literally instead of as a wildcard (docs/planning/07 §2.2).
+		"topics.regex":                   "^" + regexp.QuoteMeta(b.SourceRef) + "(\\..*)?$",
 		"format.output.type":             ds.Format,
 		"format.output.fields":           "value",
 		"file.compression.type":          "none",

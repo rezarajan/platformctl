@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"net/url"
 	"strconv"
@@ -281,7 +282,7 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		// MySQL/MariaDB: the connector filters by database, not dbname, and
 		// needs a unique server id per connector.
 		config["database.include.list"] = dbName
-		config["database.server.id"] = strconv.Itoa(184000 + len(connectorClass)) //nolint:mnd
+		config["database.server.id"] = strconv.FormatUint(uint64(serverID(connectorName)), 10)
 		config["schema.history.internal.kafka.bootstrap.servers"], _ = p.cfg.Configuration["bootstrapServers"].(string)
 		config["schema.history.internal.kafka.topic"] = topicPrefix + ".schema-history"
 	}
@@ -493,4 +494,23 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 		return fmt.Errorf("configuration.replicationSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
 	}
 	return nil
+}
+
+// serverID derives a stable, effectively-unique MySQL replication server id
+// from the connector name. MySQL requires every replication client on a
+// server to carry a distinct non-zero server_id; the previous formula
+// (184000 + len(connectorClass)) was constant per engine, so two MySQL
+// connectors against the same server would kick each other's binlog session
+// off (docs/planning/07 §2.2). FNV-1a over the name is deterministic (plan
+// stays reproducible, NFR-1) and collisions between the handful of
+// connectors a deployment runs are negligible. Range: [100000, 2^32).
+func serverID(connectorName string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(connectorName))
+	const floor = 100000
+	v := h.Sum32()
+	if v < floor {
+		v += floor
+	}
+	return v
 }

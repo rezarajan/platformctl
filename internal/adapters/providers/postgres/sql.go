@@ -3,13 +3,26 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 )
 
+// connString builds the connection URL through net/url so credentials
+// containing @, :, /, #, spaces, or quotes survive intact — secret values
+// must not depend on lucky demo passwords (docs/planning/07 §2.2).
 func connString(host string, port int, user, pass, db string) string {
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", user, pass, host, port, db)
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, pass),
+		Host:     net.JoinHostPort(host, strconv.Itoa(port)),
+		Path:     "/" + db,
+		RawQuery: "sslmode=disable",
+	}
+	return u.String()
 }
 
 func connect(ctx context.Context, conn string) (*pgx.Conn, error) {

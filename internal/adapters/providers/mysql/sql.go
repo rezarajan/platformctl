@@ -4,15 +4,27 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 
-	// Registers the "mysql" database/sql driver.
-	_ "github.com/go-sql-driver/mysql"
+	// Also registers the "mysql" database/sql driver.
+	godriver "github.com/go-sql-driver/mysql"
 )
 
+// dsn builds the DSN through the driver's own Config type so credentials
+// containing @, :, /, #, spaces, or quotes survive intact — secret values
+// must not depend on lucky demo passwords (docs/planning/07 §2.2).
 func dsn(host string, port int, user, pass, db string) string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?timeout=10s", user, pass, host, port, db)
+	cfg := godriver.NewConfig()
+	cfg.User = user
+	cfg.Passwd = pass
+	cfg.Net = "tcp"
+	cfg.Addr = net.JoinHostPort(host, strconv.Itoa(port))
+	cfg.DBName = db
+	cfg.Timeout = 10 * time.Second
+	return cfg.FormatDSN()
 }
 
 func open(conn string) (*sql.DB, error) {
