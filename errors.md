@@ -351,3 +351,77 @@ proper, searchable HTML site:
 
 Enforced by `internal/application/docsgen/site_test.go` (all Kinds present,
 tables rendered, search UI present, no leaked markdown).
+
+## CI Fails on Kubernetes
+
+```text
+Run go test -tags integration -timeout 3600s ./...
+ok  	github.com/rezarajan/platformctl/cmd/platformctl	277.336s
+?   	github.com/rezarajan/platformctl/internal/adapters/kafkaconnect	[no test files]
+?   	github.com/rezarajan/platformctl/internal/adapters/providers/debezium	[no test files]
+?   	github.com/rezarajan/platformctl/internal/adapters/providers/mysql	[no test files]
+?   	github.com/rezarajan/platformctl/internal/adapters/providers/nessie	[no test files]
+?   	github.com/rezarajan/platformctl/internal/adapters/providers/noop	[no test files]
+?   	github.com/rezarajan/platformctl/internal/adapters/providers/openlineage	[no test files]
+?   	github.com/rezarajan/platformctl/internal/adapters/providers/placeholder	[no test files]
+?   	github.com/rezarajan/platformctl/internal/adapters/providers/postgres	[no test files]
+?   	github.com/rezarajan/platformctl/internal/adapters/providers/proxy	[no test files]
+?   	github.com/rezarajan/platformctl/internal/adapters/providers/redpanda	[no test files]
+?   	github.com/rezarajan/platformctl/internal/adapters/providers/s3	[no test files]
+?   	github.com/rezarajan/platformctl/internal/adapters/providers/s3sink	[no test files]
+ok  	github.com/rezarajan/platformctl/internal/adapters/runtime/docker	3.012s
+ok  	github.com/rezarajan/platformctl/internal/adapters/runtime/fake	0.004s
+--- FAIL: TestConformance (0.00s)
+    kubernetes_integration_test.go:14: connect to kubernetes: load kubeconfig: invalid configuration: no configuration has been provided, try setting KUBERNETES_MASTER environment variable
+FAIL
+FAIL	github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes	0.016s
+?   	github.com/rezarajan/platformctl/internal/adapters/secrets/env	[no test files]
+?   	github.com/rezarajan/platformctl/internal/adapters/secrets/file	[no test files]
+ok  	github.com/rezarajan/platformctl/internal/adapters/secrets/router	0.003s
+ok  	github.com/rezarajan/platformctl/internal/adapters/secrets/vault	1.642s
+ok  	github.com/rezarajan/platformctl/internal/adapters/state/localfile	0.033s
+ok  	github.com/rezarajan/platformctl/internal/application/archview	0.004s
+ok  	github.com/rezarajan/platformctl/internal/application/compatibility	0.006s
+ok  	github.com/rezarajan/platformctl/internal/application/docsgen	0.006s
+ok  	github.com/rezarajan/platformctl/internal/application/engine	0.900s
+?   	github.com/rezarajan/platformctl/internal/application/featuregate	[no test files]
+ok  	github.com/rezarajan/platformctl/internal/application/manifest	0.019s
+ok  	github.com/rezarajan/platformctl/internal/application/plan	0.003s
+?   	github.com/rezarajan/platformctl/internal/application/registry	[no test files]
+ok  	github.com/rezarajan/platformctl/internal/cliutil	0.002s
+?   	github.com/rezarajan/platformctl/internal/domain/binding	[no test files]
+?   	github.com/rezarajan/platformctl/internal/domain/catalog	[no test files]
+?   	github.com/rezarajan/platformctl/internal/domain/connection	[no test files]
+?   	github.com/rezarajan/platformctl/internal/domain/dataset	[no test files]
+ok  	github.com/rezarajan/platformctl/internal/domain/endpoint	0.002s
+?   	github.com/rezarajan/platformctl/internal/domain/eventstream	[no test files]
+ok  	github.com/rezarajan/platformctl/internal/domain/graph	0.002s
+ok  	github.com/rezarajan/platformctl/internal/domain/hostport	0.002s
+?   	github.com/rezarajan/platformctl/internal/domain/lineage	[no test files]
+?   	github.com/rezarajan/platformctl/internal/domain/provider	[no test files]
+ok  	github.com/rezarajan/platformctl/internal/domain/resource	0.003s
+?   	github.com/rezarajan/platformctl/internal/domain/secret	[no test files]
+?   	github.com/rezarajan/platformctl/internal/domain/source	[no test files]
+?   	github.com/rezarajan/platformctl/internal/domain/status	[no test files]
+ok  	github.com/rezarajan/platformctl/internal/domain/versionprofile	0.002s
+?   	github.com/rezarajan/platformctl/internal/ports/clock	[no test files]
+?   	github.com/rezarajan/platformctl/internal/ports/reconciler	[no test files]
+?   	github.com/rezarajan/platformctl/internal/ports/runtime	[no test files]
+?   	github.com/rezarajan/platformctl/internal/ports/runtime/conformance	[no test files]
+?   	github.com/rezarajan/platformctl/internal/ports/secretstore	[no test files]
+ok  	github.com/rezarajan/platformctl/internal/ports/state	0.003s
+?   	github.com/rezarajan/platformctl/internal/ports/state/conformance	[no test files]
+?   	github.com/rezarajan/platformctl/schemas	[no test files]
+FAIL
+Error: Process completed with exit code 1.
+```
+
+**Resolution (2026-07-16):** the Kubernetes conformance test now skips
+self-descriptively when no reachable cluster is configured — the same
+policy docs/planning/07 §3.2 prescribes for `TestProbeTCPReachable` in
+restricted runners: an environment limitation must not read as a code
+failure. `New(nil)` failing or a `Discovery().ServerVersion()` probe
+failing → `t.Skipf` with instructions; runners that are *supposed* to
+provide a cluster set `PLATFORMCTL_REQUIRE_K8S=1` to turn the skip back
+into a failure. Verified both ways: skips under `KUBECONFIG=/nonexistent`,
+runs the full suite (56s) against a live minikube.
