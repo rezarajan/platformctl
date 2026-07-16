@@ -7,7 +7,6 @@ package mysql
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
@@ -196,12 +195,13 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	hostAddr := ctrState.HostAddr(3306) // observed binding, not intent
 	st.ProviderState = map[string]any{
 		"containerId":  ctrState.ID,
-		"hostAddr":     "127.0.0.1:" + strconv.Itoa(p.hostPort()),
+		"hostAddr":     hostAddr,
 		"internalAddr": name + ":3306",
 		endpoint.Key: endpoint.List{
-			{Name: "mysql", Scheme: "mysql", Host: "127.0.0.1:" + strconv.Itoa(p.hostPort()), Internal: name + ":3306"},
+			{Name: "mysql", Scheme: "mysql", Host: hostAddr, Internal: name + ":3306"},
 		}.ToState(),
 	}
 	return st, nil

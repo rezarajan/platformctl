@@ -5,6 +5,8 @@ package runtime
 
 import (
 	"context"
+	"net"
+	"strconv"
 	"time"
 )
 
@@ -119,6 +121,26 @@ type ContainerState struct {
 	// ClusterIP Services) report HostIP/HostPort zero-valued with only
 	// ContainerPort set.
 	Ports []PortBinding
+}
+
+// HostAddr returns the observed host address ("ip:port") the given container
+// port is published on, or "" when the runtime reports no host binding for
+// it (in-network only — e.g. Kubernetes ClusterIP). Providers should publish
+// endpoint hosts from this, not from their configured intent, so `platformctl
+// inventory` reports real exposure (docs/planning/07 Gate 1 checkbox 3).
+func (s ContainerState) HostAddr(containerPort int) string {
+	for _, p := range s.Ports {
+		if p.ContainerPort == containerPort && p.HostPort != 0 {
+			host := p.HostIP
+			if host == "" || host == "0.0.0.0" || host == "::" {
+				// An all-interfaces bind is reachable via loopback; report
+				// the loopback form so pasted configs work everywhere.
+				host = "127.0.0.1"
+			}
+			return net.JoinHostPort(host, strconv.Itoa(p.HostPort))
+		}
+	}
+	return ""
 }
 
 type ContainerRuntime interface {

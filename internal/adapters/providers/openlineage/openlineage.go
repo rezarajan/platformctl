@@ -149,14 +149,20 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "LineageBackendHealthy"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	// Observed binding, not intent.
+	hostAddr := ctrState.HostAddr(marquezAPIPort)
+	hostAPI := ""
+	if hostAddr != "" {
+		hostAPI = "http://" + hostAddr + "/api/v1"
+	}
 	st.ProviderState = map[string]any{
 		"containerId": ctrState.ID,
 		// The engine resolves observers against this: the in-network base
 		// URL OpenLineage transports post to.
 		"url":     fmt.Sprintf("http://%s:%d", p.name(), marquezAPIPort),
-		"hostApi": fmt.Sprintf("http://127.0.0.1:%d/api/v1", p.hostPort()),
+		"hostApi": hostAPI,
 		endpoint.Key: endpoint.List{
-			{Name: "openlineage", Scheme: "http", Host: fmt.Sprintf("http://127.0.0.1:%d/api/v1", p.hostPort()), Internal: fmt.Sprintf("http://%s:%d/api/v1", p.name(), marquezAPIPort)},
+			{Name: "openlineage", Scheme: "http", Host: hostAPI, Internal: fmt.Sprintf("http://%s:%d/api/v1", p.name(), marquezAPIPort)},
 		}.ToState(),
 	}
 	return st, nil

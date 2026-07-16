@@ -123,16 +123,18 @@ func (p *Provider) reconcileConnection(ctx context.Context, res resource.Envelop
 	}
 
 	host, port := conn.Endpoint(name)
+	// Observed binding, not intent.
+	hostAddr := ctrState.HostAddr(conn.Port)
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "Forwarding"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
 	st.ProviderState = map[string]any{
 		"containerId": ctrState.ID,
 		"internal":    fmt.Sprintf("%s:%d", host, port),
-		"host":        conn.HostEndpoint(),
+		"host":        hostAddr,
 		"target":      conn.Target,
 		endpoint.Key: endpoint.List{
-			{Name: "forward", Scheme: conn.Scheme, Host: conn.HostEndpoint(), Internal: fmt.Sprintf("%s:%d", host, port)},
+			{Name: "forward", Scheme: conn.Scheme, Host: hostAddr, Internal: fmt.Sprintf("%s:%d", host, port)},
 		}.ToState(),
 	}
 	return st, nil

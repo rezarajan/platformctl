@@ -115,7 +115,7 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
 		return st, err
 	}
-	_, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
+	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
 		Name:  name,
 		Image: image,
 		Env: map[string]string{
@@ -152,10 +152,17 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectWorkerHealthy"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	// Observed binding, not intent (connectURL() stays intent-based for the
+	// provider's own REST calls, a documented Docker-mode assumption).
+	hostAddr := ctrState.HostAddr(8083)
+	hostURL := ""
+	if hostAddr != "" {
+		hostURL = "http://" + hostAddr
+	}
 	st.ProviderState = map[string]any{
 		"connectUrl": p.connectURL(),
 		endpoint.Key: endpoint.List{
-			{Name: "connect-rest", Scheme: "http", Host: p.connectURL(), Internal: fmt.Sprintf("http://%s:8083", p.containerName())},
+			{Name: "connect-rest", Scheme: "http", Host: hostURL, Internal: fmt.Sprintf("http://%s:8083", p.containerName())},
 		}.ToState(),
 	}
 	return st, nil

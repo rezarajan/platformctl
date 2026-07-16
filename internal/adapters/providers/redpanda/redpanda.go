@@ -128,12 +128,13 @@ func (p *Provider) reconcileBroker(ctx context.Context, rt runtime.ContainerRunt
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "BrokerHealthy"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	hostAddr := ctrState.HostAddr(externalKafkaPort) // observed binding, not intent
 	st.ProviderState = map[string]any{
 		"containerId":  ctrState.ID,
-		"kafkaAddr":    p.HostAddr(),
+		"kafkaAddr":    hostAddr,
 		"internalAddr": p.InternalAddr(),
 		endpoint.Key: endpoint.List{
-			{Name: "kafka", Scheme: "kafka", Host: p.HostAddr(), Internal: p.InternalAddr()},
+			{Name: "kafka", Scheme: "kafka", Host: hostAddr, Internal: p.InternalAddr()},
 		}.ToState(),
 	}
 	return st, nil

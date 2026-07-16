@@ -6,7 +6,6 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
@@ -174,7 +173,9 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
-	hostAddr := "127.0.0.1:" + strconv.Itoa(p.hostPort())
+	// Publish the observed binding, not the configured intent — a runtime
+	// without host publishing (Kubernetes) reports "" (in-network only).
+	hostAddr := ctrState.HostAddr(5432)
 	internalAddr := name + ":5432"
 	st.ProviderState = map[string]any{
 		"containerId":  ctrState.ID,

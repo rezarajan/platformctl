@@ -120,14 +120,22 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	// Observed binding, not intent; "" (in-network only) on runtimes
+	// without host publishing.
+	hostAddr := ctrState.HostAddr(apiPort)
+	hostIceberg, hostAPI := "", ""
+	if hostAddr != "" {
+		hostIceberg = "http://" + hostAddr + "/iceberg"
+		hostAPI = "http://" + hostAddr + "/api/v2"
+	}
 	st.ProviderState = map[string]any{
 		"containerId": ctrState.ID,
-		"hostApi":     p.apiURL(),
+		"hostApi":     hostAPI,
 		"internalApi": fmt.Sprintf("http://%s:%d/api/v2", name, apiPort),
 		"icebergUri":  fmt.Sprintf("http://%s:%d/iceberg", name, apiPort),
 		endpoint.Key: endpoint.List{
-			{Name: "iceberg-rest", Scheme: "http", Host: fmt.Sprintf("http://127.0.0.1:%d/iceberg", p.hostPort()), Internal: fmt.Sprintf("http://%s:%d/iceberg", name, apiPort)},
-			{Name: "nessie-api", Scheme: "http", Host: p.apiURL(), Internal: fmt.Sprintf("http://%s:%d/api/v2", name, apiPort)},
+			{Name: "iceberg-rest", Scheme: "http", Host: hostIceberg, Internal: fmt.Sprintf("http://%s:%d/iceberg", name, apiPort)},
+			{Name: "nessie-api", Scheme: "http", Host: hostAPI, Internal: fmt.Sprintf("http://%s:%d/api/v2", name, apiPort)},
 		}.ToState(),
 	}
 	return st, nil

@@ -139,12 +139,17 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	hostAddr := ctrState.HostAddr(apiPort) // observed binding, not intent
+	hostURL := ""
+	if hostAddr != "" {
+		hostURL = "http://" + hostAddr
+	}
 	st.ProviderState = map[string]any{
 		"containerId":  ctrState.ID,
-		"hostEndpoint": "127.0.0.1:" + strconv.Itoa(p.hostPort()),
+		"hostEndpoint": hostAddr,
 		"internalUrl":  "http://" + name + ":" + strconv.Itoa(apiPort),
 		endpoint.Key: endpoint.List{
-			{Name: "s3", Scheme: "http", Host: "http://127.0.0.1:" + strconv.Itoa(p.hostPort()), Internal: "http://" + name + ":" + strconv.Itoa(apiPort)},
+			{Name: "s3", Scheme: "http", Host: hostURL, Internal: "http://" + name + ":" + strconv.Itoa(apiPort)},
 		}.ToState(),
 	}
 	return st, nil
