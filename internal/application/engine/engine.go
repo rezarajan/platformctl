@@ -484,6 +484,16 @@ func (e *Engine) Probe(ctx context.Context, envelopes []resource.Envelope) ([]Pr
 		for _, c := range probed.Conditions {
 			merged.SetCondition(c, e.Clock.Now())
 		}
+		// Observed provider facts ride under providerState["observed"] so
+		// `status -o json` answers "what did the probe actually see" without
+		// clobbering the reconcile-written providerState
+		// (docs/planning/07 §2.1).
+		if len(probed.ProviderState) > 0 {
+			if rs.Provider == nil {
+				rs.Provider = map[string]any{}
+			}
+			rs.Provider["observed"] = probed.ProviderState
+		}
 		rs.Status = merged
 		st.Resources[key] = rs
 		results = append(results, ProbeResult{Key: key, Status: merged})

@@ -10,6 +10,7 @@ import (
 	"hash/fnv"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -169,26 +170,40 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 	return st, nil
 }
 
-// reconcileConnector registers or updates the Debezium connector realizing a
-// Binding(mode: cdc), then verifies it reaches RUNNING.
-func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope) (status.Status, error) {
-	st := status.Status{}
+// desiredConnector is the manifest-derived truth about one CDC connector:
+// its name, full Connect config, and the preflight endpoint. Built
+// identically by reconcile (to register) and Probe (to diff against the
+// live config — docs/planning/07 §2.1: RUNNING with the wrong topic, table
+// filter, or credentials is drift, not health).
+type desiredConnector struct {
+	name          string
+	config        map[string]string
+	engine        string
+	dbName        string
+	preflightHost string
+	preflightPort int
+	credsUser     string
+	credsPass     string
+}
+
+func (p *Provider) desiredConnector(res resource.Envelope) (desiredConnector, error) {
+	d := desiredConnector{}
 	b, err := binding.FromEnvelope(res)
 	if err != nil {
-		return st, err
+		return d, err
 	}
 	if b.Mode != binding.ModeCDC {
-		return st, fmt.Errorf("Binding %q: debezium realizes mode \"cdc\" only, got %q", res.Metadata.Name, b.Mode)
+		return d, fmt.Errorf("Binding %q: debezium realizes mode \"cdc\" only, got %q", res.Metadata.Name, b.Mode)
 	}
 
 	srcRef := resource.RefFromSpec(res.Spec, "sourceRef")
 	srcEnv, ok := p.resources[srcRef.Key(res.Metadata.Namespace, "Source")]
 	if !ok {
-		return st, fmt.Errorf("Binding %q: sourceRef %q not found", res.Metadata.Name, b.SourceRef)
+		return d, fmt.Errorf("Binding %q: sourceRef %q not found", res.Metadata.Name, b.SourceRef)
 	}
 	src, err := source.FromEnvelope(srcEnv)
 	if err != nil {
-		return st, err
+		return d, err
 	}
 	dbName, _ := src.EngineConfig["database"].(string)
 	schema, _ := src.EngineConfig["schema"].(string)
@@ -198,7 +213,7 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 
 	connectorClass, enginePort, err := connectorFor(src.Engine)
 	if err != nil {
-		return st, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
+		return d, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
 	}
 
 	// The database address, in preference order: the Source's Connection
@@ -207,8 +222,6 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 	// Source's Provider container name, then explicit options overrides.
 	dbHost := ""
 	dbPort := enginePort
-	preflightHost := ""
-	preflightPort := 0
 	connSecretRef := ""
 	if src.ProviderRef != nil {
 		dbHost = *src.ProviderRef
@@ -218,11 +231,11 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		if connEnv, ok := p.resources[connRef.Key(srcEnv.Metadata.Namespace, "Connection")]; ok {
 			conn, err := connection.FromEnvelope(connEnv)
 			if err != nil {
-				return st, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
+				return d, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
 			}
 			dbHost, dbPort = conn.Endpoint(connEnv.Metadata.Name)
 			if host, port, ok := hostPort(conn.DialAddress()); ok {
-				preflightHost, preflightPort = host, port
+				d.preflightHost, d.preflightPort = host, port
 			}
 			if conn.SecretRef != nil {
 				connSecretRef = *conn.SecretRef
@@ -241,7 +254,7 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		}
 	}
 	if dbHost == "" {
-		return st, fmt.Errorf("Binding %q: cannot determine database hostname (no providerRef or Connection on Source, and no options.databaseHostname)", res.Metadata.Name)
+		return d, fmt.Errorf("Binding %q: cannot determine database hostname (no providerRef or Connection on Source, and no options.databaseHostname)", res.Metadata.Name)
 	}
 
 	// Credentials: the Connection's secretRef when the Source declares one
@@ -253,7 +266,7 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		creds, ok = p.secrets[replRefName]
 	}
 	if !ok {
-		return st, fmt.Errorf("Binding %q: debezium Provider %q has no resolved credentials — declare the Connection's secretRef or configuration.replicationSecretRef in spec.secretRefs", res.Metadata.Name, p.containerName())
+		return d, fmt.Errorf("Binding %q: debezium Provider %q has no resolved credentials — declare the Connection's secretRef or configuration.replicationSecretRef in spec.secretRefs", res.Metadata.Name, p.containerName())
 	}
 
 	topicPrefix := b.TargetRef // topics become <EventStream name>.<schema>.<table>
@@ -302,10 +315,30 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 	if mode, ok := b.Options["snapshotMode"].(string); ok && mode != "" {
 		config["snapshot.mode"] = mode
 	}
+
+	d.name = connectorName
+	d.config = config
+	d.engine = src.Engine
+	d.dbName = dbName
+	d.credsUser = creds["username"]
+	d.credsPass = creds["password"]
+	return d, nil
+}
+
+// reconcileConnector registers or updates the Debezium connector realizing a
+// Binding(mode: cdc), then verifies it reaches RUNNING.
+func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope) (status.Status, error) {
+	st := status.Status{}
+	d, err := p.desiredConnector(res)
+	if err != nil {
+		return st, err
+	}
+	config := d.config
+	connectorName := d.name
 	p.applyLineage(config)
 
-	if preflightHost != "" {
-		if err := verifyDatabaseConnection(ctx, src.Engine, preflightHost, preflightPort, dbName, creds["username"], creds["password"]); err != nil {
+	if d.preflightHost != "" {
+		if err := verifyDatabaseConnection(ctx, d.engine, d.preflightHost, d.preflightPort, d.dbName, d.credsUser, d.credsPass); err != nil {
 			return st, fmt.Errorf("Binding %q: database connection preflight failed before registering connector: %w", res.Metadata.Name, err)
 		}
 	}
@@ -454,15 +487,25 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorMissing"}, now)
 			return st, nil
 		}
-		if state == "RUNNING" {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectorRunning"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
-		} else {
+		if state != "RUNNING" {
 			// Declared state is a RUNNING connector; anything else is drift.
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorState" + state}, now)
 			st.SetCondition(status.Condition{Type: status.Degraded, Status: status.True, Reason: "ConnectorState" + state}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorState" + state}, now)
+			return st, nil
 		}
+		// RUNNING is not enough (docs/planning/07 §2.1): the live config
+		// must still match the manifest-derived one. Drifted key *names*
+		// only — values may carry credentials and must never leak into
+		// conditions.
+		if drifted := p.connectorConfigDrift(ctx, res); len(drifted) > 0 {
+			msg := "connector config differs from manifest at: " + strings.Join(drifted, ", ")
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorConfigDrift", Message: msg}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorConfigDrift", Message: msg}, now)
+			return st, nil
+		}
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectorRunning"}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
 		return st, nil
 	default:
 		return st, fmt.Errorf("debezium provider cannot probe kind %s", res.Kind)
@@ -494,6 +537,30 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 		return fmt.Errorf("configuration.replicationSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
 	}
 	return nil
+}
+
+// connectorConfigDrift diffs the live connector config against the
+// manifest-derived one and returns the drifted key names (sorted), or nil
+// when equivalent. Lineage keys (openlineage.*) are engine-managed after
+// registration and deliberately excluded; extra live keys beyond the
+// desired set are Connect-added defaults, not drift.
+func (p *Provider) connectorConfigDrift(ctx context.Context, res resource.Envelope) []string {
+	d, err := p.desiredConnector(res)
+	if err != nil {
+		return []string{"(desired config unresolvable: " + err.Error() + ")"}
+	}
+	actual, err := kafkaconnect.GetConnectorConfig(ctx, p.connectURL(), d.name)
+	if err != nil {
+		return []string{"(live config unreadable: " + err.Error() + ")"}
+	}
+	var drifted []string
+	for k, want := range d.config {
+		if actual[k] != want {
+			drifted = append(drifted, k)
+		}
+	}
+	sort.Strings(drifted)
+	return drifted
 }
 
 // ValidateBindingOptions implements reconciler.BindingOptionsValidator:

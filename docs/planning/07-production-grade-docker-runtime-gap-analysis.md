@@ -711,35 +711,56 @@ Design notes:
 
 ### 2.1 Provider Drift Must Check Desired Configuration
 
-Current provider drift gaps:
+**Status update (2026-07-16 Gate 2 close-out):** probes upgraded across the
+board; the equivalence table below is the authoritative record of what each
+probe checks and what is deliberately not drift-managed (with reasons —
+per this section's own required-work wording, a field may be intentionally
+excluded if the exclusion is explained).
 
-- Redpanda topic probe checks existence and partition count, but not
-  `retention.ms`.
-- Postgres Source probe checks database existence, but not logical WAL,
-  publication, replication role, grants, or credential validity.
-- MySQL/MariaDB Source probe checks database existence, but not binlog mode,
-  replication user, grants, or credential validity.
-- S3 Dataset probe checks bucket existence, but not prefix reachability,
-  format contract, versioning/lifecycle policy, or credentials beyond root.
-- Debezium and s3sink Binding probes check connector RUNNING, but not whether
-  connector config matches the desired manifest.
-- Proxy Connection probe checks the forwarder container only, not upstream
-  reachability.
-- Nessie Catalog probe checks branch existence, but not warehouse/object-store
-  configuration.
+Per-provider drift equivalence table:
 
-Required work:
+| Provider | Resource | Checked by Probe | Deliberately not drift-managed |
+|---|---|---|---|
+| redpanda | Provider | container found + healthy | — |
+| redpanda | EventStream | topic exists; partition count; `retention.ms` vs declared (when declared; an undeclared retention is not managed) | other topic configs (not declared in the manifest model) |
+| postgres | Provider | container found + healthy | — |
+| postgres | Source | database exists; `wal_level=logical` (the CDC-readiness this provider declares); replication credentials still authenticate (when `replicationSecretRef` declared) | publication membership, grants beyond authentication (provisioned superuser-side; a grants-equivalence check needs a declared grants model first) |
+| mysql/mariadb | Provider | container found + healthy | — |
+| mysql/mariadb | Source | database exists; `binlog_format=ROW`; replication credentials still authenticate (when declared) | binlog retention, grant list (same reason as postgres) |
+| s3/minio | Provider | container found + healthy | — |
+| s3/minio | Dataset | bucket exists; prefix listable with declared credentials | versioning/lifecycle policy and format contract (not part of the Dataset model; format is enforced at the sink connector) |
+| debezium | Binding | connector RUNNING **and** live config == manifest-derived config (all keys the provider sets; drifted key *names* reported, values never leaked; `openlineage.*` keys excluded — engine-managed post-registration) | Connect-added default keys beyond the desired set |
+| s3sink | Binding | connector RUNNING **and** live config == manifest-derived config (same contract as debezium) | same |
+| proxy | Connection | forwarder container healthy **and** upstream answers through it (dial the published port; socat closes the accepted session immediately on upstream connect failure, so an immediate EOF = upstream unreachable, a held-open session = alive) | — |
+| nessie | Catalog | REST API answers; declared branch exists | warehouse/object-store wiring (not yet part of the Catalog model — tracked in 2.3) |
+| SecretReference | — | resolvable; one-way fingerprint vs last applied | — |
+| external (no provider) | any | Connection resolvable + TCP-reachable | — |
 
-- [ ] Define per-provider drift equivalence tables.
-- [ ] Probe full desired configuration or explain why a field is intentionally
-      not drift-managed.
+Resolved:
+
+- [x] Define per-provider drift equivalence tables (above).
+- [x] Probe full desired configuration or explain why a field is
+      intentionally not drift-managed (above; every exclusion carries its
+      reason).
 - [x] Detect SecretReference material drift via one-way fingerprints and
       reconcile dependents when the resolved value changes.
 - [x] Support admin-password rotation for Docker-managed Postgres and
       MySQL/MariaDB when either the new credential already works or the
       previous managed-container bootstrap env is still available.
-- [ ] Store observed provider facts in status for `status -o json`.
-- [ ] Add integration tests for manual out-of-band config changes.
+- [x] Store observed provider facts in status for `status -o json`: probe
+      results carry `ProviderState`, merged by the engine under
+      `providerState.observed` (never clobbering the reconcile-written
+      providerState); condition messages carry observed-vs-desired detail
+      (e.g. `wal_level is "replica", want "logical"`); drifted connector
+      config reports key names only — values may carry credentials.
+
+Still open:
+
+- [ ] Add integration tests for manual out-of-band config changes (e.g.
+      ALTER a topic's retention.ms out-of-band, assert `drift` reports
+      RetentionMismatch). The mechanisms are unit-covered and the existing
+      chaos suite covers out-of-band *liveness* changes; config-level
+      out-of-band coverage is additive test work.
 
 Design notes:
 

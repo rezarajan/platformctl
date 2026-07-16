@@ -75,3 +75,18 @@ func removeDataset(ctx context.Context, cl *minio.Client, bucket, prefix string)
 	}
 	return nil
 }
+
+// prefixListable verifies the declared credentials can list under
+// bucket/prefix — probe support for permission/policy drift
+// (docs/planning/07 §2.1). An empty listing is fine; an error is not.
+func prefixListable(ctx context.Context, cl *minio.Client, bucket, prefix string) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	for obj := range cl.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, MaxKeys: 1}) {
+		if obj.Err != nil {
+			return obj.Err
+		}
+		break
+	}
+	return nil
+}

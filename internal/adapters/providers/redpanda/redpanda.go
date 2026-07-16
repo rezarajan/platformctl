@@ -219,7 +219,11 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if wantPartitions == 0 {
 			wantPartitions = 1
 		}
-		drift, reason, err := probeTopic(ctx, p.HostAddr(), res.Metadata.Name, wantPartitions)
+		wantRetentionMS, err := retentionMillis(es.RetentionDuration)
+		if err != nil {
+			return st, err
+		}
+		drift, reason, err := probeTopic(ctx, p.HostAddr(), res.Metadata.Name, wantPartitions, wantRetentionMS)
 		if err != nil {
 			return st, err
 		}

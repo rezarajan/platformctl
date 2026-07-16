@@ -12,7 +12,9 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/domain/connection"
@@ -170,10 +172,51 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ForwarderDown"}, now)
 			return st, nil
 		}
+		// Beyond the forwarder container's health (docs/planning/07 §2.1):
+		// dial *through* it. socat accepts, then connects to the upstream
+		// per session — a dead upstream shows as an immediate close after
+		// accept, so a connection that stays open past a short read
+		// deadline means the upstream answered.
+		conn, err := connection.FromEnvelope(res)
+		if err != nil {
+			return st, err
+		}
+		if addr := ctr.HostAddr(conn.Port); addr != "" {
+			if err := probeThroughForwarder(addr); err != nil {
+				msg := fmt.Sprintf("forwarder is up but upstream %s is unreachable: %v", conn.Target, err)
+				st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "UpstreamUnreachable", Message: msg}, now)
+				st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "UpstreamUnreachable", Message: msg}, now)
+				return st, nil
+			}
+		}
 		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "Forwarding"}, now)
 		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
 		return st, nil
 	default:
 		return st, fmt.Errorf("proxy provider cannot probe kind %s", res.Kind)
 	}
+}
+
+// probeThroughForwarder dials the forwarder's published port and holds the
+// connection through a short read deadline. socat closes the accepted
+// session immediately when its upstream connect fails, so a quick
+// EOF/reset means the upstream is unreachable; a read timeout with the
+// session still open means the upstream accepted.
+func probeThroughForwarder(addr string) error {
+	c, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	_ = c.SetReadDeadline(time.Now().Add(1500 * time.Millisecond))
+	buf := make([]byte, 1)
+	_, err = c.Read(buf)
+	if err == nil {
+		return nil // upstream even sent a banner (e.g. mysql) — alive
+	}
+	var nerr net.Error
+	if errors.As(err, &nerr) && nerr.Timeout() {
+		return nil // session held open past the deadline — upstream accepted
+	}
+	return fmt.Errorf("session closed immediately: %w", err)
 }

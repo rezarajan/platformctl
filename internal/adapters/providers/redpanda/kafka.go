@@ -101,7 +101,7 @@ func deleteTopic(ctx context.Context, addr, topic string) error {
 }
 
 // probeTopic reports drift: (drifted, reason, error).
-func probeTopic(ctx context.Context, addr, topic string, wantPartitions int) (bool, string, error) {
+func probeTopic(ctx context.Context, addr, topic string, wantPartitions int, wantRetentionMS int64) (bool, string, error) {
 	adm, cl, err := adminClient(addr)
 	if err != nil {
 		return false, "", err
@@ -119,6 +119,29 @@ func probeTopic(ctx context.Context, addr, topic string, wantPartitions int) (bo
 	}
 	if got := len(details[topic].Partitions); got != wantPartitions {
 		return true, fmt.Sprintf("PartitionCountMismatch(%d!=%d)", got, wantPartitions), nil
+	}
+	// Full desired configuration, not just liveness (docs/planning/07
+	// §2.1): declared retention must still hold against out-of-band
+	// alteration. A manifest that declares none (-1) leaves retention
+	// deliberately not drift-managed.
+	if wantRetentionMS >= 0 {
+		rc, err := adm.DescribeTopicConfigs(ctx, topic)
+		if err != nil {
+			return false, "", fmt.Errorf("describe configs for %q: %w", topic, err)
+		}
+		cfg, err := rc.On(topic, nil)
+		if err != nil {
+			return false, "", fmt.Errorf("describe configs for %q: %w", topic, err)
+		}
+		currentRetention := ""
+		for _, c := range cfg.Configs {
+			if c.Key == "retention.ms" && c.Value != nil {
+				currentRetention = *c.Value
+			}
+		}
+		if want := strconv.FormatInt(wantRetentionMS, 10); currentRetention != want {
+			return true, fmt.Sprintf("RetentionMismatch(%s!=%s)", currentRetention, want), nil
+		}
 	}
 	return false, "", nil
 }

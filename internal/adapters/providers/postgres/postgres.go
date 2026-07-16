@@ -360,17 +360,46 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if err != nil {
 			return st, err
 		}
-		exists, err := databaseExists(ctx, connString("127.0.0.1", p.hostPort(), suUser, suPass, "postgres"), dbName)
+		admin := connString("127.0.0.1", p.hostPort(), suUser, suPass, "postgres")
+		// Full desired configuration, not just liveness (docs/planning/07
+		// §2.1): the database exists, WAL is logical (the CDC-readiness this
+		// provider declares), and the replication role still exists AND its
+		// declared credentials still authenticate.
+		exists, err := databaseExists(ctx, admin, dbName)
 		if err != nil {
 			return st, err
 		}
 		if !exists {
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "DatabaseMissing"}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "DatabaseMissing"}, now)
-		} else {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "SourceHealthy"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+			return st, nil
 		}
+		walLevel, err := showSetting(ctx, admin, "wal_level")
+		if err != nil {
+			return st, err
+		}
+		// Observed facts for `status -o json` (docs/planning/07 §2.1).
+		st.ProviderState = map[string]any{"walLevel": walLevel, "databaseExists": exists}
+		if walLevel != "logical" {
+			msg := fmt.Sprintf("wal_level is %q, want \"logical\"", walLevel)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "WALNotLogical", Message: msg}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "WALNotLogical", Message: msg}, now)
+			return st, nil
+		}
+		if replRefName, _ := p.cfg.Configuration["replicationSecretRef"].(string); replRefName != "" {
+			creds, ok := p.secrets[replRefName]
+			if ok {
+				replConn := connString("127.0.0.1", p.hostPort(), creds["username"], creds["password"], dbName)
+				if err := ping(ctx, replConn); err != nil {
+					msg := fmt.Sprintf("replication credentials (%s) no longer authenticate", replRefName)
+					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ReplicationCredentialsInvalid", Message: msg}, now)
+					st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ReplicationCredentialsInvalid", Message: msg}, now)
+					return st, nil
+				}
+			}
+		}
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "SourceHealthy"}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
 		return st, nil
 	default:
 		return st, fmt.Errorf("postgres provider cannot probe kind %s", res.Kind)

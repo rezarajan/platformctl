@@ -213,3 +213,28 @@ func escapeLiteral(s string) string {
 	}
 	return string(out)
 }
+
+// showSetting returns a server configuration value (e.g. wal_level) — probe
+// support for CDC-readiness drift (docs/planning/07 §2.1).
+func showSetting(ctx context.Context, adminConn, name string) (string, error) {
+	c, err := connect(ctx, adminConn)
+	if err != nil {
+		return "", err
+	}
+	defer c.Close(ctx)
+	var value string
+	if err := c.QueryRow(ctx, `SELECT setting FROM pg_settings WHERE name = $1`, name).Scan(&value); err != nil {
+		return "", fmt.Errorf("read setting %q: %w", name, err)
+	}
+	return value, nil
+}
+
+// ping verifies the connection string authenticates — probe support for
+// credential-validity drift.
+func ping(ctx context.Context, conn string) error {
+	c, err := connect(ctx, conn)
+	if err != nil {
+		return err
+	}
+	return c.Close(ctx)
+}

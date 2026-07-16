@@ -181,3 +181,29 @@ func verifyBinlog(ctx context.Context, adminConn string) error {
 	}
 	return nil
 }
+
+// globalVariable returns a server variable (e.g. binlog_format) — probe
+// support for CDC-readiness drift (docs/planning/07 §2.1).
+func globalVariable(ctx context.Context, adminConn, name string) (string, error) {
+	db, err := open(adminConn)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	var ignored, value string
+	if err := db.QueryRowContext(ctx, "SHOW GLOBAL VARIABLES LIKE '"+name+"'").Scan(&ignored, &value); err != nil {
+		return "", fmt.Errorf("read variable %q: %w", name, err)
+	}
+	return value, nil
+}
+
+// ping verifies the DSN authenticates — probe support for
+// credential-validity drift.
+func ping(ctx context.Context, conn string) error {
+	db, err := open(conn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return db.PingContext(ctx)
+}

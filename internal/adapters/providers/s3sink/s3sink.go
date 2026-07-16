@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/adapters/kafkaconnect"
@@ -167,44 +169,44 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 	return st, nil
 }
 
-// reconcileConnector registers or updates the S3 sink connector realizing a
-// Binding(mode: sink), then verifies it reaches RUNNING.
-func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope) (status.Status, error) {
-	st := status.Status{}
+// desiredConnectorConfig builds the manifest-derived connector config —
+// shared by reconcile (to register) and Probe (to diff against the live
+// config; docs/planning/07 §2.1: RUNNING with the wrong bucket, topic
+// filter, or credentials is drift, not health).
+func (p *Provider) desiredConnectorConfig(res resource.Envelope) (string, map[string]string, error) {
 	b, err := binding.FromEnvelope(res)
 	if err != nil {
-		return st, err
+		return "", nil, err
 	}
 	if b.Mode != binding.ModeSink {
-		return st, fmt.Errorf("Binding %q: s3sink realizes mode \"sink\" only, got %q", res.Metadata.Name, b.Mode)
+		return "", nil, fmt.Errorf("Binding %q: s3sink realizes mode \"sink\" only, got %q", res.Metadata.Name, b.Mode)
 	}
 
 	sourceRef := resource.RefFromSpec(res.Spec, "sourceRef")
 	if _, ok := p.resources[sourceRef.Key(res.Metadata.Namespace, "EventStream")]; !ok {
-		return st, fmt.Errorf("Binding %q: sourceRef %q not found", res.Metadata.Name, b.SourceRef)
+		return "", nil, fmt.Errorf("Binding %q: sourceRef %q not found", res.Metadata.Name, b.SourceRef)
 	}
 	targetRef := resource.RefFromSpec(res.Spec, "targetRef")
 	dsEnv, ok := p.resources[targetRef.Key(res.Metadata.Namespace, "Dataset")]
 	if !ok {
-		return st, fmt.Errorf("Binding %q: targetRef %q not found", res.Metadata.Name, b.TargetRef)
+		return "", nil, fmt.Errorf("Binding %q: targetRef %q not found", res.Metadata.Name, b.TargetRef)
 	}
 	ds, err := dataset.FromEnvelope(dsEnv)
 	if err != nil {
-		return st, err
+		return "", nil, err
 	}
 
 	endpoint, err := p.objectStoreEndpoint(dsEnv, ds, b)
 	if err != nil {
-		return st, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
+		return "", nil, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
 	}
 
 	credsRefName, _ := p.cfg.Configuration["credentialsSecretRef"].(string)
 	creds, ok := p.secrets[credsRefName]
 	if !ok {
-		return st, fmt.Errorf("Binding %q: s3sink Provider %q needs configuration.credentialsSecretRef naming a declared secretRef", res.Metadata.Name, p.containerName())
+		return "", nil, fmt.Errorf("Binding %q: s3sink Provider %q needs configuration.credentialsSecretRef naming a declared secretRef", res.Metadata.Name, p.containerName())
 	}
 
-	connectorName := res.Metadata.Name
 	config := map[string]string{
 		"connector.class":       connectorClass,
 		"tasks.max":             "1",
@@ -229,6 +231,17 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 	}
 	if ds.Prefix != "" {
 		config["aws.s3.prefix"] = ds.Prefix
+	}
+	return res.Metadata.Name, config, nil
+}
+
+// reconcileConnector registers or updates the S3 sink connector realizing a
+// Binding(mode: sink), then verifies it reaches RUNNING.
+func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope) (status.Status, error) {
+	st := status.Status{}
+	connectorName, config, err := p.desiredConnectorConfig(res)
+	if err != nil {
+		return st, err
 	}
 
 	if err := kafkaconnect.PutConnectorConfig(ctx, p.connectURL(), connectorName, config); err != nil {
@@ -311,19 +324,52 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorMissing"}, now)
 			return st, nil
 		}
-		if state == "RUNNING" {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectorRunning"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
-		} else {
+		if state != "RUNNING" {
 			// Declared state is a RUNNING connector; anything else is drift.
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorState" + state}, now)
 			st.SetCondition(status.Condition{Type: status.Degraded, Status: status.True, Reason: "ConnectorState" + state}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorState" + state}, now)
+			return st, nil
 		}
+		// RUNNING is not enough (docs/planning/07 §2.1): the live config
+		// must still match the manifest-derived one. Drifted key *names*
+		// only — values may carry credentials and must never leak into
+		// conditions.
+		if drifted := p.connectorConfigDrift(ctx, res); len(drifted) > 0 {
+			msg := "connector config differs from manifest at: " + strings.Join(drifted, ", ")
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorConfigDrift", Message: msg}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorConfigDrift", Message: msg}, now)
+			return st, nil
+		}
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectorRunning"}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
 		return st, nil
 	default:
 		return st, fmt.Errorf("s3sink provider cannot probe kind %s", res.Kind)
 	}
+}
+
+// connectorConfigDrift diffs the live connector config against the
+// manifest-derived one and returns the drifted key names (sorted), or nil
+// when equivalent. Extra live keys beyond the desired set are Connect-added
+// defaults, not drift.
+func (p *Provider) connectorConfigDrift(ctx context.Context, res resource.Envelope) []string {
+	name, desired, err := p.desiredConnectorConfig(res)
+	if err != nil {
+		return []string{"(desired config unresolvable: " + err.Error() + ")"}
+	}
+	actual, err := kafkaconnect.GetConnectorConfig(ctx, p.connectURL(), name)
+	if err != nil {
+		return []string{"(live config unreadable: " + err.Error() + ")"}
+	}
+	var drifted []string
+	for k, want := range desired {
+		if actual[k] != want {
+			drifted = append(drifted, k)
+		}
+	}
+	sort.Strings(drifted)
+	return drifted
 }
 
 // ValidateSpec implements SpecValidator: this provider exists only to run

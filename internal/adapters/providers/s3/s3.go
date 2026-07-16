@@ -267,10 +267,19 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if !exists {
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "BucketMissing"}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "BucketMissing"}, now)
-		} else {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "DatasetHealthy"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+			return st, nil
 		}
+		// Beyond existence (docs/planning/07 §2.1): the prefix must be
+		// listable with the declared credentials — a permissions/policy
+		// change that breaks readers is drift, not health.
+		if err := prefixListable(ctx, cl, ds.Bucket, ds.Prefix); err != nil {
+			msg := "bucket exists but prefix is not listable: " + err.Error()
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "PrefixUnlistable", Message: msg}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "PrefixUnlistable", Message: msg}, now)
+			return st, nil
+		}
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "DatasetHealthy"}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
 		return st, nil
 	default:
 		return st, fmt.Errorf("s3 provider cannot probe kind %s", res.Kind)
