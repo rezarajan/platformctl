@@ -502,6 +502,51 @@ Resolution: `SecretStore.Resolve` returns a `map[string]string` keyed by the log
 `spec.keys`; how those map to actual storage (env var names, file paths) is backend-specific
 configuration, never present in the manifest's `spec` as a plaintext value.
 
+Apply records a one-way fingerprint of the resolved material in state, never
+the values themselves. Drift/status compares the current resolved fingerprint
+to the last applied one and reports `DriftDetected=True, reason=SecretChanged`
+when an operator rotates a secret out-of-band. A later apply updates the
+`SecretReference` baseline and, because secret references are dependency
+edges, re-reconciles dependents that consume the changed secret. Each provider
+is responsible for making that credential rotation real in its backing system;
+the Docker MySQL/MariaDB and Postgres providers rotate their admin accounts by
+authenticating with the previous managed-container bootstrap credentials and
+then applying the new resolved SecretReference value.
+
+Credential rotation has an intentional recovery boundary. Datascape does not
+persist plaintext old secrets, so automatic rotation requires either the new
+secret to already authenticate or the managed runtime to still expose the
+previous bootstrap environment from the existing container. If a runtime loses
+those environment values, an operator rewrites them to bad values, or the
+database is manually changed to a third password, platformctl cannot safely
+guess a credential and reconciliation fails with a manual-recovery message.
+The available trade-offs are:
+
+- Store plaintext or reversibly encrypted old secrets in state: rejected for
+  the current contract because state may be checked in or shared.
+- Use the managed Docker container environment as a transient fallback:
+  implemented for MySQL/MariaDB and Postgres; no values are written to state.
+- Add an operator-supplied previous-secret override or runtime exec rescue
+  workflow: viable future work for break-glass recovery, but it needs explicit
+  UX and audit semantics.
+- Destroy/recreate with the data volume removed: works only when data loss is
+  acceptable and should remain an explicit destructive action, not automatic
+  reconciliation.
+
+MinIO/S3 root credential rotation is not equivalent to SQL `ALTER USER`.
+Changing `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` changes the server process
+bootstrap credentials after restart; platformctl can restart the managed
+container with the new SecretReference, but if the store is unreachable because
+credentials were manually corrupted, recovery is operator-owned.
+
+External system credentials are not rotated by platformctl. For example, a
+Debezium Binding that reads an external Postgres database through a managed
+Connection uses the Connection's `secretRef` when registering the connector,
+but the external database must already accept those credentials. Platformctl
+preflights the database login through the Connection's host endpoint before
+registering the connector and fails with a credential/reachability error if
+the external system still has a different password.
+
 ## 11. Status & Conditions — common shape
 
 ```yaml

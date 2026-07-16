@@ -88,7 +88,9 @@ historical design note).
 
 ## Architecture facts an agent needs (beyond CLAUDE.md)
 
-- Engine special-cases: SecretReference (resolve-only), external-no-provider
+- Engine special-cases: SecretReference (resolve-only, stores a one-way
+  resolved-material fingerprint on apply, reports `SecretChanged` drift when
+  the backend value differs), external-no-provider
   resources (connection-resolvable check; destroy = forget-state-only under
   the NFR-3 double lock `Engine.AllowDestructive`), drift healing (plan-noop
   + Managed + DriftDetected → re-reconcile), `Engine.Import` (adopt-by-name,
@@ -123,6 +125,17 @@ A round of reported errors and feature requests, all resolved and committed:
   `Engine.PreflightSecrets`), aggregating all missing vars; a persistent
   `--env-file` loads dotenv (shell env wins). Cannot half-apply for a
   missing credential.
+- **Secret drift fingerprints**: apply stores a one-way fingerprint for each
+  resolved SecretReference; drift/status reports changed backend material as
+  `SecretChanged`; apply records the new baseline and re-reconciles dependents.
+  Docker MySQL/MariaDB root rotation and Postgres superuser rotation are
+  supported by using previous managed-container bootstrap credentials
+  transiently, then applying the new resolved value in the database. Edge case
+  documented: if both desired credentials and previous runtime env credentials
+  fail, manual recovery is required because plaintext old secrets are not
+  stored in state. External systems are not rotated; Debezium now preflights
+  external database credentials through the Connection endpoint before
+  registering a connector, producing a direct credential/reachability error.
 - **Honest external reachability**: an external resource whose connectionRef
   names a Connection is TCP-probed (`Connection.DialAddress` +
   `probeTCPReachable`) — a dead-upstream forwarder reports

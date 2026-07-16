@@ -6,9 +6,13 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,6 +48,9 @@ type Engine struct {
 	// sets it when both --include-external and
 	// --yes-i-understand-this-is-destructive were passed.
 	AllowDestructive bool
+	// AllowImportedDeletes permits authoritative apply to delete resources
+	// recorded as Imported when they are absent from desired manifests.
+	AllowImportedDeletes bool
 	// Parallelism bounds concurrent reconciliation within a topological
 	// level (resources in the same level share no dependency relationship).
 	// Values <= 1 mean fully sequential. Gated by ParallelReconciliation.
@@ -110,6 +117,14 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 	if err != nil {
 		return res, err
 	}
+	for _, entry := range p.Entries {
+		if _, ok := byKey[entry.Key]; ok {
+			continue
+		}
+		if rs, ok := st.Resources[entry.Key]; ok && rs.LastApplied != nil {
+			byKey[entry.Key] = *rs.LastApplied
+		}
+	}
 
 	total := 0
 	for _, entry := range p.Entries {
@@ -138,7 +153,25 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 			e.report(func(r Reporter) { r.StepSkipped(key, "a dependency failed") })
 			return
 		}
-		env := byKey[key]
+		env, hasEnv := byKey[key]
+		if entry.Action == plan.ActionOrphanUnknown {
+			err := fmt.Errorf("%s cannot be deleted by apply because its state has no last-applied manifest; re-apply the resource once with this platformctl version, or use destroy with an explicit manifest to remove it", key)
+			mu.Lock()
+			res.Failed[key] = err
+			mu.Unlock()
+			e.logf("fail %s (%s): %v", key, entry.Action, err)
+			e.report(func(r Reporter) { r.StepSkipped(key, err.Error()) })
+			return
+		}
+		if !hasEnv {
+			err := fmt.Errorf("%s: no manifest is available for planned action %s", key, entry.Action)
+			mu.Lock()
+			res.Failed[key] = err
+			mu.Unlock()
+			e.logf("fail %s (%s): %v", key, entry.Action, err)
+			e.report(func(r Reporter) { r.StepSkipped(key, err.Error()) })
+			return
+		}
 		if entry.Action == plan.ActionNoop {
 			// The spec is unchanged, but the infrastructure may not be:
 			// probe, and re-reconcile on drift. Managed resources only —
@@ -166,7 +199,12 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 		n := int(atomic.AddInt64(&seq, 1))
 		e.report(func(r Reporter) { r.StepStarted(n, total, key, string(entry.Action)) })
 		start := time.Now()
-		err := e.reconcileOne(ctx, entry, env, byKey, &st)
+		var err error
+		if entry.Action == plan.ActionDelete {
+			err = e.applyDeleteOne(ctx, entry, env, byKey, &st)
+		} else {
+			err = e.reconcileOne(ctx, entry, env, byKey, depGraph, &st)
+		}
 		dur := time.Since(start).Round(time.Millisecond)
 		if err != nil {
 			mu.Lock()
@@ -236,6 +274,7 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 // engine depending on graph construction.
 type DependencyGraph interface {
 	Dependents(k resource.Key) map[resource.Key]bool
+	Dependencies(k resource.Key) map[resource.Key]bool
 }
 
 // PreflightSecrets checks that every SecretReference declared in the set
@@ -268,6 +307,54 @@ func (e *Engine) PreflightSecrets(ctx context.Context, envelopes []resource.Enve
 	return nil
 }
 
+// SecretHashes resolves every SecretReference and returns deterministic,
+// one-way fingerprints of the resolved material. The resolved values are not
+// persisted or logged; the fingerprints let apply detect that dependencies
+// must be reconciled after an operator rotates a secret out-of-band.
+func (e *Engine) SecretHashes(ctx context.Context, envelopes []resource.Envelope) (map[resource.Key]string, error) {
+	out := make(map[resource.Key]string)
+	for _, env := range envelopes {
+		if env.Kind != "SecretReference" {
+			continue
+		}
+		ref := secretRefFrom(env)
+		if err := ref.Validate(); err != nil {
+			return nil, err
+		}
+		if e.SecretStore == nil {
+			return nil, fmt.Errorf("SecretReference %q: no secret store is configured", env.Metadata.Name)
+		}
+		values, err := e.SecretStore.Resolve(ctx, ref)
+		if err != nil {
+			return nil, err
+		}
+		out[env.Key()] = SecretFingerprint(ref, values)
+	}
+	return out, nil
+}
+
+// SecretFingerprint returns a deterministic, one-way hash over the reference
+// identity and resolved values. It is exported for tests and intentionally
+// does not reveal the secret material.
+func SecretFingerprint(ref secret.SecretReference, values map[string]string) string {
+	keys := append([]string(nil), ref.Keys...)
+	sort.Strings(keys)
+	payload := struct {
+		Name    string            `json:"name"`
+		Backend secret.Backend    `json:"backend"`
+		Keys    []string          `json:"keys"`
+		Values  map[string]string `json:"values"`
+	}{
+		Name:    ref.Name,
+		Backend: ref.Backend,
+		Keys:    keys,
+		Values:  values,
+	}
+	b, _ := json.Marshal(payload)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
 func secretRefFrom(env resource.Envelope) secret.SecretReference {
 	ref := secret.SecretReference{Name: env.Metadata.Name}
 	backend, _ := env.Spec["backend"].(string)
@@ -282,17 +369,37 @@ func secretRefFrom(env resource.Envelope) secret.SecretReference {
 	return ref
 }
 
-func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) error {
+func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, deps DependencyGraph, st *state.State) error {
 	// SecretReference is a pure declaration with no provider or runtime
 	// behind it: reconciling one means verifying it resolves.
 	if env.Kind == "SecretReference" {
-		return e.reconcileSecretReference(ctx, entry, env, st)
+		return e.reconcileSecretReference(ctx, entry, env, deps, st)
 	}
 	// An External resource without a providerRef lives entirely outside
 	// Datascape: "reconciling" it means verifying its connection is
 	// resolvable, never creating anything (plan.ActionConfigure path).
 	if isExternalNoProvider(env) {
-		return e.reconcileExternal(ctx, entry, env, byKey, st)
+		return e.reconcileExternal(ctx, entry, env, byKey, deps, st)
+	}
+	if isExternal(env) {
+		prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
+		if err != nil {
+			return err
+		}
+		configurer, ok := prov.(reconciler.ExternalConfigurer)
+		if !ok {
+			return fmt.Errorf("%s is External with providerRef, but provider type %q does not implement ExternalConfigurer", env.Key(), prov.Type())
+		}
+		newStatus, err := configurer.ConfigureExternal(ctx, env, rt)
+		if err != nil {
+			return err
+		}
+		e.stateMu.Lock()
+		defer e.stateMu.Unlock()
+		imported := st.Resources[env.Key()].Imported
+		st.Resources[env.Key()] = e.resourceState(env, entry.SpecHash, newStatus, resource.External, imported, deps)
+		e.recordDependencyHashes(st, env.Key(), deps)
+		return e.StateStore.Save(ctx, *st)
 	}
 
 	prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
@@ -311,7 +418,7 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 	if len(env.Metadata.Observers) > 0 {
 		if la, ok := prov.(reconciler.LineageAware); ok {
 			for _, obs := range env.Metadata.Observers {
-				endpoint, err := e.resolveLineageEndpoint(ctx, obs.Name, byKey, st)
+				endpoint, err := e.resolveLineageEndpoint(ctx, obs, env.Metadata.Namespace, byKey, st)
 				if err != nil {
 					return fmt.Errorf("resolve observer %q: %w", obs.Name, err)
 				}
@@ -332,13 +439,9 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
 	lifecycle := resource.LifecycleOf(env, st.Resources[env.Key()].Imported)
-	st.Resources[env.Key()] = state.ResourceState{
-		SpecHash:  entry.SpecHash,
-		Status:    newStatus,
-		Lifecycle: lifecycle.String(),
-		Imported:  st.Resources[env.Key()].Imported,
-		Provider:  newStatus.ProviderState,
-	}
+	imported := st.Resources[env.Key()].Imported
+	st.Resources[env.Key()] = e.resourceState(env, entry.SpecHash, newStatus, lifecycle, imported, deps)
+	e.recordDependencyHashes(st, env.Key(), deps)
 	return e.StateStore.Save(ctx, *st)
 }
 
@@ -376,7 +479,7 @@ func (e *Engine) Probe(ctx context.Context, envelopes []resource.Envelope) ([]Pr
 		if !ok {
 			continue
 		}
-		probed := e.probeOne(ctx, env, byKey)
+		probed := e.probeOneAgainstState(ctx, env, byKey, rs)
 		merged := rs.Status
 		for _, c := range probed.Conditions {
 			merged.SetCondition(c, e.Clock.Now())
@@ -395,27 +498,15 @@ func (e *Engine) Probe(ctx context.Context, envelopes []resource.Envelope) ([]Pr
 // returns an error: an unreachable or unresolvable resource *is* drift —
 // things failing out-of-band is the expected case, not an exception.
 func (e *Engine) probeOne(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope) status.Status {
+	return e.probeOneAgainstState(ctx, env, byKey, state.ResourceState{})
+}
+
+func (e *Engine) probeOneAgainstState(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope, rs state.ResourceState) status.Status {
 	now := e.Clock.Now()
 	st := status.Status{}
 
 	if env.Kind == "SecretReference" {
-		ref := secretRefFrom(env)
-		err := ref.Validate()
-		if err == nil {
-			if e.SecretStore == nil {
-				err = fmt.Errorf("no secret store is configured")
-			} else {
-				_, err = e.SecretStore.Resolve(ctx, ref)
-			}
-		}
-		if err != nil {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "SecretUnresolvable", Message: err.Error()}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "SecretUnresolvable"}, now)
-			return st
-		}
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "SecretResolvable"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
-		return st
+		return e.secretReferenceStatus(ctx, env, rs.SecretHash)
 	}
 
 	if isExternalNoProvider(env) {
@@ -435,10 +526,41 @@ func (e *Engine) probeOne(ctx context.Context, env resource.Envelope, byKey map[
 	return st
 }
 
+func (e *Engine) secretReferenceStatus(ctx context.Context, env resource.Envelope, priorHash string) status.Status {
+	now := e.Clock.Now()
+	st := status.Status{}
+	ref := secretRefFrom(env)
+	err := ref.Validate()
+	var currentHash string
+	if err == nil {
+		if e.SecretStore == nil {
+			err = fmt.Errorf("no secret store is configured")
+		} else {
+			var values map[string]string
+			values, err = e.SecretStore.Resolve(ctx, ref)
+			if err == nil {
+				currentHash = SecretFingerprint(ref, values)
+			}
+		}
+	}
+	if err != nil {
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "SecretUnresolvable", Message: err.Error()}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "SecretUnresolvable"}, now)
+		return st
+	}
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "SecretResolvable"}, now)
+	if priorHash != "" && currentHash != "" && priorHash != currentHash {
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "SecretChanged", Message: "resolved secret material differs from the last applied fingerprint"}, now)
+		return st
+	}
+	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+	return st
+}
+
 // reconcileSecretReference verifies the reference resolves through the
 // configured SecretStore (without storing any secret material) and records it
 // Ready in state.
-func (e *Engine) reconcileSecretReference(ctx context.Context, entry plan.Entry, env resource.Envelope, st *state.State) error {
+func (e *Engine) reconcileSecretReference(ctx context.Context, entry plan.Entry, env resource.Envelope, deps DependencyGraph, st *state.State) error {
 	ref := secretRefFrom(env)
 	if err := ref.Validate(); err != nil {
 		return err
@@ -446,8 +568,13 @@ func (e *Engine) reconcileSecretReference(ctx context.Context, entry plan.Entry,
 	if e.SecretStore == nil {
 		return fmt.Errorf("SecretReference %q: no secret store is configured", env.Metadata.Name)
 	}
-	if _, err := e.SecretStore.Resolve(ctx, ref); err != nil {
+	values, err := e.SecretStore.Resolve(ctx, ref)
+	if err != nil {
 		return err
+	}
+	secretHash := entry.SecretHash
+	if secretHash == "" {
+		secretHash = SecretFingerprint(ref, values)
 	}
 	newStatus := status.Status{}
 	now := e.Clock.Now()
@@ -455,12 +582,11 @@ func (e *Engine) reconcileSecretReference(ctx context.Context, entry plan.Entry,
 	newStatus.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
-	st.Resources[env.Key()] = state.ResourceState{
-		SpecHash:  entry.SpecHash,
-		Status:    newStatus,
-		Lifecycle: resource.LifecycleOf(env, st.Resources[env.Key()].Imported).String(),
-		Imported:  st.Resources[env.Key()].Imported,
-	}
+	imported := st.Resources[env.Key()].Imported
+	rs := e.resourceState(env, entry.SpecHash, newStatus, resource.LifecycleOf(env, imported), imported, deps)
+	rs.SecretHash = secretHash
+	st.Resources[env.Key()] = rs
+	e.recordDependencyHashes(st, env.Key(), deps)
 	return e.StateStore.Save(ctx, *st)
 }
 
@@ -474,16 +600,18 @@ type DependencyResolver interface {
 // spec.external: true and names no providerRef — i.e. nothing in the
 // platform realizes it; only its reachability can be verified.
 func isExternalNoProvider(env resource.Envelope) bool {
-	ext, _ := env.Spec["external"].(bool)
-	if !ext {
+	if !isExternal(env) {
 		return false
 	}
-	if ref, ok := env.Spec["providerRef"].(map[string]any); ok {
-		if name, _ := ref["name"].(string); name != "" {
-			return false
-		}
+	if resource.RefName(env.Spec, "providerRef") != "" {
+		return false
 	}
 	return true
+}
+
+func isExternal(env resource.Envelope) bool {
+	ext, _ := env.Spec["external"].(bool)
+	return ext
 }
 
 // externalConnectionStatus verifies the resource's connectionRef resolves:
@@ -493,14 +621,12 @@ func isExternalNoProvider(env resource.Envelope) bool {
 func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope) status.Status {
 	now := e.Clock.Now()
 	st := status.Status{}
-	connName := ""
-	if ref, ok := env.Spec["connectionRef"].(map[string]any); ok {
-		connName, _ = ref["name"].(string)
-	}
+	connRef := resource.RefFromSpec(env.Spec, "connectionRef")
+	connName := connRef.Name
 
 	// 1. The connection details (address + credentials) must resolve.
 	if connName != "" {
-		if err := e.resolveConnectionRef(ctx, connName, byKey); err != nil {
+		if err := e.resolveConnectionRef(ctx, connRef, env.Metadata.Namespace, byKey); err != nil {
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ExternalConnectionUnresolvable", Message: err.Error()}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ExternalConnectionUnresolvable"}, now)
 			return st
@@ -511,7 +637,7 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 	// verify the endpoint answers — "resolvable" is not "reachable", and an
 	// external resource that isn't reachable must not report Ready
 	// (errors.md: an unreachable external source claiming health is a lie).
-	if connEnv, ok := byKey[resource.Key{Kind: "Connection", Name: connName}]; ok {
+	if connEnv, ok := byKey[connRef.Key(env.Metadata.Namespace, "Connection")]; ok {
 		conn, err := connection.FromEnvelope(connEnv)
 		if err == nil {
 			if addr := conn.DialAddress(); addr != "" {
@@ -564,8 +690,9 @@ func probeTCPReachable(ctx context.Context, address string) error {
 
 // resolveConnectionRef checks a connectionRef target: a Connection whose
 // credentials (if declared) resolve, or a bare SecretReference.
-func (e *Engine) resolveConnectionRef(ctx context.Context, connName string, byKey map[resource.Key]resource.Envelope) error {
-	if connEnv, ok := byKey[resource.Key{Kind: "Connection", Name: connName}]; ok {
+func (e *Engine) resolveConnectionRef(ctx context.Context, connRef resource.NameRef, defaultNamespace string, byKey map[resource.Key]resource.Envelope) error {
+	connName := connRef.Name
+	if connEnv, ok := byKey[connRef.Key(defaultNamespace, "Connection")]; ok {
 		conn, err := connection.FromEnvelope(connEnv)
 		if err != nil {
 			return err
@@ -573,9 +700,9 @@ func (e *Engine) resolveConnectionRef(ctx context.Context, connName string, byKe
 		if conn.SecretRef == nil {
 			return nil
 		}
-		refEnv, ok := byKey[resource.Key{Kind: "SecretReference", Name: *conn.SecretRef}]
+		refEnv, ok := byKey[resource.Key{Namespace: connEnv.Key().Namespace, Kind: "SecretReference", Name: *conn.SecretRef}]
 		if !ok {
-			return fmt.Errorf("Connection %q: secretRef %q does not resolve to a SecretReference in the manifest set", connName, *conn.SecretRef)
+			return fmt.Errorf("Connection %q: secretRef %q does not resolve to a SecretReference in namespace %q", connName, *conn.SecretRef, connEnv.Key().Namespace)
 		}
 		if e.SecretStore == nil {
 			return fmt.Errorf("no secret store is configured")
@@ -583,17 +710,17 @@ func (e *Engine) resolveConnectionRef(ctx context.Context, connName string, byKe
 		_, err = e.SecretStore.Resolve(ctx, secretRefFrom(refEnv))
 		return err
 	}
-	if refEnv, ok := byKey[resource.Key{Kind: "SecretReference", Name: connName}]; ok {
+	if refEnv, ok := byKey[connRef.Key(defaultNamespace, "SecretReference")]; ok {
 		if e.SecretStore == nil {
 			return fmt.Errorf("no secret store is configured")
 		}
 		_, err := e.SecretStore.Resolve(ctx, secretRefFrom(refEnv))
 		return err
 	}
-	return fmt.Errorf("connectionRef %q does not resolve to a Connection or SecretReference in the manifest set", connName)
+	return fmt.Errorf("connectionRef %q does not resolve to a Connection or SecretReference in namespace %q", connName, connRef.NamespaceOr(defaultNamespace))
 }
 
-func (e *Engine) reconcileExternal(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) error {
+func (e *Engine) reconcileExternal(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, deps DependencyGraph, st *state.State) error {
 	// Reconcile is the "make it so" path: give a just-started external system
 	// (or its forwarder) a bounded window to come up before declaring it
 	// unreachable, rather than failing on the first dial. Drift/status use
@@ -615,13 +742,102 @@ func (e *Engine) reconcileExternal(ctx context.Context, entry plan.Entry, env re
 	}
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
-	st.Resources[env.Key()] = state.ResourceState{
-		SpecHash:  entry.SpecHash,
-		Status:    probed,
-		Lifecycle: resource.External.String(),
-		Imported:  st.Resources[env.Key()].Imported,
-	}
+	imported := st.Resources[env.Key()].Imported
+	st.Resources[env.Key()] = e.resourceState(env, entry.SpecHash, probed, resource.External, imported, deps)
+	e.recordDependencyHashes(st, env.Key(), deps)
 	return e.StateStore.Save(ctx, *st)
+}
+
+func (e *Engine) resourceState(env resource.Envelope, specHash string, st status.Status, lifecycle resource.Lifecycle, imported bool, deps DependencyGraph) state.ResourceState {
+	env.Metadata.Namespace = resource.NormalizeNamespace(env.Metadata.Namespace)
+	return state.ResourceState{
+		SpecHash:     specHash,
+		Status:       st,
+		Lifecycle:    lifecycle.String(),
+		Imported:     imported,
+		Provider:     st.ProviderState,
+		LastApplied:  &env,
+		Dependencies: dependencyKeys(deps, env.Key()),
+	}
+}
+
+func dependencyKeys(deps DependencyGraph, key resource.Key) []resource.Key {
+	if deps == nil {
+		return nil
+	}
+	depSet := deps.Dependencies(key)
+	if len(depSet) == 0 {
+		return nil
+	}
+	out := make([]resource.Key, 0, len(depSet))
+	for dep := range depSet {
+		out = append(out, dep)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	return out
+}
+
+func (e *Engine) recordDependencyHashes(st *state.State, key resource.Key, deps DependencyGraph) {
+	if deps == nil {
+		return
+	}
+	rs := st.Resources[key]
+	hashes := make(map[string]string)
+	for _, dep := range dependencyKeys(deps, key) {
+		depState := st.Resources[dep]
+		if depState.SecretHash == "" {
+			continue
+		}
+		hashes[state.KeyString(dep)] = depState.SecretHash
+	}
+	if len(hashes) > 0 {
+		rs.DependencyHashes = hashes
+	} else {
+		rs.DependencyHashes = nil
+	}
+	st.Resources[key] = rs
+}
+
+func (e *Engine) applyDeleteOne(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) error {
+	e.stateMu.Lock()
+	rs := st.Resources[entry.Key]
+	e.stateMu.Unlock()
+
+	lifecycle := resource.LifecycleOf(env, rs.Imported)
+	if lifecycle == resource.External {
+		if !e.AllowDestructive {
+			return fmt.Errorf("%s is External: deleting it during apply requires both --include-external and --yes-i-understand-this-is-destructive", entry.Key)
+		}
+		if isExternalNoProvider(env) {
+			e.stateMu.Lock()
+			delete(st.Resources, entry.Key)
+			err := e.StateStore.Save(ctx, *st)
+			e.stateMu.Unlock()
+			return err
+		}
+	}
+	if lifecycle == resource.Imported && !e.AllowImportedDeletes {
+		return fmt.Errorf("%s is Imported: deleting it during apply requires --include-imported-deletes", entry.Key)
+	}
+	if env.Kind == "SecretReference" {
+		e.stateMu.Lock()
+		delete(st.Resources, entry.Key)
+		err := e.StateStore.Save(ctx, *st)
+		e.stateMu.Unlock()
+		return err
+	}
+	prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
+	if err != nil {
+		return err
+	}
+	if err := prov.Destroy(ctx, env, rt); err != nil {
+		return err
+	}
+	e.stateMu.Lock()
+	delete(st.Resources, entry.Key)
+	err = e.StateStore.Save(ctx, *st)
+	e.stateMu.Unlock()
+	return err
 }
 
 // Import adopts a pre-existing, out-of-band-created resource into state as
@@ -660,11 +876,12 @@ func (e *Engine) Import(ctx context.Context, envelopes []resource.Envelope, key 
 		return probed, err
 	}
 	st.Resources[key] = state.ResourceState{
-		SpecHash:  hash,
-		Status:    probed,
-		Lifecycle: resource.Imported.String(),
-		Imported:  true,
-		Provider:  probed.ProviderState,
+		SpecHash:    hash,
+		Status:      probed,
+		Lifecycle:   resource.Imported.String(),
+		Imported:    true,
+		Provider:    probed.ProviderState,
+		LastApplied: &env,
 	}
 	return probed, e.StateStore.Save(ctx, st)
 }
@@ -774,16 +991,13 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 func (e *Engine) resolveProviderAndRuntime(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope) (reconciler.Provider, runtime.ContainerRuntime, error) {
 	provEnv := env
 	if env.Kind != "Provider" {
-		refName := ""
-		if ref, ok := env.Spec["providerRef"].(map[string]any); ok {
-			refName, _ = ref["name"].(string)
-		}
-		if refName == "" {
+		ref := resource.RefFromSpec(env.Spec, "providerRef")
+		if ref.Name == "" {
 			return nil, nil, fmt.Errorf("%s: no providerRef to resolve a provider from", env.Key())
 		}
-		pe, ok := byKey[resource.Key{Kind: "Provider", Name: refName}]
+		pe, ok := byKey[ref.Key(env.Metadata.Namespace, "Provider")]
 		if !ok {
-			return nil, nil, fmt.Errorf("%s: providerRef %q does not resolve to a Provider", env.Key(), refName)
+			return nil, nil, fmt.Errorf("%s: providerRef %q does not resolve to a Provider in namespace %q", env.Key(), ref.Name, ref.NamespaceOr(env.Metadata.Namespace))
 		}
 		provEnv = pe
 	}
@@ -808,9 +1022,9 @@ func (e *Engine) resolveProviderAndRuntime(ctx context.Context, env resource.Env
 		}
 		secrets := make(map[string]map[string]string, len(p.SecretRefs))
 		for _, refName := range p.SecretRefs {
-			refEnv, ok := byKey[resource.Key{Kind: "SecretReference", Name: refName}]
+			refEnv, ok := byKey[resource.Key{Namespace: provEnv.Key().Namespace, Kind: "SecretReference", Name: refName}]
 			if !ok {
-				return nil, nil, fmt.Errorf("Provider %q: secretRef %q does not resolve to a SecretReference", provEnv.Metadata.Name, refName)
+				return nil, nil, fmt.Errorf("Provider %q: secretRef %q does not resolve to a SecretReference in namespace %q", provEnv.Metadata.Name, refName, provEnv.Key().Namespace)
 			}
 			ref := secretRefFrom(refEnv)
 			resolved, err := e.SecretStore.Resolve(ctx, ref)
@@ -828,10 +1042,11 @@ func (e *Engine) resolveProviderAndRuntime(ctx context.Context, env resource.Env
 	return prov, rt, nil
 }
 
-func (e *Engine) resolveLineageEndpoint(ctx context.Context, observerName string, byKey map[resource.Key]resource.Envelope, st *state.State) (lineage.LineageEndpoint, error) {
-	provEnv, ok := byKey[resource.Key{Kind: "Provider", Name: observerName}]
+func (e *Engine) resolveLineageEndpoint(ctx context.Context, observer resource.ObserverRef, defaultNamespace string, byKey map[resource.Key]resource.Envelope, st *state.State) (lineage.LineageEndpoint, error) {
+	ref := resource.NameRef{Name: observer.Name, Namespace: observer.Namespace}
+	provEnv, ok := byKey[ref.Key(defaultNamespace, "Provider")]
 	if !ok {
-		return lineage.LineageEndpoint{}, fmt.Errorf("observer %q does not resolve to a Provider", observerName)
+		return lineage.LineageEndpoint{}, fmt.Errorf("observer %q does not resolve to a Provider in namespace %q", observer.Name, ref.NamespaceOr(defaultNamespace))
 	}
 	p, err := provider.FromEnvelope(provEnv)
 	if err != nil {
@@ -847,5 +1062,5 @@ func (e *Engine) resolveLineageEndpoint(ctx context.Context, observerName string
 			return lineage.LineageEndpoint{URL: url, Namespace: "datascape"}, nil
 		}
 	}
-	return lineage.LineageEndpoint{}, fmt.Errorf("observer %q: no resolvable endpoint (set spec.configuration.url or reconcile the provider first)", observerName)
+	return lineage.LineageEndpoint{}, fmt.Errorf("observer %q: no resolvable endpoint (set spec.configuration.url or reconcile the provider first)", observer.Name)
 }

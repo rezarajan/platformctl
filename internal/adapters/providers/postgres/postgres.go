@@ -129,10 +129,8 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	if err != nil {
 		return st, err
 	}
-	labels := map[string]string{
-		runtime.LabelManagedBy:  runtime.ManagedByValue,
-		runtime.LabelGeneration: name,
-	}
+	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", name, name)
+	oldUser, oldPass, _ := p.liveSuperuser(ctx, rt)
 
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
 		return st, err
@@ -169,6 +167,9 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
 		return st, err
 	}
+	if err := p.ensureSuperuser(ctx, user, pass, oldUser, oldPass); err != nil {
+		return st, err
+	}
 
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
@@ -184,6 +185,37 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		}.ToState(),
 	}
 	return st, nil
+}
+
+func (p *Provider) liveSuperuser(ctx context.Context, rt runtime.ContainerRuntime) (string, string, bool) {
+	ctr, found, err := rt.Inspect(ctx, p.containerName())
+	if err != nil || !found {
+		return "", "", false
+	}
+	user := ctr.Env["POSTGRES_USER"]
+	pass := ctr.Env["POSTGRES_PASSWORD"]
+	if user == "" || pass == "" {
+		return "", "", false
+	}
+	return user, pass, true
+}
+
+func (p *Provider) ensureSuperuser(ctx context.Context, desiredUser, desiredPass, previousUser, previousPass string) error {
+	desired := connString("127.0.0.1", p.hostPort(), desiredUser, desiredPass, "postgres")
+	if previousUser == "" || previousPass == "" || (previousUser == desiredUser && previousPass == desiredPass) {
+		return waitReady(ctx, desired, 60*time.Second)
+	}
+	if err := waitReady(ctx, desired, 5*time.Second); err == nil {
+		return nil
+	}
+	previous := connString("127.0.0.1", p.hostPort(), previousUser, previousPass, "postgres")
+	if err := waitReady(ctx, previous, 60*time.Second); err != nil {
+		return fmt.Errorf("postgres superuser credentials changed but neither the desired SecretReference nor the previous managed-container environment credentials can authenticate; manual recovery is required: %w", err)
+	}
+	if err := ensureSuperuserCredentials(ctx, previous, desiredUser, desiredPass); err != nil {
+		return err
+	}
+	return waitReady(ctx, desired, 30*time.Second)
 }
 
 // reconcileSource ensures the declared database exists, logical replication

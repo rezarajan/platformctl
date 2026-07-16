@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"net"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/ports/clock"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/ports/state"
 )
 
 // fakeLineageProvider records the endpoint it receives.
@@ -149,7 +151,7 @@ func TestLineageNotConsumedCondition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rs, ok := st.Resources[resource.Key{Kind: "Provider", Name: "plain-provider"}]
+	rs, ok := st.Resources[resource.Key{Namespace: resource.DefaultNamespace, Kind: "Provider", Name: "plain-provider"}]
 	if !ok {
 		t.Fatal("plain-provider missing from state")
 	}
@@ -239,6 +241,87 @@ func TestApplyWithoutHealDriftLeavesDrift(t *testing.T) {
 	applyAll(t, eng, envelopes)
 	if prov.ReconcileCount != 1 {
 		t.Errorf("ReconcileCount = %d, want 1 (HealDrift off must not reconcile)", prov.ReconcileCount)
+	}
+}
+
+type externalConfigProvider struct {
+	noop.Provider
+	configured int
+}
+
+func (p *externalConfigProvider) Type() string { return "external-config" }
+
+func (p *externalConfigProvider) Reconcile(_ context.Context, res resource.Envelope, _ runtime.ContainerRuntime) (status.Status, error) {
+	if res.Kind != "Provider" {
+		return status.Status{}, errors.New("external resource used Reconcile")
+	}
+	st := status.Status{}
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ProviderReady"}, time.Now())
+	return st, nil
+}
+
+func (p *externalConfigProvider) ConfigureExternal(_ context.Context, res resource.Envelope, _ runtime.ContainerRuntime) (status.Status, error) {
+	if res.Kind != "Dataset" {
+		return status.Status{}, errors.New("unexpected external resource")
+	}
+	p.configured++
+	st := status.Status{}
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ExternalConfigured"}, time.Now())
+	return st, nil
+}
+
+func TestExternalProviderRefUsesConfigureExternal(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	prov := &externalConfigProvider{}
+	reg.RegisterProvider("external-config", func() reconciler.Provider { return prov }, "")
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+
+	envelopes := []resource.Envelope{
+		envelope("Provider", "cfg", map[string]any{
+			"type":    "external-config",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Dataset", "raw", map[string]any{
+			"external":    true,
+			"providerRef": map[string]any{"name": "cfg"},
+			"bucket":      "raw",
+			"format":      "json",
+		}),
+	}
+	applyAll(t, newTestEngine(t, reg), envelopes)
+	if prov.configured != 1 {
+		t.Fatalf("ConfigureExternal calls = %d, want 1", prov.configured)
+	}
+}
+
+func TestApplyRefusesLegacyOrphanUnknown(t *testing.T) {
+	eng := newTestEngine(t, registry.New(featuregate.NewRegistry()))
+	key := resource.Key{Namespace: resource.DefaultNamespace, Kind: "Provider", Name: "legacy"}
+	if err := eng.StateStore.Save(context.Background(), state.State{
+		Version: state.CurrentVersion,
+		Resources: map[resource.Key]state.ResourceState{
+			key: {SpecHash: "old", Lifecycle: resource.Managed.String()},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g, err := graph.Build(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := plan.Plan{
+		Entries: []plan.Entry{{Key: key, Action: plan.ActionOrphanUnknown}},
+		Levels:  [][]resource.Key{{key}},
+	}
+	result, err := eng.Apply(context.Background(), p, nil, g)
+	if err == nil {
+		t.Fatal("apply accepted orphan-unknown delete")
+	}
+	if _, ok := result.Failed[key]; !ok {
+		t.Fatalf("result missing failed orphan key: %+v", result.Failed)
 	}
 }
 
@@ -419,6 +502,81 @@ func TestPreflightSecretsAggregates(t *testing.T) {
 	if err := eng.PreflightSecrets(context.Background(), envs); err != nil {
 		t.Errorf("preflight failed with all secrets set: %v", err)
 	}
+}
+
+func TestSecretReferenceDriftAndApplyRecordsNewFingerprint(t *testing.T) {
+	eng := newTestEngine(t, registry.New(featuregate.NewRegistry()))
+	eng.SecretStore = env.New()
+	envelopes := []resource.Envelope{
+		envelope("SecretReference", "db-creds", map[string]any{"backend": "env", "keys": []any{"password"}}),
+	}
+	key := envelopes[0].Key()
+
+	t.Setenv("DATASCAPE_SECRET_DB_CREDS_PASSWORD", "old-password")
+	applyWithSecretHashes(t, eng, envelopes)
+	st, err := eng.StateStore.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHash := st.Resources[key].SecretHash
+	if oldHash == "" {
+		t.Fatal("secret hash was not recorded after apply")
+	}
+
+	t.Setenv("DATASCAPE_SECRET_DB_CREDS_PASSWORD", "new-password")
+	results, err := eng.Probe(context.Background(), envelopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("probe returned %d result(s), want 1", len(results))
+	}
+	cond, ok := results[0].Status.Condition(status.DriftDetected)
+	if !ok || cond.Status != status.True || cond.Reason != "SecretChanged" {
+		t.Fatalf("drift condition = %+v, want SecretChanged true", cond)
+	}
+	st, err = eng.StateStore.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Resources[key].SecretHash; got != oldHash {
+		t.Fatalf("probe changed stored secret hash to %q, want old hash %q until apply", got, oldHash)
+	}
+
+	applyWithSecretHashes(t, eng, envelopes)
+	st, err = eng.StateStore.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	newHash := st.Resources[key].SecretHash
+	if newHash == "" || newHash == oldHash {
+		t.Fatalf("apply did not record new secret hash; old=%q new=%q", oldHash, newHash)
+	}
+}
+
+func applyWithSecretHashes(t *testing.T, eng *Engine, envelopes []resource.Envelope) Result {
+	t.Helper()
+	g, err := graph.Build(envelopes)
+	if err != nil {
+		t.Fatalf("graph: %v", err)
+	}
+	st, err := eng.StateStore.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	secretHashes, err := eng.SecretHashes(context.Background(), envelopes)
+	if err != nil {
+		t.Fatalf("secret hashes: %v", err)
+	}
+	p, err := plan.ComputeWithSecretHashes(envelopes, st, g, secretHashes)
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	result, err := eng.Apply(context.Background(), p, envelopes, g)
+	if err != nil {
+		t.Fatalf("apply: %v (failed: %v)", err, result.Failed)
+	}
+	return result
 }
 
 // TestProbeTCPReachable distinguishes a live endpoint (holds the connection),

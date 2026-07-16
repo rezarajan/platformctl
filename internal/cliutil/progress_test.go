@@ -26,8 +26,8 @@ func TestProgressReporterStreamsOrderedSteps(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"Reconciling 2 resources:",
-		"[1/2]", "create Provider/pg", "(2.7s)",
-		"[2/2]", "Source/db", "boom",
+		"[1/2]", "create default/Provider/pg", "(2.7s)",
+		"[2/2]", "default/Source/db", "boom",
 		"1 applied", "1 failed",
 	} {
 		if !strings.Contains(out, want) {
@@ -46,7 +46,7 @@ func TestProgressReporterHealingBeyondPlan(t *testing.T) {
 	r.End(1, 0, 0)
 
 	out := buf.String()
-	if !strings.Contains(out, "drift Provider/minio") {
+	if !strings.Contains(out, "drift default/Provider/minio") {
 		t.Errorf("missing healing line:\n%s", out)
 	}
 	if !strings.Contains(out, "[1]") { // seq beyond total renders as [n]

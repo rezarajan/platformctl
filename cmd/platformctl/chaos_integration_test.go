@@ -38,13 +38,18 @@ type driftReport struct {
 func runDrift(t *testing.T, manifests, stateFile string) (map[string]driftReport, int) {
 	t.Helper()
 	out, _, code := run(t, "drift", manifests, "--state-file", stateFile, "-o", "json")
-	var rows []driftReport
-	if err := json.NewDecoder(strings.NewReader(out)).Decode(&rows); err != nil {
+	var payload struct {
+		Resources []driftReport `json:"resources"`
+	}
+	if err := json.NewDecoder(strings.NewReader(out)).Decode(&payload); err != nil {
 		t.Fatalf("decode drift output: %v\n%s", err, out)
 	}
-	byResource := make(map[string]driftReport, len(rows))
-	for _, r := range rows {
+	byResource := make(map[string]driftReport, len(payload.Resources))
+	for _, r := range payload.Resources {
 		byResource[r.Resource] = r
+		if trimmed := strings.TrimPrefix(r.Resource, "default/"); trimmed != r.Resource {
+			byResource[trimmed] = r
+		}
 	}
 	return byResource, code
 }

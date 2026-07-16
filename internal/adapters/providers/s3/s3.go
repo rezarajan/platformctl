@@ -102,10 +102,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	if err != nil {
 		return st, err
 	}
-	labels := map[string]string{
-		runtime.LabelManagedBy:  runtime.ManagedByValue,
-		runtime.LabelGeneration: name,
-	}
+	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", name, name)
 
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
 		return st, err

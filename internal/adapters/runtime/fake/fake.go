@@ -135,6 +135,7 @@ func (r *Runtime) stateOf(spec runtime.ContainerSpec) runtime.ContainerState {
 		Running: true,
 		Healthy: true,
 		Labels:  spec.Labels,
+		Env:     spec.Env,
 	}
 }
 

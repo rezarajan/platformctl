@@ -20,6 +20,14 @@ type Provider interface {
 	Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error)
 }
 
+// ExternalConfigurer is the only provider capability allowed to mutate or
+// configure resources declaring spec.external: true with a providerRef.
+// External resources without providerRef remain connection/probe-only.
+type ExternalConfigurer interface {
+	Provider
+	ConfigureExternal(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error)
+}
+
 // CDCCapableProvider is declared by a provider that can sit behind a
 // `mode: cdc` Binding.
 type CDCCapableProvider interface {

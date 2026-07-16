@@ -59,6 +59,9 @@ func (r *Runtime) EnsureNetwork(ctx context.Context, spec runtime.NetworkSpec) e
 	}
 	for _, n := range nets {
 		if n.Name == spec.Name {
+			if n.Labels[runtime.LabelManagedBy] != runtime.ManagedByValue {
+				return fmt.Errorf("network %q exists but is not managed by platformctl; refusing to reuse it", spec.Name)
+			}
 			return nil // exists — Ensure* is a no-op
 		}
 	}
@@ -72,7 +75,10 @@ func (r *Runtime) EnsureNetwork(ctx context.Context, spec runtime.NetworkSpec) e
 }
 
 func (r *Runtime) EnsureVolume(ctx context.Context, spec runtime.VolumeSpec) error {
-	if _, err := r.cli.VolumeInspect(ctx, spec.Name); err == nil {
+	if vol, err := r.cli.VolumeInspect(ctx, spec.Name); err == nil {
+		if vol.Labels[runtime.LabelManagedBy] != runtime.ManagedByValue {
+			return fmt.Errorf("volume %q exists but is not managed by platformctl; refusing to reuse it", spec.Name)
+		}
 		return nil // exists
 	} else if !errdefs.IsNotFound(err) {
 		return fmt.Errorf("inspect volume %q: %w", spec.Name, err)
@@ -365,6 +371,7 @@ func stateFromInspect(info container.InspectResponse) runtime.ContainerState {
 	if info.Config != nil {
 		st.Image = info.Config.Image
 		st.Labels = info.Config.Labels
+		st.Env = envMap(info.Config.Env)
 	}
 	if info.State != nil {
 		st.Running = info.State.Running
@@ -375,6 +382,18 @@ func stateFromInspect(info container.InspectResponse) runtime.ContainerState {
 		}
 	}
 	return st
+}
+
+func envMap(env []string) map[string]string {
+	out := make(map[string]string, len(env))
+	for _, entry := range env {
+		k, v, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 func portMaps(ports []runtime.PortBinding) (nat.PortSet, nat.PortMap, error) {
@@ -393,7 +412,11 @@ func portMaps(ports []runtime.PortBinding) (nat.PortSet, nat.PortMap, error) {
 			return nil, nil, fmt.Errorf("invalid port %d/%s: %w", p.ContainerPort, proto, err)
 		}
 		exposed[port] = struct{}{}
-		bindings[port] = []nat.PortBinding{{HostPort: strconv.Itoa(p.HostPort)}}
+		hostIP := p.HostIP
+		if hostIP == "" {
+			hostIP = "127.0.0.1"
+		}
+		bindings[port] = []nat.PortBinding{{HostIP: hostIP, HostPort: strconv.Itoa(p.HostPort)}}
 	}
 	return exposed, bindings, nil
 }

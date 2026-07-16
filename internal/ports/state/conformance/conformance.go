@@ -31,7 +31,7 @@ func Run(t *testing.T, factory Factory) {
 	t.Run("Save_then_Load_roundtrip", func(t *testing.T) {
 		s := factory(t)
 		st, _ := s.Load(ctx)
-		key := resource.Key{Kind: "Provider", Name: "test-noop"}
+		key := resource.Key{Namespace: resource.DefaultNamespace, Kind: "Provider", Name: "test-noop"}
 		st.Resources[key] = state.ResourceState{SpecHash: "abc123", Lifecycle: "Managed"}
 		if err := s.Save(ctx, st); err != nil {
 			t.Fatalf("Save: %v", err)

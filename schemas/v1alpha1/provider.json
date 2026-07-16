@@ -71,7 +71,8 @@
           "type": "array",
           "items": {
             "type": "string",
-            "minLength": 1
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "maxLength": 63
           },
           "description": "Names of SecretReference resources resolved by the engine and passed to the provider."
         },

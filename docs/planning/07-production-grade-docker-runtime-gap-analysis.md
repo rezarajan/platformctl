@@ -445,6 +445,11 @@ Required work:
 - [ ] Define per-provider drift equivalence tables.
 - [ ] Probe full desired configuration or explain why a field is intentionally
       not drift-managed.
+- [x] Detect SecretReference material drift via one-way fingerprints and
+      reconcile dependents when the resolved value changes.
+- [x] Support admin-password rotation for Docker-managed Postgres and
+      MySQL/MariaDB when either the new credential already works or the
+      previous managed-container bootstrap env is still available.
 - [ ] Store observed provider facts in status for `status -o json`.
 - [ ] Add integration tests for manual out-of-band config changes.
 
@@ -584,6 +589,8 @@ Required work:
 - [ ] Add removed-resource/orphan tests.
 - [ ] Add unmanaged Docker network/volume collision tests.
 - [ ] Add host bind-address tests.
+- [x] Add lakehouse integration coverage for MySQL and Postgres admin-secret
+      rotation through SecretReference changes.
 - [ ] Add full provider config drift tests.
 - [ ] Add MariaDB integration coverage.
 - [ ] Add tests for special-character secrets and URL/DSN escaping.

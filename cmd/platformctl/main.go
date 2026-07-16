@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/rezarajan/platformctl/internal/adapters/providers/debezium"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/mysql"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/nessie"
@@ -39,13 +41,27 @@ func main() {
 		var exitErr cliutil.ExitError
 		if errors.As(err, &exitErr) {
 			if exitErr.Err != nil {
+				writeStructuredError(root, exitErr.Code, exitErr.Err)
 				fmt.Fprintln(os.Stderr, "error:", exitErr.Err)
 			}
 			os.Exit(exitErr.Code)
 		}
+		writeStructuredError(root, cliutil.ExitExecution, err)
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(cliutil.ExitExecution)
 	}
+}
+
+func writeStructuredError(root *cobra.Command, code int, err error) {
+	flags := root.PersistentFlags()
+	format, ferr := flags.GetString("output")
+	if ferr != nil || !isStructured(format) {
+		return
+	}
+	_ = cliutil.WriteOutput(os.Stdout, format, map[string]any{
+		"error": err.Error(),
+		"code":  code,
+	}, nil)
 }
 
 // defaultWiring registers every adapter this build ships. This is the single

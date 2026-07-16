@@ -19,7 +19,7 @@ func TestInventorySurfacesEndpoints(t *testing.T) {
 	store := localfile.New(stateFile)
 
 	st := state.State{Version: state.CurrentVersion, Resources: map[resource.Key]state.ResourceState{}}
-	st.Resources[resource.Key{Kind: "Provider", Name: "datascape-rp-test"}] = state.ResourceState{
+	st.Resources[resource.Key{Namespace: resource.DefaultNamespace, Kind: "Provider", Name: "datascape-rp-test"}] = state.ResourceState{
 		Lifecycle: "Managed",
 		Provider: map[string]any{
 			endpoint.Key: endpoint.List{
@@ -35,7 +35,7 @@ func TestInventorySurfacesEndpoints(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("inventory failed (code %d): %v\n%s", code, err, out)
 	}
-	for _, want := range []string{"kafka", "127.0.0.1:19192", "datascape-rp-test:29092", "Provider/datascape-rp-test"} {
+	for _, want := range []string{"kafka", "127.0.0.1:19192", "datascape-rp-test:29092", "default/Provider/datascape-rp-test"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("inventory output missing %q:\n%s", want, out)
 		}

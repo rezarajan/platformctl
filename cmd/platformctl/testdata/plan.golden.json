@@ -2,21 +2,23 @@
   "entries": [
     {
       "key": {
-        "Kind": "Provider",
-        "Name": "test-noop-provider"
+        "namespace": "default",
+        "kind": "Provider",
+        "name": "test-noop-provider"
       },
       "action": "create",
       "reason": "not present in state",
-      "specHash": "e5e1aefca5b94528b5d0cc0c86b2e97d11f1d60f87766c095df98c47c31793a0"
+      "specHash": "7edf9cbe805e6bcd5b108966db59afea5e22a95e7cf103771b9b4ab84d331136"
     },
     {
       "key": {
-        "Kind": "EventStream",
-        "Name": "test-events"
+        "namespace": "default",
+        "kind": "EventStream",
+        "name": "test-events"
       },
       "action": "create",
       "reason": "not present in state",
-      "specHash": "4b9d058b94c3ba83077c5cccd6a122bf003ae3e134d687861a07b3493643c887"
+      "specHash": "74de076f23eee3f25a78081921b6bd246d3b713225fc97aee7bf67d6a46afd79"
     }
   ]
 }

@@ -144,10 +144,8 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	if err != nil {
 		return st, err
 	}
-	labels := map[string]string{
-		runtime.LabelManagedBy:  runtime.ManagedByValue,
-		runtime.LabelGeneration: name,
-	}
+	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", name, name)
+	oldRootPass, _ := p.liveRootPassword(ctx, rt)
 
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
 		return st, err
@@ -191,7 +189,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	}
 	// Health says the server answers; make sure root auth over TCP works
 	// before declaring Ready (the images run an init phase like postgres's).
-	if err := waitReady(ctx, dsn("127.0.0.1", p.hostPort(), "root", rootPass, ""), 60*time.Second); err != nil {
+	if err := p.ensureRootPassword(ctx, rootPass, oldRootPass); err != nil {
 		return st, err
 	}
 
@@ -207,6 +205,38 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		}.ToState(),
 	}
 	return st, nil
+}
+
+func (p *Provider) liveRootPassword(ctx context.Context, rt runtime.ContainerRuntime) (string, bool) {
+	ctr, found, err := rt.Inspect(ctx, p.containerName())
+	if err != nil || !found {
+		return "", false
+	}
+	if pass := ctr.Env["MYSQL_ROOT_PASSWORD"]; pass != "" {
+		return pass, true
+	}
+	if pass := ctr.Env["MARIADB_ROOT_PASSWORD"]; pass != "" {
+		return pass, true
+	}
+	return "", false
+}
+
+func (p *Provider) ensureRootPassword(ctx context.Context, desiredPass, previousPass string) error {
+	desired := dsn("127.0.0.1", p.hostPort(), "root", desiredPass, "")
+	if previousPass == "" || previousPass == desiredPass {
+		return waitReady(ctx, desired, 60*time.Second)
+	}
+	if err := waitReady(ctx, desired, 5*time.Second); err == nil {
+		return nil
+	}
+	previous := dsn("127.0.0.1", p.hostPort(), "root", previousPass, "")
+	if err := waitReady(ctx, previous, 60*time.Second); err != nil {
+		return fmt.Errorf("mysql root credentials changed but neither the desired SecretReference nor the previous managed-container environment password can authenticate; manual recovery is required: %w", err)
+	}
+	if err := rotateRootPassword(ctx, previous, desiredPass); err != nil {
+		return err
+	}
+	return waitReady(ctx, desired, 30*time.Second)
 }
 
 // reconcileSource ensures the declared database exists, a replication-capable

@@ -42,10 +42,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	}
 
 	netName, volName, ctrName := names(res, cfg)
-	labels := map[string]string{
-		runtime.LabelManagedBy:  runtime.ManagedByValue,
-		runtime.LabelGeneration: res.Metadata.Name,
-	}
+	labels := runtime.ManagedLabels(res.Metadata.Namespace, res.Kind, res.Metadata.Name, res.Metadata.Name)
 
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: netName, Labels: labels}); err != nil {
 		return st, err

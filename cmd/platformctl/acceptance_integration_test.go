@@ -52,6 +52,7 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 			_ = rt.RemoveVolume(ctx, v)
 		}
 		_ = rt.RemoveNetwork(ctx, "datascape")
+		_ = exec.Command("docker", "network", "rm", "datascape").Run()
 	}
 	cleanup()
 	t.Cleanup(cleanup)

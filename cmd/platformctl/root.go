@@ -295,11 +295,15 @@ func newApplyCmd(a *app) *cobra.Command {
 	var autoApprove bool
 	var haltOnError bool
 	var parallelism int
+	var includeExternal, destructiveOK, includeImportedDeletes bool
 	cmd := &cobra.Command{
 		Use:   "apply [path]",
 		Short: "Compute the plan, then execute it",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if includeExternal && !destructiveOK {
+				return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("--include-external additionally requires --yes-i-understand-this-is-destructive"))
+			}
 			envelopes, g, err := a.loadAndValidate(pathArg(args))
 			if err != nil {
 				return err
@@ -321,28 +325,44 @@ func newApplyCmd(a *app) *cobra.Command {
 			if err := eng.PreflightSecrets(cmd.Context(), envelopes); err != nil {
 				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
-			p, err := planpkg.Compute(envelopes, st, g)
+			secretHashes, err := eng.SecretHashes(cmd.Context(), envelopes)
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
+			}
+			p, err := planpkg.ComputeWithSecretHashes(envelopes, st, g, secretHashes)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
 			healDrift := a.gates.Enabled("DriftDetection")
 			if !p.HasChanges() {
 				if !healDrift {
+					if isStructured(a.output) {
+						return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, applyOutput{Plan: p}, nil)
+					}
 					fmt.Fprintln(cmd.OutOrStdout(), "no changes; nothing to apply")
 					return nil
 				}
 				// Healing only re-converges resources to the spec already in
 				// state, so no approval prompt: nothing new is being applied.
-				fmt.Fprintln(cmd.OutOrStdout(), "no changes; probing for drift")
+				fmt.Fprintln(humanWriter(cmd, a.output), "no changes; probing for drift")
 			} else {
-				if err := printPlan(cmd, a.output, p); err != nil {
-					return err
+				if isStructured(a.output) {
+					if err := printPlanTo(humanWriter(cmd, a.output), "table", p); err != nil {
+						return err
+					}
+				} else {
+					if err := printPlan(cmd, a.output, p); err != nil {
+						return err
+					}
 				}
 				if !autoApprove {
-					fmt.Fprint(cmd.OutOrStdout(), "\nApply these changes? Only 'yes' is accepted: ")
+					fmt.Fprint(humanWriter(cmd, a.output), "\nApply these changes? Only 'yes' is accepted: ")
 					var answer string
 					fmt.Fscanln(cmd.InOrStdin(), &answer) //nolint:errcheck
 					if answer != "yes" {
+						if isStructured(a.output) {
+							return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, applyOutput{Plan: p, Cancelled: true}, nil)
+						}
 						fmt.Fprintln(cmd.OutOrStdout(), "apply cancelled")
 						return nil
 					}
@@ -356,12 +376,18 @@ func newApplyCmd(a *app) *cobra.Command {
 			eng.HaltOnError = haltOnError
 			eng.HealDrift = healDrift
 			eng.Parallelism = parallelism
+			eng.AllowDestructive = includeExternal && destructiveOK
+			eng.AllowImportedDeletes = includeImportedDeletes
 			// Stream ordered, countable progress to stderr; the reporter owns
 			// per-step output, so silence the raw log to avoid duplicate lines.
 			eng.Log = nil
 			eng.Reporter = cliutil.NewProgressReporter(cmd.ErrOrStderr(), isTTY(cmd.ErrOrStderr()))
-			if _, err := eng.Apply(cmd.Context(), p, envelopes, g); err != nil {
+			result, err := eng.Apply(cmd.Context(), p, envelopes, g)
+			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
+			}
+			if isStructured(a.output) {
+				return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, applyOutput{Plan: p, Result: resultPayload(result)}, nil)
 			}
 			// The reporter (stderr) already printed the streamed steps and a
 			// summary; success is also conveyed by the zero exit code.
@@ -371,6 +397,9 @@ func newApplyCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "skip the interactive confirmation (for CI)")
 	cmd.Flags().BoolVar(&haltOnError, "halt-on-error", false, "stop the whole apply on the first failure")
 	cmd.Flags().IntVar(&parallelism, "parallelism", 1, "max concurrent reconciliations within a dependency level (>1 requires the ParallelReconciliation gate)")
+	cmd.Flags().BoolVar(&includeExternal, "include-external", false, "also delete absent External-lifecycle resources during authoritative apply")
+	cmd.Flags().BoolVar(&includeImportedDeletes, "include-imported-deletes", false, "also delete absent Imported-lifecycle resources during authoritative apply")
+	cmd.Flags().BoolVar(&destructiveOK, "yes-i-understand-this-is-destructive", false, "required with --include-external")
 	return cmd
 }
 
@@ -403,18 +432,30 @@ func newDestroyCmd(a *app) *cobra.Command {
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
-			if err := printPlan(cmd, a.output, p); err != nil {
-				return err
+			if isStructured(a.output) {
+				if err := printPlanTo(cmd.ErrOrStderr(), "table", p); err != nil {
+					return err
+				}
+			} else {
+				if err := printPlan(cmd, a.output, p); err != nil {
+					return err
+				}
 			}
 			if !p.HasChanges() {
+				if isStructured(a.output) {
+					return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, destroyOutput{Plan: p}, nil)
+				}
 				fmt.Fprintln(cmd.OutOrStdout(), "nothing to destroy")
 				return nil
 			}
 			if !autoApprove {
-				fmt.Fprint(cmd.OutOrStdout(), "\nDestroy these resources? Only 'yes' is accepted: ")
+				fmt.Fprint(humanWriter(cmd, a.output), "\nDestroy these resources? Only 'yes' is accepted: ")
 				var answer string
 				fmt.Fscanln(cmd.InOrStdin(), &answer) //nolint:errcheck
 				if answer != "yes" {
+					if isStructured(a.output) {
+						return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, destroyOutput{Plan: p, Cancelled: true}, nil)
+					}
 					fmt.Fprintln(cmd.OutOrStdout(), "destroy cancelled")
 					return nil
 				}
@@ -424,6 +465,9 @@ func newDestroyCmd(a *app) *cobra.Command {
 			result, err := eng.Destroy(cmd.Context(), p, envelopes, g)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
+			}
+			if isStructured(a.output) {
+				return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, destroyOutput{Plan: p, Result: resultPayload(result)}, nil)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "destroyed: %d succeeded, %d failed, %d skipped\n", len(result.Succeeded), len(result.Failed), len(result.Skipped))
 			return nil
@@ -489,14 +533,23 @@ func newDriftCmd(a *app) *cobra.Command {
 				data = append(data, row)
 				rows = append(rows, []string{row.Resource, row.Ready, row.Drift, row.Reason})
 			}
-			if err := cliutil.WriteOutput(cmd.OutOrStdout(), a.output, data, rows); err != nil {
+			payload := driftOutput{Resources: data, Drifted: drifted}
+			if isStructured(a.output) {
+				if err := cliutil.WriteOutput(cmd.OutOrStdout(), a.output, payload, nil); err != nil {
+					return err
+				}
+			} else if err := cliutil.WriteOutput(cmd.OutOrStdout(), a.output, data, rows); err != nil {
 				return err
 			}
 			if drifted > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "\ndrift detected on %d resource(s); run apply to reconcile\n", drifted)
+				if !isStructured(a.output) {
+					fmt.Fprintf(cmd.OutOrStdout(), "\ndrift detected on %d resource(s); run apply to reconcile\n", drifted)
+				}
 				return cliutil.Exit(cliutil.ExitPlanChanges, nil)
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "\nno drift detected")
+			if !isStructured(a.output) {
+				fmt.Fprintln(cmd.OutOrStdout(), "\nno drift detected")
+			}
 			return nil
 		},
 	}
@@ -504,6 +557,7 @@ func newDriftCmd(a *app) *cobra.Command {
 
 func newImportCmd(a *app) *cobra.Command {
 	var from string
+	var namespace string
 	cmd := &cobra.Command{
 		Use:   "import <Kind>/<name> [path]",
 		Short: "Adopt an existing, out-of-band-created resource into state as Imported",
@@ -516,9 +570,9 @@ func newImportCmd(a *app) *cobra.Command {
 			if err := a.gates.Require("ImportedResources"); err != nil {
 				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
-			kind, name, ok := strings.Cut(args[0], "/")
-			if !ok || kind == "" || name == "" {
-				return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("first argument must be <Kind>/<name>, got %q", args[0]))
+			key, err := resource.ParseSelector(args[0], namespace)
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
 			envelopes, _, err := a.loadAndValidate(pathArg(args[1:]))
 			if err != nil {
@@ -535,7 +589,6 @@ func newImportCmd(a *app) *cobra.Command {
 			if err := eng.PreflightSecrets(cmd.Context(), envelopes); err != nil {
 				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
-			key := resource.Key{Kind: kind, Name: name}
 			probed, err := eng.Import(cmd.Context(), envelopes, key, from)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
@@ -544,11 +597,15 @@ func newImportCmd(a *app) *cobra.Command {
 			if c, ok := probed.Condition(status.Ready); ok {
 				reason = c.Reason
 			}
+			if isStructured(a.output) {
+				return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, importOutput{Key: key, Ready: reason}, nil)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "imported %s (Ready: %s)\n", key, reason)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&from, "from", "", "name of the existing backing object to adopt (must equal metadata.name in v1)")
+	cmd.Flags().StringVar(&namespace, "namespace", resource.DefaultNamespace, "namespace for the <Kind>/<name> selector")
 	_ = cmd.MarkFlagRequired("from")
 	return cmd
 }
@@ -607,8 +664,14 @@ func newInventoryCmd(a *app) *cobra.Command {
 				}
 			}
 			if len(data) == 0 {
+				if isStructured(a.output) {
+					return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, inventoryOutput{Endpoints: data}, nil)
+				}
 				fmt.Fprintln(cmd.OutOrStdout(), "no service endpoints recorded — apply the platform first")
 				return nil
+			}
+			if isStructured(a.output) {
+				return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, inventoryOutput{Endpoints: data}, nil)
 			}
 			return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, data, rows)
 		},
@@ -695,14 +758,15 @@ func newStatusCmd(a *app) *cobra.Command {
 }
 
 func newGraphCmd(a *app) *cobra.Command {
-	return &cobra.Command{
+	var graphFormat string
+	cmd := &cobra.Command{
 		Use:   "graph [path]",
 		Short: "Render the platform architecture (data flow + technology layer)",
 		Long: "Renders the architecture the manifests describe — data-movement pipelines\n" +
 			"(Bindings collapse into labelled source→target edges) and the technology layer\n" +
 			"(which Provider realizes each asset, and how external systems are reached).\n" +
 			"This is the picture you configure orchestrators against, not the internal\n" +
-			"reconcile ordering. Choose the format with -o: tree (default), dot, mermaid, json.",
+			"reconcile ordering. Choose the graph format with --format: tree (default), dot, mermaid, json.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			envelopes, _, err := a.loadAndValidate(pathArg(args))
@@ -710,20 +774,26 @@ func newGraphCmd(a *app) *cobra.Command {
 				return err
 			}
 			view := archview.Build(envelopes)
-			if err := view.Render(cmd.OutOrStdout(), a.output); err != nil {
+			if err := view.Render(cmd.OutOrStdout(), graphFormat); err != nil {
 				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&graphFormat, "format", "tree", "graph format: tree|dot|mermaid|json")
+	return cmd
 }
 
 func printPlan(cmd *cobra.Command, output string, p planpkg.Plan) error {
+	return printPlanTo(cmd.OutOrStdout(), output, p)
+}
+
+func printPlanTo(w io.Writer, output string, p planpkg.Plan) error {
 	rows := [][]string{{"RESOURCE", "ACTION", "REASON"}}
 	for _, e := range p.Entries {
 		rows = append(rows, []string{e.Key.String(), string(e.Action), e.Reason})
 	}
-	return cliutil.WriteOutput(cmd.OutOrStdout(), output, p, rows)
+	return cliutil.WriteOutput(w, output, p, rows)
 }
 
 func pathArg(args []string) string {
@@ -731,6 +801,63 @@ func pathArg(args []string) string {
 		return args[0]
 	}
 	return "."
+}
+
+type applyOutput struct {
+	Plan      planpkg.Plan  `json:"plan" yaml:"plan"`
+	Result    *resultOutput `json:"result,omitempty" yaml:"result,omitempty"`
+	Cancelled bool          `json:"cancelled,omitempty" yaml:"cancelled,omitempty"`
+}
+
+type destroyOutput struct {
+	Plan      planpkg.Plan  `json:"plan" yaml:"plan"`
+	Result    *resultOutput `json:"result,omitempty" yaml:"result,omitempty"`
+	Cancelled bool          `json:"cancelled,omitempty" yaml:"cancelled,omitempty"`
+}
+
+type resultOutput struct {
+	Succeeded []resource.Key    `json:"succeeded" yaml:"succeeded"`
+	Failed    map[string]string `json:"failed,omitempty" yaml:"failed,omitempty"`
+	Skipped   []resource.Key    `json:"skipped,omitempty" yaml:"skipped,omitempty"`
+}
+
+type driftOutput struct {
+	Resources any `json:"resources" yaml:"resources"`
+	Drifted   int `json:"drifted" yaml:"drifted"`
+}
+
+type inventoryOutput struct {
+	Endpoints any `json:"endpoints" yaml:"endpoints"`
+}
+
+type importOutput struct {
+	Key   resource.Key `json:"key" yaml:"key"`
+	Ready string       `json:"ready" yaml:"ready"`
+}
+
+func isStructured(output string) bool {
+	return output == "json" || output == "yaml"
+}
+
+func humanWriter(cmd *cobra.Command, output string) io.Writer {
+	if isStructured(output) {
+		return cmd.ErrOrStderr()
+	}
+	return cmd.OutOrStdout()
+}
+
+func resultPayload(result engine.Result) *resultOutput {
+	out := &resultOutput{
+		Succeeded: result.Succeeded,
+		Skipped:   result.Skipped,
+	}
+	if len(result.Failed) > 0 {
+		out.Failed = make(map[string]string, len(result.Failed))
+		for key, err := range result.Failed {
+			out.Failed[key.String()] = err.Error()
+		}
+	}
+	return out
 }
 
 // isTTY reports whether w is an interactive terminal (a character device),

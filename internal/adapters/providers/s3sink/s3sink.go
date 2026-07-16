@@ -100,10 +100,7 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 	if bootstrap == "" {
 		return st, fmt.Errorf("Provider %q (type: s3sink): spec.configuration.bootstrapServers is required", name)
 	}
-	labels := map[string]string{
-		runtime.LabelManagedBy:  runtime.ManagedByValue,
-		runtime.LabelGeneration: name,
-	}
+	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", name, name)
 
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
 		return st, err
@@ -173,10 +170,12 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		return st, fmt.Errorf("Binding %q: s3sink realizes mode \"sink\" only, got %q", res.Metadata.Name, b.Mode)
 	}
 
-	if _, ok := p.resources[resource.Key{Kind: "EventStream", Name: b.SourceRef}]; !ok {
+	sourceRef := resource.RefFromSpec(res.Spec, "sourceRef")
+	if _, ok := p.resources[sourceRef.Key(res.Metadata.Namespace, "EventStream")]; !ok {
 		return st, fmt.Errorf("Binding %q: sourceRef %q not found", res.Metadata.Name, b.SourceRef)
 	}
-	dsEnv, ok := p.resources[resource.Key{Kind: "Dataset", Name: b.TargetRef}]
+	targetRef := resource.RefFromSpec(res.Spec, "targetRef")
+	dsEnv, ok := p.resources[targetRef.Key(res.Metadata.Namespace, "Dataset")]
 	if !ok {
 		return st, fmt.Errorf("Binding %q: targetRef %q not found", res.Metadata.Name, b.TargetRef)
 	}
@@ -185,7 +184,7 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		return st, err
 	}
 
-	endpoint, err := p.objectStoreEndpoint(ds, b)
+	endpoint, err := p.objectStoreEndpoint(dsEnv, ds, b)
 	if err != nil {
 		return st, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
 	}
@@ -241,14 +240,15 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 // objectStoreEndpoint resolves the S3 endpoint reachable from the Connect
 // worker container: an explicit options.endpoint wins (external stores),
 // otherwise the Dataset's Provider container on the shared network.
-func (p *Provider) objectStoreEndpoint(ds dataset.Dataset, b binding.Binding) (string, error) {
+func (p *Provider) objectStoreEndpoint(dsEnv resource.Envelope, ds dataset.Dataset, b binding.Binding) (string, error) {
 	if ep, ok := b.Options["endpoint"].(string); ok && ep != "" {
 		return ep, nil
 	}
 	if ds.ProviderRef == "" {
 		return "", fmt.Errorf("cannot determine object-store endpoint (no providerRef on Dataset and no options.endpoint)")
 	}
-	if _, ok := p.resources[resource.Key{Kind: "Provider", Name: ds.ProviderRef}]; !ok {
+	providerRef := resource.RefFromSpec(dsEnv.Spec, "providerRef")
+	if _, ok := p.resources[providerRef.Key(dsEnv.Metadata.Namespace, "Provider")]; !ok {
 		return "", fmt.Errorf("Dataset providerRef %q not found", ds.ProviderRef)
 	}
 	// The s3 provider always serves the S3 API on 9000 inside the network.

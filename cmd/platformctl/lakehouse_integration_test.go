@@ -59,7 +59,9 @@ func TestLakehouse(t *testing.T) {
 	// The external database the Connection targets — out-of-band, on the
 	// shared network, never managed. wal_level=logical so the CDC Binding
 	// can stream from it.
-	if out, err := exec.Command("docker", "network", "create", "datascape").CombinedOutput(); err != nil &&
+	if out, err := exec.Command("docker", "network", "create",
+		"--label", "io.datascape.managed-by=platformctl",
+		"datascape").CombinedOutput(); err != nil &&
 		!strings.Contains(string(out), "already exists") {
 		t.Fatalf("create network: %v\n%s", err, out)
 	}
@@ -112,9 +114,36 @@ func TestLakehouse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mysqlDB.Close()
 	if err := mysqlDB.Ping(); err != nil {
 		t.Errorf("mysql source not reachable: %v", err)
+	}
+	mysqlDB.Close()
+
+	// Secret rotation: changing the root SecretReference must rotate the
+	// backing MySQL account and reconcile dependents, not leave the old DB
+	// password in place while probes start failing.
+	t.Setenv("DATASCAPE_SECRET_LAKE_MYSQL_ROOT_PASSWORD", "mysql-root-pw-rotated")
+	out, err, code = run(t, "apply", manifests, "--state-file", stateFile, "--auto-approve")
+	if err != nil || code != 0 {
+		t.Fatalf("mysql secret rotation apply failed (code %d): %v\n%s", code, err, out)
+	}
+	if err := pingMySQL("mysql-root-pw-rotated"); err != nil {
+		t.Fatalf("rotated mysql password not accepted: %v", err)
+	}
+	if err := pingMySQL("mysql-root-pw"); err == nil {
+		t.Fatal("old mysql password still accepted after rotation")
+	}
+
+	t.Setenv("DATASCAPE_SECRET_LAKE_PG_ADMIN_PASSWORD", "admin-pw-rotated")
+	out, err, code = run(t, "apply", manifests, "--state-file", stateFile, "--auto-approve")
+	if err != nil || code != 0 {
+		t.Fatalf("postgres secret rotation apply failed (code %d): %v\n%s", code, err, out)
+	}
+	if err := pingPostgres("admin-pw-rotated"); err != nil {
+		t.Fatalf("rotated postgres password not accepted: %v", err)
+	}
+	if err := pingPostgres("admin-pw"); err == nil {
+		t.Fatal("old postgres password still accepted after rotation")
 	}
 
 	// The Connection is a working entrypoint to the external database.
@@ -183,4 +212,24 @@ func TestLakehouse(t *testing.T) {
 	if st, found, _ := rt.Inspect(ctx, "external-orders-db"); !found || !st.Running {
 		t.Error("destroy touched the external database container")
 	}
+}
+
+func pingMySQL(password string) error {
+	db, err := sql.Open("mysql", "root:"+password+"@tcp(127.0.0.1:13306)/eventsdb?timeout=10s")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return db.Ping()
+}
+
+func pingPostgres(password string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, "postgres://admin:"+password+"@127.0.0.1:15434/appdb?sslmode=disable")
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	return nil
 }

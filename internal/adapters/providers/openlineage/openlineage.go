@@ -85,10 +85,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	if image == "" {
 		image = defaultImage
 	}
-	labels := map[string]string{
-		runtime.LabelManagedBy:  runtime.ManagedByValue,
-		runtime.LabelGeneration: p.name(),
-	}
+	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", p.name(), p.name())
 
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
 		return st, err

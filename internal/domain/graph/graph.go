@@ -35,7 +35,7 @@ func Build(envelopes []resource.Envelope) (*Graph, error) {
 		Edges: make(map[resource.Key][]resource.Key),
 	}
 
-	// Index by name for cross-kind ref resolution.
+	// Index by namespace/name for cross-kind ref resolution.
 	byName := make(map[string][]resource.Key)
 	for _, e := range envelopes {
 		k := e.Key()
@@ -43,28 +43,31 @@ func Build(envelopes []resource.Envelope) (*Graph, error) {
 			return nil, fmt.Errorf("duplicate resource %s", k)
 		}
 		g.Nodes[k] = e
-		byName[e.Metadata.Name] = append(byName[e.Metadata.Name], k)
+		byName[nameIndexKey(k.Namespace, k.Name)] = append(byName[nameIndexKey(k.Namespace, k.Name)], k)
 	}
 
 	for _, e := range envelopes {
 		from := e.Key()
 		for _, field := range refFields {
-			name := refName(e.Spec, field)
-			if name == "" {
+			ref := resource.RefFromSpec(e.Spec, field)
+			if ref.Name == "" {
 				continue
 			}
-			targets := byName[name]
+			if err := validateRef(from, field, ref); err != nil {
+				return nil, err
+			}
+			targets := filterKinds(byName[nameIndexKey(ref.NamespaceOr(e.Metadata.Namespace), ref.Name)], allowedKinds(field))
 			if len(targets) == 0 {
 				// Every reference — connectionRef included — must resolve
 				// in-set: the engine will demand it at apply time, and a
 				// dangling reference caught only then is a broken developer
 				// experience.
-				return nil, fmt.Errorf("%s: spec.%s %q does not resolve to any resource in the manifest set", from, field, name)
+				return nil, fmt.Errorf("%s: spec.%s %q does not resolve to any resource in namespace %q", from, field, ref.Name, ref.NamespaceOr(e.Metadata.Namespace))
 			}
 			// Prefer the kind-appropriate target when a name is ambiguous.
 			to := targets[0]
 			if len(targets) > 1 {
-				return nil, fmt.Errorf("%s: spec.%s %q is ambiguous (matches %d resources)", from, field, name, len(targets))
+				return nil, fmt.Errorf("%s: spec.%s %q is ambiguous in namespace %q (matches %d resources)", from, field, ref.Name, ref.NamespaceOr(e.Metadata.Namespace), len(targets))
 			}
 			g.Edges[from] = append(g.Edges[from], to)
 		}
@@ -75,9 +78,12 @@ func Build(envelopes []resource.Envelope) (*Graph, error) {
 				if !ok || name == "" {
 					continue
 				}
-				target := resource.Key{Kind: "SecretReference", Name: name}
+				if err := resource.ValidateDNSLabel("spec.secretRefs.name", name); err != nil {
+					return nil, fmt.Errorf("%s: %w", from, err)
+				}
+				target := resource.Key{Namespace: from.Namespace, Kind: "SecretReference", Name: name}
 				if _, exists := g.Nodes[target]; !exists {
-					return nil, fmt.Errorf("%s: spec.secretRefs entry %q does not resolve to a SecretReference", from, name)
+					return nil, fmt.Errorf("%s: spec.secretRefs entry %q does not resolve to a SecretReference in namespace %q", from, name, from.Namespace)
 				}
 				g.Edges[from] = append(g.Edges[from], target)
 			}
@@ -85,11 +91,15 @@ func Build(envelopes []resource.Envelope) (*Graph, error) {
 		// observers create edges too: the resource depends on the observed provider
 		// being reconciled first so its endpoint is resolvable.
 		for _, obs := range e.Metadata.Observers {
-			targets := byName[obs.Name]
-			if len(targets) == 0 {
-				return nil, fmt.Errorf("%s: metadata.observers entry %q does not resolve to any resource", from, obs.Name)
+			ref := resource.NameRef{Name: obs.Name, Namespace: obs.Namespace}
+			if err := validateRef(from, "metadata.observers", ref); err != nil {
+				return nil, err
 			}
-			g.Edges[from] = append(g.Edges[from], targets[0])
+			target := ref.Key(e.Metadata.Namespace, "Provider")
+			if _, ok := g.Nodes[target]; !ok {
+				return nil, fmt.Errorf("%s: metadata.observers entry %q does not resolve to a Provider in namespace %q", from, obs.Name, target.Namespace)
+			}
+			g.Edges[from] = append(g.Edges[from], target)
 		}
 	}
 
@@ -235,11 +245,44 @@ func formatCycle(cycle []resource.Key) string {
 	return s
 }
 
-func refName(spec map[string]any, field string) string {
-	ref, ok := spec[field].(map[string]any)
-	if !ok {
-		return ""
+func nameIndexKey(namespace, name string) string {
+	return resource.NormalizeNamespace(namespace) + "\x00" + name
+}
+
+func validateRef(from resource.Key, field string, ref resource.NameRef) error {
+	if err := resource.ValidateDNSLabel(field+".name", ref.Name); err != nil {
+		return fmt.Errorf("%s: %w", from, err)
 	}
-	name, _ := ref["name"].(string)
-	return name
+	if ref.Namespace != "" {
+		if err := resource.ValidateDNSLabel(field+".namespace", ref.Namespace); err != nil {
+			return fmt.Errorf("%s: %w", from, err)
+		}
+	}
+	return nil
+}
+
+func allowedKinds(field string) map[string]bool {
+	switch field {
+	case "providerRef":
+		return map[string]bool{"Provider": true}
+	case "connectionRef":
+		return map[string]bool{"Connection": true, "SecretReference": true}
+	case "secretRef":
+		return map[string]bool{"SecretReference": true}
+	default:
+		return nil
+	}
+}
+
+func filterKinds(keys []resource.Key, allowed map[string]bool) []resource.Key {
+	if allowed == nil {
+		return keys
+	}
+	var out []resource.Key
+	for _, k := range keys {
+		if allowed[k.Kind] {
+			out = append(out, k)
+		}
+	}
+	return out
 }

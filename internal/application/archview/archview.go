@@ -96,9 +96,9 @@ func Build(envelopes []resource.Envelope) *View {
 			for _, o := range e.Metadata.Observers {
 				observers = append(observers, o.Name)
 			}
-			target := resolveByName(byKey, b.TargetRef)
+			target := resolveByRef(byKey, e.Metadata.Namespace, resource.RefFromSpec(e.Spec, "targetRef"))
 			v.Edges = append(v.Edges, Edge{
-				From:      resolveByName(byKey, b.SourceRef),
+				From:      resolveByRef(byKey, e.Metadata.Namespace, resource.RefFromSpec(e.Spec, "sourceRef")),
 				To:        target,
 				Kind:      Pipeline,
 				Label:     label,
@@ -106,30 +106,30 @@ func Build(envelopes []resource.Envelope) *View {
 			})
 			// Lineage attaches at the target asset in the graph views.
 			for _, o := range observers {
-				v.Edges = append(v.Edges, Edge{From: target, To: resource.Key{Kind: "Provider", Name: o}, Kind: Observes})
+				v.Edges = append(v.Edges, Edge{From: target, To: resource.NameRef{Name: o}.Key(e.Metadata.Namespace, "Provider"), Kind: Observes})
 			}
 		default:
 			// Realization: the providerRef stands up this asset.
-			if p := refName(e.Spec, "providerRef"); p != "" {
+			if ref := resource.RefFromSpec(e.Spec, "providerRef"); ref.Name != "" {
 				v.Edges = append(v.Edges, Edge{
-					From: resource.Key{Kind: "Provider", Name: p},
+					From: ref.Key(e.Metadata.Namespace, "Provider"),
 					To:   e.Key(),
 					Kind: Realizes,
 				})
 			}
 			// Reachability: an asset consuming a Connection.
-			if c := refName(e.Spec, "connectionRef"); c != "" {
-				if _, ok := byKey[resource.Key{Kind: "Connection", Name: c}]; ok {
+			if ref := resource.RefFromSpec(e.Spec, "connectionRef"); ref.Name != "" {
+				if _, ok := byKey[ref.Key(e.Metadata.Namespace, "Connection")]; ok {
 					v.Edges = append(v.Edges, Edge{
 						From: e.Key(),
-						To:   resource.Key{Kind: "Connection", Name: c},
+						To:   ref.Key(e.Metadata.Namespace, "Connection"),
 						Kind: Reaches,
 					})
 				}
 			}
 			// Observers on a non-Binding asset (uncommon) attach directly.
 			for _, obs := range e.Metadata.Observers {
-				v.Edges = append(v.Edges, Edge{From: e.Key(), To: resource.Key{Kind: "Provider", Name: obs.Name}, Kind: Observes})
+				v.Edges = append(v.Edges, Edge{From: e.Key(), To: resource.NameRef{Name: obs.Name, Namespace: obs.Namespace}.Key(e.Metadata.Namespace, "Provider"), Kind: Observes})
 			}
 		}
 	}
@@ -141,7 +141,7 @@ func Build(envelopes []resource.Envelope) *View {
 			continue
 		}
 		if target, _ := e.Spec["target"].(string); target != "" {
-			tk := resource.Key{Kind: "External", Name: target}
+			tk := resource.Key{Namespace: e.Key().Namespace, Kind: "External", Name: target}
 			addNode(Node{Key: tk, Kind: "External", Detail: "external system"})
 			v.Edges = append(v.Edges, Edge{From: e.Key(), To: tk, Kind: Reaches, Label: "forwards to"})
 		}
@@ -157,15 +157,17 @@ func Build(envelopes []resource.Envelope) *View {
 	return v
 }
 
-// resolveByName finds a resource by bare name across kinds (Binding refs are
-// name-only). Falls back to a synthetic key when unresolved.
-func resolveByName(byKey map[resource.Key]resource.Envelope, name string) resource.Key {
+// resolveByRef finds a resource by ref namespace/name across kinds. Falls
+// back to a synthetic key when unresolved; validation catches unresolved refs
+// before this view is normally rendered.
+func resolveByRef(byKey map[resource.Key]resource.Envelope, defaultNamespace string, ref resource.NameRef) resource.Key {
+	namespace := ref.NamespaceOr(defaultNamespace)
 	for k := range byKey {
-		if k.Name == name {
+		if k.Namespace == namespace && k.Name == ref.Name {
 			return k
 		}
 	}
-	return resource.Key{Kind: "?", Name: name}
+	return resource.Key{Namespace: namespace, Kind: "?", Name: ref.Name}
 }
 
 func detailOf(e resource.Envelope) string {
@@ -190,13 +192,4 @@ func detailOf(e resource.Envelope) string {
 		}
 	}
 	return ""
-}
-
-func refName(spec map[string]any, field string) string {
-	ref, ok := spec[field].(map[string]any)
-	if !ok {
-		return ""
-	}
-	name, _ := ref["name"].(string)
-	return name
 }

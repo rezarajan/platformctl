@@ -5,10 +5,17 @@ package debezium
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	// Registers the MySQL database/sql driver for connector preflight.
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/rezarajan/platformctl/internal/adapters/kafkaconnect"
 	"github.com/rezarajan/platformctl/internal/domain/binding"
@@ -103,10 +110,7 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 	if bootstrap == "" {
 		return st, fmt.Errorf("Provider %q (type: debezium): spec.configuration.bootstrapServers is required", name)
 	}
-	labels := map[string]string{
-		runtime.LabelManagedBy:  runtime.ManagedByValue,
-		runtime.LabelGeneration: name,
-	}
+	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", name, name)
 
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
 		return st, err
@@ -169,7 +173,8 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		return st, fmt.Errorf("Binding %q: debezium realizes mode \"cdc\" only, got %q", res.Metadata.Name, b.Mode)
 	}
 
-	srcEnv, ok := p.resources[resource.Key{Kind: "Source", Name: b.SourceRef}]
+	srcRef := resource.RefFromSpec(res.Spec, "sourceRef")
+	srcEnv, ok := p.resources[srcRef.Key(res.Metadata.Namespace, "Source")]
 	if !ok {
 		return st, fmt.Errorf("Binding %q: sourceRef %q not found", res.Metadata.Name, b.SourceRef)
 	}
@@ -194,17 +199,23 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 	// Source's Provider container name, then explicit options overrides.
 	dbHost := ""
 	dbPort := enginePort
+	preflightHost := ""
+	preflightPort := 0
 	connSecretRef := ""
 	if src.ProviderRef != nil {
 		dbHost = *src.ProviderRef
 	}
 	if src.External && src.ConnectionRef != nil {
-		if connEnv, ok := p.resources[resource.Key{Kind: "Connection", Name: *src.ConnectionRef}]; ok {
+		connRef := resource.RefFromSpec(srcEnv.Spec, "connectionRef")
+		if connEnv, ok := p.resources[connRef.Key(srcEnv.Metadata.Namespace, "Connection")]; ok {
 			conn, err := connection.FromEnvelope(connEnv)
 			if err != nil {
 				return st, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
 			}
 			dbHost, dbPort = conn.Endpoint(connEnv.Metadata.Name)
+			if host, port, ok := hostPort(conn.DialAddress()); ok {
+				preflightHost, preflightPort = host, port
+			}
 			if conn.SecretRef != nil {
 				connSecretRef = *conn.SecretRef
 			}
@@ -285,6 +296,11 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 	}
 	p.applyLineage(config)
 
+	if preflightHost != "" {
+		if err := verifyDatabaseConnection(ctx, src.Engine, preflightHost, preflightPort, dbName, creds["username"], creds["password"]); err != nil {
+			return st, fmt.Errorf("Binding %q: database connection preflight failed before registering connector: %w", res.Metadata.Name, err)
+		}
+	}
 	if err := kafkaconnect.PutConnectorConfig(ctx, p.connectURL(), connectorName, config); err != nil {
 		return st, err
 	}
@@ -334,6 +350,53 @@ func (p *Provider) applyLineage(config map[string]string) {
 	config["openlineage.integration.config.transport.url"] = p.lineage.URL
 	if p.lineage.Namespace != "" {
 		config["openlineage.integration.job.namespace"] = p.lineage.Namespace
+	}
+}
+
+func hostPort(address string) (string, int, bool) {
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", 0, false
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return "", 0, false
+	}
+	return host, port, true
+}
+
+func verifyDatabaseConnection(ctx context.Context, engine, host string, port int, dbName, user, pass string) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	switch engine {
+	case "postgres":
+		u := url.URL{
+			Scheme: "postgres",
+			User:   url.UserPassword(user, pass),
+			Host:   host + ":" + strconv.Itoa(port),
+			Path:   "/" + dbName,
+		}
+		q := u.Query()
+		q.Set("sslmode", "disable")
+		u.RawQuery = q.Encode()
+		conn, err := pgx.Connect(ctx, u.String())
+		if err != nil {
+			return fmt.Errorf("connect to postgres %s:%d/%s as %q: %w", host, port, dbName, user, err)
+		}
+		defer conn.Close(ctx)
+		return nil
+	case "mysql", "mariadb":
+		db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?timeout=10s", user, pass, host, port, dbName))
+		if err != nil {
+			return fmt.Errorf("connect to mysql %s:%d/%s as %q: %w", host, port, dbName, user, err)
+		}
+		defer db.Close()
+		if err := db.PingContext(ctx); err != nil {
+			return fmt.Errorf("connect to mysql %s:%d/%s as %q: %w", host, port, dbName, user, err)
+		}
+		return nil
+	default:
+		return nil
 	}
 }
 

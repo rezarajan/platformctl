@@ -136,7 +136,9 @@ func TestExternalSourceEndToEnd(t *testing.T) {
 
 	// The "production" database: out-of-band, on the shared network, never
 	// managed by Datascape.
-	if out, err := exec.Command("docker", "network", "create", "datascape-ext-net").CombinedOutput(); err != nil {
+	if out, err := exec.Command("docker", "network", "create",
+		"--label", "io.datascape.managed-by=platformctl",
+		"datascape-ext-net").CombinedOutput(); err != nil {
 		t.Fatalf("create network: %v\n%s", err, out)
 	}
 	if out, err := exec.Command("docker", "run", "-d", "--name", "datascape-ext-outofband-pg",
@@ -184,7 +186,7 @@ func TestExternalSourceEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := st.Resources[resource.Key{Kind: "Source", Name: "ext-students"}]; !ok {
+	if _, ok := st.Resources[resource.Key{Namespace: resource.DefaultNamespace, Kind: "Source", Name: "ext-students"}]; !ok {
 		t.Error("external Source vanished from state without --include-external")
 	}
 

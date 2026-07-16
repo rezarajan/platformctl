@@ -46,6 +46,29 @@ func waitReady(ctx context.Context, conn string, timeout time.Duration) error {
 	}
 }
 
+func ensureSuperuserCredentials(ctx context.Context, adminConn, user, pass string) error {
+	c, err := connect(ctx, adminConn)
+	if err != nil {
+		return err
+	}
+	defer c.Close(ctx)
+	var count int
+	if err := c.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname = $1`, user).Scan(&count); err != nil {
+		return fmt.Errorf("check superuser role %q: %w", user, err)
+	}
+	quotedUser := pgx.Identifier{user}.Sanitize()
+	if count == 0 {
+		if _, err := c.Exec(ctx, fmt.Sprintf(`CREATE ROLE %s WITH LOGIN SUPERUSER PASSWORD '%s'`, quotedUser, escapeLiteral(pass))); err != nil {
+			return fmt.Errorf("create superuser role %q: %w", user, err)
+		}
+		return nil
+	}
+	if _, err := c.Exec(ctx, fmt.Sprintf(`ALTER ROLE %s WITH LOGIN SUPERUSER PASSWORD '%s'`, quotedUser, escapeLiteral(pass))); err != nil {
+		return fmt.Errorf("update superuser role %q: %w", user, err)
+	}
+	return nil
+}
+
 func ensureDatabase(ctx context.Context, adminConn, name string) error {
 	exists, err := databaseExists(ctx, adminConn, name)
 	if err != nil {

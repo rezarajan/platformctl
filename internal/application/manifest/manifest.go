@@ -148,13 +148,15 @@ func envelopeFrom(raw map[string]any) (resource.Envelope, error) {
 	meta, _ := raw["metadata"].(map[string]any)
 	e.Metadata.Name, _ = meta["name"].(string)
 	e.Metadata.Namespace, _ = meta["namespace"].(string)
+	e.Metadata.Namespace = resource.NormalizeNamespace(e.Metadata.Namespace)
 	e.Metadata.Labels = stringMap(meta["labels"])
 	e.Metadata.Annotations = stringMap(meta["annotations"])
 	if observers, ok := meta["observers"].([]any); ok {
 		for _, o := range observers {
 			if om, ok := o.(map[string]any); ok {
 				name, _ := om["name"].(string)
-				e.Metadata.Observers = append(e.Metadata.Observers, resource.ObserverRef{Name: name})
+				namespace, _ := om["namespace"].(string)
+				e.Metadata.Observers = append(e.Metadata.Observers, resource.ObserverRef{Name: name, Namespace: namespace})
 			}
 		}
 	}

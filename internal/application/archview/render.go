@@ -1,6 +1,7 @@
 package archview
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -59,7 +60,7 @@ func (v *View) renderDOT(w io.Writer) error {
 		if n.Lifecycle == "External" {
 			attrs += ", style=\"rounded,dashed\""
 		}
-		fmt.Fprintf(w, "  %q [%s];\n", n.Key.String(), attrs)
+		fmt.Fprintf(w, "  %s [%s];\n", graphID(n.Key), attrs)
 	}
 	for _, e := range v.Edges {
 		attrs := ""
@@ -76,7 +77,7 @@ func (v *View) renderDOT(w io.Writer) error {
 				attrs += fmt.Sprintf(", label=%q", e.Label)
 			}
 		}
-		fmt.Fprintf(w, "  %q -> %q [%s];\n", e.From.String(), e.To.String(), attrs)
+		fmt.Fprintf(w, "  %s -> %s [%s];\n", graphID(e.From), graphID(e.To), attrs)
 	}
 	fmt.Fprintln(w, "}")
 	return nil
@@ -85,19 +86,19 @@ func (v *View) renderDOT(w io.Writer) error {
 func (v *View) renderMermaid(w io.Writer) error {
 	fmt.Fprintln(w, "flowchart LR")
 	for _, n := range v.Nodes {
-		id := mermaidID(n.Key)
+		id := graphID(n.Key)
 		label := mermaidEscape(nodeLabel(n))
 		switch n.Kind {
 		case "Provider":
-			fmt.Fprintf(w, "  %s([%s])\n", id, label)
+			fmt.Fprintf(w, "  %s([\"%s\"])\n", id, label)
 		case "External":
 			fmt.Fprintf(w, "  %s[/%s/]\n", id, label)
 		default:
-			fmt.Fprintf(w, "  %s[%s]\n", id, label)
+			fmt.Fprintf(w, "  %s[\"%s\"]\n", id, label)
 		}
 	}
 	for _, e := range v.Edges {
-		from, to := mermaidID(e.From), mermaidID(e.To)
+		from, to := graphID(e.From), graphID(e.To)
 		switch e.Kind {
 		case Pipeline:
 			fmt.Fprintf(w, "  %s ==>|%s| %s\n", from, mermaidEscape(e.Label), to)
@@ -221,11 +222,17 @@ func nodeLabel(n Node) string {
 	return label
 }
 
-func mermaidID(k resource.Key) string {
-	repl := strings.NewReplacer("/", "_", "-", "_", ".", "_", " ", "_", ":", "_")
-	return repl.Replace(k.String())
+func graphID(k resource.Key) string {
+	return "n_" + base64.RawURLEncoding.EncodeToString([]byte(k.String()))
 }
 
 func mermaidEscape(s string) string {
-	return strings.ReplaceAll(s, "\"", "'")
+	repl := strings.NewReplacer(
+		"\\", "\\\\",
+		"\"", "#quot;",
+		"\r\n", "<br/>",
+		"\n", "<br/>",
+		"|", "#124;",
+	)
+	return repl.Replace(s)
 }

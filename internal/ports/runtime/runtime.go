@@ -31,6 +31,7 @@ type VolumeMount struct {
 }
 
 type PortBinding struct {
+	HostIP        string
 	HostPort      int
 	ContainerPort int
 	Protocol      string // "tcp" (default) | "udp"
@@ -55,6 +56,7 @@ type ContainerState struct {
 	Running bool
 	Healthy bool
 	Labels  map[string]string
+	Env     map[string]string
 }
 
 type ContainerRuntime interface {
@@ -74,5 +76,26 @@ type ContainerRuntime interface {
 const (
 	LabelManagedBy  = "io.datascape.managed-by"
 	LabelGeneration = "io.datascape.generation"
+	LabelNamespace  = "io.datascape.namespace"
+	LabelKind       = "io.datascape.kind"
+	LabelName       = "io.datascape.name"
+	LabelProject    = "io.datascape.project"
 	ManagedByValue  = "platformctl"
 )
+
+func ManagedLabels(namespace, kind, name, generation string) map[string]string {
+	if namespace == "" {
+		namespace = "default"
+	}
+	if generation == "" {
+		generation = name
+	}
+	return map[string]string{
+		LabelManagedBy:  ManagedByValue,
+		LabelGeneration: generation,
+		LabelNamespace:  namespace,
+		LabelKind:       kind,
+		LabelName:       name,
+		LabelProject:    namespace,
+	}
+}

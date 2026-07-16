@@ -35,6 +35,12 @@ type sinkStub struct{ stubProvider }
 
 func (sinkStub) SupportedSinkFormats() []string { return []string{"parquet", "json"} }
 
+type externalConfigStub struct{ stubProvider }
+
+func (externalConfigStub) ConfigureExternal(context.Context, resource.Envelope, runtime.ContainerRuntime) (status.Status, error) {
+	return status.Status{}, nil
+}
+
 func envelope(kind, name string, spec map[string]any) resource.Envelope {
 	e := resource.Envelope{}
 	e.APIVersion = "datascape.io/v1alpha1"
@@ -433,6 +439,31 @@ func TestConnectionSecretRefTargetKind(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `secretRef "missing-creds" must resolve to a SecretReference`) {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestExternalProviderRefRequiresConfigurer(t *testing.T) {
+	manifests := []resource.Envelope{
+		envelope("Provider", "object-store", map[string]any{
+			"type":    "minio",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Dataset", "raw", map[string]any{
+			"external":    true,
+			"providerRef": map[string]any{"name": "object-store"},
+			"bucket":      "raw",
+			"format":      "json",
+		}),
+	}
+	err := Check(manifests, resolver(stubProvider{"minio"}))
+	if err == nil {
+		t.Fatal("validate accepted an external providerRef without ExternalConfigurer")
+	}
+	if !strings.Contains(err.Error(), "ExternalConfigurer") {
+		t.Fatalf("error does not name ExternalConfigurer: %v", err)
+	}
+	if err := Check(manifests, resolver(externalConfigStub{stubProvider{"minio"}})); err != nil {
+		t.Fatalf("external configurer rejected: %v", err)
 	}
 }
 

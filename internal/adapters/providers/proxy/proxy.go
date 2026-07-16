@@ -61,10 +61,7 @@ func (p *Provider) image() string {
 }
 
 func (p *Provider) labels() map[string]string {
-	return map[string]string{
-		runtime.LabelManagedBy:  runtime.ManagedByValue,
-		runtime.LabelGeneration: p.name(),
-	}
+	return runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", p.name(), p.name())
 }
 
 func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
@@ -106,6 +103,7 @@ func (p *Provider) reconcileConnection(ctx context.Context, res resource.Envelop
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: p.labels()}); err != nil {
 		return st, err
 	}
+	connLabels := runtime.ManagedLabels(res.Metadata.Namespace, res.Kind, name, name)
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
 		Name:  name,
 		Image: p.image(),
@@ -115,7 +113,7 @@ func (p *Provider) reconcileConnection(ctx context.Context, res resource.Envelop
 		},
 		Networks: []string{p.network()},
 		Ports:    []runtime.PortBinding{{HostPort: conn.Port, ContainerPort: conn.Port}},
-		Labels:   p.labels(),
+		Labels:   connLabels,
 	})
 	if err != nil {
 		return st, err

@@ -69,7 +69,7 @@ func TestPipelineEdgesFollowDataFlow(t *testing.T) {
 			realized[e.To.String()] = true
 		}
 	}
-	for _, want := range []string{"Source/students", "EventStream/events"} {
+	for _, want := range []string{"default/Source/students", "default/EventStream/events"} {
 		if !realized[want] {
 			t.Errorf("no realization edge for %s", want)
 		}

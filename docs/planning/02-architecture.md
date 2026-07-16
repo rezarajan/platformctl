@@ -514,8 +514,10 @@ noise contaminating stdout.
 - Locking: `flock` (or equivalent) around the state file for the duration of `plan`/`apply`/
   `destroy`; a stale lock (process died) is detected via a PID + heartbeat check and reported
   with a clear recovery instruction, never silently overridden.
-- Secrets: state stores **hashes/fingerprints** of resolved secret values where a fingerprint is
-  needed for drift comparison, never the resolved value itself.
+- Secrets: state stores **hashes/fingerprints** of resolved secret values for
+  applied `SecretReference`s, never the resolved value itself. Drift compares
+  the current resolved fingerprint to the last applied fingerprint; apply
+  records the new baseline and cascades reconciliation to dependents.
 
 ## 8. Observability
 

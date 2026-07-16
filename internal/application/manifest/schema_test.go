@@ -59,6 +59,18 @@ func TestSchemaRejectsMalformedManifests(t *testing.T) {
 				"spec: {providerRef: {name: m}, bucket: b, format: json}\nstatus: {conditions: []}\n",
 			want: "schema validation failed",
 		},
+		{
+			name: "uppercase metadata name",
+			doc: "apiVersion: datascape.io/v1alpha1\nkind: Provider\nmetadata: {name: BadName}\n" +
+				"spec: {type: noop, runtime: {type: fake}}\n",
+			want: "schema validation failed",
+		},
+		{
+			name: "uppercase ref name",
+			doc: "apiVersion: datascape.io/v1alpha1\nkind: EventStream\nmetadata: {name: events}\n" +
+				"spec: {providerRef: {name: BadRef}}\n",
+			want: "schema validation failed",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -74,8 +86,8 @@ func TestSchemaRejectsMalformedManifests(t *testing.T) {
 }
 
 func TestSchemaAcceptsValidManifest(t *testing.T) {
-	doc := "apiVersion: datascape.io/v1alpha1\nkind: EventStream\nmetadata: {name: events}\n" +
-		"spec:\n  providerRef: {name: rp}\n  partitions: 3\n  retention: {duration: 7d}\n"
+	doc := "apiVersion: datascape.io/v1alpha1\nkind: EventStream\nmetadata: {name: events, namespace: analytics}\n" +
+		"spec:\n  providerRef: {namespace: infra, name: rp}\n  partitions: 3\n  retention: {duration: 7d}\n"
 	if err := loadOne(t, doc); err != nil {
 		t.Fatalf("valid manifest rejected: %v", err)
 	}

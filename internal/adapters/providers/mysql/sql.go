@@ -50,6 +50,40 @@ func waitReady(ctx context.Context, conn string, timeout time.Duration) error {
 	}
 }
 
+func rotateRootPassword(ctx context.Context, adminConn, newPass string) error {
+	db, err := open(adminConn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(ctx, "SELECT Host FROM mysql.user WHERE User = 'root'")
+	if err != nil {
+		return fmt.Errorf("list root accounts: %w", err)
+	}
+	defer rows.Close()
+	var hosts []string
+	for rows.Next() {
+		var host string
+		if err := rows.Scan(&host); err != nil {
+			return fmt.Errorf("scan root account: %w", err)
+		}
+		hosts = append(hosts, host)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list root accounts: %w", err)
+	}
+	if len(hosts) == 0 {
+		return fmt.Errorf("no root accounts found")
+	}
+	for _, host := range hosts {
+		account := quoteString("root") + "@" + quoteString(host)
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("ALTER USER %s IDENTIFIED BY %s", account, quoteString(newPass))); err != nil {
+			return fmt.Errorf("rotate root password for root@%s: %w", host, err)
+		}
+	}
+	return nil
+}
+
 // quoteIdent backtick-quotes an identifier (CREATE DATABASE/USER cannot be
 // parameterized).
 func quoteIdent(s string) string { return "`" + strings.ReplaceAll(s, "`", "``") + "`" }
