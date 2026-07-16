@@ -45,6 +45,158 @@ The highest-priority work is:
    and generated endpoint config for tools such as Spark, Trino, Dagster,
    dbt, BI tools, and SQL/S3 clients.
 
+## Cross-Runtime Portability (Docker + Kubernetes + Terraform)
+
+**Added 2026-07-16.** This gap analysis is scoped to the Docker runtime, but
+the project's own design goal (docs/planning/01-product-requirements.md
+G6, docs/planning/04-roadmap-and-feature-gates.md §10) is that the
+provider/runtime split lets a second runtime adapter — Kubernetes, then
+Terraform/external — be added *without changing any existing resource kind
+or provider*. That claim was previously untested: Phase 7 (Kubernetes) and
+Phase 8 (Terraform/external) were both listed as "future, not started," and
+`registry.PlannedRuntimes` rejected `kubernetes` at construction time with
+"planned but not yet available."
+
+A real Kubernetes `ContainerRuntime` adapter now exists
+(`internal/adapters/runtime/kubernetes`, Alpha, behind the
+`KubernetesRuntime` gate — disabled by default) and:
+
+- Passes the exact same conformance suite the Docker adapter passes
+  (`internal/ports/runtime/conformance`), run against a real cluster
+  (`minikube`, verified live during this work — not mocked).
+- Was exercised through the real CLI with the **unmodified** `redpanda`
+  provider (`internal/adapters/providers/redpanda`) — `platformctl apply`
+  against a manifest with `spec.runtime.type: kubernetes` created a real
+  Deployment + Service, pulled the image, ran the translated health probe,
+  and reported the Provider healthy in ~2.5s. Zero provider code changes.
+
+This is the strongest evidence available that the port boundary in
+`internal/ports/runtime` is genuinely runtime-agnostic, not just designed to
+look that way. Building it surfaced concrete facts worth recording — both
+things that needed fixing and things that turned out to be genuine,
+justified per-runtime differences (per this project's own "never overfit
+unless truly technology-specific" standard):
+
+### Mapping decisions that worked cleanly (no port change needed)
+
+- **Docker network → Kubernetes Namespace.** A Docker network is a shared
+  addressing+isolation domain that lets containers resolve each other by
+  name; a Kubernetes Namespace plus a same-name Service does the same job
+  (Service DNS gives every pod in the namespace `<name>` resolution, exactly
+  matching Docker's embedded per-network DNS). `EnsureNetwork` creates the
+  Namespace; every container/volume naming that network lands inside it.
+  Every provider already names exactly one network per container
+  (verified: `grep -rn "Networks:" internal/adapters/providers/*/*.go` — 11
+  call sites, all single-element slices), so this required no provider
+  change at all.
+- **RestartPolicy, SecurityContext field names.** These were deliberately
+  named after Kubernetes' own vocabulary when added in this session's
+  earlier Gate 1.1 slice (restartPolicy Always/OnFailure/Never;
+  runAsUser/readOnlyRootFilesystem/capabilities), specifically so a future
+  Kubernetes adapter wouldn't need translation. That bet paid off — the
+  Kubernetes adapter maps these fields almost directly.
+- **Health checks.** Docker's `HealthCheck.Test` convention (`["CMD-SHELL",
+  "<cmd>"]` / `["CMD", "<argv>"]`, used identically across all 7 providers
+  that set one) translates cleanly to a Kubernetes `ExecAction`, applied to
+  both readiness and liveness probes (Docker's single healthcheck gates both
+  "accepting traffic" and "should be restarted").
+
+### A real port-boundary defect found and fixed
+
+- **`VolumeSpec` had no namespace concept.** Docker volumes are
+  cluster-global; a Kubernetes `PersistentVolumeClaim` is namespace-scoped
+  and can only be mounted by a Pod in the *same* namespace. `VolumeSpec`
+  carried no hint of which namespace a volume belonged to, so the
+  Kubernetes adapter had no way to know where to place the PVC before the
+  container that mounts it is created. Fixed by adding `VolumeSpec.Networks
+  []string` (Docker ignores it; Kubernetes requires exactly one, mirroring
+  `ContainerSpec.Networks`) — a small, mechanical change to `runtime.go` and
+  the 6 provider call sites (`mysql`, `s3`, `postgres`, `redpanda`,
+  `openlineage`, `placeholder`), plus the conformance suite. This is
+  exactly the kind of "design defect in the port boundary" §10 of the
+  roadmap doc anticipated finding, found by actually building the second
+  adapter rather than reasoning about it abstractly.
+
+### A real bug found only by running a real, unmodified provider
+
+- **`Cmd` maps to Docker's CMD (appended after ENTRYPOINT), not a full
+  command replacement** — the Kubernetes adapter's first version set
+  `container.Command = spec.Cmd`, which is Kubernetes' ENTRYPOINT-replacing
+  field, not its CMD-appending one (`container.Args`). This went undetected
+  by the conformance suite (which uses a bare `alpine sleep`, no image
+  ENTRYPOINT) and was only caught by running the real `redpanda` provider
+  end-to-end: its image has `Entrypoint: ["/entrypoint.sh"]`
+  (`docker image inspect docker.redpanda.com/redpandadata/redpanda:v24.2.1`
+  confirms this), and replacing it skipped whatever bootstrap the entrypoint
+  script does, surfacing as `unrecognised option '--node-id'` from the raw
+  `redpanda` binary. Fixed: `spec.Cmd` → `container.Args`, `container.Command`
+  left unset so the image's own entrypoint (if any) still runs — this is
+  the standard, well-known Docker→Kubernetes CMD/ENTRYPOINT mapping.
+  **Lesson for this backlog generally: a synthetic conformance suite proves
+  the *port contract*; only a real provider against a real cluster proves
+  the *translation* is faithful.** Both are needed.
+
+### Genuine per-runtime differences (not bugs — documented, not forced)
+
+- **RestartPolicy.MaxRetries and non-`Always` modes.** Kubernetes
+  Deployments require Pod `restartPolicy: Always` — there is no Pod-level
+  "give up after N restarts" the way Docker's `on-failure` +
+  `MaxRetries` has (that's a Job concept, not a Deployment one, and our
+  containers are long-running Deployments). The Kubernetes adapter accepts
+  `RestartPolicy` but only actually applies `Always` at the Pod level;
+  `Mode` values other than `always`/`unless-stopped` and `MaxRetries` are
+  silently not enforced under Kubernetes. This is a real platform
+  difference, not something to fake.
+- **`LogConfig` has no Kubernetes equivalent** — log driver selection is a
+  node/kubelet concern in Kubernetes, not a per-Pod API field. Ignored by
+  the Kubernetes adapter.
+- **`SecurityContext.SecurityOpt`** is a Docker-specific escape hatch
+  (e.g. `no-new-privileges`) with no generic Kubernetes translation.
+  Ignored by the Kubernetes adapter.
+- **CPU reservation.** Kubernetes has a real, portable reservation concept
+  (`resources.requests.cpu`); Docker does not (CPU shares are a relative
+  weight). `Resources.CPUReservation` was added to the port specifically
+  because building the Kubernetes adapter proved it has a genuine
+  runtime-specific meaning worth exposing, even though Docker can only
+  approximate it.
+
+### Still open (this adapter is an early, Alpha proof, not production-ready)
+
+- [ ] **External reachability.** A container's Service is ClusterIP-only;
+      nothing outside the cluster network can reach it, including
+      `platformctl` itself when run from outside the cluster — verified
+      live: applying the redpanda Provider succeeded (Deployment healthy in
+      ~2.5s), but the dependent EventStream's own topic-management call
+      failed with `dial tcp 127.0.0.1:19093: connect: connection refused`,
+      because that call runs from the CLI process, not from in-cluster. This
+      is the Kubernetes-adapter instance of Gate 1.1's "host bind address
+      and published-port inspection" item, and is the single biggest
+      remaining gap before this adapter is useful for anything beyond a
+      Provider with no CLI-side control-plane calls. Closing it needs a
+      deliberate design choice: NodePort exposure, `kubectl port-forward`-
+      style tunneling built into the adapter (client-go's
+      `tools/portforward` package), or documenting that `platformctl`
+      targeting Kubernetes must run in-cluster.
+  - [ ] `ContainerState`/`Inspect` do not yet report actual bind
+        addresses for the Kubernetes adapter either (same gap as Docker's
+        Gate 1.1 item).
+- [ ] No conformance/integration coverage yet for volumes actually
+      persisting data across a Deployment update (PVC reuse is exercised by
+      idempotency tests, not by writing-then-reading real data).
+- [ ] No RBAC/ServiceAccount design — the adapter uses whatever permissions
+      the ambient kubeconfig grants; a production posture needs a documented
+      minimal ClusterRole.
+- [ ] No coverage of multi-replica scenarios, PodDisruptionBudgets, or
+      anti-affinity — this adapter targets "one Pod per managed container,"
+      matching Docker's model, deliberately not more.
+- [ ] Terraform/external adapters remain untouched — this work only
+      addresses the Kubernetes half of the goal. `registry.PlannedRuntimes`
+      still rejects `external`/`terraform` construction.
+- [ ] `docs/planning/04-roadmap-and-feature-gates.md` Phase 7 status and
+      `schemas/v1alpha1/provider.json`'s `runtime.type` description need
+      updating now that `kubernetes` is a real (Alpha) adapter, not merely
+      schema-accepted-for-forward-compatibility.
+
 ## Stage Gates
 
 Use these gates to split future work. A later gate should not start until the
@@ -55,23 +207,46 @@ the tracking issue.
 
 Required before broader contribution or more provider work.
 
-- [ ] Canonical resource identity policy is implemented and documented.
-- [ ] External lifecycle resources cannot be mutated accidentally through any
-      provider path.
-- [ ] Resource removal and rename behavior is explicit, tested, and safe.
-- [ ] Machine-readable command output is valid JSON/YAML for every command.
-- [ ] Mermaid/DOT renderers are collision-resistant and escaping-safe.
-- [ ] Docker bind addresses and object ownership checks are safe by default.
+**Status (2026-07-16): implementation complete for all six; see Gate 0
+Details below for the specific test-coverage items still open per area.**
+Checked here means the mechanism is implemented and at least indirectly
+tested; it does not mean every edge case in that area's detail section has
+dedicated coverage.
+
+- [x] Canonical resource identity policy is implemented and documented
+      (namespaced `resource.Key`, DNS-label schema pattern, escaped
+      structured state keys, project-scoped Docker labels — see 0.1).
+- [x] External lifecycle resources cannot be mutated accidentally through any
+      provider path (`ExternalConfigurer` contract enforced centrally in the
+      engine — see 0.3).
+- [x] Resource removal and rename behavior is explicit, tested, and safe
+      (authoritative apply-delete + legacy-orphan refusal — see 0.4; rename
+      and provider-type-change as distinct scenarios still need dedicated
+      tests).
+- [x] Machine-readable command output is valid JSON/YAML for every command
+      (structured payload always to stdout, prose to stderr — see 0.5;
+      generic per-path parse tests still open).
+- [x] Mermaid/DOT renderers are collision-resistant and escaping-safe
+      (hash-based ids, separated labels — see 0.6; adversarial-input golden
+      tests still open).
+- [x] Docker bind addresses and object ownership checks are safe by default
+      (127.0.0.1 default, managed-by label refusal — see 0.7; actual
+      published-port inspection still open, tracked with Gate 1.1).
 
 ### Gate 1: Docker Production Runtime
 
 Required before positioning the Docker runtime as production-grade.
 
-- [ ] Runtime specs cover restart policy, bind address, resource limits,
+- [~] Runtime specs cover restart policy, bind address, resource limits,
       security context, network aliases, logs, image pull policy, and digest
-      pinning.
-- [ ] Docker adapter refuses or adopts pre-existing networks and volumes
-      consistently with the container ownership policy.
+      pinning. **Partial (2026-07-16):** restart policy, resource limits,
+      security context, and log config are done (see 1.1); bind-address
+      *default* is done (see 0.7); network aliases, published-port
+      inspection, config/file mounts, and image pull policy/digest pinning
+      are still open (see 1.1's "still open" list).
+- [x] Docker adapter refuses or adopts pre-existing networks and volumes
+      consistently with the container ownership policy (see 0.7 — refuses,
+      does not yet adopt; no adopt flow exists for networks/volumes).
 - [ ] Endpoint discovery reports actual published ports and bind addresses,
       not only deterministic intent.
 - [ ] Secret material is not exposed through inspectable container environment
@@ -104,39 +279,46 @@ Required before inviting third-party provider/runtime contribution.
 
 ## Gate 0 Details
 
+**Status update (2026-07-16):** the bulk of Gate 0's *implementation* landed
+in commit `a2c1484` ("harden Gate 0 reconciliation contracts"), but that
+commit did not update this checklist. The subsections below have been
+corrected to match the current code, verified by direct inspection
+(user-confirmed edit). Any remaining `[ ]` items are genuine gaps — mostly
+missing dedicated test coverage for mechanics that already exist, plus the
+still-open Gate 1+ work.
+
 ### 0.1 Canonical Names, Namespaces, And Stable IDs
 
-Current risk:
+Resolved:
 
-- `metadata.name` only has `minLength: 1` in `schemas/v1alpha1/meta.json`.
-- `resource.Key` is `Kind/Name`; `state.parseKey` splits on `/`, so a name
-  containing `/` corrupts state round-trips.
-- `Metadata.Namespace` exists in Go, but the schema does not allow
-  `metadata.namespace`, and state keys ignore it.
-- The same name flows into Docker container/network/volume names, Kafka topics,
-  Kafka Connect connector names, REST URL path segments, env var names, file
-  secret paths, host-port hashes, Mermaid ids, Graphviz ids, and state keys.
-- Docker object names are not scoped by project/workspace. Two checkouts or two
-  users on the same Docker daemon can collide.
+- Namespaced-resources policy chosen: `resource.Key` is
+  `Namespace/Kind/Name`; `schemas/v1alpha1/meta.json` allows
+  `metadata.namespace` (DNS-label pattern, defaults to `default`).
+- `metadata.name`, `metadata.namespace`, and `nameRef.name`/`.namespace` all
+  carry a DNS-label schema pattern (`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`,
+  maxLength 63), enforced in both the JSON Schema and
+  `resource.ValidateDNSLabel` (Go-side, so `import`/CLI-constructed
+  envelopes are covered too, not just manifest-loaded ones).
+- State serialization is no longer delimiter-fragile:
+  `state.KeyString`/`state.ParseKey` URL-path-escape each of
+  namespace/kind/name before joining on `/`, with a versioned migration path
+  (`state.CurrentVersion = 2`, `parseV1Key` fallback) in
+  `internal/ports/state/state.go`.
+- Docker labels carry project scope: `runtime.ManagedLabels` sets
+  `io.datascape.{managed-by,generation,namespace,kind,name,project}` on every
+  created object (`internal/ports/runtime/runtime.go`).
 
-Required work:
+Still open:
 
-- [ ] Choose one v1 policy:
-  - Strict single namespace: remove `Namespace` from Go/docs and reject it
-    explicitly.
-  - Namespaced resources: include namespace in `resource.Key`, state,
-    labels, Docker object names, inventory, graph output, and import/destroy.
-- [ ] Add a schema pattern for `metadata.name` and all `nameRef` values.
-      Prefer a conservative DNS-label-style policy unless there is a clear
-      reason to allow arbitrary names.
-- [ ] Introduce separate concepts for display label, stable resource key, and
-      runtime object name.
-- [ ] Add a project or stack id used in Docker names and labels. It must be
-      stable across runs and explicit enough for multi-checkout use.
-- [ ] Make state serialization structured rather than delimiter-based, or
-      escape keys with a tested reversible encoding.
-- [ ] Add tests for invalid names, cross-workspace collisions, slash/dot/colon
-      names, long names, Unicode, and name collisions after sanitization.
+- [ ] Separate display-label/title concept distinct from `metadata.name`
+      (not yet needed — no reported case of the DNS-label policy being too
+      restrictive for a real manifest; revisit if one shows up).
+- [ ] Add dedicated unit tests for name-policy edge cases: invalid names,
+      slash/dot/colon names, long (>63 char) names, Unicode, and
+      cross-namespace vs. same-namespace collisions. There is no
+      `internal/domain/resource/resource_test.go` today — `ValidateDNSLabel`
+      and `Envelope.Validate` are only exercised indirectly through
+      higher-level tests.
 
 Design notes:
 
@@ -151,201 +333,249 @@ Design notes:
 
 Current risk:
 
-- `manifest.Validate` permits `Provider/foo` and `Source/foo` in the same set.
-- `graph.Build` rejects ambiguous refs for normal ref fields, but
-  `metadata.observers` takes the first matching name and does not reject
-  ambiguity.
-- `compatibility.Check` builds `byName map[string]Envelope`, so duplicate names
-  across kinds overwrite each other before capability checks.
-- `archview.resolveByName` iterates a map and can choose nondeterministically.
+Resolved:
 
-Required work:
+- `graph.Build` rejects ambiguous refs for every ref field (kind-filtered
+  candidate matching, error names the field and match count) — this now also
+  covers `metadata.observers` (`resource.Envelope.Validate` DNS-validates
+  observer names; `graph.Build` resolves them through the same ambiguity path
+  as other refs).
+- `compatibility.Check`'s ref index (`byName map[string][]resource.Envelope`
+  in `internal/application/compatibility/compatibility.go`) is a slice
+  keyed by namespace+name, not an overwriting map; `idx.resolve` returns an
+  explicit `ambiguous` bool checked at every call site (sourceRef, targetRef,
+  connectionRef).
+- `archview.Build` no longer resolves by bare name at all — it consumes
+  `graph.Build`'s already-validated, already-disambiguated key set
+  (`resolveByRef` in `internal/application/archview/archview.go` looks up by
+  `resource.Key`, not by name), so ambiguity is rejected once, upstream, by
+  the same command path (`loadAndValidate`) every subcommand shares.
 
-- [ ] Either make names globally unique in a manifest set or make refs typed
-      (`kind` + `name`) everywhere.
-- [ ] Apply the same ambiguity rules to observers, Binding refs, Connection
-      refs, compatibility checks, inventory, import, and graph rendering.
-- [ ] Add negative tests for cross-kind duplicate names and ambiguous observer
-      targets.
+Still open:
 
-Design notes:
-
-- Global uniqueness is simpler for v1 and aligns with current bare `nameRef`.
-- Typed refs are more extensible, but they are a schema and UX change.
+- [ ] Add explicit negative-path unit tests asserting the ambiguity error for
+      cross-kind duplicate names on each ref field (sourceRef, targetRef,
+      connectionRef, observers) — the mechanism is shared and exercised
+      indirectly by existing tests, but there's no test enumerating all ref
+      fields the way this item originally called for.
 
 ### 0.3 External Lifecycle Must Be Enforced On Apply
 
 Current risk:
 
-- `resource.LifecycleOf` marks `spec.external: true` as External.
-- Plan emits `configure` for external resources.
-- The engine only special-cases external resources with no `providerRef`.
-- If an external resource also has a `providerRef`, the engine calls the
-  provider's normal `Reconcile`, and most providers do not know this is a
-  configure-only lifecycle. Example class: an external Dataset with a
-  providerRef can still cause bucket creation.
+Resolved:
 
-Required work:
+- `reconciler.ExternalConfigurer` is a distinct interface from `Reconcile`
+  (`internal/ports/reconciler`); the engine (`internal/application/engine/
+  engine.go`) checks `isExternal(env)` and requires the provider to implement
+  `ExternalConfigurer` — `fmt.Errorf("... is External with providerRef, but
+  provider type %q does not implement ExternalConfigurer")` if not. A normal
+  `Reconcile` is never called for an External resource with a providerRef;
+  this is enforced centrally in the engine, not by provider convention.
+  Covered by `TestExternalProviderRefUsesConfigureExternal` in
+  `engine_test.go`.
+- External-with-no-providerRef still takes the connection-resolvable-only
+  path (`reconcileExternal`), unchanged from before.
 
-- [ ] Define a provider contract for External resources:
-  - no mutation at all, only validation/status, or
-  - explicit `Configure` method separate from `Reconcile`.
-- [ ] Enforce the contract in the engine, not by provider convention.
-- [ ] Add tests for `external: true` with and without `providerRef` for every
-      resource kind that supports external lifecycle.
-- [ ] Update docs to make "external" behavior exact.
+Still open:
 
-Design notes:
-
-- Destroy already has an engine-level external guard. Apply needs the same
-  level of central enforcement.
-- If "configure an external system" is supported later, it should be an
-  explicit capability with a destructive/mutating policy.
+- [ ] Confirm every resource kind that plausibly supports `external: true`
+      either implements `ExternalConfigurer` on its provider(s) or is
+      documented as not supporting the external lifecycle. Not audited
+      kind-by-kind.
+- [ ] `docs/planning/03-resource-model-reference.md` should state the
+      `ExternalConfigurer` contract explicitly wherever `external: true` is
+      documented per-kind (currently the contract lives only in code +
+      `docs/planning/02-architecture.md`).
 
 ### 0.4 Removed Or Renamed Resources Are Orphaned
 
 Current risk:
 
-- `plan.Compute` iterates desired envelopes only. State entries that are no
-  longer present in manifests are not surfaced.
-- Removing a manifest can leave the state entry and Docker object alive until
-  the user reconstructs the old manifest or cleans up manually.
-- Renames are indistinguishable from create-new plus orphan-old.
+Resolved:
 
-Required work:
+- `plan.computeApplyDeletes` (`internal/application/plan/plan.go`) diffs
+  state against desired and emits `ActionDelete` entries (authoritative,
+  in-apply deletion — the "delete belongs in normal apply" question was
+  answered in favor of Terraform-style authoritative apply, not a separate
+  prune command) using `state.ResourceState.LastApplied` +
+  `.Dependencies`/`.Provider` to reconstruct enough identity to destroy
+  without the manifest present.
+- Legacy pre-rename state (no `LastApplied` recorded) surfaces as
+  `ActionOrphanUnknown` rather than being silently skipped or guessed at;
+  `Engine` refuses to act on it until state is repaired
+  (`TestApplyRefusesLegacyOrphanUnknown`).
+- Covered by `TestComputePlansAuthoritativeDeletes` and
+  `TestComputeReportsLegacyOrphanUnknown` (`plan_test.go`).
 
-- [ ] Add a safe orphan detection model:
-  - `plan` reports state resources missing from desired.
-  - `apply` does not delete by default unless a clear prune flag/policy exists.
-  - `destroy` can operate from state for missing desired resources, using
-    stored provider/runtime identity.
-- [ ] Decide whether `delete` actions belong in normal apply or only in a
-      `prune`/`gc` command.
-- [ ] Persist enough provider/runtime identity in state to destroy resources
-      after their manifests are removed.
-- [ ] Add tests for deletion, rename, provider type change, and state-only
-      resources.
+- [x] Dedicated tests for a **rename** (old-name delete + new-name create
+      in the same apply — `TestComputePlansRenameAsDeleteAndCreate`) and a
+      **provider-type change** (same resource name, different
+      `providerRef` target — `TestComputePlansProviderTypeChangeAsUpdate`)
+      as scenarios distinct from a plain removal, in `plan_test.go`.
 
-Design notes:
+Still open:
 
-- Terraform-style deletion on apply is powerful but dangerous for data
-  systems. A separate explicit prune command may be a safer first step.
-- Data-bearing resources need stronger protection than ephemeral connectors.
+- [ ] Confirm data-bearing kinds (Dataset, Source, Catalog) get the "stronger
+      protection than ephemeral connectors" the design note called for, or
+      that authoritative apply-delete is an accepted risk for them too
+      (no `--protect`/`prevent-destroy`-style opt-out exists today).
 
 ### 0.5 Machine-Readable Output Contract
 
 Current risk:
 
-- `drift -o json` and `drift -o yaml` write structured rows and then append
-  human summary text to stdout, making the output invalid as JSON/YAML.
-- `destroy -o json` writes a plan and then human prompts/summaries to stdout.
-- `inventory -o json` with no endpoints prints plain text instead of a JSON
-  empty result.
-- `apply -o json` can print a plan, prompt text, or no-change text to stdout.
-- The root `-o` help says `table|json|yaml`, but `graph` accepts
-  `tree|dot|mermaid|json` through the same flag.
+Resolved (`cmd/platformctl/root.go`):
 
-Required work:
+- `isStructured(output)`/`humanWriter(cmd, output)` route every prompt and
+  human summary line to stderr when `-o json|yaml` is active; stdout gets
+  exactly one `cliutil.WriteOutput` call per exit path — success, no-op,
+  drift-heal, cancelled — via typed payloads (`applyOutput`, `destroyOutput`,
+  `driftOutput`, `inventoryOutput`, `importOutput`).
+- `inventory -o json` with zero endpoints returns `{"endpoints": []}` (via
+  `inventoryOutput{Endpoints: data}` with `data` typed as a slice, not a bare
+  `nil`/text branch).
+- `graph` takes its own `--format tree|dot|mermaid|json` flag, independent of
+  the root `-o table|json|yaml`, whose help text is now accurate.
 
-- [ ] Define per-command stdout/stderr contracts.
-- [ ] For `json` and `yaml`, stdout must contain exactly one parseable
-      document for every exit path.
-- [ ] Move human summaries and prompts to stderr or include them inside the
-      structured payload.
-- [ ] Give `graph` its own format flag or make global output help accurate.
-- [ ] Add command-level tests that parse JSON/YAML for success, no-op,
-      changed, drifted, empty, validation-error, and cancelled paths.
+Still open:
 
-Design notes:
-
-- CI and external tools should never need to parse human prose.
-- Exit codes can carry changed/drifted status; structured payload should carry
-  counts and reasons.
+- [ ] Add command-level tests that actually parse stdout as JSON/YAML for
+      each command × each path (success, no-op, changed, drifted, empty,
+      cancelled). Today this is verified by inspection of `root.go` and by
+      `archview`'s own `TestRenderFormats` (which does assert `json.Unmarshal`
+      round-trips), but there is no generic harness asserting, e.g., `apply
+      -o json` on a cancelled run still emits a single valid JSON document on
+      stdout with nothing else mixed in.
 
 ### 0.6 Mermaid, DOT, And Architecture Rendering Escaping
 
 Current risk:
 
-- `archview.mermaidID` replaces only `/`, `-`, `.`, space, and `:`.
-- Different resource keys can collapse to the same Mermaid id.
-- Mermaid labels only replace `"`, but labels can contain newlines, brackets,
-  pipes, slashes, backticks, braces, and Mermaid control characters.
-- Pipeline and reaches edge labels are embedded directly in Mermaid edge
-  syntax.
-- Synthetic external node names come from raw `Connection.spec.target`, which
-  can contain punctuation.
-- `archview.resolveByName` can pick nondeterministically when names are
-  duplicated across kinds.
+Resolved (`internal/application/archview/render.go`):
 
-Required work:
+- `graphID(k)` generates node/edge ids from a **hex** encoding of the full
+  `resource.Key` string (namespace+kind+name) — collision-resistant, and
+  decoupled from the human-readable label. This was originally shipped using
+  `base64.RawURLEncoding`, which was found and fixed in this pass: the
+  base64url alphabet legally includes `-`, and DOT ids are emitted
+  **unquoted**, where a bare `-` is only valid as a numeral's sign per the
+  DOT grammar — any resource name containing a hyphen (a normal, schema-legal
+  DNS-label character, e.g. `orders-db`) could have produced a
+  Graphviz-invalid `.dot` file. Hex (`[0-9a-f]`) is safe unquoted in both DOT
+  and Mermaid and is equally collision-resistant. Locked in by
+  `TestGraphIDIsSafeUnquotedIdentifier` and
+  `TestRenderDOTQuotesAndEscapesAdversarialLabels`
+  (`render_escaping_test.go`).
+- `mermaidEscape` replaces backslash, quote, CR/LF, and pipe (the characters
+  that break Mermaid node/edge syntax); labels and ids are no longer the same
+  string (`nodeLabel` is display-only, `graphID` is the wire id).
+- `archview.resolveByName`-style nondeterministic lookup no longer exists —
+  see 0.2 above; archview resolves through already-disambiguated keys.
+- [x] Golden/adversarial-input tests added
+      (`internal/application/archview/render_escaping_test.go`): a
+      Connection target containing quotes, backticks, braces, angle brackets,
+      and pipes renders without corrupting DOT ids, without an unescaped
+      embedded quote in a DOT label, without a raw pipe breaking a Mermaid
+      edge label, and the JSON output still parses.
 
-- [ ] Implement renderer-specific escaping for Mermaid node ids, labels, edge
-      labels, DOT ids, DOT labels, and tree output.
-- [ ] Generate renderer ids from a stable opaque encoding or hash of the full
-      resource key, then keep display labels separate.
-- [ ] Add golden tests for special characters, duplicate-looking sanitized
-      names, multiline labels, synthetic external targets, and all graph
-      formats.
-- [ ] Add an optional Mermaid syntax validation step in tests if a lightweight
-      validator is available.
+Still open:
 
-Design notes:
-
-- The safest Mermaid pattern is stable internal ids plus quoted/escaped labels.
-- A name policy can reduce the input space, but renderer escaping is still
-  required for details such as external targets and endpoint URLs.
+- [ ] No lightweight Mermaid syntax validator is wired into tests (optional,
+      lower priority now that labels/ids are structurally separated and
+      covered by the adversarial-input tests above).
 
 ### 0.7 Docker Bind Address And Ownership Safety
 
 Current risk:
 
-- `runtime.PortBinding` has no `HostIP`.
-- Docker `nat.PortBinding` is created with only `HostPort`; Docker commonly
-  binds published ports on all interfaces when `HostIP` is empty.
-- Providers report host endpoints as `127.0.0.1:<port>`, which can understate
-  the actual exposure.
-- `EnsureNetwork` returns success when a same-name network already exists,
-  without verifying platformctl ownership labels.
-- `EnsureVolume` returns success when a same-name volume already exists,
-  without verifying platformctl ownership labels.
+Resolved (`internal/ports/runtime/runtime.go`,
+`internal/adapters/runtime/docker/docker.go`):
 
-Required work:
+- `runtime.PortBinding.HostIP` exists; the Docker adapter defaults it to
+  `127.0.0.1` whenever a provider leaves it empty
+  (`TestPortMapsDefaultHostIPLocalhost`), and honors an explicit override
+  (`TestPortMapsHonorsExplicitHostIP`) for the rare case a provider needs
+  wider exposure.
+- `EnsureNetwork`/`EnsureVolume` both check
+  `Labels[runtime.LabelManagedBy] != runtime.ManagedByValue` on any
+  same-name existing object and refuse to adopt it silently (no
+  import/adopt flow exists yet for networks/volumes specifically — refusal
+  is the current behavior, which is the safe default this item asked for).
 
-- [ ] Add `HostIP` or `BindAddress` to the runtime port; default to
-      `127.0.0.1` for local development.
-- [ ] Inventory must report the actual bind address.
-- [ ] EnsureNetwork and EnsureVolume must refuse unmanaged same-name objects,
-      adopt only through explicit import/adopt flow, or use project-scoped
-      names that avoid collisions.
-- [ ] Add integration tests proving ports are not exposed beyond the intended
-      interface and unmanaged networks/volumes are not reused.
+- [x] Integration tests against a real Docker daemon
+      (`internal/adapters/runtime/docker/docker_integration_test.go`):
+      `TestEnsureNetworkRefusesUnmanagedExisting` and
+      `TestEnsureVolumeRefusesUnmanagedExisting` create a same-name
+      network/volume out-of-band (no ownership label) via the raw client and
+      assert `EnsureNetwork`/`EnsureVolume` refuse to reuse it.
+      `TestPublishedPortBindsToLoopbackByDefault` creates a real container
+      with a `PortBinding{HostPort: ...}` (no `HostIP` set) and asserts via
+      `ContainerInspect` that Docker actually bound the published port to
+      `127.0.0.1`, not `0.0.0.0`. Writing these surfaced that `RemoveNetwork`/
+      `RemoveVolume` apply the *same* ownership guard on teardown, which is
+      correct but means test cleanup for a deliberately-unmanaged object must
+      go through the raw client, not `RemoveNetwork`/`RemoveVolume`.
 
-Design notes:
+Still open:
 
-- This is a security issue, not a UX polish item.
-- Host tools can still connect to localhost; remote access should be explicit.
+- [ ] Inventory/endpoint reporting still constructs the host address from
+      the *configured* port (`hostport.Resolve` + a hardcoded `127.0.0.1`
+      per provider), not from an actual Docker inspect of the published
+      port. `runtime.ContainerState` has no `Ports`/bind-address field, so
+      there's no way yet for a provider to report what Docker actually
+      bound versus what was requested. This is the same gap as Gate 1.1's
+      "host bind address and published-port inspection" — closing 1.1
+      closes this too.
 
 ## Gate 1 Details
 
 ### 1.1 Expand The ContainerRuntime Contract
 
-Current gap:
+**Status update (2026-07-16):** the core production controls landed in
+`internal/ports/runtime/runtime.go` (types: `RestartPolicy`, `Resources`,
+`SecurityContext`, `LogConfig`, all added to `ContainerSpec`) and are wired
+into `internal/adapters/runtime/docker/docker.go`'s `EnsureContainer`
+(restart policy, CPU/memory limits+reservation, user/read-only-rootfs/
+capabilities/security-opt, log driver+options) — verified against a real
+Docker daemon (`conformance.go`'s new
+`EnsureContainer_productionFields_idempotent` subtest, run via both the fake
+and `docker_integration_test.go`). Field names deliberately follow whichever
+vocabulary (Docker/Compose for restart policy, Kubernetes for security
+context) is more portable, per the design note below, so a future Kubernetes
+runtime adapter can consume the same `ContainerSpec` fields directly instead
+of needing Docker-shaped ones translated.
 
-The runtime port supports only network, volume, container, env, command,
-ports, health checks, labels, and simple mounts. Production Docker operation
-needs more controls.
+Resolved:
 
-Required work:
+- [x] Restart policy (`RestartPolicy{Mode, MaxRetries}`).
+- [x] CPU and memory limits/reservation (`Resources{CPULimit,
+      MemoryLimitBytes, MemoryReservationBytes}` — no CPU *reservation* field:
+      Docker's CPU shares are a relative weight, not a portable absolute
+      reservation, so it was deliberately left unmodeled rather than faked).
+- [x] User, read-only root filesystem, capabilities, security options
+      (`SecurityContext{User, ReadOnlyRootFS, CapAdd, CapDrop, SecurityOpt}`).
+- [x] Log driver and options (`LogConfig{Driver, Options}`; rotation is a
+      log-driver *option*, e.g. `json-file`'s `max-size`/`max-file`, so it
+      rides on `Options` rather than needing a separate field).
+- [x] Container log retrieval for diagnostics: `ContainerRuntime.Logs(ctx,
+      name, tail)`, backed by the same `ContainerLogs` call the engine
+      already used internally for failure messages (`tailLogs`, now a thin
+      wrapper over the shared `fetchLogs` helper).
 
-- [ ] Restart policy.
-- [ ] CPU and memory limits/reservations.
-- [ ] User, group, read-only root filesystem, capabilities, security options.
-- [ ] Network aliases and explicit DNS names.
-- [ ] Host bind address and published-port inspection.
-- [ ] Log driver and log rotation.
-- [ ] Config/file mounts, not only named volumes.
-- [ ] Image pull policy, registry auth, digest pinning, and local-only mode.
-- [ ] Container events/log retrieval for diagnostics.
+Still open (deliberately deferred — each is a larger, separable slice):
+
+- [ ] Network aliases and explicit DNS names — `ContainerSpec.Networks` is
+      still `[]string` (network names only); no per-network alias list.
+- [ ] Host bind address and published-port *inspection* (as opposed to the
+      already-resolved bind-address *default* from §0.7) — `ContainerState`
+      still has no `Ports`/bind-address field, so nothing reports what
+      Docker actually bound versus what was requested.
+- [ ] Config/file mounts — `VolumeMount` only names a named volume; there is
+      no way to mount literal file content or a host path.
+- [ ] Image pull policy, registry auth, digest pinning, and local-only mode
+      — `ensureImage` only checks presence-by-reference and pulls if absent;
+      no policy knob, no digest-pinning enforcement.
 
 Design notes:
 
@@ -355,22 +585,41 @@ Design notes:
 
 ### 1.2 Runtime Drift Equivalence
 
-Current gap:
+**Status update (2026-07-16):** the specific complaint about the fake
+runtime is resolved; the broader "runtime-level desired-vs-actual
+equivalence" design question is still open.
 
-- Docker `EnsureContainer` uses a spec-hash label to decide replacement.
-- `Inspect` returns only name, id, image, running, healthy, and labels.
-- Provider probes mostly check liveness, not spec equivalence.
-- The fake runtime's `containerSpecEqual` ignores command, ports, volumes,
-  health checks, and other fields, so conformance can miss drift-sensitive
-  changes.
+Resolved:
 
-Required work:
+- [x] The fake runtime's `containerSpecEqual` no longer hand-picks fields —
+      it's `reflect.DeepEqual(a, b)` over the whole `ContainerSpec`
+      (`internal/adapters/runtime/fake/fake.go`), so command, ports,
+      volumes, health checks, restart policy, resources, and security
+      context are all covered automatically as the struct grows, rather
+      than needing a matching update here every time a field is added.
+- [x] Conformance tests for command, env, ports, networks, labels, health
+      checks, restart policy, and resource limits — the pre-existing
+      `EnsureContainer_idempotent` plus the new
+      `EnsureContainer_productionFields_idempotent` subtest, which also
+      asserts changing `RestartPolicy` alone (not name/image/labels/env/
+      networks) is detected as drift, not silently ignored.
+- The real Docker adapter's mechanism (`specHash` = `sha256(json.Marshal(
+  ContainerSpec))`, stored as a label, compared on next `EnsureContainer`)
+  already covered every field structurally without needing a matching
+  update — new `ContainerSpec` fields are automatically part of the hash.
 
-- [ ] Define runtime-level desired-vs-actual equivalence.
-- [ ] Expand `ContainerState` or add a `ProbeContainerSpec` capability.
-- [ ] Make the fake runtime compare every meaningful `ContainerSpec` field.
-- [ ] Add conformance tests for command, env, ports, bind address, volumes,
-      networks, labels, health checks, restart policy, and resource limits.
+Still open:
+
+- [ ] Docker `Inspect`/`ContainerState` still report only name, id, image,
+      running, healthy, and labels — no expansion of `ContainerState` or a
+      `ProbeContainerSpec` capability to compare desired vs. *actually
+      observed* runtime facts (as opposed to the spec-hash-label proxy for
+      "did EnsureContainer think it matched last time").
+- [ ] Provider probes (per-provider `Probe` methods) still mostly check
+      liveness, not full desired-configuration equivalence — this is Gate
+      2.1's concern, not Gate 1's, but the two are related.
+- [ ] No bind-address conformance coverage yet (tracked under 1.1's "host
+      bind address and published-port inspection").
 
 Design notes:
 

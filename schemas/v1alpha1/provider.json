@@ -50,7 +50,7 @@
                 "external",
                 "terraform"
               ],
-              "description": "docker and fake (testing) are implemented; kubernetes/external/terraform are accepted for forward compatibility and rejected at registry construction as planned-but-unavailable."
+              "description": "docker and fake (testing) are implemented. kubernetes is a real, Alpha adapter behind the KubernetesRuntime feature gate (disabled by default) as of Phase 7. external/terraform are accepted for forward compatibility and rejected at registry construction as planned-but-unavailable."
             },
             "network": {
               "type": "string",

@@ -309,16 +309,42 @@ provider code — technologies realize nouns, they never become nouns.
 their hardening period). `LineageObservability` Alpha → Beta,
 `ImportedResources` Alpha → Beta.
 
-## 10. Phase 7 — Kubernetes Runtime Adapter (future)
+## 10. Phase 7 — Kubernetes Runtime Adapter (started, Alpha; early)
 
-A second implementation of a runtime port proves the design decision that providers never import
-a concrete runtime package. If this phase requires touching
-`redpanda`/`postgres`/`debezium`/`s3`/`s3sink` internals to work on Kubernetes, that's a design
-defect in the port boundary to fix, not a Kubernetes quirk to special-case. Reintroduces a
-storage vocabulary (`StorageClass`/`PersistentVolume`-equivalent) if and only if the Kubernetes
-adapter's volume model can't be expressed through the existing `VolumeSpec`.
+**Status update (2026-07-16):** started. `internal/adapters/runtime/kubernetes`
+implements `ContainerRuntime` against a real cluster (client-go), passes the
+same conformance suite the Docker adapter passes (run live against
+`minikube`), and reconciled the real `redpanda` provider end-to-end through
+`platformctl apply` with **zero changes to any provider package** —
+confirming the design decision this phase exists to prove. Full findings,
+including one real bug found only by running an unmodified provider
+end-to-end (Docker's `Cmd` maps to Kubernetes `Args`, not `Command`) and one
+real port-boundary gap found and fixed (`VolumeSpec` needed a `Networks`
+hint because PersistentVolumeClaims are namespace-scoped and Docker volumes
+are not), are recorded in
+`docs/planning/07-production-grade-docker-runtime-gap-analysis.md`'s
+"Cross-Runtime Portability" section — read that before resuming this phase.
 
-**Feature gates:** `KubernetesRuntime` (Alpha, long hardening period before Beta given blast radius).
+The one `VolumeSpec.Networks` field was the only port change required; no
+`redpanda`/`postgres`/`debezium`/`s3`/`s3sink` provider *logic* changed
+(6 provider files got a one-line, mechanical addition of the same field at
+their existing `EnsureVolume` call site) — the design bet this phase exists
+to test held.
+
+No storage-vocabulary reintroduction (`StorageClass`/`PersistentVolume`-
+equivalent Kinds) was needed: the existing `VolumeSpec` expresses the
+Kubernetes adapter's volume model (a `PersistentVolumeClaim` per named
+volume) once it carried a namespace hint.
+
+Remaining before this leaves Alpha: external reachability (a container's
+Service is ClusterIP-only; nothing outside the cluster — including
+`platformctl` itself run from a laptop — can reach it yet), bind-address/
+published-port inspection, an RBAC/ServiceAccount posture, and volume
+persistence-across-update coverage. See the gap-analysis doc for the full
+list.
+
+**Feature gates:** `KubernetesRuntime` (Alpha, disabled by default; long
+hardening period expected before Beta given blast radius).
 
 ## 11. Phase 8 — External/Terraform Adapter, Out-of-Process Provider Plugins (future)
 

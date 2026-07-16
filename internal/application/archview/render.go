@@ -1,7 +1,7 @@
 package archview
 
 import (
-	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -222,8 +222,13 @@ func nodeLabel(n Node) string {
 	return label
 }
 
+// graphID derives a renderer id from the full resource key. It must stay
+// safe as an *unquoted* identifier in every renderer: DOT ids only allow
+// alphanumerics/underscore (a bare '-' is reserved for numeral signs) and
+// Mermaid ids are similarly restrictive, so this uses hex rather than
+// base64 — collision-resistant like base64, but restricted to [0-9a-f].
 func graphID(k resource.Key) string {
-	return "n_" + base64.RawURLEncoding.EncodeToString([]byte(k.String()))
+	return "n_" + hex.EncodeToString([]byte(k.String()))
 }
 
 func mermaidEscape(s string) string {

@@ -92,7 +92,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	}
 	// Marquez's metadata store: a dedicated Postgres, internal to the
 	// provider (not published to the host).
-	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: p.dbName() + "-data", Labels: labels}); err != nil {
+	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: p.dbName() + "-data", Labels: labels, Networks: []string{p.network()}}); err != nil {
 		return st, err
 	}
 	_, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{

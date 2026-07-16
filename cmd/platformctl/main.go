@@ -23,6 +23,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/adapters/providers/s3sink"
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	fakeruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/fake"
+	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
 	"github.com/rezarajan/platformctl/internal/application/featuregate"
 	"github.com/rezarajan/platformctl/internal/application/registry"
 	"github.com/rezarajan/platformctl/internal/cliutil"
@@ -91,6 +92,11 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	gates.Register("NessieProvider", featuregate.Alpha, true)
 	gates.Register("OpenLineageProvider", featuregate.Alpha, true)
 	gates.Register("ProxyProvider", featuregate.Alpha, true)
+	// Phase 7 (early): second runtime adapter, proving the provider/runtime
+	// split for real (docs/planning/04-roadmap-and-feature-gates.md §10).
+	// Alpha and disabled by default given the blast radius of a second
+	// runtime; long hardening period expected before Beta.
+	gates.Register("KubernetesRuntime", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
@@ -118,6 +124,12 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 			return nil, err
 		}
 		return dockerruntime.New(cfg)
+	})
+	reg.RegisterRuntime("kubernetes", func(cfg map[string]any) (runtime.ContainerRuntime, error) {
+		if err := gates.Require("KubernetesRuntime"); err != nil {
+			return nil, err
+		}
+		return k8sruntime.New(cfg)
 	})
 	return reg
 }

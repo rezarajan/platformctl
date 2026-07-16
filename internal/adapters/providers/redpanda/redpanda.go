@@ -92,7 +92,7 @@ func (p *Provider) reconcileBroker(ctx context.Context, rt runtime.ContainerRunt
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
 		return st, err
 	}
-	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name + "-data", Labels: labels}); err != nil {
+	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name + "-data", Labels: labels, Networks: []string{p.network()}}); err != nil {
 		return st, err
 	}
 

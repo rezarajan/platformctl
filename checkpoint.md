@@ -22,7 +22,8 @@ and what a next session would pick up.
 | 6 — Scale-out (committed scope) | Done | `TestParallelReconciliation` (race-clean), vault backend vs real dev server (`vault_integration_test.go`), file backend + router unit tests |
 | 6 — optional openlineage provider | Done (in 6.5) | Built as the `openlineage` provider (Marquez + dedicated Postgres); LineageObservability graduated to Beta |
 | 6.5 — Orchestrator-ready infrastructure | Done | `lakehouse_integration_test.go` against the literal `examples/lakehouse/`: Catalog(nessie) + managed Connection + external Source with CDC flowing through the entrypoint + MySQL + Marquez, incl. Connection drift-heal and clean destroy |
-| 7/8 — K8s runtime, plugins | Not started (future) | — |
+| 7 — Kubernetes runtime adapter | Started, Alpha, early | `internal/adapters/runtime/kubernetes`; passes `internal/ports/runtime/conformance` live against a real cluster; unmodified `redpanda` provider reconciled through `platformctl apply` end-to-end |
+| 8 — External/Terraform adapter, plugins | Not started (future) | — |
 
 ## v1.0.0 Definition-of-Done ledger (spec §9)
 
@@ -212,6 +213,19 @@ Adding a provider with required configuration? Implement
    real use.
 7. Tag exists locally? — see "Release mechanics" below; if the v1.0.0 tag
    isn't on the remote, push it (`git push origin v1.0.0 && git push`).
+8. **Kubernetes runtime adapter (Phase 7, started)**: `internal/adapters/
+   runtime/kubernetes`, gated `KubernetesRuntime` (Alpha, disabled). Passes
+   conformance live; unmodified `redpanda` provider reconciles through it.
+   Biggest remaining gap: external reachability (Services are ClusterIP-only;
+   `platformctl` run from outside the cluster can't reach them for a
+   provider's own control-plane calls, e.g. redpanda's topic management) —
+   needs a NodePort/port-forward design decision before this is useful
+   beyond a Provider with no CLI-side follow-up calls. Full findings in
+   `docs/planning/07-production-grade-docker-runtime-gap-analysis.md`'s
+   "Cross-Runtime Portability" section, including a real bug (Docker's `Cmd`
+   → Kubernetes `Args`, not `Command`) and a real port-boundary fix
+   (`VolumeSpec.Networks`, since PVCs are namespace-scoped and Docker
+   volumes are not) found by actually building the second adapter.
 
 ## Release mechanics
 

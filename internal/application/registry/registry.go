@@ -19,10 +19,12 @@ type RuntimeConstructor func(config map[string]any) (runtime.ContainerRuntime, e
 // PlannedRuntimes are accepted by schema for forward compatibility but
 // rejected at registry-construction time with a "planned, not yet available"
 // error — never silently ignored. See docs/planning/05-v1-first-version-spec.md §4.
+// "kubernetes" is no longer planned-only: a real adapter exists (Alpha,
+// behind the KubernetesRuntime gate) — see
+// internal/adapters/runtime/kubernetes and docs/planning/04 §10.
 var PlannedRuntimes = map[string]bool{
-	"kubernetes": true,
-	"external":   true,
-	"terraform":  true,
+	"external":  true,
+	"terraform": true,
 }
 
 type Registry struct {

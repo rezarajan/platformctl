@@ -155,10 +155,43 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpe
 			Retries:  spec.HealthCheck.Retries,
 		}
 	}
+	if spec.Security != nil {
+		cfg.User = spec.Security.User
+	}
 
 	hostCfg := &container.HostConfig{PortBindings: bindings}
 	for _, m := range spec.Volumes {
 		hostCfg.Binds = append(hostCfg.Binds, m.VolumeName+":"+m.MountPath)
+	}
+	if spec.RestartPolicy != nil {
+		hostCfg.RestartPolicy = container.RestartPolicy{
+			Name:              container.RestartPolicyMode(spec.RestartPolicy.Mode),
+			MaximumRetryCount: spec.RestartPolicy.MaxRetries,
+		}
+	}
+	if spec.Resources != nil {
+		hostCfg.Resources = container.Resources{
+			NanoCPUs:          int64(spec.Resources.CPULimit * 1e9),
+			Memory:            spec.Resources.MemoryLimitBytes,
+			MemoryReservation: spec.Resources.MemoryReservationBytes,
+			// Docker has no absolute CPU reservation; CPUShares is a
+			// relative scheduling weight. 1024 shares per core is the
+			// conventional conversion (also used historically by
+			// Kubernetes' own dockershim) — best-effort, not a guarantee.
+			CPUShares: int64(spec.Resources.CPUReservation * 1024),
+		}
+	}
+	if spec.Security != nil {
+		hostCfg.ReadonlyRootfs = spec.Security.ReadOnlyRootFS
+		hostCfg.CapAdd = spec.Security.CapAdd
+		hostCfg.CapDrop = spec.Security.CapDrop
+		hostCfg.SecurityOpt = spec.Security.SecurityOpt
+	}
+	if spec.LogConfig != nil {
+		hostCfg.LogConfig = container.LogConfig{
+			Type:   spec.LogConfig.Driver,
+			Config: spec.LogConfig.Options,
+		}
 	}
 
 	var netCfg *network.NetworkingConfig
@@ -235,26 +268,39 @@ func networksAttached(info container.InspectResponse, want []string) bool {
 // an error message, or "" if logs are unavailable. Failing containers are
 // otherwise a black box to the CLI user.
 func (r *Runtime) tailLogs(ctx context.Context, name string) string {
-	rc, err := r.cli.ContainerLogs(ctx, name, container.LogsOptions{
-		ShowStdout: true,
-		ShowStderr: true,
-		Tail:       "10",
-	})
-	if err != nil {
-		return ""
-	}
-	defer rc.Close()
-	var buf bytes.Buffer
-	// Container logs arrive stdout/stderr-multiplexed; demux into one stream.
-	_, _ = stdcopy.StdCopy(&buf, &buf, io.LimitReader(rc, 64*1024))
-	out := strings.TrimSpace(buf.String())
-	if out == "" {
+	out, err := r.fetchLogs(ctx, name, 10)
+	if err != nil || out == "" {
 		return ""
 	}
 	if len(out) > 2000 {
 		out = out[len(out)-2000:]
 	}
 	return "; last log lines:\n" + out
+}
+
+// Logs returns the last `tail` lines of the container's combined
+// stdout/stderr for diagnostics. tail <= 0 uses a sane default.
+func (r *Runtime) Logs(ctx context.Context, name string, tail int) (string, error) {
+	if tail <= 0 {
+		tail = 200
+	}
+	return r.fetchLogs(ctx, name, tail)
+}
+
+func (r *Runtime) fetchLogs(ctx context.Context, name string, tail int) (string, error) {
+	rc, err := r.cli.ContainerLogs(ctx, name, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       strconv.Itoa(tail),
+	})
+	if err != nil {
+		return "", fmt.Errorf("read logs for container %q: %w", name, err)
+	}
+	defer rc.Close()
+	var buf bytes.Buffer
+	// Container logs arrive stdout/stderr-multiplexed; demux into one stream.
+	_, _ = stdcopy.StdCopy(&buf, &buf, io.LimitReader(rc, 256*1024))
+	return strings.TrimSpace(buf.String()), nil
 }
 
 func (r *Runtime) Inspect(ctx context.Context, name string) (runtime.ContainerState, bool, error) {

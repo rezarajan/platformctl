@@ -47,7 +47,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: netName, Labels: labels}); err != nil {
 		return st, err
 	}
-	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: volName, Labels: labels}); err != nil {
+	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: volName, Labels: labels, Networks: []string{netName}}); err != nil {
 		return st, err
 	}
 

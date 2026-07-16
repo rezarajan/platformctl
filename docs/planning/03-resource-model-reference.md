@@ -112,8 +112,8 @@ metadata:
 spec:
   type: redpanda                 # redpanda | postgres | mysql | mariadb | debezium | s3 | minio | s3sink | nessie | openlineage | proxy
   runtime:
-    type: docker                 # docker | kubernetes (future) | external (future)
-    network: datascape           # docker-specific; ignored/validated per runtime.type
+    type: docker                 # docker | kubernetes (Alpha, KubernetesRuntime gate) | external (future) | terraform (future)
+    network: datascape           # docker: the shared network name. kubernetes: the Namespace name (EnsureNetwork creates it).
   configuration:                 # provider-specific, schema keyed by `type`
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
   secretRefs: []                 # optional list of SecretReference names, resolved and passed to the provider
@@ -194,7 +194,11 @@ Field notes:
   (Kubernetes) would realise the same intent as a Service — the provider states the desire, the
   runtime materialises it.
 - `spec.runtime.type` selects which `ContainerRuntime` (or future non-container runtime port) is
-  constructed and injected.
+  constructed and injected. `kubernetes` is a real (Alpha, `KubernetesRuntime` gate,
+  `internal/adapters/runtime/kubernetes`) second adapter as of Phase 7 — see
+  docs/planning/07-production-grade-docker-runtime-gap-analysis.md's "Cross-Runtime Portability"
+  section for its mapping decisions and known limitations (the biggest: no external reachability
+  yet, since a container's Service is ClusterIP-only).
 - `spec.runtime` fields beyond `type` are runtime-specific and validated by the runtime adapter's
   own schema fragment.
 

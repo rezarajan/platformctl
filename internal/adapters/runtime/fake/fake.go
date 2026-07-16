@@ -6,6 +6,7 @@ package fake
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -115,6 +116,15 @@ func (r *Runtime) RemoveVolume(_ context.Context, name string) error {
 	return nil
 }
 
+func (r *Runtime) Logs(_ context.Context, name string, _ int) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.containers[name]; !ok {
+		return "", fmt.Errorf("container %q not found", name)
+	}
+	return "", nil // fake containers produce no logs
+}
+
 func (r *Runtime) ListManaged(_ context.Context) ([]runtime.ContainerState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -151,20 +161,11 @@ func specEqual(a, b map[string]string) bool {
 	return true
 }
 
+// containerSpecEqual compares every field of ContainerSpec (command, ports,
+// volumes, health checks, restart policy, resources, security context, log
+// config — not just name/image/labels/env/networks), so the fake stays
+// honest about the NFR-2 idempotency contract: a second EnsureContainer call
+// only counts as a no-op when nothing meaningful actually changed.
 func containerSpecEqual(a, b runtime.ContainerSpec) bool {
-	if a.Name != b.Name || a.Image != b.Image {
-		return false
-	}
-	if !specEqual(a.Labels, b.Labels) || !specEqual(a.Env, b.Env) {
-		return false
-	}
-	if len(a.Networks) != len(b.Networks) {
-		return false
-	}
-	for i := range a.Networks {
-		if a.Networks[i] != b.Networks[i] {
-			return false
-		}
-	}
-	return true
+	return reflect.DeepEqual(a, b)
 }

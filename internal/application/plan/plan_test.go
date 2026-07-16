@@ -85,6 +85,87 @@ func TestComputeReportsLegacyOrphanUnknown(t *testing.T) {
 	}
 }
 
+// TestComputePlansRenameAsDeleteAndCreate guards docs/planning/07 §0.4: a
+// rename (old manifest name removed, a new name added in the same apply)
+// must be explicit — an authoritative delete of the old key plus a create
+// of the new key — never a silent update-in-place of one for the other.
+func TestComputePlansRenameAsDeleteAndCreate(t *testing.T) {
+	prov := testEnvelope("Provider", "keep", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
+	oldName := testEnvelope("EventStream", "old-name", map[string]any{"providerRef": map[string]any{"name": "keep"}})
+	newName := testEnvelope("EventStream", "new-name", map[string]any{"providerRef": map[string]any{"name": "keep"}})
+
+	provHash, err := SpecHash(prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHash, err := SpecHash(oldName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := state.State{Version: state.CurrentVersion, Resources: map[resource.Key]state.ResourceState{
+		prov.Key():    {SpecHash: provHash, Lifecycle: resource.Managed.String(), LastApplied: &prov},
+		oldName.Key(): {SpecHash: oldHash, Lifecycle: resource.Managed.String(), LastApplied: &oldName, Dependencies: []resource.Key{prov.Key()}},
+	}}
+
+	// The manifest set now has prov + newName (oldName was renamed away).
+	g2, err := graph.Build([]resource.Envelope{prov, newName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Compute([]resource.Envelope{prov, newName}, st, g2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	actions := make(map[resource.Key]Action, len(p.Entries))
+	for _, e := range p.Entries {
+		actions[e.Key] = e.Action
+	}
+	if got := actions[oldName.Key()]; got != ActionDelete {
+		t.Errorf("old-name action = %s, want %s", got, ActionDelete)
+	}
+	if got := actions[newName.Key()]; got != ActionCreate {
+		t.Errorf("new-name action = %s, want %s", got, ActionCreate)
+	}
+}
+
+// TestComputePlansProviderTypeChangeAsUpdate guards docs/planning/07 §0.4:
+// changing which provider a resource points at (or a provider's own type)
+// without renaming the resource must show up as an in-place update, driven
+// purely by the spec-hash diff — never silently treated as a no-op.
+func TestComputePlansProviderTypeChangeAsUpdate(t *testing.T) {
+	before := testEnvelope("EventStream", "events", map[string]any{"providerRef": map[string]any{"name": "old-provider"}})
+	after := testEnvelope("EventStream", "events", map[string]any{"providerRef": map[string]any{"name": "new-provider"}})
+	oldProv := testEnvelope("Provider", "old-provider", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
+	newProv := testEnvelope("Provider", "new-provider", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
+
+	beforeHash, err := SpecHash(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := state.State{Version: state.CurrentVersion, Resources: map[resource.Key]state.ResourceState{
+		before.Key(): {SpecHash: beforeHash, Lifecycle: resource.Managed.String(), LastApplied: &before, Dependencies: []resource.Key{oldProv.Key()}},
+	}}
+
+	g, err := graph.Build([]resource.Envelope{newProv, oldProv, after})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Compute([]resource.Envelope{newProv, oldProv, after}, st, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range p.Entries {
+		if e.Key == after.Key() {
+			if e.Action != ActionUpdate {
+				t.Errorf("provider-type-change action = %s, want %s (reason: %s)", e.Action, ActionUpdate, e.Reason)
+			}
+			return
+		}
+	}
+	t.Fatalf("no plan entry for %s", after.Key())
+}
+
 func TestComputePlansSecretHashChangeAndDependents(t *testing.T) {
 	creds := testEnvelope("SecretReference", "db-creds", map[string]any{"backend": "env", "keys": []any{"password"}})
 	prov := testEnvelope("Provider", "postgres", map[string]any{

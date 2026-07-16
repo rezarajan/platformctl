@@ -32,12 +32,13 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 	}
 
 	netSpec := runtime.NetworkSpec{Name: namePrefix + "-net", Labels: labels}
-	volSpec := runtime.VolumeSpec{Name: namePrefix + "-vol", Labels: labels}
+	volSpec := runtime.VolumeSpec{Name: namePrefix + "-vol", Labels: labels, Networks: []string{netSpec.Name}}
 	ctrSpec := runtime.ContainerSpec{
 		Name:     namePrefix + "-ctr",
 		Image:    "alpine:3.20",
 		Cmd:      []string{"sleep", "300"}, // must outlive the suite against a real daemon
 		Networks: []string{netSpec.Name},
+		Volumes:  []runtime.VolumeMount{{VolumeName: volSpec.Name, MountPath: "/data"}},
 		Labels:   labels,
 	}
 
@@ -121,6 +122,62 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		}
 		if !foundOurs {
 			t.Errorf("ListManaged did not include %q", ctrSpec.Name)
+		}
+	})
+
+	t.Run("EnsureContainer_productionFields_idempotent", func(t *testing.T) {
+		name := namePrefix + "-prod-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		prodSpec := runtime.ContainerSpec{
+			Name:     name,
+			Image:    "alpine:3.20",
+			Cmd:      []string{"sleep", "300"},
+			Networks: []string{netSpec.Name},
+			Labels:   labels,
+			RestartPolicy: &runtime.RestartPolicy{
+				Mode:       "on-failure",
+				MaxRetries: 3,
+			},
+			Resources: &runtime.Resources{
+				CPULimit:               0.5,
+				MemoryLimitBytes:       128 * 1024 * 1024,
+				MemoryReservationBytes: 64 * 1024 * 1024,
+			},
+			Security: &runtime.SecurityContext{
+				ReadOnlyRootFS: false, // alpine needs a writable rootfs to sleep
+			},
+			LogConfig: &runtime.LogConfig{Driver: "json-file"},
+		}
+		if _, err := rt.EnsureContainer(ctx, prodSpec); err != nil {
+			t.Fatalf("first EnsureContainer with production fields: %v", err)
+		}
+		mc, hasCounter := rt.(MutationCounter)
+		before := 0
+		if hasCounter {
+			before = mc.Mutations()
+		}
+		if _, err := rt.EnsureContainer(ctx, prodSpec); err != nil {
+			t.Fatalf("second EnsureContainer with production fields: %v", err)
+		}
+		if hasCounter && mc.Mutations() != before {
+			t.Fatalf("second EnsureContainer with identical production-field spec mutated state (NFR-2 violation)")
+		}
+
+		// Changing a production field (not name/image/labels/env/networks)
+		// must still be detected as drift, not silently ignored.
+		changed := prodSpec
+		changed.RestartPolicy = &runtime.RestartPolicy{Mode: "always"}
+		if _, err := rt.EnsureContainer(ctx, changed); err != nil {
+			t.Fatalf("EnsureContainer with changed restart policy: %v", err)
+		}
+		if hasCounter && mc.Mutations() == before {
+			t.Fatalf("changing RestartPolicy alone was not detected as a spec change")
+		}
+	})
+
+	t.Run("Logs_returns_without_error", func(t *testing.T) {
+		if _, err := rt.Logs(ctx, ctrSpec.Name, 5); err != nil {
+			t.Fatalf("Logs: %v", err)
 		}
 	})
 
