@@ -10,7 +10,7 @@ metadata:
 spec:
   type: minio
   runtime: {type: docker, network: datascape}
-  configuration: {image: minio/minio:latest, port: 19010, rootSecretRef: lake-minio-root}
+  configuration: {image: minio/minio:RELEASE.2025-04-22T22-12-26Z, port: 19010, rootSecretRef: lake-minio-root}
   secretRefs: [lake-minio-root]
 ---
 # Realizes Catalog(engine: nessie) — see catalog-and-connections.yaml.

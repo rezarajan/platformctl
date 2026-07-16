@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	defaultImage   = "marquezproject/marquez:latest"
+	defaultImage   = "marquezproject/marquez:0.51.1"
 	defaultDBImage = "postgres:16"
 	marquezAPIPort = 5000
 )
@@ -162,7 +162,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 		"url":     fmt.Sprintf("http://%s:%d", p.name(), marquezAPIPort),
 		"hostApi": hostAPI,
 		endpoint.Key: endpoint.List{
-			{Name: "openlineage", Scheme: "http", Host: hostAPI, Internal: fmt.Sprintf("http://%s:%d/api/v1", p.name(), marquezAPIPort)},
+			{Name: "openlineage", Scheme: "http", Host: hostAPI, Internal: fmt.Sprintf("http://%s:%d/api/v1", p.name(), marquezAPIPort), Insecure: true},
 		}.ToState(),
 	}
 	return st, nil

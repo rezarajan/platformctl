@@ -186,7 +186,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		"hostAddr":     hostAddr,
 		"internalAddr": internalAddr,
 		endpoint.Key: endpoint.List{
-			{Name: "postgres", Scheme: "postgres", Host: hostAddr, Internal: internalAddr},
+			{Name: "postgres", Scheme: "postgres", Host: hostAddr, Internal: internalAddr, Insecure: true},
 		}.ToState(),
 	}
 	return st, nil

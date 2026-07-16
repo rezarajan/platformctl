@@ -20,6 +20,12 @@ type Endpoint struct {
 	// Internal is the address reachable from other containers on the shared
 	// runtime network (<container>:<port>).
 	Internal string `json:"internal,omitempty"`
+	// Insecure marks a plaintext (no TLS) endpoint. Local-development
+	// defaults are plaintext; the flag makes that an explicit, surfaced
+	// fact (docs/planning/07 §2.3/§2.5) instead of an unstated assumption —
+	// `inventory` renders it so nobody points production traffic at an
+	// unlabeled plaintext port.
+	Insecure bool `json:"insecure,omitempty"`
 }
 
 // List is an ordered set of a component's endpoints.
@@ -37,6 +43,9 @@ func (l List) ToState() []map[string]any {
 		}
 		if e.Internal != "" {
 			m["internal"] = e.Internal
+		}
+		if e.Insecure {
+			m["insecure"] = true
 		}
 		out = append(out, m)
 	}
@@ -64,6 +73,9 @@ func FromState(v any) List {
 		e.Scheme, _ = m["scheme"].(string)
 		e.Host, _ = m["host"].(string)
 		e.Internal, _ = m["internal"].(string)
+		if v, ok := m["insecure"].(bool); ok {
+			e.Insecure = v
+		}
 		out = append(out, e)
 	}
 	return out

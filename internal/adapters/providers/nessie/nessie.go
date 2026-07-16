@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	defaultImage = "ghcr.io/projectnessie/nessie:latest"
+	defaultImage = "ghcr.io/projectnessie/nessie:0.108.1"
 	apiPort      = 19120
 )
 
@@ -134,8 +134,8 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		"internalApi": fmt.Sprintf("http://%s:%d/api/v2", name, apiPort),
 		"icebergUri":  fmt.Sprintf("http://%s:%d/iceberg", name, apiPort),
 		endpoint.Key: endpoint.List{
-			{Name: "iceberg-rest", Scheme: "http", Host: hostIceberg, Internal: fmt.Sprintf("http://%s:%d/iceberg", name, apiPort)},
-			{Name: "nessie-api", Scheme: "http", Host: hostAPI, Internal: fmt.Sprintf("http://%s:%d/api/v2", name, apiPort)},
+			{Name: "iceberg-rest", Scheme: "http", Host: hostIceberg, Internal: fmt.Sprintf("http://%s:%d/iceberg", name, apiPort), Insecure: true},
+			{Name: "nessie-api", Scheme: "http", Host: hostAPI, Internal: fmt.Sprintf("http://%s:%d/api/v2", name, apiPort), Insecure: true},
 		}.ToState(),
 	}
 	return st, nil

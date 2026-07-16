@@ -25,7 +25,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
-const defaultImage = "alpine/socat:latest"
+const defaultImage = "alpine/socat:1.8.0.3"
 
 type Provider struct {
 	providerRes resource.Envelope
@@ -136,7 +136,7 @@ func (p *Provider) reconcileConnection(ctx context.Context, res resource.Envelop
 		"host":        hostAddr,
 		"target":      conn.Target,
 		endpoint.Key: endpoint.List{
-			{Name: "forward", Scheme: conn.Scheme, Host: hostAddr, Internal: fmt.Sprintf("%s:%d", host, port)},
+			{Name: "forward", Scheme: conn.Scheme, Host: hostAddr, Internal: fmt.Sprintf("%s:%d", host, port), Insecure: true},
 		}.ToState(),
 	}
 	return st, nil

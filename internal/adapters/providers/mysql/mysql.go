@@ -207,7 +207,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		"hostAddr":     hostAddr,
 		"internalAddr": name + ":3306",
 		endpoint.Key: endpoint.List{
-			{Name: "mysql", Scheme: "mysql", Host: hostAddr, Internal: name + ":3306"},
+			{Name: "mysql", Scheme: "mysql", Host: hostAddr, Internal: name + ":3306", Insecure: true},
 		}.ToState(),
 	}
 	return st, nil

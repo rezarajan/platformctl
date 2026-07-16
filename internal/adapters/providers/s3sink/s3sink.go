@@ -163,7 +163,7 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 	st.ProviderState = map[string]any{
 		"connectUrl": p.connectURL(),
 		endpoint.Key: endpoint.List{
-			{Name: "connect-rest", Scheme: "http", Host: hostURL, Internal: fmt.Sprintf("http://%s:8083", p.containerName())},
+			{Name: "connect-rest", Scheme: "http", Host: hostURL, Internal: fmt.Sprintf("http://%s:8083", p.containerName()), Insecure: true},
 		}.ToState(),
 	}
 	return st, nil

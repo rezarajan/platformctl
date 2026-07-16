@@ -638,8 +638,12 @@ func newInventoryCmd(a *app) *cobra.Command {
 				Host      string `json:"host"`
 				InNetwork string `json:"inNetwork"`
 				Secret    string `json:"credentials"`
+				// Insecure surfaces plaintext (no-TLS) endpoints explicitly —
+				// local-dev defaults are insecure and must say so
+				// (docs/planning/07 §2.3/§2.5).
+				Insecure bool `json:"insecure,omitempty"`
 			}
-			rows := [][]string{{"COMPONENT", "ENDPOINT", "SCHEME", "HOST (from your machine)", "IN-NETWORK", "CREDENTIALS"}}
+			rows := [][]string{{"COMPONENT", "ENDPOINT", "SCHEME", "HOST (from your machine)", "IN-NETWORK", "CREDENTIALS", "SECURITY"}}
 			var data []invRow
 			for _, e := range envelopes {
 				rs, ok := st.Resources[e.Key()]
@@ -658,9 +662,14 @@ func newInventoryCmd(a *app) *cobra.Command {
 						Host:      host,
 						InNetwork: ep.Internal,
 						Secret:    creds[e.Key()],
+						Insecure:  ep.Insecure,
+					}
+					security := "tls"
+					if r.Insecure {
+						security = "plaintext (local only)"
 					}
 					data = append(data, r)
-					rows = append(rows, []string{r.Component, r.Endpoint, r.Scheme, r.Host, r.InNetwork, dash(r.Secret)})
+					rows = append(rows, []string{r.Component, r.Endpoint, r.Scheme, r.Host, r.InNetwork, dash(r.Secret), security})
 				}
 			}
 			if len(data) == 0 {

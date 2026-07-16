@@ -134,7 +134,7 @@ func (p *Provider) reconcileBroker(ctx context.Context, rt runtime.ContainerRunt
 		"kafkaAddr":    hostAddr,
 		"internalAddr": p.InternalAddr(),
 		endpoint.Key: endpoint.List{
-			{Name: "kafka", Scheme: "kafka", Host: hostAddr, Internal: p.InternalAddr()},
+			{Name: "kafka", Scheme: "kafka", Host: hostAddr, Internal: p.InternalAddr(), Insecure: true},
 		}.ToState(),
 	}
 	return st, nil

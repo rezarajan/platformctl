@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	defaultImage = "minio/minio:latest"
+	defaultImage = "minio/minio:RELEASE.2025-04-22T22-12-26Z"
 	apiPort      = 9000
 	// rootPasswordPath is where the bootstrap password file is mounted.
 	rootPasswordPath = "/run/datascape/root-password"
@@ -155,7 +155,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		"hostEndpoint": hostAddr,
 		"internalUrl":  "http://" + name + ":" + strconv.Itoa(apiPort),
 		endpoint.Key: endpoint.List{
-			{Name: "s3", Scheme: "http", Host: hostURL, Internal: "http://" + name + ":" + strconv.Itoa(apiPort)},
+			{Name: "s3", Scheme: "http", Host: hostURL, Internal: "http://" + name + ":" + strconv.Itoa(apiPort), Insecure: true},
 		}.ToState(),
 	}
 	return st, nil
