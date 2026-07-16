@@ -152,10 +152,14 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name + "-data", Labels: labels, Networks: []string{p.network()}}); err != nil {
 		return st, err
 	}
-	env := map[string]string{"MYSQL_ROOT_PASSWORD": rootPass}
+	// The password rides a file mount, not env — env is readable by anyone
+	// with `docker inspect` access (docs/planning/07 Gate 1 checkbox 4);
+	// both official images consume *_FILE natively.
+	env := map[string]string{"MYSQL_ROOT_PASSWORD_FILE": rootPasswordPath}
 	if p.mariadb() {
-		env["MARIADB_ROOT_PASSWORD"] = rootPass
+		env["MARIADB_ROOT_PASSWORD_FILE"] = rootPasswordPath
 	}
+	files := []runtime.FileMount{{Path: rootPasswordPath, Content: []byte(rootPass)}}
 	// MySQL 8.x has row-format binlog on by default; MariaDB needs it asked
 	// for. Setting it explicitly on both keeps CDC-readiness uniform.
 	cmd := []string{"--log-bin=binlog", "--binlog-format=ROW", "--server-id=1"}
@@ -168,6 +172,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		Image:    prof.Image,
 		Cmd:      cmd,
 		Env:      env,
+		Files:    files,
 		Networks: []string{p.network()},
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: prof.DataMount}},
 		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: 3306}},
@@ -207,11 +212,19 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	return st, nil
 }
 
+// rootPasswordPath is where the bootstrap password file is mounted.
+const rootPasswordPath = "/run/datascape/root-password"
+
 func (p *Provider) liveRootPassword(ctx context.Context, rt runtime.ContainerRuntime) (string, bool) {
 	ctr, found, err := rt.Inspect(ctx, p.containerName())
 	if err != nil || !found {
 		return "", false
 	}
+	if data, err := rt.ReadFile(ctx, p.containerName(), rootPasswordPath); err == nil && len(data) > 0 {
+		return string(data), true
+	}
+	// Containers created before the file-mount change carried the password
+	// in env; keep rotation working across the upgrade.
 	if pass := ctr.Env["MYSQL_ROOT_PASSWORD"]; pass != "" {
 		return pass, true
 	}

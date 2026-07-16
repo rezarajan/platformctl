@@ -141,10 +141,14 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		Name:  name,
 		Image: prof.Image,
 		Cmd:   []string{"postgres", "-c", "wal_level=logical"},
+		// The password rides a file mount, not env — env is readable by
+		// anyone with `docker inspect` access (docs/planning/07 Gate 1
+		// checkbox 4); the official image consumes *_FILE natively.
 		Env: map[string]string{
-			"POSTGRES_USER":     user,
-			"POSTGRES_PASSWORD": pass,
+			"POSTGRES_USER":          user,
+			"POSTGRES_PASSWORD_FILE": superuserPasswordPath,
 		},
+		Files:    []runtime.FileMount{{Path: superuserPasswordPath, Content: []byte(pass)}},
 		Networks: []string{p.network()},
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: prof.DataMount}},
 		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: 5432}},
@@ -188,13 +192,23 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	return st, nil
 }
 
+// superuserPasswordPath is where the bootstrap password file is mounted.
+const superuserPasswordPath = "/run/datascape/superuser-password"
+
 func (p *Provider) liveSuperuser(ctx context.Context, rt runtime.ContainerRuntime) (string, string, bool) {
 	ctr, found, err := rt.Inspect(ctx, p.containerName())
 	if err != nil || !found {
 		return "", "", false
 	}
 	user := ctr.Env["POSTGRES_USER"]
-	pass := ctr.Env["POSTGRES_PASSWORD"]
+	pass := ""
+	if data, err := rt.ReadFile(ctx, p.containerName(), superuserPasswordPath); err == nil {
+		pass = string(data)
+	} else {
+		// Containers created before the file-mount change carried the
+		// password in env; keep rotation working across the upgrade.
+		pass = ctr.Env["POSTGRES_PASSWORD"]
+	}
 	if user == "" || pass == "" {
 		return "", "", false
 	}

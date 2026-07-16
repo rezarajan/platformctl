@@ -21,6 +21,8 @@ import (
 const (
 	defaultImage = "minio/minio:latest"
 	apiPort      = 9000
+	// rootPasswordPath is where the bootstrap password file is mounted.
+	rootPasswordPath = "/run/datascape/root-password"
 )
 
 type Provider struct {
@@ -114,10 +116,14 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		Name:  name,
 		Image: image,
 		Cmd:   []string{"server", "/data"},
+		// The password rides a file mount, not env — env is readable by
+		// anyone with `docker inspect` access (docs/planning/07 Gate 1
+		// checkbox 4); MinIO's entrypoint consumes *_FILE natively.
 		Env: map[string]string{
-			"MINIO_ROOT_USER":     user,
-			"MINIO_ROOT_PASSWORD": pass,
+			"MINIO_ROOT_USER":          user,
+			"MINIO_ROOT_PASSWORD_FILE": rootPasswordPath,
 		},
+		Files:    []runtime.FileMount{{Path: rootPasswordPath, Content: []byte(pass)}},
 		Networks: []string{p.network()},
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/data"}},
 		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: apiPort}},
