@@ -110,6 +110,15 @@ type ContainerState struct {
 	Healthy bool
 	Labels  map[string]string
 	Env     map[string]string
+	// Ports reports the *actually bound* published ports as observed from
+	// the runtime (Docker: NetworkSettings.Ports from inspect), not the
+	// requested intent — so endpoint discovery and drift checks can verify
+	// real exposure (docs/planning/07 §0.7/§1.1). HostIP is the concrete
+	// bind address (e.g. "127.0.0.1"), never empty for a published port.
+	// Runtimes with no host-port concept for a container (Kubernetes
+	// ClusterIP Services) report HostIP/HostPort zero-valued with only
+	// ContainerPort set.
+	Ports []PortBinding
 }
 
 type ContainerRuntime interface {

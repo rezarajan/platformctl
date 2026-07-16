@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -427,7 +428,39 @@ func stateFromInspect(info container.InspectResponse) runtime.ContainerState {
 			st.Healthy = info.State.Running
 		}
 	}
+	st.Ports = portsFromInspect(info)
 	return st
+}
+
+// portsFromInspect reports the ports Docker actually bound — observed
+// exposure, not requested intent (docs/planning/07 §1.1). Sorted for
+// deterministic output.
+func portsFromInspect(info container.InspectResponse) []runtime.PortBinding {
+	if info.NetworkSettings == nil || len(info.NetworkSettings.Ports) == 0 {
+		return nil
+	}
+	var out []runtime.PortBinding
+	for port, bindings := range info.NetworkSettings.Ports {
+		for _, b := range bindings {
+			hostPort, err := strconv.Atoi(b.HostPort)
+			if err != nil {
+				continue
+			}
+			out = append(out, runtime.PortBinding{
+				HostIP:        b.HostIP,
+				HostPort:      hostPort,
+				ContainerPort: port.Int(),
+				Protocol:      port.Proto(),
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ContainerPort != out[j].ContainerPort {
+			return out[i].ContainerPort < out[j].ContainerPort
+		}
+		return out[i].HostPort < out[j].HostPort
+	})
+	return out
 }
 
 func envMap(env []string) map[string]string {

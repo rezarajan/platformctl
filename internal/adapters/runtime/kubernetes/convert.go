@@ -289,6 +289,19 @@ func stateFromDeployment(d *appsv1.Deployment) runtimeport.ContainerState {
 			env[e.Name] = e.Value
 		}
 		st.Env = env
+		// No host binding exists for a ClusterIP-backed Deployment;
+		// report container ports only (HostIP/HostPort zero-valued), per
+		// the ContainerState.Ports contract.
+		for _, p := range c.Ports {
+			proto := "tcp"
+			if p.Protocol == corev1.ProtocolUDP {
+				proto = "udp"
+			}
+			st.Ports = append(st.Ports, runtimeport.PortBinding{
+				ContainerPort: int(p.ContainerPort),
+				Protocol:      proto,
+			})
+		}
 	}
 	return st
 }

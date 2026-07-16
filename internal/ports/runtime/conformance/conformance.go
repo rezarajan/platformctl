@@ -181,6 +181,42 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		}
 	})
 
+	t.Run("Inspect_reports_observed_ports", func(t *testing.T) {
+		name := namePrefix + "-ports-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		spec := runtime.ContainerSpec{
+			Name:     name,
+			Image:    "alpine:3.20",
+			Cmd:      []string{"sleep", "300"},
+			Networks: []string{netSpec.Name},
+			Ports:    []runtime.PortBinding{{HostPort: 28999, ContainerPort: 80}},
+			Labels:   labels,
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer: %v", err)
+		}
+		st, found, err := rt.Inspect(ctx, name)
+		if err != nil || !found {
+			t.Fatalf("Inspect: found=%v err=%v", found, err)
+		}
+		var got *runtime.PortBinding
+		for i := range st.Ports {
+			if st.Ports[i].ContainerPort == 80 {
+				got = &st.Ports[i]
+			}
+		}
+		if got == nil {
+			t.Fatalf("Inspect did not report the published container port 80; ports = %+v", st.Ports)
+		}
+		// A runtime with host publishing (Docker, fake) must report the
+		// concrete bind address, never an empty HostIP for a bound port.
+		// A runtime without host publishing (Kubernetes) reports HostPort 0
+		// and may leave HostIP empty.
+		if got.HostPort != 0 && got.HostIP == "" {
+			t.Errorf("published port reported with empty HostIP: %+v", *got)
+		}
+	})
+
 	t.Run("Remove_then_absent", func(t *testing.T) {
 		if err := rt.Remove(ctx, ctrSpec.Name); err != nil {
 			t.Fatalf("Remove: %v", err)

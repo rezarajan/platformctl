@@ -146,7 +146,29 @@ func (r *Runtime) stateOf(spec runtime.ContainerSpec) runtime.ContainerState {
 		Healthy: true,
 		Labels:  spec.Labels,
 		Env:     spec.Env,
+		Ports:   observedPorts(spec.Ports),
 	}
+}
+
+// observedPorts mirrors what the Docker adapter reports from inspect:
+// published ports with the concrete bind address filled in (127.0.0.1 when
+// the spec left HostIP empty) — the fake must present observed exposure the
+// same way the real runtime does.
+func observedPorts(ports []runtime.PortBinding) []runtime.PortBinding {
+	if len(ports) == 0 {
+		return nil
+	}
+	out := make([]runtime.PortBinding, len(ports))
+	for i, p := range ports {
+		if p.HostIP == "" {
+			p.HostIP = "127.0.0.1"
+		}
+		if p.Protocol == "" {
+			p.Protocol = "tcp"
+		}
+		out[i] = p
+	}
+	return out
 }
 
 func specEqual(a, b map[string]string) bool {
