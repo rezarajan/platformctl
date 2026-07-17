@@ -242,6 +242,11 @@ func (a *app) newEngine() *engine.Engine {
 	}
 }
 
+type validateOutput struct {
+	Valid     bool `json:"valid" yaml:"valid"`
+	Resources int  `json:"resources" yaml:"resources"`
+}
+
 func newValidateCmd(a *app) *cobra.Command {
 	return &cobra.Command{
 		Use:   "validate [path]",
@@ -251,6 +256,9 @@ func newValidateCmd(a *app) *cobra.Command {
 			envelopes, _, err := a.loadAndValidate(pathArg(args))
 			if err != nil {
 				return err
+			}
+			if isStructured(a.output) {
+				return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, validateOutput{Valid: true, Resources: len(envelopes)}, nil)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%d resource(s) valid\n", len(envelopes))
 			return nil
@@ -635,6 +643,13 @@ func newInventoryCmd(a *app) *cobra.Command {
 			}
 			creds := credentialRefs(envelopes)
 			if forTool != "" {
+				if isStructured(a.output) {
+					snippet, err := renderToolConfigString(forTool, gatherToolFacts(envelopes, st, creds))
+					if err != nil {
+						return cliutil.Exit(cliutil.ExitValidation, err)
+					}
+					return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, toolConfigOutput{Tool: forTool, Config: snippet}, nil)
+				}
 				if err := renderToolConfig(cmd.OutOrStdout(), forTool, gatherToolFacts(envelopes, st, creds)); err != nil {
 					return cliutil.Exit(cliutil.ExitValidation, err)
 				}
@@ -787,7 +802,9 @@ func newGraphCmd(a *app) *cobra.Command {
 			"(Bindings collapse into labelled source→target edges) and the technology layer\n" +
 			"(which Provider realizes each asset, and how external systems are reached).\n" +
 			"This is the picture you configure orchestrators against, not the internal\n" +
-			"reconcile ordering. Choose the graph format with --format: tree (default), dot, mermaid, json.",
+			"reconcile ordering. Choose the graph format with --format: tree (default), dot, mermaid, json.\n" +
+			"-o json|yaml overrides --format with a structured node/edge document (the root\n" +
+			"output contract: exactly one parseable document on stdout).",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			envelopes, _, err := a.loadAndValidate(pathArg(args))
@@ -795,6 +812,15 @@ func newGraphCmd(a *app) *cobra.Command {
 				return err
 			}
 			view := archview.Build(envelopes)
+			if isStructured(a.output) {
+				if cmd.Flags().Changed("format") && graphFormat != "json" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: -o %s overrides --format %s for graph\n", a.output, graphFormat)
+				}
+				if err := cliutil.WriteOutput(cmd.OutOrStdout(), a.output, graphView(view), nil); err != nil {
+					return cliutil.Exit(cliutil.ExitValidation, err)
+				}
+				return nil
+			}
 			if err := view.Render(cmd.OutOrStdout(), graphFormat); err != nil {
 				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
@@ -803,6 +829,26 @@ func newGraphCmd(a *app) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&graphFormat, "format", "tree", "graph format: tree|dot|mermaid|json")
 	return cmd
+}
+
+// graphViewOutput mirrors archview's own JSON shape (renderJSON) so -o
+// json|yaml produces the identical document --format json already does,
+// without archview needing to expose an encoder for each format.
+type graphViewOutput struct {
+	Nodes []archview.Node `json:"nodes" yaml:"nodes"`
+	Edges []graphEdge     `json:"edges" yaml:"edges"`
+}
+
+type graphEdge struct {
+	From, To, Kind, Label string
+}
+
+func graphView(v *archview.View) graphViewOutput {
+	out := graphViewOutput{Nodes: v.Nodes}
+	for _, e := range v.Edges {
+		out.Edges = append(out.Edges, graphEdge{e.From.String(), e.To.String(), string(e.Kind), e.Label})
+	}
+	return out
 }
 
 func printPlan(cmd *cobra.Command, output string, p planpkg.Plan) error {
@@ -849,6 +895,11 @@ type driftOutput struct {
 
 type inventoryOutput struct {
 	Endpoints any `json:"endpoints" yaml:"endpoints"`
+}
+
+type toolConfigOutput struct {
+	Tool   string `json:"tool" yaml:"tool"`
+	Config string `json:"config" yaml:"config"`
 }
 
 type importOutput struct {

@@ -224,8 +224,13 @@ dedicated coverage.
       and provider-type-change as distinct scenarios still need dedicated
       tests).
 - [x] Machine-readable command output is valid JSON/YAML for every command
-      (structured payload always to stdout, prose to stderr — see 0.5;
-      generic per-path parse tests still open).
+      (structured payload always to stdout, prose to stderr — see 0.5).
+      **Audit correction (2026-07-17, `docs/remediation/F-001`):** this
+      checkbox was previously unsupported by the code — `graph -o json`,
+      `validate -o json`, and `inventory --for -o json` all emitted
+      non-JSON prose to stdout despite the claim. Fixed; all three now
+      verified to emit exactly one parseable document. A generic
+      per-command × per-path harness remains open (0.5).
 - [x] Mermaid/DOT renderers are collision-resistant and escaping-safe
       (hash-based ids, separated labels — see 0.6; adversarial-input golden
       tests still open).
@@ -465,7 +470,7 @@ Still open:
 
 Current risk:
 
-Resolved (`cmd/platformctl/root.go`):
+Resolved (`cmd/platformctl/root.go`, `cmd/platformctl/toolconfig.go`):
 
 - `isStructured(output)`/`humanWriter(cmd, output)` route every prompt and
   human summary line to stderr when `-o json|yaml` is active; stdout gets
@@ -476,17 +481,33 @@ Resolved (`cmd/platformctl/root.go`):
   `inventoryOutput{Endpoints: data}` with `data` typed as a slice, not a bare
   `nil`/text branch).
 - `graph` takes its own `--format tree|dot|mermaid|json` flag, independent of
-  the root `-o table|json|yaml`, whose help text is now accurate.
+  the root `-o table|json|yaml`, whose help text is now accurate — **and (audit
+  fix, 2026-07-17, `docs/remediation/F-001`) `-o json|yaml` now overrides
+  `--format` and emits the same node/edge document `--format json` produces,
+  instead of ignoring `-o` and writing tree text regardless.** A stderr
+  warning fires when both an explicit non-default `--format` and a structured
+  `-o` are given, since `-o` wins.
+- **`validate -o json|yaml`** (audit fix, F-001) emits `{"valid": true,
+  "resources": N}` instead of the prose line unconditionally; the prose
+  stays the default-output behavior.
+- **`inventory --for <tool> -o json|yaml`** (audit fix, F-001) emits
+  `{"tool": "<tool>", "config": "<rendered snippet>"}` instead of writing
+  the raw prose snippet regardless of `-o`.
+- [x] Command-level tests that parse stdout as JSON/YAML now exist for the
+      three paths above (`cmd/platformctl/output_contract_test.go`:
+      `TestGraphStructuredOutput`, `TestValidateStructuredOutput`,
+      `TestInventoryForStructuredOutput`, plus default-output regression
+      guards for each). Full apply/destroy/drift path × exit-path coverage
+      (success/no-op/drifted/cancelled) remains a generic-harness gap — see
+      below.
 
 Still open:
 
-- [ ] Add command-level tests that actually parse stdout as JSON/YAML for
-      each command × each path (success, no-op, changed, drifted, empty,
-      cancelled). Today this is verified by inspection of `root.go` and by
-      `archview`'s own `TestRenderFormats` (which does assert `json.Unmarshal`
-      round-trips), but there is no generic harness asserting, e.g., `apply
-      -o json` on a cancelled run still emits a single valid JSON document on
-      stdout with nothing else mixed in.
+- [ ] Add a generic command-level harness that parses stdout as JSON/YAML
+      for every command × every exit path (success, no-op, changed,
+      drifted, empty, cancelled) — `apply`/`destroy`/`drift`/`status` are
+      verified correct by inspection and by the three commands' dedicated
+      tests above, but no single harness sweeps all of them systematically.
 
 ### 0.6 Mermaid, DOT, And Architecture Rendering Escaping
 

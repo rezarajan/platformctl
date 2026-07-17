@@ -2,7 +2,9 @@
 
 **Severity:** Medium (CI/tooling consumers get unparseable output; a Gate 0
 stage-gate completion claim is unsupported as written).
-**Status:** Confirmed, reproduced at `ae99505`.
+**Status:** RESOLVED at `<pending-commit>` (2026-07-17). All three repro
+cases now emit exactly one parseable document; regression tests added in
+`cmd/platformctl/output_contract_test.go`.
 
 ## Claim audited
 

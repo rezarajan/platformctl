@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"sort"
@@ -110,6 +111,17 @@ func renderToolConfig(w io.Writer, tool string, f toolFacts) error {
 	}
 	render(w, f)
 	return nil
+}
+
+// renderToolConfigString is renderToolConfig into an in-memory buffer, for
+// callers that need the rendered snippet as a value (e.g. embedding in a
+// structured -o json|yaml payload) rather than writing it directly.
+func renderToolConfigString(tool string, f toolFacts) (string, error) {
+	var buf bytes.Buffer
+	if err := renderToolConfig(&buf, tool, f); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 func note(w io.Writer, lines ...string) {
