@@ -2,7 +2,9 @@
 
 **Severity:** Low (unit suite fails in sandboxed environments; the gap doc's
 own validation-signal section has requested this since its first revision).
-**Status:** Confirmed at `ae99505`.
+**Status:** RESOLVED (2026-07-17). Verified the test still runs and passes
+normally in an unrestricted environment (the skip path is unreachable
+there).
 
 ## Claim audited
 

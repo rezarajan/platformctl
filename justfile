@@ -15,6 +15,15 @@ test:
 test-integration:
     go test -tags integration -timeout 3600s ./...
 
-# Format and vet.
+# Format and vet. gofmt -l only lists unformatted files on stdout — it
+# exits 0 either way, so `gofmt -l . && ...` never actually gated on
+# formatting; check the output explicitly instead (mirrors the CI gofmt step).
 check:
-    gofmt -l . && go vet ./... && go vet -tags integration ./...
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out=$(gofmt -l .)
+    if [ -n "$out" ]; then
+        echo "files need gofmt:" && echo "$out" && exit 1
+    fi
+    go vet ./...
+    go vet -tags integration ./...

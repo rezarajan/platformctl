@@ -999,23 +999,63 @@ Design notes:
 
 ### 3.2 Test Coverage Gaps
 
-Required work:
+**Status update (2026-07-17):** most items resolved across the Gate 0/1/2
+close-out passes and the remediation audit (`docs/remediation/`); checked
+against the actual test files below, not just prior claims.
 
-- [ ] Add tests for name policy and renderer escaping.
-- [ ] Add command-output tests that parse every `-o json` and `-o yaml` path.
-- [ ] Add removed-resource/orphan tests.
-- [ ] Add unmanaged Docker network/volume collision tests.
-- [ ] Add host bind-address tests.
+Resolved:
+
+- [x] Add tests for name policy and renderer escaping —
+      `internal/domain/resource/resource_test.go`,
+      `internal/application/archview/render_escaping_test.go`.
+- [x] Add removed-resource/orphan tests —
+      `TestComputePlansAuthoritativeDeletes`,
+      `TestComputeReportsLegacyOrphanUnknown`,
+      `TestComputePlansRenameAsDeleteAndCreate`,
+      `TestComputePlansProviderTypeChangeAsUpdate`
+      (`internal/application/plan/plan_test.go`).
+- [x] Add unmanaged Docker network/volume collision tests —
+      `TestEnsureNetworkRefusesUnmanagedExisting`,
+      `TestEnsureVolumeRefusesUnmanagedExisting`
+      (`internal/adapters/runtime/docker/docker_integration_test.go`, run
+      live against a real daemon).
+- [x] Add host bind-address tests — `TestPortMapsDefaultHostIPLocalhost`
+      (`docker_test.go`), `TestPublishedPortBindsToLoopbackByDefault`
+      (`docker_integration_test.go`, live).
 - [x] Add lakehouse integration coverage for MySQL and Postgres admin-secret
       rotation through SecretReference changes.
-- [ ] Add full provider config drift tests.
-- [ ] Add MariaDB integration coverage.
-- [ ] Add tests for special-character secrets and URL/DSN escaping.
-- [ ] Expand fake runtime conformance to compare every spec field.
-- [ ] Make `TestProbeTCPReachable` skip or self-describe when loopback listen
-      is blocked by a restricted runner.
-- [ ] Fix `just check`; `gofmt -l .` alone does not fail when files need
-      formatting.
+- [x] Add tests for special-character secrets and URL/DSN escaping —
+      `internal/adapters/providers/postgres/sql_test.go`,
+      `internal/adapters/providers/mysql/sql_test.go` (round-trip through
+      the real `pgx`/`go-sql-driver` parsers).
+- [x] Expand fake runtime conformance to compare every spec field —
+      `fake.containerSpecEqual` is `reflect.DeepEqual` over the whole
+      `ContainerSpec` (`internal/adapters/runtime/fake/fake.go`).
+- [x] Make `TestProbeTCPReachable` skip or self-describe when loopback
+      listen is blocked by a restricted runner (`docs/remediation/F-007`,
+      resolved).
+- [x] Fix `just check`; `gofmt -l .` alone does not fail when files need
+      formatting (`docs/remediation/F-008`, resolved — reproduced the
+      failure-to-fail, fixed, reproduced the fix catching it).
+- [x] Add command-output tests that parse `-o json`/`-o yaml` paths for
+      `graph`, `validate`, `inventory --for`
+      (`cmd/platformctl/output_contract_test.go`, `docs/remediation/F-001`)
+      — partial: see "still open" below for the remaining generic sweep.
+
+Still open:
+
+- [ ] A generic command-output harness parsing every command × every exit
+      path (success/no-op/changed/drifted/empty/cancelled) — the three
+      previously-broken paths (graph/validate/inventory --for) now have
+      dedicated tests, and apply/destroy/drift/status/import were verified
+      correct by inspection, but no single harness sweeps all of them.
+- [ ] Add full provider config drift tests — the per-provider equivalence
+      table (§2.1) and connector-config-diff mechanism are tested; targeted
+      out-of-band config-change integration tests (e.g. ALTER a topic's
+      retention.ms out-of-band, assert `drift` reports it) remain additive
+      work (§2.1's own "still open" note).
+- [ ] Add MariaDB integration coverage (still genuinely untested — no test
+      applies a `type: mariadb` Provider).
 
 Design notes:
 

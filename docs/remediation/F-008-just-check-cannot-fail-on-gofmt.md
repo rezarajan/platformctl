@@ -2,7 +2,9 @@
 
 **Severity:** Low (local/CI hygiene gate silently ineffective for
 formatting; vet still runs).
-**Status:** Confirmed and reproduced at `ae99505`.
+**Status:** RESOLVED (2026-07-17). Reproduced the exact failure-to-fail
+scenario, applied the fix, reproduced again to confirm it now fails
+correctly, then confirmed the clean tree still passes.
 
 ## Claim audited
 
