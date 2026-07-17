@@ -816,19 +816,44 @@ Design notes:
 
 ### 2.2 Provider-Specific Bugs To Fix
 
-Required work:
+**Status update (2026-07-17, remediation audit):** all seven items were
+fixed in the Gate 2 close-out (commit `09e1b61`), but this checklist was
+never ticked at the time — the Gate 2 stage-gate summary referenced the
+work without updating the detail section it summarized. Re-verified against
+the current code below (audit finding, cross-linked from
+`docs/remediation/F-006`).
 
-- [ ] URL-escape Kafka Connect connector names in REST paths.
-- [ ] Escape Kafka topic names when generating `topics.regex` for the S3 sink.
-- [ ] Build Postgres connection strings with URL-safe credential handling.
-- [ ] Build MySQL DSNs through `mysql.Config` rather than string formatting.
-- [ ] Generate unique MySQL/MariaDB Debezium `database.server.id` values per
-      connector; the current formula is effectively constant.
-- [ ] Add validation for provider-specific option blocks such as Debezium
+Resolved:
+
+- [x] URL-escape Kafka Connect connector names in REST paths —
+      `kafkaconnect.connectorPath` (`internal/adapters/kafkaconnect/connect.go`),
+      used by all five REST calls.
+- [x] Escape Kafka topic names when generating `topics.regex` for the S3
+      sink — `regexp.QuoteMeta(b.SourceRef)`
+      (`internal/adapters/providers/s3sink/s3sink.go`).
+- [x] Build Postgres connection strings with URL-safe credential handling —
+      `net/url`-based `connString`
+      (`internal/adapters/providers/postgres/sql.go`), round-trip tested
+      against the real `pgx` parser with `@:/#`-and-quote-laden credentials.
+- [x] Build MySQL DSNs through `mysql.Config` rather than string
+      formatting — `godriver.NewConfig()` + `FormatDSN()`
+      (`internal/adapters/providers/mysql/sql.go`), same round-trip test
+      treatment against the real driver.
+- [x] Generate unique MySQL/MariaDB Debezium `database.server.id` values per
+      connector — FNV-1a over the connector name (`serverID`,
+      `internal/adapters/providers/debezium/debezium.go`). **Upgrade note:**
+      this is a behavioral migration — pre-existing connectors report a
+      one-time `ConnectorConfigDrift` until the next `apply`; see
+      `docs/upgrade-notes.md`.
+- [x] Add validation for provider-specific option blocks such as Debezium
       table lists, snapshot mode, external database host/port overrides, and
-      S3 sink endpoint.
-- [ ] Make destroy behavior explicit for data-bearing subresources such as
-      Datasets and Sources.
+      S3 sink endpoint — `reconciler.BindingOptionsValidator`, implemented
+      by both `debezium` and `s3sink`.
+- [x] Make destroy behavior explicit for data-bearing subresources such as
+      Datasets and Sources — `spec.deletionPolicy: retain|delete`
+      (`internal/domain/dataset`, `internal/domain/source`, adopted by the
+      `s3`/`postgres`/`mysql` providers' `Destroy`). Schema + `docs/planning/03`
+      updated in the same commit per the schema-change rule.
 
 Design notes:
 

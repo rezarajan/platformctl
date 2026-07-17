@@ -227,11 +227,16 @@ Adding a provider with required configuration? Implement
    (`VolumeSpec.Networks`, since PVCs are namespace-scoped and Docker
    volumes are not) found by actually building the second adapter.
 9. **Gate 2 (lakehouse/pipeline completeness) closed** (docs/planning/07,
-   2026-07-16): 2.2 bugs fixed (connector-name URL escaping, topics.regex
-   quoting, URL-safe conn strings/DSNs with round-trip tests, unique
-   database.server.id, BindingOptionsValidator capability, deletionPolicy
-   retain|delete on Dataset/Source — s3's silent bucket-wipe on destroy is
-   gone); 2.1 drift probes verify desired config (connector config diffs,
+   2026-07-16; §2.2's checkboxes themselves weren't ticked until the
+   2026-07-17 remediation audit caught the staleness — code was correct,
+   the doc wasn't): 2.2 bugs fixed (connector-name URL escaping,
+   topics.regex quoting, URL-safe conn strings/DSNs with round-trip tests,
+   unique database.server.id — a behavioral migration, see
+   `docs/upgrade-notes.md` for the one-time drift report pre-existing
+   MySQL/MariaDB CDC connectors show on the first apply after upgrading —,
+   BindingOptionsValidator capability, deletionPolicy retain|delete on
+   Dataset/Source — s3's silent bucket-wipe on destroy is gone);
+   2.1 drift probes verify desired config (connector config diffs,
    wal_level/binlog_format/credential validity, retention.ms, prefix
    listability, upstream-through-forwarder) with a per-provider equivalence
    table in the doc; 2.5 images pinned + endpoints carry explicit

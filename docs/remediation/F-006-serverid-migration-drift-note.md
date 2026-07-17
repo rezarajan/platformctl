@@ -2,7 +2,11 @@
 
 **Severity:** Low (self-healing; but the first `drift` after upgrading looks
 like a regression to an operator who wasn't told).
-**Status:** Confirmed by construction at `ae99505`.
+**Status:** RESOLVED (2026-07-17). `docs/upgrade-notes.md` created;
+cross-linked from docs/planning/07 §2.2 and checkpoint.md. Implementation
+also surfaced that §2.2's whole checklist (all seven items, this one
+included) had never been ticked despite being fixed in the Gate 2
+close-out — corrected in the same pass.
 
 ## Evidence
 
