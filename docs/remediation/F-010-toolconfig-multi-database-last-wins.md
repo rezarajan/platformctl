@@ -3,7 +3,11 @@
 **Severity:** Low (single-database platforms — every shipped example —
 are unaffected; multi-database platforms get an arbitrary-looking pick with
 no warning).
-**Status:** Confirmed by code inspection at `ae99505`.
+**Status:** RESOLVED (2026-07-17). toolFacts fields are now slices,
+gathered in two passes so Source-to-Provider pairing is by providerRef, not
+envelope order (the original bug's exact mechanism). Single-instance output
+verified byte-identical; multi-instance output verified correctly paired
+(not just present) via index-position assertions in the new test.
 
 ## Claim audited
 

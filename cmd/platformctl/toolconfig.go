@@ -12,27 +12,59 @@ import (
 	"github.com/rezarajan/platformctl/internal/ports/state"
 )
 
+// dbEndpoint pairs one database-shaped Provider's observed endpoint with
+// the database name a Source declares against it (matched by providerRef,
+// not by iteration order — see gatherToolFacts) and the SecretReference
+// name holding its credentials.
+type dbEndpoint struct {
+	component resource.Key
+	host      string // host:port
+	db        string
+	credsRef  string
+}
+
+// simpleEndpoint is a component with just a host and optional credentials
+// (s3, kafka) — no per-Source database pairing.
+type simpleEndpoint struct {
+	component resource.Key
+	host      string
+	credsRef  string
+}
+
+// catalogEndpoint pairs a Catalog's observed iceberg-rest endpoint with its
+// default branch.
+type catalogEndpoint struct {
+	component resource.Key
+	host      string
+	branch    string
+}
+
 // toolFacts is everything the config views draw on, gathered once from
 // applied state: the exact endpoints and catalog facts a tool needs, plus
 // the SecretReference *names* holding credentials — values are never
 // rendered (docs/planning/07 §2.3: inventory answers "what exact config do
-// I paste into my tool?" without leaking secrets).
+// I paste into my tool?" without leaking secrets). Every field is a slice,
+// in envelope order, because the resource model allows any number of
+// providers of one type (docs/remediation/F-010): a platform with two
+// postgres Providers must render one paste-ready section per component,
+// not silently pick one.
 type toolFacts struct {
-	icebergRestHost string // catalog REST endpoint reachable from the host
-	catalogBranch   string
-	s3Host          string // http://host:port
-	s3CredsRef      string
-	kafkaHost       string
-	postgresHost    string // host:port
-	postgresDB      string
-	postgresCreds   string
-	mysqlHost       string
-	mysqlDB         string
-	mysqlCreds      string
+	catalogs []catalogEndpoint
+	s3       []simpleEndpoint
+	kafka    []simpleEndpoint
+	postgres []dbEndpoint
+	mysql    []dbEndpoint
 }
 
 func gatherToolFacts(envelopes []resource.Envelope, st state.State, creds map[resource.Key]string) toolFacts {
 	f := toolFacts{}
+	// First pass: Providers and Catalogs, so every database-shaped
+	// component has a slot before Sources are matched against it by
+	// providerRef in the second pass — Source and Provider envelopes are
+	// not guaranteed to appear in reference order.
+	dbIndex := map[resource.Key]int{} // component Key -> index in f.postgres or f.mysql
+	dbFamily := map[resource.Key]string{}
+
 	for _, e := range envelopes {
 		rs, ok := st.Resources[e.Key()]
 		if !ok {
@@ -40,12 +72,10 @@ func gatherToolFacts(envelopes []resource.Envelope, st state.State, creds map[re
 		}
 		switch e.Kind {
 		case "Catalog":
-			if v, ok := rs.Provider["defaultBranch"].(string); ok {
-				f.catalogBranch = v
-			}
+			branch, _ := rs.Provider["defaultBranch"].(string)
 			for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
 				if ep.Name == "iceberg-rest" && ep.Host != "" {
-					f.icebergRestHost = ep.Host
+					f.catalogs = append(f.catalogs, catalogEndpoint{component: e.Key(), host: ep.Host, branch: branch})
 				}
 			}
 		case "Provider":
@@ -55,30 +85,48 @@ func gatherToolFacts(envelopes []resource.Envelope, st state.State, creds map[re
 				}
 				switch ep.Name {
 				case "s3":
-					f.s3Host = ep.Host
-					f.s3CredsRef = creds[e.Key()]
+					f.s3 = append(f.s3, simpleEndpoint{component: e.Key(), host: ep.Host, credsRef: creds[e.Key()]})
 				case "kafka":
-					f.kafkaHost = ep.Host
+					f.kafka = append(f.kafka, simpleEndpoint{component: e.Key(), host: ep.Host, credsRef: creds[e.Key()]})
 				case "postgres":
-					f.postgresHost = ep.Host
-					f.postgresCreds = creds[e.Key()]
+					dbIndex[e.Key()] = len(f.postgres)
+					dbFamily[e.Key()] = "postgres"
+					f.postgres = append(f.postgres, dbEndpoint{component: e.Key(), host: ep.Host, credsRef: creds[e.Key()]})
 				case "mysql":
-					f.mysqlHost = ep.Host
-					f.mysqlCreds = creds[e.Key()]
+					dbIndex[e.Key()] = len(f.mysql)
+					dbFamily[e.Key()] = "mysql"
+					f.mysql = append(f.mysql, dbEndpoint{component: e.Key(), host: ep.Host, credsRef: creds[e.Key()]})
 				}
 			}
-		case "Source":
-			engine, _ := e.Spec["engine"].(string)
-			if block, ok := e.Spec[engine].(map[string]any); ok {
-				if db, _ := block["database"].(string); db != "" {
-					switch engine {
-					case "postgres":
-						f.postgresDB = db
-					case "mysql", "mariadb":
-						f.mysqlDB = db
-					}
-				}
-			}
+		}
+	}
+
+	// Second pass: Sources, matched to their Provider by providerRef so the
+	// right database name lands on the right component even when several
+	// providers of the same engine exist.
+	for _, e := range envelopes {
+		if e.Kind != "Source" {
+			continue
+		}
+		engine, _ := e.Spec["engine"].(string)
+		block, ok := e.Spec[engine].(map[string]any)
+		if !ok {
+			continue
+		}
+		db, _ := block["database"].(string)
+		if db == "" {
+			continue
+		}
+		provKey := resource.RefFromSpec(e.Spec, "providerRef").Key(e.Metadata.Namespace, "Provider")
+		idx, ok := dbIndex[provKey]
+		if !ok {
+			continue
+		}
+		switch dbFamily[provKey] {
+		case "postgres":
+			f.postgres[idx].db = db
+		case "mysql":
+			f.mysql[idx].db = db
 		}
 	}
 	return f
@@ -130,57 +178,83 @@ func note(w io.Writer, lines ...string) {
 	}
 }
 
+// forEachSection renders one block per entry. With exactly one entry the
+// output is just that block (byte-identical to the pre-plurality renderers,
+// for the single-instance platforms every shipped example is). With more
+// than one, each block gets a "# --- component ---" header and a blank
+// line separates blocks, so a platform with e.g. two postgres Providers
+// gets one clearly-labeled section per component instead of one renderer
+// silently picking the last one (docs/remediation/F-010).
+func forEachSection[T any](w io.Writer, entries []T, keyOf func(T) resource.Key, render func(io.Writer, T)) {
+	for i, e := range entries {
+		if len(entries) > 1 {
+			fmt.Fprintf(w, "# --- %s ---\n", keyOf(e).String())
+		}
+		render(w, e)
+		if len(entries) > 1 && i < len(entries)-1 {
+			fmt.Fprintln(w)
+		}
+	}
+}
+
 func renderSpark(w io.Writer, f toolFacts) {
 	note(w, "spark-defaults.conf — Iceberg REST catalog + S3A warehouse access.",
 		"Credentials come from the named SecretReference's env keys; never inline them.")
-	if f.icebergRestHost == "" && f.s3Host == "" {
+	if len(f.catalogs) == 0 && len(f.s3) == 0 {
 		note(w, "no catalog or object-store endpoints recorded — apply the platform first")
 		return
 	}
 	fmt.Fprintln(w, "spark.jars.packages                              org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.0")
 	fmt.Fprintln(w, "spark.sql.extensions                             org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
-	if f.icebergRestHost != "" {
+	forEachSection(w, f.catalogs, func(c catalogEndpoint) resource.Key { return c.component }, func(w io.Writer, c catalogEndpoint) {
 		fmt.Fprintln(w, "spark.sql.catalog.lakehouse                      org.apache.iceberg.spark.SparkCatalog")
 		fmt.Fprintln(w, "spark.sql.catalog.lakehouse.type                 rest")
-		fmt.Fprintf(w, "spark.sql.catalog.lakehouse.uri                  %s\n", f.icebergRestHost)
-		if f.catalogBranch != "" {
-			fmt.Fprintf(w, "spark.sql.catalog.lakehouse.ref                  %s\n", f.catalogBranch)
+		fmt.Fprintf(w, "spark.sql.catalog.lakehouse.uri                  %s\n", c.host)
+		if c.branch != "" {
+			fmt.Fprintf(w, "spark.sql.catalog.lakehouse.ref                  %s\n", c.branch)
 		}
-	}
-	if f.s3Host != "" {
-		fmt.Fprintf(w, "spark.hadoop.fs.s3a.endpoint                     %s\n", f.s3Host)
+	})
+	forEachSection(w, f.s3, func(s simpleEndpoint) resource.Key { return s.component }, func(w io.Writer, s simpleEndpoint) {
+		fmt.Fprintf(w, "spark.hadoop.fs.s3a.endpoint                     %s\n", s.host)
 		fmt.Fprintln(w, "spark.hadoop.fs.s3a.path.style.access            true")
-		if f.s3CredsRef != "" {
-			note(w, fmt.Sprintf("access/secret key: the %q SecretReference (username/password keys)", f.s3CredsRef))
+		if s.credsRef != "" {
+			note(w, fmt.Sprintf("access/secret key: the %q SecretReference (username/password keys)", s.credsRef))
 		}
-	}
+	})
 }
 
 func renderTrino(w io.Writer, f toolFacts) {
 	note(w, "etc/catalog/lakehouse.properties — Iceberg REST connector.")
-	if f.icebergRestHost == "" {
+	if len(f.catalogs) == 0 {
 		note(w, "no catalog endpoint recorded — apply the platform first")
 		return
 	}
-	fmt.Fprintln(w, "connector.name=iceberg")
-	fmt.Fprintln(w, "iceberg.catalog.type=rest")
-	fmt.Fprintf(w, "iceberg.rest-catalog.uri=%s\n", f.icebergRestHost)
-	if f.s3Host != "" {
-		fmt.Fprintf(w, "fs.native-s3.enabled=true\ns3.endpoint=%s\ns3.path-style-access=true\n", f.s3Host)
-		if f.s3CredsRef != "" {
-			note(w, fmt.Sprintf("s3.aws-access-key/s3.aws-secret-key: the %q SecretReference", f.s3CredsRef))
+	forEachSection(w, f.catalogs, func(c catalogEndpoint) resource.Key { return c.component }, func(w io.Writer, c catalogEndpoint) {
+		fmt.Fprintln(w, "connector.name=iceberg")
+		fmt.Fprintln(w, "iceberg.catalog.type=rest")
+		fmt.Fprintf(w, "iceberg.rest-catalog.uri=%s\n", c.host)
+	})
+	forEachSection(w, f.s3, func(s simpleEndpoint) resource.Key { return s.component }, func(w io.Writer, s simpleEndpoint) {
+		fmt.Fprintf(w, "fs.native-s3.enabled=true\ns3.endpoint=%s\ns3.path-style-access=true\n", s.host)
+		if s.credsRef != "" {
+			note(w, fmt.Sprintf("s3.aws-access-key/s3.aws-secret-key: the %q SecretReference", s.credsRef))
 		}
-	}
+	})
 }
 
 func renderDBT(w io.Writer, f toolFacts) {
 	note(w, "profiles.yml — postgres target against the platform database.")
-	if f.postgresHost == "" {
+	if len(f.postgres) == 0 {
 		note(w, "no postgres endpoint recorded — apply the platform first")
 		return
 	}
-	host, port, _ := strings.Cut(f.postgresHost, ":")
-	fmt.Fprintf(w, `datascape:
+	forEachSection(w, f.postgres, func(p dbEndpoint) resource.Key { return p.component }, func(w io.Writer, p dbEndpoint) {
+		profile := "datascape"
+		if len(f.postgres) > 1 {
+			profile = "datascape-" + p.component.Name
+		}
+		host, port, _ := strings.Cut(p.host, ":")
+		fmt.Fprintf(w, `%s:
   target: dev
   outputs:
     dev:
@@ -191,45 +265,56 @@ func renderDBT(w io.Writer, f toolFacts) {
       user: "{{ env_var('DB_USER') }}"
       password: "{{ env_var('DB_PASSWORD') }}"
       schema: public
-`, host, port, orPlaceholder(f.postgresDB, "<database>"))
-	if f.postgresCreds != "" {
-		note(w, fmt.Sprintf("DB_USER/DB_PASSWORD: the %q SecretReference (username/password keys)", f.postgresCreds))
-	}
+`, profile, host, port, orPlaceholder(p.db, "<database>"))
+		if p.credsRef != "" {
+			note(w, fmt.Sprintf("DB_USER/DB_PASSWORD: the %q SecretReference (username/password keys)", p.credsRef))
+		}
+	})
 }
 
 func renderPsql(w io.Writer, f toolFacts) {
 	note(w, "psql — connect from this machine.")
-	if f.postgresHost == "" {
+	if len(f.postgres) == 0 {
 		note(w, "no postgres endpoint recorded — apply the platform first")
 		return
 	}
-	host, port, _ := strings.Cut(f.postgresHost, ":")
-	fmt.Fprintf(w, "psql -h %s -p %s -U \"$DB_USER\" -d %s\n", host, port, orPlaceholder(f.postgresDB, "<database>"))
-	if f.postgresCreds != "" {
-		note(w, fmt.Sprintf("DB_USER/PGPASSWORD: the %q SecretReference (username/password keys)", f.postgresCreds))
-	}
+	forEachSection(w, f.postgres, func(p dbEndpoint) resource.Key { return p.component }, func(w io.Writer, p dbEndpoint) {
+		host, port, _ := strings.Cut(p.host, ":")
+		fmt.Fprintf(w, "psql -h %s -p %s -U \"$DB_USER\" -d %s\n", host, port, orPlaceholder(p.db, "<database>"))
+		if p.credsRef != "" {
+			note(w, fmt.Sprintf("DB_USER/PGPASSWORD: the %q SecretReference (username/password keys)", p.credsRef))
+		}
+	})
 }
 
 func renderS3(w io.Writer, f toolFacts) {
 	note(w, "AWS CLI / mc — S3-compatible access from this machine.")
-	if f.s3Host == "" {
+	if len(f.s3) == 0 {
 		note(w, "no object-store endpoint recorded — apply the platform first")
 		return
 	}
-	fmt.Fprintf(w, "aws s3 ls --endpoint-url %s\n", f.s3Host)
-	fmt.Fprintf(w, "mc alias set datascape %s \"$AWS_ACCESS_KEY_ID\" \"$AWS_SECRET_ACCESS_KEY\"\n", f.s3Host)
-	if f.s3CredsRef != "" {
-		note(w, fmt.Sprintf("AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY: the %q SecretReference (username/password keys)", f.s3CredsRef))
-	}
+	forEachSection(w, f.s3, func(s simpleEndpoint) resource.Key { return s.component }, func(w io.Writer, s simpleEndpoint) {
+		alias := "datascape"
+		if len(f.s3) > 1 {
+			alias = "datascape-" + s.component.Name
+		}
+		fmt.Fprintf(w, "aws s3 ls --endpoint-url %s\n", s.host)
+		fmt.Fprintf(w, "mc alias set %s %s \"$AWS_ACCESS_KEY_ID\" \"$AWS_SECRET_ACCESS_KEY\"\n", alias, s.host)
+		if s.credsRef != "" {
+			note(w, fmt.Sprintf("AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY: the %q SecretReference (username/password keys)", s.credsRef))
+		}
+	})
 }
 
 func renderKafka(w io.Writer, f toolFacts) {
 	note(w, "Kafka clients — bootstrap from this machine.")
-	if f.kafkaHost == "" {
+	if len(f.kafka) == 0 {
 		note(w, "no kafka endpoint recorded — apply the platform first")
 		return
 	}
-	fmt.Fprintf(w, "bootstrap.servers=%s\n", f.kafkaHost)
+	forEachSection(w, f.kafka, func(k simpleEndpoint) resource.Key { return k.component }, func(w io.Writer, k simpleEndpoint) {
+		fmt.Fprintf(w, "bootstrap.servers=%s\n", k.host)
+	})
 }
 
 func orPlaceholder(s, placeholder string) string {
