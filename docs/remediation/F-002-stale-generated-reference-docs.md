@@ -2,7 +2,16 @@
 
 **Severity:** Medium (the generated reference is the user-facing contract;
 it currently contradicts the schemas on a data-loss-relevant field).
-**Status:** Confirmed at `ae99505`.
+**Status:** RESOLVED (2026-07-17). Regenerated; a sync-drift test
+(`TestGeneratedReferenceInSync`) now guards against recurrence. One
+wrinkle found during implementation: `secretreference.md` carried
+hand-added rotation-behavior prose with no home in the schema
+description — moved into `schemas/v1alpha1/secretreference.json`'s
+description (multi-paragraph, `\n\n`-separated) so it survives
+regeneration; `docsgen.go` gained a `description()` helper (Kind-page
+header, preserves paragraph breaks) distinct from `str()` (table cells,
+collapses newlines) and a `firstParagraph()` helper for the index page's
+one-line summary column.
 
 ## Claim audited
 

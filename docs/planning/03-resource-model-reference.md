@@ -514,7 +514,7 @@ kind: SecretReference
 metadata:
   name: postgres-replication-creds
 spec:
-  backend: env                     # env | file | kubernetes (future) | vault (future)
+  backend: env                     # env | file (both implemented) | vault (implemented, VaultSecretBackend gate, Alpha/disabled) | kubernetes (future — fails fast if referenced)
   keys:
     - username
     - password

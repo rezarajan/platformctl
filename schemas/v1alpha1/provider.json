@@ -54,7 +54,7 @@
             },
             "network": {
               "type": "string",
-              "description": "docker-specific: the shared network name (default: datascape)."
+              "description": "The shared addressing/isolation domain the provider's objects join. docker: the network name (default: datascape). kubernetes: the Namespace name (EnsureNetwork creates it; must not collide with an existing unmanaged namespace — see the runtime adapter's ownership policy)."
             }
           },
           "required": [

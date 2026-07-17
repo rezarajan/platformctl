@@ -36,7 +36,7 @@ func Build() (map[string]string, error) {
 			}
 			name := strings.ToLower(kind) + ".md"
 			out[name] = renderKind(apiVersion, kind, sch)
-			indexRows = append(indexRows, fmt.Sprintf("| [%s](%s) | `%s` | %s |", kind, name, apiVersion, str(sch["description"])))
+			indexRows = append(indexRows, fmt.Sprintf("| [%s](%s) | `%s` | %s |", kind, name, apiVersion, str(firstParagraph(sch["description"]))))
 		}
 	}
 
@@ -73,7 +73,11 @@ func providerTypes() string {
 
 func renderKind(apiVersion, kind string, sch map[string]any) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# %s\n\n`%s`\n\n%s\n\n", kind, apiVersion, str(sch["description"]))
+	// The Kind header is prose, not a table cell, so a multi-paragraph
+	// schema description (\n\n-separated) renders as real markdown
+	// paragraphs here — unlike str(), used everywhere a description lands
+	// in a table cell, where an embedded newline would break the table.
+	fmt.Fprintf(&b, "# %s\n\n`%s`\n\n%s\n\n", kind, apiVersion, description(sch["description"]))
 	b.WriteString("| Field | Type | Required | Description |\n|---|---|---|---|\n")
 	fmt.Fprintf(&b, "| `metadata.name` | string | yes | Unique per Kind within a manifest set. |\n")
 	fmt.Fprintf(&b, "| `metadata.observers[].name` | string | no | Provider names resolved to LineageEndpoints and forwarded when this resource's provider is LineageAware. |\n")
@@ -159,4 +163,22 @@ func dig(m map[string]any, path ...string) map[string]any {
 func str(v any) string {
 	s, _ := v.(string)
 	return strings.ReplaceAll(s, "\n", " ")
+}
+
+// description renders a top-level Kind description as prose: unlike str()
+// (used for table cells, where a raw newline would break the table), a
+// schema description may use "\n\n" for real paragraph breaks.
+func description(v any) string {
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
+}
+
+// firstParagraph returns just the first "\n\n"-delimited paragraph of a
+// description, for the index table's one-line summary column — a
+// multi-paragraph description (e.g. SecretReference's rotation-behavior
+// notes) would otherwise blow out that row.
+func firstParagraph(v any) string {
+	s, _ := v.(string)
+	first, _, _ := strings.Cut(strings.TrimSpace(s), "\n\n")
+	return first
 }

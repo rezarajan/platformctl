@@ -9,6 +9,7 @@ A durable landing zone (bucket/prefix + format) realized by an object-store Prov
 | `metadata.name` | string | yes | Unique per Kind within a manifest set. |
 | `metadata.observers[].name` | string | no | Provider names resolved to LineageEndpoints and forwarded when this resource's provider is LineageAware. |
 | `spec.bucket` | string | yes |  |
+| `spec.deletionPolicy` | `retain` \| `delete` | no | What Dataset destroy does to the stored objects: retain (default) keeps bucket contents — destroying the platform's record of a dataset must not destroy the data; delete removes every object under bucket/prefix. Instance teardown (Provider destroy) removes the backing store regardless. |
 | `spec.external` | boolean | no |  |
 | `spec.format` | string | yes | Validated against the sink provider's SupportedSinkFormats() (e.g. json, jsonl, csv, parquet). |
 | `spec.prefix` | string | no |  |

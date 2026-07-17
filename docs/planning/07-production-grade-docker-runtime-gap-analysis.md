@@ -1024,16 +1024,39 @@ Design notes:
 
 ### 3.3 Docs And Public Surface Sync
 
-Required work:
+**Status update (2026-07-17, remediation audit `docs/remediation/`):**
 
-- [ ] Update README command descriptions: `graph` now renders architecture,
-      not the raw dependency DAG.
+Resolved:
+
+- [x] Regenerate reference docs after schema changes — `docs/reference/`
+      regenerated (`docs/remediation/F-002`); the generator now preserves
+      multi-paragraph Kind-level descriptions as real paragraphs
+      (`docsgen.description`) while table cells stay single-line
+      (`docsgen.firstParagraph` for the index summary column), so hand-owned
+      narrative content (e.g. SecretReference's rotation-behavior notes)
+      moved into the schema description instead of living only in the
+      committed markdown, where a future regeneration would have silently
+      deleted it. A drift guard (`TestGeneratedReferenceInSync`,
+      `internal/application/docsgen/generated_sync_test.go`) now fails CI
+      if `docs/reference/` and the schemas disagree, with the exact fix
+      command in the failure message.
+- [x] Update SecretReference docs: Vault is implemented behind a gate;
+      Kubernetes is still unavailable — `docs/planning/03`'s SecretReference
+      example comment corrected (was `vault (future)`; vault has shipped
+      since Phase 6, gated `VaultSecretBackend`, Alpha/disabled).
+- [x] Update README command descriptions: `graph` now renders architecture
+      (`docs/remediation/F-003`) — table corrected to describe
+      `--format tree|dot|mermaid|json` and the post-F-001 `-o json|yaml`
+      contract; `inventory` (with `--for <tool>`) added, previously absent
+      from the table entirely.
+
+Still open:
+
 - [ ] Reconcile roadmap checkboxes with checkpoint status or convert old
       roadmap sections into historical records.
-- [ ] Reconcile schema/docs/code around namespace support.
-- [ ] Update SecretReference docs: Vault is implemented behind a gate;
-      Kubernetes is still unavailable.
-- [ ] Regenerate reference docs after schema changes.
+- [ ] Reconcile schema/docs/code around namespace support (namespaces
+      themselves are documented — §0.1 — this item is about sweeping any
+      remaining single-namespace-era prose).
 - [ ] Document the exact support level of Alpha-enabled providers.
 
 Design notes:

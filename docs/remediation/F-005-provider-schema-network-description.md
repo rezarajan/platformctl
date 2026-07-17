@@ -1,7 +1,8 @@
 # F-005: `provider.json` describes `runtime.network` as docker-specific; the Kubernetes adapter consumes it as the Namespace
 
 **Severity:** Low (documentation contract drift inside the schema itself).
-**Status:** Confirmed at `ae99505`.
+**Status:** RESOLVED (2026-07-17), landed together with F-002's
+regeneration pass.
 
 ## Evidence
 
