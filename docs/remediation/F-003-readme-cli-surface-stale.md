@@ -2,8 +2,7 @@
 
 **Severity:** Low (documentation; but the documented `graph -o dot|mermaid`
 invocation no longer selects a format at all).
-**Status:** Confirmed at `ae99505`. Concretizes the open §3.3 item "Update
-README command descriptions".
+**Status:** RESOLVED (2026-07-17), landed after F-001.
 
 ## Evidence
 

@@ -1045,10 +1045,10 @@ Resolved:
       example comment corrected (was `vault (future)`; vault has shipped
       since Phase 6, gated `VaultSecretBackend`, Alpha/disabled).
 - [x] Update README command descriptions: `graph` now renders architecture
-      (`docs/remediation/F-003`) — table corrected to describe
+      (`docs/remediation/F-003`, resolved) — table corrected to describe
       `--format tree|dot|mermaid|json` and the post-F-001 `-o json|yaml`
       contract; `inventory` (with `--for <tool>`) added, previously absent
-      from the table entirely.
+      from the table entirely. Verified against live `--help` output.
 
 Still open:
 
