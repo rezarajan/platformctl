@@ -2,7 +2,9 @@
 
 **Severity:** Low (safe-by-default refusal is correct; the failure mode is
 operator confusion, not damage).
-**Status:** Confirmed by code inspection at `ae99505`.
+**Status:** RESOLVED (2026-07-17). Verified live against a real cluster:
+EnsureNetwork("default") now refuses with a message naming
+spec.runtime.network as the remedy.
 
 ## Claim audited
 

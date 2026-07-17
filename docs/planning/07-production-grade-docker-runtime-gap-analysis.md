@@ -162,6 +162,12 @@ unless truly technology-specific" standard):
 
 ### Still open (this adapter is an early, Alpha proof, not production-ready)
 
+- [x] ~~Namespace-collision refusal message names no remedy~~ resolved
+      (2026-07-17, `docs/remediation/F-009`): `EnsureNetwork`'s unmanaged-
+      namespace refusal now names `spec.runtime.network` as the fix and
+      notes that colliding with a cluster's pre-existing system namespaces
+      (`default`, `kube-system`, ...) is expected, not a bug. Verified live
+      against a real cluster.
 - [ ] **External reachability.** A container's Service is ClusterIP-only;
       nothing outside the cluster network can reach it, including
       `platformctl` itself when run from outside the cluster — verified

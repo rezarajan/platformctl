@@ -153,7 +153,7 @@ func (r *Runtime) EnsureNetwork(ctx context.Context, spec runtimeport.NetworkSpe
 	ns, err := r.clientset.CoreV1().Namespaces().Get(ctx, spec.Name, metav1.GetOptions{})
 	if err == nil {
 		if ns.Labels[runtimeport.LabelManagedBy] != runtimeport.ManagedByValue {
-			return fmt.Errorf("namespace %q exists but is not managed by platformctl; refusing to reuse it", spec.Name)
+			return fmt.Errorf("namespace %q exists but is not managed by platformctl; refusing to reuse it — choose a dedicated name via the Provider's spec.runtime.network (every object of one platform joins that namespace); every cluster has pre-existing unmanaged namespaces like default/kube-system, so a collision here is expected, not a bug", spec.Name)
 		}
 		return nil
 	}
