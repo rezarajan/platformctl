@@ -8,6 +8,7 @@ Go 1.22+. Build: `CGO_ENABLED=0 go build -trimpath -buildvcs=false ./cmd/platfor
   `internal/adapters` implement ports and may import third-party SDKs.
 - Only `cmd/platformctl` and `internal/application/registry` import concrete adapters.
 - **The one invariant:** if you're about to import an adapter package from `domain` or `ports`, stop — that's the architecture this whole design depends on.
+- **Test exception:** `_test.go` files in `internal/application` may import the `fake` runtime, `localfile` state, `env` secrets, and `noop` provider adapters as test doubles; importing technology adapters (postgres, redpanda, ...) from application tests is not allowed — write a local stub of the relevant port/capability interface instead (see `internal/application/compatibility/compatibility_test.go`'s `versionedStub` for the pattern).
 
 ## Before implementing anything
 

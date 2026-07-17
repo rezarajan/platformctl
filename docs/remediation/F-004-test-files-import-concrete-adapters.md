@@ -2,7 +2,9 @@
 
 **Severity:** Low (production code is clean; the invariant's wording admits
 no test exception, so either the tests or the documented rule is wrong).
-**Status:** Confirmed at `ae99505`.
+**Status:** RESOLVED (2026-07-17). `compatibility_test.go`'s postgres
+import replaced with a local `versionedStub`; `engine_test.go`'s test-double
+imports are now a documented, bounded exception in CLAUDE.md.
 
 ## Claim audited
 

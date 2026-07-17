@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rezarajan/platformctl/internal/adapters/providers/postgres"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/domain/versionprofile"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
@@ -40,6 +40,18 @@ type externalConfigStub struct{ stubProvider }
 func (externalConfigStub) ConfigureExternal(context.Context, resource.Envelope, runtime.ContainerRuntime) (status.Status, error) {
 	return status.Status{}, nil
 }
+
+// versionedStub is a local double for reconciler.VersionedProvider — it
+// exercises compatibility's use of VersionCatalog() without importing a
+// concrete technology adapter (docs/planning/07 §layering invariant,
+// docs/remediation/F-004). The real postgres catalog stays covered by the
+// CDC/lakehouse integration suites.
+type versionedStub struct {
+	stubProvider
+	catalog versionprofile.Catalog
+}
+
+func (v versionedStub) VersionCatalog() versionprofile.Catalog { return v.catalog }
 
 func envelope(kind, name string, spec map[string]any) resource.Envelope {
 	e := resource.Envelope{}
@@ -483,7 +495,17 @@ func TestVersionedProviderValidation(t *testing.T) {
 			envelope("SecretReference", "creds", map[string]any{"backend": "env", "keys": []any{"username", "password"}}),
 		}
 	}
-	resolvePG := func(string) (reconciler.Provider, error) { return postgres.New(), nil }
+	stub := versionedStub{
+		stubProvider: stubProvider{"postgres"},
+		catalog: versionprofile.Catalog{
+			Default: "18",
+			Profiles: map[string]versionprofile.Profile{
+				"16": {Version: "16", Image: "postgres:16", DataMount: "/var/lib/postgresql/data"},
+				"18": {Version: "18", Image: "postgres:18", DataMount: "/var/lib/postgresql"},
+			},
+		},
+	}
+	resolvePG := func(string) (reconciler.Provider, error) { return stub, nil }
 
 	// Valid version.
 	if err := Check(pg(map[string]any{"version": "18"}), resolvePG); err != nil {

@@ -15,3 +15,5 @@ Files in `internal/domain` and `internal/ports` must never import anything under
 **Example violation:** `internal/ports/reconciler.Provider` importing `internal/adapters/runtime/docker` directly. Fix: import `internal/ports/runtime.ContainerRuntime` instead.
 
 Check before committing: `grep -n "adapters" internal/domain/**/*.go internal/ports/**/*.go` returns nothing (except in comments).
+
+This rule's scope is `internal/domain` and `internal/ports` only — production code in `internal/application` is held to the same standard, but its test files have a narrower, documented exception (which test-double adapters are allowed) recorded in CLAUDE.md's Layering section, not here.
