@@ -93,6 +93,25 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	}
 }
 
+// imagePullAuth resolves configuration.imagePullSecretRef (docs/planning/07
+// §1.1 deferral, docs/planning/08 A1) into runtime credentials, or returns
+// nil when unset — private-image pulls stay opt-in, and the runtime's
+// ambient/daemon-level credentials keep working unchanged either way.
+func (p *Provider) imagePullAuth() (*runtime.ImagePullAuth, error) {
+	refName, _ := p.cfg.Configuration["imagePullSecretRef"].(string)
+	if refName == "" {
+		return nil, nil
+	}
+	creds, ok := p.secrets[refName]
+	if !ok {
+		return nil, fmt.Errorf("Provider %q: no resolved credentials for imagePullSecretRef %q", p.containerName(), refName)
+	}
+	if creds["username"] == "" || creds["password"] == "" {
+		return nil, fmt.Errorf("Provider %q: imagePullSecretRef %q must provide username and password keys", p.containerName(), refName)
+	}
+	return &runtime.ImagePullAuth{Username: creds["username"], Password: creds["password"], Registry: creds["registry"]}, nil
+}
+
 func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRuntime) (status.Status, error) {
 	st := status.Status{}
 	name := p.containerName()
@@ -101,6 +120,10 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		image = defaultImage
 	}
 	user, pass, err := p.rootCredentials()
+	if err != nil {
+		return st, err
+	}
+	pullAuth, err := p.imagePullAuth()
 	if err != nil {
 		return st, err
 	}
@@ -113,9 +136,10 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		return st, err
 	}
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
-		Name:  name,
-		Image: image,
-		Cmd:   []string{"server", "/data"},
+		Name:          name,
+		Image:         image,
+		ImagePullAuth: pullAuth,
+		Cmd:           []string{"server", "/data"},
 		// The password rides a file mount, not env — env is readable by
 		// anyone with `docker inspect` access (docs/planning/07 Gate 1
 		// checkbox 4); MinIO's entrypoint consumes *_FILE natively.
@@ -295,6 +319,9 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 		}
 	} else if len(cfg.SecretRefs) == 0 {
 		return fmt.Errorf("spec.secretRefs must name at least one SecretReference (the root credentials; configuration.rootSecretRef selects one explicitly)")
+	}
+	if ref, _ := cfg.Configuration["imagePullSecretRef"].(string); ref != "" && !cfg.HasSecretRef(ref) {
+		return fmt.Errorf("configuration.imagePullSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
 	}
 	return nil
 }

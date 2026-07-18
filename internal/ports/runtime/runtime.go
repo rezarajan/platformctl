@@ -109,6 +109,22 @@ const (
 	PullNever        = "never"  // never pull; fail if the image is absent (air-gapped/local-only)
 )
 
+// ImagePullAuth carries resolved registry credentials for a private image
+// pull (docs/planning/07 §1.1 deferral: `ImagePull` previously sent no
+// RegistryAuth header at all). The runtime port has no SecretStore access,
+// so this always carries already-resolved values — a provider resolves
+// `configuration.imagePullSecretRef` via the same SecretsAware/SetSecrets
+// plumbing it uses for any other credential (e.g. postgres's superuser
+// password), never a bare reference the adapter would need to re-resolve.
+type ImagePullAuth struct {
+	Username string
+	Password string
+	// Registry is the registry hostname these credentials are for (e.g.
+	// "ghcr.io"). Optional — Docker infers it from the image reference when
+	// empty; Kubernetes' dockerconfigjson Secret needs it explicit.
+	Registry string
+}
+
 type ContainerSpec struct {
 	Name string
 	// Image is any runtime-resolvable reference, including digest-pinned
@@ -118,8 +134,12 @@ type ContainerSpec struct {
 	Image string
 	// PullPolicy is one of the Pull* constants above.
 	PullPolicy string
-	Cmd        []string // implementation-revealed addition: real providers need command/args; pending doc amendment to 02-architecture.md §4.1
-	Networks   []string
+	// ImagePullAuth carries resolved credentials for a private image pull.
+	// Nil means the runtime's ambient/daemon-level credentials apply
+	// unchanged (the pre-existing behavior).
+	ImagePullAuth *ImagePullAuth
+	Cmd           []string // implementation-revealed addition: real providers need command/args; pending doc amendment to 02-architecture.md §4.1
+	Networks      []string
 	// Aliases are additional in-network DNS names for this container beyond
 	// its Name, so a stable internal address can outlive a container rename
 	// (docs/planning/07 §1.1/§2.4). Docker: per-network endpoint aliases;

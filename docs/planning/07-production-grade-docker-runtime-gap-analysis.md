@@ -659,10 +659,31 @@ Resolved in the Gate 1 close-out pass (2026-07-16, incremental commits):
       behaves identically on both runtimes. `PullNever` fails fast
       (`TestPullPolicyNeverFailsFastOnAbsentImage`).
 
+Resolved (2026-07-18, `docs/planning/08` A1):
+
+- [x] Registry auth for private images: `ContainerSpec.ImagePullAuth`
+      (`internal/ports/runtime/runtime.go`) carries already-resolved
+      credentials — the runtime port has no SecretStore access, so a
+      provider resolves `configuration.imagePullSecretRef` through the same
+      `SecretsAware`/`SetSecrets` plumbing it uses for any other credential,
+      never a bare reference the adapter would re-resolve. Docker builds the
+      base64 `X-Registry-Auth` header (`registry.EncodeAuthConfig`) for
+      `ImagePull`; Kubernetes materializes a `kubernetes.io/dockerconfigjson`
+      Secret per container and sets `imagePullSecrets`. Wired through one
+      representative provider end-to-end (`s3`/minio:
+      `configuration.imagePullSecretRef`, validated at validate-time like
+      every other secretRef) — the same 5-line pattern is a mechanical
+      follow-up for the other `SecretsAware` providers (postgres, mysql,
+      debezium, s3sink), not a design gap. Verified: a conformance subtest
+      on all three adapters (credentials round-trip safely, `PullNever` so
+      it never risks a real registry rejecting synthetic ones), and a
+      Docker-only integration test against a real `registry:2` + htpasswd
+      instance (`TestImagePullAuthPullsFromPrivateRegistry`) — pull fails
+      without `ImagePullAuth`, succeeds with it, and the password never
+      appears in `docker inspect`'s env.
+
 Still open (deliberately deferred):
 
-- [ ] Registry auth for private images — `ImagePull` sends no RegistryAuth
-      header; only daemon-level/ambient credentials work today.
 - [ ] Host-path mounts — `FileMount` covers literal content; mounting an
       arbitrary host directory remains unsupported (deliberate: host paths
       are not portable across runtimes).

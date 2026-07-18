@@ -1,6 +1,7 @@
 package kubernetes
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -98,6 +99,11 @@ func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash stri
 		})
 	}
 
+	var pullSecrets []corev1.LocalObjectReference
+	if spec.ImagePullAuth != nil {
+		pullSecrets = []corev1.LocalObjectReference{{Name: pullSecretName(spec.Name)}}
+	}
+
 	replicas := one
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -124,6 +130,7 @@ func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash stri
 					TerminationGracePeriodSeconds: &terminationGracePeriodSeconds,
 					Containers:                    []corev1.Container{container},
 					Volumes:                       volumes,
+					ImagePullSecrets:              pullSecrets,
 				},
 			},
 		},
@@ -192,6 +199,59 @@ func buildFilesSecret(namespace string, spec runtimeport.ContainerSpec) *corev1.
 		},
 		Data: data,
 	}
+}
+
+func pullSecretName(containerName string) string { return containerName + "-pull-secret" }
+
+// dockerHubServer is the auths key Docker's own tooling uses for the
+// default registry when an image reference names no host — the same
+// convention `docker login` writes to ~/.docker/config.json.
+const dockerHubServer = "https://index.docker.io/v1/"
+
+// dockerConfigJSONAuth mirrors the ".dockerconfigjson" Secret shape
+// (`kubectl create secret docker-registry`) with only the fields
+// kubelet's image-pull code path reads.
+type dockerConfigJSONAuth struct {
+	Auths map[string]dockerConfigJSONEntry `json:"auths"`
+}
+
+type dockerConfigJSONEntry struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Auth     string `json:"auth"`
+}
+
+// buildImagePullSecret renders spec.ImagePullAuth into a
+// kubernetes.io/dockerconfigjson Secret the Deployment's
+// spec.imagePullSecrets references by name.
+func buildImagePullSecret(namespace string, spec runtimeport.ContainerSpec) (*corev1.Secret, error) {
+	auth := spec.ImagePullAuth
+	server := auth.Registry
+	if server == "" {
+		server = dockerHubServer
+	}
+	cfg := dockerConfigJSONAuth{Auths: map[string]dockerConfigJSONEntry{
+		server: {
+			Username: auth.Username,
+			Password: auth.Password,
+			Auth:     base64.StdEncoding.EncodeToString([]byte(auth.Username + ":" + auth.Password)),
+		},
+	}}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("encode dockerconfigjson: %w", err)
+	}
+	labels := withOwnership(spec.Labels)
+	labels["app"] = spec.Name
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pullSecretName(spec.Name),
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{corev1.DockerConfigJsonKey: data},
+	}, nil
 }
 
 // imagePullPolicy maps the port's Pull* constants onto Kubernetes'. The

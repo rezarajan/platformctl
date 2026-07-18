@@ -106,12 +106,15 @@ mistakes, and auditable cleanup.
 **Stage exit criteria:**
 - [ ] Two operators on different machines can manage one platform through a
       shared state backend without corruption (locking proven by a
-      concurrent-apply test).
-- [ ] `platformctl gc plan` / `state doctor` exist and are covered by
-      integration tests against deliberately-orphaned objects/state.
-- [ ] A private-registry image pulls successfully via a `SecretReference`.
-- [ ] `destroy` against a `protect: true` data-bearing resource refuses.
-- [ ] The out-of-band config-drift and MariaDB integration suites are green in CI.
+      concurrent-apply test). — tracked in A4, not yet started.
+- [x] `platformctl gc plan` / `state doctor` exist and are covered by
+      integration tests against deliberately-orphaned objects/state (A2, A3).
+- [x] A private-registry image pulls successfully via a `SecretReference`
+      (A1 — `TestImagePullAuthPullsFromPrivateRegistry` against a real
+      `registry:2` + htpasswd instance).
+- [x] `destroy` against a `protect: true` data-bearing resource refuses (A5).
+- [x] The out-of-band config-drift and MariaDB integration suites are green
+      in CI (A8, A9).
 
 ### A1: Registry authentication for private images
 

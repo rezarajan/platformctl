@@ -161,6 +161,49 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		}
 	})
 
+	// EnsureContainer_imagePullAuth_accepted proves ContainerSpec.ImagePullAuth
+	// round-trips safely through every adapter (docs/planning/07 §1.1
+	// deferral, docs/planning/08 A1) — PullNever so it never attempts a real
+	// pull with these (deliberately fake) credentials against a real
+	// registry; a real authenticated pull is proven separately by the
+	// Docker-only integration test against a local htpasswd registry, which
+	// controls credentials it knows are correct rather than risking a public
+	// registry rejecting bogus ones.
+	t.Run("EnsureContainer_imagePullAuth_accepted", func(t *testing.T) {
+		name := namePrefix + "-auth-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		authSpec := runtime.ContainerSpec{
+			Name:       name,
+			Image:      ctrSpec.Image, // already ensured present by an earlier subtest
+			PullPolicy: runtime.PullNever,
+			Cmd:        []string{"sleep", "60"},
+			Networks:   []string{netSpec.Name},
+			Labels:     labels,
+			ImagePullAuth: &runtime.ImagePullAuth{
+				Username: "conformance-user",
+				Password: "conformance-password",
+				Registry: "registry.example.com",
+			},
+		}
+		if _, err := rt.EnsureContainer(ctx, authSpec); err != nil {
+			t.Fatalf("EnsureContainer with ImagePullAuth: %v", err)
+		}
+		if _, found, err := rt.Inspect(ctx, name); err != nil || !found {
+			t.Fatalf("Inspect after EnsureContainer with ImagePullAuth: found=%v err=%v", found, err)
+		}
+		mc, hasCounter := rt.(MutationCounter)
+		before := 0
+		if hasCounter {
+			before = mc.Mutations()
+		}
+		if _, err := rt.EnsureContainer(ctx, authSpec); err != nil {
+			t.Fatalf("second EnsureContainer with ImagePullAuth: %v", err)
+		}
+		if hasCounter && mc.Mutations() != before {
+			t.Errorf("second EnsureContainer with identical ImagePullAuth mutated state (NFR-2 violation)")
+		}
+	})
+
 	t.Run("EnsureContainer_productionFields_idempotent", func(t *testing.T) {
 		name := namePrefix + "-prod-ctr"
 		t.Cleanup(func() { _ = rt.Remove(ctx, name) })

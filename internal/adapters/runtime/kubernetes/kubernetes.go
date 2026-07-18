@@ -314,6 +314,9 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.Containe
 	if err := r.ensureFilesSecret(ctx, ns, spec); err != nil {
 		return runtimeport.ContainerState{}, err
 	}
+	if err := r.ensureImagePullSecret(ctx, ns, spec); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
 
 	if deploymentNotFound {
 		created, err := r.clientset.AppsV1().Deployments(ns).Create(ctx, deployment, metav1.CreateOptions{})
@@ -371,6 +374,41 @@ func (r *Runtime) ensureFilesSecret(ctx context.Context, ns string, spec runtime
 		desired.ResourceVersion = existing.ResourceVersion
 		if _, err := r.clientset.CoreV1().Secrets(ns).Update(ctx, desired, metav1.UpdateOptions{}); err != nil {
 			return fmt.Errorf("update files secret %q: %w", name, err)
+		}
+		return nil
+	}
+}
+
+// ensureImagePullSecret creates or updates the dockerconfigjson Secret
+// backing spec.ImagePullAuth, and deletes it when the spec no longer
+// declares one — the same create/update/delete-on-absence shape as
+// ensureFilesSecret above, for the same reason (docs/planning/07 §1.1
+// deferral, docs/planning/08 A1).
+func (r *Runtime) ensureImagePullSecret(ctx context.Context, ns string, spec runtimeport.ContainerSpec) error {
+	name := pullSecretName(spec.Name)
+	if spec.ImagePullAuth == nil {
+		if err := r.clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete image pull secret %q: %w", name, err)
+		}
+		return nil
+	}
+	desired, err := buildImagePullSecret(ns, spec)
+	if err != nil {
+		return fmt.Errorf("build image pull secret %q: %w", name, err)
+	}
+	existing, err := r.clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		if _, err := r.clientset.CoreV1().Secrets(ns).Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create image pull secret %q: %w", name, err)
+		}
+		return nil
+	case err != nil:
+		return fmt.Errorf("get image pull secret %q: %w", name, err)
+	default:
+		desired.ResourceVersion = existing.ResourceVersion
+		if _, err := r.clientset.CoreV1().Secrets(ns).Update(ctx, desired, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update image pull secret %q: %w", name, err)
 		}
 		return nil
 	}

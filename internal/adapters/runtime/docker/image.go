@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/errdefs"
 
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
@@ -18,8 +19,9 @@ import (
 // default (PullIfNotPresent) pulls only when the image isn't present
 // locally — keeping EnsureContainer idempotent and offline-friendly once
 // images are cached. Digest-pinned refs ("repo@sha256:...") work through
-// the same inspect/pull calls unchanged.
-func (r *Runtime) ensureImage(ctx context.Context, ref, pullPolicy string) error {
+// the same inspect/pull calls unchanged. auth is nil unless the spec named
+// configuration.imagePullSecretRef (docs/planning/07 §1.1 deferral).
+func (r *Runtime) ensureImage(ctx context.Context, ref, pullPolicy string, auth *runtime.ImagePullAuth) error {
 	switch pullPolicy {
 	case runtime.PullNever:
 		if _, err := r.cli.ImageInspect(ctx, ref); err != nil {
@@ -30,7 +32,7 @@ func (r *Runtime) ensureImage(ctx context.Context, ref, pullPolicy string) error
 		}
 		return nil
 	case runtime.PullAlways:
-		return r.pullImage(ctx, ref)
+		return r.pullImage(ctx, ref, auth)
 	case runtime.PullIfNotPresent:
 		_, err := r.cli.ImageInspect(ctx, ref)
 		if err == nil {
@@ -39,14 +41,26 @@ func (r *Runtime) ensureImage(ctx context.Context, ref, pullPolicy string) error
 		if !errdefs.IsNotFound(err) {
 			return fmt.Errorf("inspect image %q: %w", ref, err)
 		}
-		return r.pullImage(ctx, ref)
+		return r.pullImage(ctx, ref, auth)
 	default:
 		return fmt.Errorf("unknown image pull policy %q (allowed: %q, %q, %q)", pullPolicy, runtime.PullIfNotPresent, runtime.PullAlways, runtime.PullNever)
 	}
 }
 
-func (r *Runtime) pullImage(ctx context.Context, ref string) error {
-	rc, err := r.cli.ImagePull(ctx, ref, image.PullOptions{})
+func (r *Runtime) pullImage(ctx context.Context, ref string, auth *runtime.ImagePullAuth) error {
+	opts := image.PullOptions{}
+	if auth != nil {
+		encoded, err := registry.EncodeAuthConfig(registry.AuthConfig{
+			Username:      auth.Username,
+			Password:      auth.Password,
+			ServerAddress: auth.Registry,
+		})
+		if err != nil {
+			return fmt.Errorf("encode registry auth for %q: %w", ref, err)
+		}
+		opts.RegistryAuth = encoded
+	}
+	rc, err := r.cli.ImagePull(ctx, ref, opts)
 	if err != nil {
 		return fmt.Errorf("pull image %q: %w", ref, err)
 	}
