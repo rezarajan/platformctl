@@ -152,6 +152,30 @@ func (r *Runtime) ListManaged(_ context.Context) ([]runtime.ContainerState, erro
 	return out, nil
 }
 
+func (r *Runtime) ListManagedNetworks(_ context.Context) ([]runtime.ManagedNetwork, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []runtime.ManagedNetwork
+	for name, spec := range r.networks {
+		if spec.Labels[runtime.LabelManagedBy] == runtime.ManagedByValue {
+			out = append(out, runtime.ManagedNetwork{Name: name, Labels: spec.Labels})
+		}
+	}
+	return out, nil
+}
+
+func (r *Runtime) ListManagedVolumes(_ context.Context) ([]runtime.ManagedVolume, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []runtime.ManagedVolume
+	for name, spec := range r.volumes {
+		if spec.Labels[runtime.LabelManagedBy] == runtime.ManagedByValue {
+			out = append(out, runtime.ManagedVolume{Name: name, Labels: spec.Labels})
+		}
+	}
+	return out, nil
+}
+
 func (r *Runtime) stateOf(spec runtime.ContainerSpec) runtime.ContainerState {
 	return runtime.ContainerState{
 		Name:    spec.Name,

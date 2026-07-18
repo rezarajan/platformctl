@@ -559,6 +559,46 @@ func (r *Runtime) ListManaged(ctx context.Context) ([]runtimeport.ContainerState
 	return out, nil
 }
 
+// ListManagedNetworks reports every managed Namespace (the Docker network
+// analog — EnsureNetwork creates one Namespace per Docker network, see
+// EnsureNetwork above), independent of whether any Deployment currently runs
+// in it.
+func (r *Runtime) ListManagedNetworks(ctx context.Context) ([]runtimeport.ManagedNetwork, error) {
+	list, err := r.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+		LabelSelector: runtimeport.LabelManagedBy + "=" + runtimeport.ManagedByValue,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list managed namespaces: %w", err)
+	}
+	out := make([]runtimeport.ManagedNetwork, 0, len(list.Items))
+	for _, ns := range list.Items {
+		out = append(out, runtimeport.ManagedNetwork{Name: ns.Name, Labels: ns.Labels})
+	}
+	return out, nil
+}
+
+// ListManagedVolumes reports every managed PersistentVolumeClaim across
+// every managed namespace (the Docker volume analog).
+func (r *Runtime) ListManagedVolumes(ctx context.Context) ([]runtimeport.ManagedVolume, error) {
+	namespaces, err := r.managedNamespaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []runtimeport.ManagedVolume
+	for _, ns := range namespaces {
+		list, err := r.clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: runtimeport.LabelManagedBy + "=" + runtimeport.ManagedByValue,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list persistentvolumeclaims in namespace %q: %w", ns, err)
+		}
+		for _, pvc := range list.Items {
+			out = append(out, runtimeport.ManagedVolume{Name: pvc.Name, Labels: pvc.Labels})
+		}
+	}
+	return out, nil
+}
+
 func (r *Runtime) Logs(ctx context.Context, name string, tail int) (string, error) {
 	ns, d, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {
 		return r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})

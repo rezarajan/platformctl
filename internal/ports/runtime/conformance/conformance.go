@@ -125,6 +125,42 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		}
 	})
 
+	t.Run("ListManagedNetworks_and_Volumes_only_labeled", func(t *testing.T) {
+		nets, err := rt.ListManagedNetworks(ctx)
+		if err != nil {
+			t.Fatalf("ListManagedNetworks: %v", err)
+		}
+		foundNet := false
+		for _, n := range nets {
+			if n.Labels[runtime.LabelManagedBy] != runtime.ManagedByValue {
+				t.Errorf("ListManagedNetworks returned unlabeled object %q", n.Name)
+			}
+			if n.Name == netSpec.Name {
+				foundNet = true
+			}
+		}
+		if !foundNet {
+			t.Errorf("ListManagedNetworks did not include %q", netSpec.Name)
+		}
+
+		vols, err := rt.ListManagedVolumes(ctx)
+		if err != nil {
+			t.Fatalf("ListManagedVolumes: %v", err)
+		}
+		foundVol := false
+		for _, v := range vols {
+			if v.Labels[runtime.LabelManagedBy] != runtime.ManagedByValue {
+				t.Errorf("ListManagedVolumes returned unlabeled object %q", v.Name)
+			}
+			if v.Name == volSpec.Name {
+				foundVol = true
+			}
+		}
+		if !foundVol {
+			t.Errorf("ListManagedVolumes did not include %q", volSpec.Name)
+		}
+	})
+
 	t.Run("EnsureContainer_productionFields_idempotent", func(t *testing.T) {
 		name := namePrefix + "-prod-ctr"
 		t.Cleanup(func() { _ = rt.Remove(ctx, name) })

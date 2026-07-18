@@ -267,6 +267,35 @@ var commandScenarios = map[string]commandScenario{
 		structured: false,
 		reason:     "starts a blocking HTTP server (http.ListenAndServe); not exercised in the automated harness — docs build covers the same rendering path non-interactively.",
 	},
+	"gc plan": {
+		structured: true,
+		run: func(t *testing.T) {
+			stateFile := filepath.Join(t.TempDir(), "state.json")
+			// The fake runtime is a fresh, empty in-memory instance per
+			// a.reg.Runtime(...) call, so it can't carry a pre-existing
+			// orphan across separate CLI invocations the way a real Docker
+			// daemon does — this smoke-tests the output contract (an empty
+			// orphan list still parses as one document) and flag wiring;
+			// live orphan detection is covered by the Docker integration
+			// test (gc_integration_test.go, docs/planning/08 A2).
+			runBothFormats(t, "gc plan", "gc", "plan", "--runtime", "fake", "--state-file", stateFile)
+		},
+	},
+	"gc apply": {
+		structured: true,
+		run: func(t *testing.T) {
+			stateFile := filepath.Join(t.TempDir(), "state.json")
+			if _, _, err := runSplit(t, "gc", "apply", "--runtime", "fake", "--state-file", stateFile, "-o", "json"); err == nil {
+				t.Fatal("gc apply accepted without --yes-i-understand-this-is-destructive")
+			}
+			out, _, err := runSplit(t, "gc", "apply", "--runtime", "fake", "--state-file", stateFile,
+				"--yes-i-understand-this-is-destructive", "-o", "json")
+			if err != nil {
+				t.Fatalf("gc apply -o json: %v", err)
+			}
+			assertJSON(t, "gc apply -o json", out)
+		},
+	},
 }
 
 // TestOutputContractHarness runs every registered scenario.

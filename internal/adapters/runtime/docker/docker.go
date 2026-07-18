@@ -459,6 +459,30 @@ func (r *Runtime) ListManaged(ctx context.Context) ([]runtime.ContainerState, er
 	return out, nil
 }
 
+func (r *Runtime) ListManagedNetworks(ctx context.Context) ([]runtime.ManagedNetwork, error) {
+	nets, err := r.cli.NetworkList(ctx, network.ListOptions{Filters: managedFilter()})
+	if err != nil {
+		return nil, fmt.Errorf("list managed networks: %w", err)
+	}
+	out := make([]runtime.ManagedNetwork, 0, len(nets))
+	for _, n := range nets {
+		out = append(out, runtime.ManagedNetwork{Name: n.Name, Labels: n.Labels})
+	}
+	return out, nil
+}
+
+func (r *Runtime) ListManagedVolumes(ctx context.Context) ([]runtime.ManagedVolume, error) {
+	vols, err := r.cli.VolumeList(ctx, volume.ListOptions{Filters: managedFilter()})
+	if err != nil {
+		return nil, fmt.Errorf("list managed volumes: %w", err)
+	}
+	out := make([]runtime.ManagedVolume, 0, len(vols.Volumes))
+	for _, v := range vols.Volumes {
+		out = append(out, runtime.ManagedVolume{Name: v.Name, Labels: v.Labels})
+	}
+	return out, nil
+}
+
 func (r *Runtime) inspectState(ctx context.Context, name string) (runtime.ContainerState, error) {
 	info, err := r.cli.ContainerInspect(ctx, name)
 	if err != nil {

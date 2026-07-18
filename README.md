@@ -214,6 +214,8 @@ bin/platformctl destroy examples/cdc-attendance/ --auto-approve
 | `import <Kind>/<name> --from <name>` | Adopt a pre-existing backing object into state as Imported (probe, never create). Gated by `ImportedResources`. |
 | `docs build\|serve` | Generate/serve the resource reference from `schemas/`. |
 | `destroy <dir>` | Reverse-order teardown. `--include-external` additionally requires `--yes-i-understand-this-is-destructive`. |
+| `gc plan [--runtime docker\|kubernetes]` | List every labeled container/network/volume that no state entry accounts for (read-only). |
+| `gc apply [--runtime docker\|kubernetes] --yes-i-understand-this-is-destructive` | Remove exactly the objects `gc plan` lists. |
 
 Global flags: `--state-file` (default `.datascape/state.json`),
 `--feature-gates`, `-o table|json|yaml`.

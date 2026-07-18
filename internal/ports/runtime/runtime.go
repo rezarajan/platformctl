@@ -176,6 +176,20 @@ func (s ContainerState) HostAddr(containerPort int) string {
 	return ""
 }
 
+// ManagedNetwork/ManagedVolume report a labeled non-container object for GC
+// inspection (`platformctl gc plan`, docs/planning/07 §1.3) — the same
+// ownership-label contract as ContainerState, without the container-specific
+// fields neither object has.
+type ManagedNetwork struct {
+	Name   string
+	Labels map[string]string
+}
+
+type ManagedVolume struct {
+	Name   string
+	Labels map[string]string
+}
+
 type ContainerRuntime interface {
 	EnsureNetwork(ctx context.Context, spec NetworkSpec) error
 	EnsureVolume(ctx context.Context, spec VolumeSpec) error
@@ -186,6 +200,13 @@ type ContainerRuntime interface {
 	RemoveNetwork(ctx context.Context, name string) error
 	RemoveVolume(ctx context.Context, name string) error
 	ListManaged(ctx context.Context) ([]ContainerState, error) // everything labeled as Datascape-owned
+	// ListManagedNetworks/ListManagedVolumes report every network/volume
+	// (Docker: networks and volumes; Kubernetes: managed Namespaces and
+	// PersistentVolumeClaims) carrying the ownership label, independent of
+	// whether any container currently references them — the GC surface for
+	// `platformctl gc plan`.
+	ListManagedNetworks(ctx context.Context) ([]ManagedNetwork, error)
+	ListManagedVolumes(ctx context.Context) ([]ManagedVolume, error)
 	// Logs returns the last `tail` lines of the container's combined
 	// stdout/stderr, for diagnostics (`platformctl doctor`, CLI log
 	// retrieval). tail <= 0 requests the runtime's default tail length.

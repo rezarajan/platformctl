@@ -723,19 +723,34 @@ Design notes:
 ### 1.3 Garbage Collection And Orphan Inspection
 
 **Disposition (2026-07-16 Gate 1 close-out): explicitly deferred past the
-Gate 1 stage-gate.** This is inspection/operator tooling, not a correctness
-or safety gap: ownership labels are on every created object, unlabeled
-objects are never touched, unmanaged same-name objects are refused, and
-authoritative apply already deletes state-tracked orphans. Nothing here can
-damage a shared daemon by its absence — it only makes cleanup of *pre-crash*
-stale objects more manual. Track as its own epic (issue slicing #4).
+Gate 1 stage-gate**, then resolved as its own task (2026-07-18,
+`docs/planning/08` A2). This was inspection/operator tooling, not a
+correctness or safety gap: ownership labels are on every created object,
+unlabeled objects are never touched, unmanaged same-name objects are
+refused, and authoritative apply already deletes state-tracked orphans.
+Nothing here could damage a shared daemon by its absence — it only made
+cleanup of *pre-crash* stale objects more manual.
 
-Remaining work (unchanged):
+Resolved:
 
-- [ ] Add managed network and volume listing.
-- [ ] Add `platformctl doctor` or `platformctl gc plan` to show orphaned
-      Docker objects by project/namespace/resource labels.
-- [ ] Add non-destructive and destructive cleanup flows with dry-run output.
+- [x] Managed network and volume listing:
+      `ContainerRuntime.ListManagedNetworks`/`ListManagedVolumes`
+      (`internal/ports/runtime/runtime.go`), implemented by all three
+      adapters (docker, kubernetes, fake) and covered by a new conformance
+      subtest (`ListManagedNetworks_and_Volumes_only_labeled`).
+- [x] `platformctl gc plan` (read-only: every labeled container/network/
+      volume whose namespace/kind/name has no matching state entry,
+      grouped and reported as `gcOrphan{Object, Namespace, Kind, Name}`)
+      and `platformctl gc apply` (removes exactly that list; refuses
+      without `--yes-i-understand-this-is-destructive`, mirroring
+      `destroy`'s NFR-3 pattern) — `cmd/platformctl/gc.go`.
+- [x] Non-destructive (`gc plan`) and destructive (`gc apply`) flows with
+      `-o table|json|yaml` output, verified live against a real Docker
+      daemon: `TestGCPlanAndApply` (`cmd/platformctl/gc_integration_test.go`)
+      creates a labeled container+network+volume out-of-band (no state
+      entry), asserts `gc plan` lists exactly them, `gc apply` without the
+      flag refuses and removes nothing, `gc apply` with the flag removes
+      exactly them.
 
 Design notes:
 
