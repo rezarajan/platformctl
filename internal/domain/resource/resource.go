@@ -30,6 +30,9 @@ type Metadata struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
 	Observers   []ObserverRef     `json:"observers,omitempty"`
+	// Protect refuses any plan/apply/destroy action that would delete this
+	// resource. See docs/planning/03-resource-model-reference.md §2.
+	Protect bool `json:"protect,omitempty"`
 }
 
 // Envelope is the parsed, validated form of any manifest before it's cast to

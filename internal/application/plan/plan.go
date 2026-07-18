@@ -24,6 +24,7 @@ const (
 	ActionNoop          Action = "no-op"
 	ActionDelete        Action = "delete"
 	ActionOrphanUnknown Action = "orphan-unknown"
+	ActionRefused       Action = "refused" // metadata.protect: true blocks a would-be delete
 )
 
 type Entry struct {
@@ -228,10 +229,14 @@ func computeApplyDeletes(desired map[resource.Key]resource.Envelope, st state.St
 		for _, key := range level {
 			rs := absent[key]
 			entry := Entry{Key: key}
-			if rs.LastApplied == nil {
+			switch {
+			case rs.LastApplied == nil:
 				entry.Action = ActionOrphanUnknown
 				entry.Reason = "state entry predates last-applied state; re-apply a manifest for this resource or remove it with destroy before authoritative apply can delete it"
-			} else {
+			case rs.LastApplied.Metadata.Protect:
+				entry.Action = ActionRefused
+				entry.Reason = fmt.Sprintf("%s is protected (metadata.protect: true in its last-applied manifest); restore its manifest, set metadata.protect: false and re-apply to lift the block, then remove it", key)
+			default:
 				entry.Action = ActionDelete
 				entry.Reason = "present in state but absent from desired manifests"
 			}
@@ -239,6 +244,19 @@ func computeApplyDeletes(desired map[resource.Key]resource.Envelope, st state.St
 		}
 	}
 	return levels, entries
+}
+
+// isProtected reports metadata.protect for a would-be delete: the manifest's
+// own value if one was loaded (e.Kind != ""), otherwise the last-applied
+// value recorded in state (the manifest may have already been removed).
+func isProtected(e resource.Envelope, prior state.ResourceState) bool {
+	if e.Kind != "" {
+		return e.Metadata.Protect
+	}
+	if prior.LastApplied != nil {
+		return prior.LastApplied.Metadata.Protect
+	}
+	return false
 }
 
 // ComputeDestroy builds a teardown plan: reverse dependency order, managed
@@ -285,6 +303,10 @@ func ComputeDestroy(envelopes []resource.Envelope, st state.State, g *graph.Grap
 					entry.Action = ActionNoop
 					entry.Reason = "not present in state; nothing to destroy"
 				}
+			}
+			if entry.Action == ActionDelete && isProtected(e, prior) {
+				entry.Action = ActionRefused
+				entry.Reason = fmt.Sprintf("%s is protected (metadata.protect: true); remove metadata.protect and re-apply to allow deletion", key)
 			}
 			p.Entries = append(p.Entries, entry)
 		}

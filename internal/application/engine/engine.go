@@ -163,6 +163,15 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 			e.report(func(r Reporter) { r.StepSkipped(key, err.Error()) })
 			return
 		}
+		if entry.Action == plan.ActionRefused {
+			err := errors.New(entry.Reason)
+			mu.Lock()
+			res.Failed[key] = err
+			mu.Unlock()
+			e.logf("fail %s (%s): %v", key, entry.Action, err)
+			e.report(func(r Reporter) { r.StepSkipped(key, err.Error()) })
+			return
+		}
 		if !hasEnv {
 			err := fmt.Errorf("%s: no manifest is available for planned action %s", key, entry.Action)
 			mu.Lock()
@@ -925,7 +934,14 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 	}
 
 	for _, entry := range p.Entries {
-		if entry.Action != plan.ActionDelete {
+		if entry.Action != plan.ActionDelete && entry.Action != plan.ActionRefused {
+			continue
+		}
+		if entry.Action == plan.ActionRefused {
+			err := errors.New(entry.Reason)
+			res.Failed[entry.Key] = err
+			e.logf("fail destroy %s: %v", entry.Key, err)
+			block(entry.Key)
 			continue
 		}
 		env, ok := byKey[entry.Key]

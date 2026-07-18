@@ -325,6 +325,77 @@ func TestApplyRefusesLegacyOrphanUnknown(t *testing.T) {
 	}
 }
 
+// TestApplyRefusesProtectedDelete guards docs/planning/08 A5: apply must
+// fail an authoritative delete for a resource whose last-applied manifest
+// carried metadata.protect: true, naming the resource and the remedy.
+func TestApplyRefusesProtectedDelete(t *testing.T) {
+	eng := newTestEngine(t, registry.New(featuregate.NewRegistry()))
+	protected := envelope("Provider", "protected", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
+	protected.Metadata.Protect = true
+	key := protected.Key()
+	if err := eng.StateStore.Save(context.Background(), state.State{
+		Version: state.CurrentVersion,
+		Resources: map[resource.Key]state.ResourceState{
+			key: {SpecHash: "old", Lifecycle: resource.Managed.String(), LastApplied: &protected},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	g, err := graph.Build(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := plan.Plan{
+		Entries: []plan.Entry{{Key: key, Action: plan.ActionRefused, Reason: "protected"}},
+		Levels:  [][]resource.Key{{key}},
+	}
+	result, err := eng.Apply(context.Background(), p, nil, g)
+	if err == nil {
+		t.Fatal("apply accepted a protected delete")
+	}
+	ferr, ok := result.Failed[key]
+	if !ok || !strings.Contains(ferr.Error(), "protected") {
+		t.Fatalf("result missing protected failure: %+v", result.Failed)
+	}
+}
+
+// TestDestroyRefusesProtectedResource guards docs/planning/08 A5: destroy
+// must fail against a protect: true data-bearing resource.
+func TestDestroyRefusesProtectedResource(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+	eng := newTestEngine(t, reg)
+	protected := envelope("Provider", "protected", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
+	protected.Metadata.Protect = true
+	envelopes := []resource.Envelope{protected}
+	applyAll(t, eng, []resource.Envelope{envelope("Provider", "protected", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})})
+
+	g, err := graph.Build(envelopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := eng.StateStore.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := plan.ComputeDestroy(envelopes, st, g, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Destroy(context.Background(), p, envelopes, g)
+	if err == nil {
+		t.Fatal("engine destroyed a protected resource")
+	}
+	ferr, ok := result.Failed[protected.Key()]
+	if !ok || !strings.Contains(ferr.Error(), "protect") {
+		t.Fatalf("result missing protected failure: %+v", result.Failed)
+	}
+}
+
 // TestProbeRecordsDrift: Probe merges observed DriftDetected/Ready
 // conditions into recorded state so `status` reflects the last observation.
 func TestProbeRecordsDrift(t *testing.T) {

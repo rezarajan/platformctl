@@ -25,6 +25,7 @@ metadata:
   annotations: {}  # optional, free-form
   observers:       # optional, any data-plane Kind may declare this
     - name: local-marquez   # a Provider this resource's own provider may forward a LineageEndpoint to
+  protect: false   # optional, default false — see below
 spec:
   ...              # kind-specific, see below
 status:            # populated by Datascape, never hand-authored
@@ -36,6 +37,16 @@ status:            # populated by Datascape, never hand-authored
 `observers` is a list of `Provider` names, resolved to `LineageEndpoint`s at reconcile time. It
 does not change what the resource *does* — it only optionally hands its provider a connection
 fact, if that provider knows what to do with one. See §9.
+
+`metadata.protect: true` refuses any `plan`/`apply`/`destroy` action that would delete this
+resource, regardless of lifecycle (Managed, External, or Imported) or of `destroy`'s
+`--include-external`/`--include-imported` flags. `plan` reports the would-be delete as its own
+`refused` action instead of `delete`; `apply`/`destroy` fail the run, naming the resource and the
+remedy (remove `metadata.protect`, or set it to `false`, and re-apply before the resource can be
+deleted). There is no separate opt-out flag — the only way to delete a protected resource is to
+first apply a manifest for it with `protect` removed. This applies engine-wide, not per-provider;
+data-bearing kinds (Dataset, Source, Catalog) are the primary intended use, but the field is
+available on every Kind.
 
 ## 3. Lifecycle taxonomy — how it's expressed per kind
 

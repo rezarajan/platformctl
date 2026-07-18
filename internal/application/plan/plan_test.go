@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/rezarajan/platformctl/internal/domain/graph"
@@ -53,6 +54,77 @@ func TestComputePlansAuthoritativeDeletes(t *testing.T) {
 	}
 	if got := p.Levels[len(p.Levels)-1][0]; got != removed.Key() {
 		t.Fatalf("last level key = %s, want %s", got, removed.Key())
+	}
+}
+
+// TestComputePlansProtectedDeleteAsRefused guards docs/planning/08 A5:
+// removing a protected resource from manifests must never fall through to an
+// authoritative delete — it must be reported as a refusal naming the remedy.
+func TestComputePlansProtectedDeleteAsRefused(t *testing.T) {
+	keep := testEnvelope("Provider", "keep", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
+	protected := testEnvelope("EventStream", "protected", map[string]any{"providerRef": map[string]any{"name": "keep"}})
+	protected.Metadata.Protect = true
+	g, err := graph.Build([]resource.Envelope{keep})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := SpecHash(keep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := state.State{Version: state.CurrentVersion, Resources: map[resource.Key]state.ResourceState{
+		keep.Key(): {SpecHash: hash, Lifecycle: resource.Managed.String(), LastApplied: &keep},
+		protected.Key(): {
+			SpecHash:     "old",
+			Lifecycle:    resource.Managed.String(),
+			LastApplied:  &protected,
+			Dependencies: []resource.Key{keep.Key()},
+		},
+	}}
+
+	p, err := Compute([]resource.Envelope{keep}, st, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range p.Entries {
+		if entry.Key != protected.Key() {
+			continue
+		}
+		found = true
+		if entry.Action != ActionRefused {
+			t.Fatalf("protected entry action = %s, want %s", entry.Action, ActionRefused)
+		}
+		if !strings.Contains(entry.Reason, "protect") {
+			t.Fatalf("protected entry reason = %q, want it to name the remedy", entry.Reason)
+		}
+	}
+	if !found {
+		t.Fatalf("protected key %s not reported", protected.Key())
+	}
+}
+
+func TestComputeDestroyRefusesProtectedResource(t *testing.T) {
+	protected := testEnvelope("Provider", "protected", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
+	protected.Metadata.Protect = true
+	g, err := graph.Build([]resource.Envelope{protected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := SpecHash(protected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := state.State{Version: state.CurrentVersion, Resources: map[resource.Key]state.ResourceState{
+		protected.Key(): {SpecHash: hash, Lifecycle: resource.Managed.String(), LastApplied: &protected},
+	}}
+
+	p, err := ComputeDestroy([]resource.Envelope{protected}, st, g, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Entries[0]; got.Action != ActionRefused || !strings.Contains(got.Reason, "protect") {
+		t.Fatalf("destroy entry = %+v, want refused naming the protect remedy", got)
 	}
 }
 

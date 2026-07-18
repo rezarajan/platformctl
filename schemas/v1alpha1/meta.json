@@ -23,6 +23,10 @@
       "type": "array",
       "items": { "$ref": "#/$defs/nameRef" },
       "description": "Provider names whose connection details are resolved to LineageEndpoints and forwarded to this resource's provider if it is LineageAware."
+    },
+    "protect": {
+      "type": "boolean",
+      "description": "When true, plan/apply/destroy refuse any action that would delete this resource. Remove this field and re-apply to allow deletion."
     }
   },
   "required": ["name"],
