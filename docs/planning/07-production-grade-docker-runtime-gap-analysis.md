@@ -7,6 +7,12 @@ production-grade Docker-runtime foundation for data lakehouse and pipeline
 infrastructure, and before the project invites broad third-party open-source
 contribution. This is intentionally a work backlog, not an implementation note.
 
+**Task tracking (2026-07-17):** every open (`[ ]`) item in this document is
+now sliced into an actionable, stage-gated task in
+[08-production-readiness-plan.md](08-production-readiness-plan.md) — see its
+§9 for the item-by-item mapping. Work new items there; this document remains
+the analysis record and the home of the per-area detail the tasks reference.
+
 Validation signal during review:
 
 - `GOCACHE=/tmp/platformctl-go-build go test ./...` passes outside the sandbox.

@@ -193,6 +193,12 @@ Adding a provider with required configuration? Implement
 
 ## Known open items (next session's natural backlog)
 
+> **Superseded (2026-07-17):** these items (and every open item in
+> docs/planning/07) are now sliced into the stage-gated, individually
+> actionable backlog in `docs/planning/08-production-readiness-plan.md`
+> (Stages A–E; its §9 maps each item below to a task ID). Work from that
+> plan; the list below is retained as the historical record.
+
 1. **Providers for the new pairings**: `jdbcsink` (sink→Source) and an
    s3-source provider (ingest) over the existing Connect-worker pattern —
    pure adapters, no schema work needed.

@@ -20,6 +20,15 @@ assume the current `internal/` layout, resource-kind list, or CLI surface surviv
 6. **[06-agentic-execution-guide.md](06-agentic-execution-guide.md)** — how to actually build
    this with Claude Code and other coding agents: repo structure, standing bookkeeping tasks,
    pre-coding review checklist, and model selection per task type.
+7. **[07-production-grade-docker-runtime-gap-analysis.md](07-production-grade-docker-runtime-gap-analysis.md)**
+   — the post-v1.0.0 gap analysis and stage gates (Gates 0–3), including the
+   cross-runtime (Kubernetes) portability findings. Analysis record; its open
+   items are worked through the backlog below.
+8. **[08-production-readiness-plan.md](08-production-readiness-plan.md)** — the
+   current stage-gated backlog (Stages A–E) of individually actionable tasks
+   taking v1.0.0 to a production data-pipeline platform: operational
+   hardening, Kubernetes to Beta/GA, HA/routing/TLS/monitoring/backup,
+   pipeline-infrastructure providers, and DX/contribution readiness.
 
 ## The one diagram that explains everything else
 

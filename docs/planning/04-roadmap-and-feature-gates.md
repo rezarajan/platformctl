@@ -15,6 +15,15 @@
 
 ## 2. Phase overview
 
+**Status (2026-07-17):** Phases 0–6.5 are complete and verified
+(`checkpoint.md` records the evidence per phase); their exit-criteria
+checklists below are retained as historical record. Phase 7 is in progress.
+Post-v1.0.0 production-readiness work — closing Phase 7, high availability,
+routing/TLS, monitoring, backup, and the remaining provider gaps — is planned
+as stage-gated, individually actionable tasks in
+[08-production-readiness-plan.md](08-production-readiness-plan.md) (Stages
+A–E), which supersedes per-phase detail for everything after Phase 6.5.
+
 | Phase | Theme | Primary outcome |
 |---|---|---|
 | 0 | Foundations | Domain model, ports, manifest validation, dependency graph, CLI skeleton, local state store — no real infrastructure yet. |
@@ -346,6 +355,16 @@ list.
 **Feature gates:** `KubernetesRuntime` (Alpha, disabled by default; long
 hardening period expected before Beta given blast radius).
 
+**Task breakdown (2026-07-17):** the remaining Phase 7 work is fully sliced
+into actionable tasks in
+[08-production-readiness-plan.md](08-production-readiness-plan.md): Stage B
+(B1–B9: external-reachability access modes, observed endpoints, storage
+classes/sizing/persistence, the kubernetes secret backend, RBAC posture,
+connection preflight, NetworkPolicy parity, the full provider matrix in CI,
+docs/schema sync) takes the adapter to Beta; Stage C (C1 replicas/stable
+identity and the HA scenarios built on it) takes it toward GA. Phase 7 closes
+when doc 08's Stage B exit criteria hold.
+
 ## 11. Phase 8 — External/Terraform Adapter, Out-of-Process Provider Plugins (future)
 
 - A narrower, non-container runtime port for adapters that don't map to "run a container"
@@ -376,6 +395,14 @@ hardening period expected before Beta given blast radius).
 | `KubernetesRuntime` | Phase 7 | Alpha | disabled | — |
 | `TerraformRuntimeAdapter` | Phase 8 | Alpha | disabled | — |
 | `OutOfProcessProviderPlugins` | Phase 8 | Alpha | disabled | — |
+
+Gates planned by the production-readiness backlog (`SharedStateBackend`,
+`KubernetesSecretBackend`, `HighAvailability`, `IngressProvider`,
+`TLSTermination`, `MonitoringStackProvider`, `BackupRestore`,
+`SchemaRegistrySupport`, `JDBCSinkProvider`, `IngestProvider`,
+`TunnelProvider`) are tracked with their introduction points and graduation
+intents in [08-production-readiness-plan.md](08-production-readiness-plan.md)
+§8; append each to this table in the commit that lands it.
 
 Gate mechanics: `--feature-gates=Name=true,Other=false` on the CLI, or a `featureGates:` block in
 a config file; `application/registry` consults the gate before constructing a provider/runtime,
