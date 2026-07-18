@@ -15,6 +15,7 @@ import (
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
 	envsecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/env"
 	filesecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/file"
+	k8ssecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/kubernetes"
 	secretrouter "github.com/rezarajan/platformctl/internal/adapters/secrets/router"
 	vaultsecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/vault"
 	"github.com/rezarajan/platformctl/internal/application/archview"
@@ -298,6 +299,9 @@ func (a *app) newEngine() (*engine.Engine, error) {
 		Register(secret.BackendFile, filesecrets.New())
 	if a.gates.Enabled("VaultSecretBackend") {
 		secrets.Register(secret.BackendVault, vaultsecrets.New())
+	}
+	if a.gates.Enabled("KubernetesSecretBackend") {
+		secrets.Register(secret.BackendKubernetes, k8ssecrets.New())
 	}
 	store, err := a.stateStore()
 	if err != nil {

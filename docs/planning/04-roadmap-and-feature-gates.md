@@ -396,12 +396,13 @@ when doc 08's Stage B exit criteria hold.
 | `TerraformRuntimeAdapter` | Phase 8 | Alpha | disabled | — |
 | `OutOfProcessProviderPlugins` | Phase 8 | Alpha | disabled | — |
 | `SharedStateBackend` | 08 Stage A (A4) | Alpha | disabled | Beta once used by CI itself |
+| `KubernetesSecretBackend` | 08 Stage B (B4) | Alpha | disabled | Beta with KubernetesRuntime |
 
-Gates planned by the production-readiness backlog (`KubernetesSecretBackend`,
-`HighAvailability`, `IngressProvider`, `TLSTermination`,
-`MonitoringStackProvider`, `BackupRestore`, `SchemaRegistrySupport`,
-`JDBCSinkProvider`, `IngestProvider`, `TunnelProvider`) are tracked with
-their introduction points and graduation intents in
+Gates planned by the production-readiness backlog (`HighAvailability`,
+`IngressProvider`, `TLSTermination`, `MonitoringStackProvider`,
+`BackupRestore`, `SchemaRegistrySupport`, `JDBCSinkProvider`,
+`IngestProvider`, `TunnelProvider`) are tracked with their introduction
+points and graduation intents in
 [08-production-readiness-plan.md](08-production-readiness-plan.md) §8;
 append each to this table in the commit that lands it.
 

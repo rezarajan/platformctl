@@ -587,7 +587,7 @@ kind: SecretReference
 metadata:
   name: postgres-replication-creds
 spec:
-  backend: env                     # env | file (both implemented) | vault (implemented, VaultSecretBackend gate, Alpha/disabled) | kubernetes (future — fails fast if referenced)
+  backend: env                     # env | file (both implemented) | vault (implemented, VaultSecretBackend gate, Alpha/disabled) | kubernetes (implemented, KubernetesSecretBackend gate, Alpha/disabled)
   keys:
     - username
     - password
@@ -596,6 +596,26 @@ spec:
 Resolution: `SecretStore.Resolve` returns a `map[string]string` keyed by the logical names in
 `spec.keys`; how those map to actual storage (env var names, file paths) is backend-specific
 configuration, never present in the manifest's `spec` as a plaintext value.
+
+`backend: kubernetes` (docs/planning/08 B4) resolves `spec.keys` from a native Kubernetes Secret's
+data keys — the ambient kubeconfig (`KUBECONFIG` env, then `~/.kube/config`, or in-cluster config)
+resolves the cluster, the same rules the `kubernetes` runtime uses when a Provider's
+`spec.runtime` doesn't override them. The Secret object defaults to `metadata.name` in
+`metadata.namespace` (the Datascape namespace doubles as the Kubernetes namespace, matching the
+runtime adapter's Provider convention) — both overridable via an optional `spec.kubernetes` block:
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: postgres-replication-creds
+spec:
+  backend: kubernetes
+  keys: [username, password]
+  kubernetes:               # optional; both fields default as described above
+    name: pg-repl-secret     # the Kubernetes Secret's own object name
+    namespace: data-platform # the Kubernetes namespace it lives in
+```
 
 Apply records a one-way fingerprint of the resolved material in state, never
 the values themselves. Drift/status compares the current resolved fingerprint

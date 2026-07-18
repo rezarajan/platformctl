@@ -365,7 +365,7 @@ func SecretFingerprint(ref secret.SecretReference, values map[string]string) str
 }
 
 func secretRefFrom(env resource.Envelope) secret.SecretReference {
-	ref := secret.SecretReference{Name: env.Metadata.Name}
+	ref := secret.SecretReference{Name: env.Metadata.Name, Namespace: resource.NormalizeNamespace(env.Metadata.Namespace)}
 	backend, _ := env.Spec["backend"].(string)
 	ref.Backend = secret.Backend(backend)
 	if keys, ok := env.Spec["keys"].([]any); ok {
@@ -374,6 +374,10 @@ func secretRefFrom(env resource.Envelope) secret.SecretReference {
 				ref.Keys = append(ref.Keys, s)
 			}
 		}
+	}
+	if k8s, ok := env.Spec["kubernetes"].(map[string]any); ok {
+		ref.Kubernetes.Name, _ = k8s["name"].(string)
+		ref.Kubernetes.Namespace, _ = k8s["namespace"].(string)
 	}
 	return ref
 }
