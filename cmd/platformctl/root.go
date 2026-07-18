@@ -669,7 +669,7 @@ func newInventoryCmd(a *app) *cobra.Command {
 				Insecure bool `json:"insecure,omitempty"`
 			}
 			rows := [][]string{{"COMPONENT", "ENDPOINT", "SCHEME", "HOST (from your machine)", "IN-NETWORK", "CREDENTIALS", "SECURITY"}}
-			var data []invRow
+			data := []invRow{}
 			for _, e := range envelopes {
 				rs, ok := st.Resources[e.Key()]
 				if !ok {
