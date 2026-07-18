@@ -10,9 +10,27 @@ import (
 	"time"
 )
 
+// Network isolation policy modes for NetworkSpec.IsolationPolicy.
+const (
+	// IsolationDefault gives the network a real isolation boundary where
+	// the runtime supports one: Docker networks always were one; Kubernetes
+	// additionally provisions a default-deny + allow-same-namespace
+	// NetworkPolicy pair (docs/planning/08 B7) so a Namespace stops being
+	// DNS-parity-only and actually matches Docker's isolation semantics.
+	IsolationDefault = ""
+	// IsolationNone opts out of Kubernetes' NetworkPolicy provisioning —
+	// for clusters whose CNI doesn't enforce NetworkPolicy (the objects
+	// would sit inert) or where an operator has their own policy story.
+	// Docker ignores this field either way; a network is always isolated
+	// there.
+	IsolationNone = "none"
+)
+
 type NetworkSpec struct {
 	Name   string
 	Labels map[string]string
+	// IsolationPolicy is one of the Isolation* constants above.
+	IsolationPolicy string
 }
 
 type VolumeSpec struct {

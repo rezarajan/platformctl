@@ -55,6 +55,11 @@
             "network": {
               "type": "string",
               "description": "The shared addressing/isolation domain the provider's objects join. docker: the network name (default: datascape). kubernetes: the Namespace name (EnsureNetwork creates it; must not collide with an existing unmanaged namespace — see the runtime adapter's ownership policy)."
+            },
+            "networkPolicy": {
+              "type": "string",
+              "enum": ["none"],
+              "description": "kubernetes only; docker ignores it (a Docker network is always isolated). By default EnsureNetwork also provisions a default-deny + allow-same-namespace NetworkPolicy pair so the Namespace mapping isn't DNS-parity-only — without it, any pod anywhere in the cluster could reach a Service. Set to \"none\" to opt out (e.g. a CNI that doesn't enforce NetworkPolicy, or an operator with their own policy story); a stderr warning is printed when opted out."
             }
           },
           "required": [

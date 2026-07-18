@@ -158,6 +158,10 @@ spec:
   runtime:
     type: docker                 # docker | kubernetes (Alpha, KubernetesRuntime gate) | external (future) | terraform (future)
     network: datascape           # docker: the shared network name. kubernetes: the Namespace name (EnsureNetwork creates it).
+    networkPolicy: ""            # kubernetes only (docs/planning/08 B7); "" (default) provisions a default-deny +
+                                  # allow-same-namespace NetworkPolicy pair so the Namespace isn't DNS-parity-only —
+                                  # without it any pod anywhere in the cluster could reach it. "none" opts out (prints
+                                  # a stderr warning); docker ignores this entirely, a Docker network is always isolated.
   configuration:                 # provider-specific, schema keyed by `type`
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
   secretRefs: []                 # optional list of SecretReference names, resolved and passed to the provider

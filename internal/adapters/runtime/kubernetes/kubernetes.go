@@ -40,6 +40,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -156,22 +157,58 @@ func sanitizeLabelValue(v string) string {
 	return out
 }
 
+// EnsureNetwork creates the Namespace and, unless opted out
+// (IsolationPolicy: IsolationNone), a default-deny + allow-same-namespace
+// NetworkPolicy pair (docs/planning/08 B7) — without it, a Docker network's
+// isolation boundary silently weakens to "DNS parity only" on Kubernetes:
+// any pod anywhere in the cluster could reach a Service the Namespace
+// mapping alone does nothing to stop.
 func (r *Runtime) EnsureNetwork(ctx context.Context, spec runtimeport.NetworkSpec) error {
 	ns, err := r.clientset.CoreV1().Namespaces().Get(ctx, spec.Name, metav1.GetOptions{})
-	if err == nil {
+	switch {
+	case err == nil:
 		if ns.Labels[runtimeport.LabelManagedBy] != runtimeport.ManagedByValue {
 			return fmt.Errorf("namespace %q exists but is not managed by platformctl; refusing to reuse it — choose a dedicated name via the Provider's spec.runtime.network (every object of one platform joins that namespace); every cluster has pre-existing unmanaged namespaces like default/kube-system, so a collision here is expected, not a bug", spec.Name)
 		}
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
+	case apierrors.IsNotFound(err):
+		if _, err := r.clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Labels: withOwnership(spec.Labels)},
+		}, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create namespace %q: %w", spec.Name, err)
+		}
+	default:
 		return fmt.Errorf("get namespace %q: %w", spec.Name, err)
 	}
-	_, err = r.clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Labels: withOwnership(spec.Labels)},
-	}, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create namespace %q: %w", spec.Name, err)
+
+	if spec.IsolationPolicy == runtimeport.IsolationNone {
+		fmt.Fprintf(os.Stderr, "warning: namespace %q uses networkPolicy: none — no isolation boundary is provisioned; every pod in the cluster can reach it unless something else in the cluster restricts it\n", spec.Name)
+		return nil
+	}
+	return r.ensureNetworkPolicies(ctx, spec.Name, spec.Labels)
+}
+
+// ensureNetworkPolicies creates or updates the isolation-boundary
+// NetworkPolicy pair. Update (not just create-if-absent) so a namespace
+// created before this existed, or one whose policies were edited
+// out-of-band, converges back to the declared boundary on the next apply —
+// the same drift-heals-on-reconcile behavior every other managed object
+// gets.
+func (r *Runtime) ensureNetworkPolicies(ctx context.Context, ns string, labels map[string]string) error {
+	for _, policy := range buildNetworkPolicies(ns, labels) {
+		existing, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, policy.Name, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+			if _, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, policy, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("create networkpolicy %q: %w", policy.Name, err)
+			}
+		case err != nil:
+			return fmt.Errorf("get networkpolicy %q: %w", policy.Name, err)
+		default:
+			policy.ResourceVersion = existing.ResourceVersion
+			if _, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Update(ctx, policy, metav1.UpdateOptions{}); err != nil {
+				return fmt.Errorf("update networkpolicy %q: %w", policy.Name, err)
+			}
+		}
 	}
 	return nil
 }

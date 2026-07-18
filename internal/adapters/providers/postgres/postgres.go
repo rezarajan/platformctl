@@ -89,6 +89,15 @@ func (p *Provider) network() string {
 	return "datascape"
 }
 
+// networkIsolationPolicy resolves spec.runtime.networkPolicy
+// (docs/planning/08 B7) into runtime.NetworkSpec's opt-out field. Docker
+// ignores it (a network is always isolated there); empty keeps the
+// Kubernetes adapter's default NetworkPolicy provisioning.
+func (p *Provider) networkIsolationPolicy() string {
+	policy, _ := p.cfg.RuntimeConfig["networkPolicy"].(string)
+	return policy
+}
+
 // storage resolves configuration.storage.{size,class} (docs/planning/08 B3)
 // into a VolumeSpec's runtime-agnostic fields. Both are optional — an unset
 // size keeps the runtime adapter's own default (Docker: unsized; Kubernetes:
@@ -155,7 +164,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	if err != nil {
 		return st, err
 	}
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels, IsolationPolicy: p.networkIsolationPolicy()}); err != nil {
 		return st, err
 	}
 	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{

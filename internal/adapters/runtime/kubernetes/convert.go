@@ -10,6 +10,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -167,6 +168,44 @@ func buildService(namespace, serviceName string, spec runtimeport.ContainerSpec)
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{"app": spec.Name},
 			Ports:    ports,
+		},
+	}
+}
+
+// Isolation-boundary NetworkPolicy names (docs/planning/08 B7).
+const (
+	denyAllIngressPolicyName     = "datascape-default-deny-ingress"
+	allowSameNamespacePolicyName = "datascape-allow-same-namespace"
+)
+
+// buildNetworkPolicies returns the default-deny + allow-same-namespace pair
+// that gives a Namespace the isolation boundary a Docker network always
+// had. Every pod in the namespace is selected by an empty PodSelector; the
+// allow rule's peer names no namespaceSelector, which Kubernetes' own
+// NetworkPolicy semantics scope to the policy's own namespace — exactly
+// "allow from anything in this namespace, deny everything else."
+func buildNetworkPolicies(namespace string, labels map[string]string) []*networkingv1.NetworkPolicy {
+	owned := withOwnership(labels)
+	ingress := []networkingv1.PolicyType{networkingv1.PolicyTypeIngress}
+	return []*networkingv1.NetworkPolicy{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: denyAllIngressPolicyName, Namespace: namespace, Labels: owned},
+			Spec: networkingv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{},
+				PolicyTypes: ingress,
+				// No Ingress rules at all: nothing matches, so nothing is
+				// allowed — the default-deny half of the pair.
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: allowSameNamespacePolicyName, Namespace: namespace, Labels: owned},
+			Spec: networkingv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{},
+				PolicyTypes: ingress,
+				Ingress: []networkingv1.NetworkPolicyIngressRule{
+					{From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}}},
+				},
+			},
 		},
 	}
 }
