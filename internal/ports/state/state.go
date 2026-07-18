@@ -38,20 +38,54 @@ type State struct {
 	RawResources map[string]ResourceState `json:"resources"`
 }
 
-// Normalize syncs the typed map from the raw serialized form after Load.
+// migration upgrades a State in place from FromVersion to FromVersion+1,
+// mutating RawResources only — Normalize's decode loop runs once, after
+// every pending migration, so a migrator's only job is producing raw keys
+// the *next* version's decode understands.
+type migration struct {
+	FromVersion int
+	Name        string
+	Apply       func(*State)
+}
+
+// migrations is the ordered chain, one entry per version this package has
+// ever shipped, keyed by the version it upgrades away from. A new format
+// change (CurrentVersion++) means appending exactly one entry here — never
+// rewriting Normalize's decode loop — see state/migration_test.go for the
+// template a new one should follow and the contiguity invariant it checks.
+var migrations = []migration{
+	{
+		FromVersion: 1,
+		Name:        "v1-namespace-aware-keys",
+		// v1 raw keys are bare "Kind/Name" (no namespace, no escaping); v2
+		// keys are url-escaped "namespace/kind/name" (KeyString). Re-key
+		// every entry through the v1 parser so the v2 decode below sees
+		// consistent input regardless of which version it started at.
+		Apply: func(s *State) {
+			upgraded := make(map[string]ResourceState, len(s.RawResources))
+			for k, v := range s.RawResources {
+				upgraded[KeyString(parseV1Key(k))] = v
+			}
+			s.RawResources = upgraded
+		},
+	},
+}
+
+// Normalize syncs the typed map from the raw serialized form after Load,
+// running any pending migrations first.
 func (s *State) Normalize() {
-	s.Resources = make(map[resource.Key]ResourceState, len(s.RawResources))
-	version := s.Version
-	if version == 0 {
-		version = 1
+	if s.Version == 0 {
+		s.Version = 1
 	}
-	for k, v := range s.RawResources {
-		var key resource.Key
-		if version < 2 {
-			key = parseV1Key(k)
-		} else {
-			key = ParseKey(k)
+	for _, m := range migrations {
+		if s.Version == m.FromVersion {
+			m.Apply(s)
+			s.Version = m.FromVersion + 1
 		}
+	}
+	s.Resources = make(map[resource.Key]ResourceState, len(s.RawResources))
+	for k, v := range s.RawResources {
+		key := ParseKey(k)
 		if v.LastApplied != nil {
 			v.LastApplied.Metadata.Namespace = resource.NormalizeNamespace(v.LastApplied.Metadata.Namespace)
 		}

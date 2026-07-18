@@ -118,6 +118,7 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 		newInventoryCmd(a),
 		newDocsCmd(),
 		newGCCmd(a),
+		newStateCmd(a),
 	)
 	return root
 }

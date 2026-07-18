@@ -296,6 +296,37 @@ var commandScenarios = map[string]commandScenario{
 			assertJSON(t, "gc apply -o json", out)
 		},
 	},
+	"state inspect": {
+		structured: true,
+		run: func(t *testing.T) {
+			stateFile := filepath.Join(t.TempDir(), "state.json")
+			if _, err, code := run(t, "apply", "testdata/noop-scenario", "--state-file", stateFile, "--auto-approve"); err != nil || code != 0 {
+				t.Fatalf("apply failed (code %d): %v", code, err)
+			}
+			runBothFormats(t, "state inspect", "state", "inspect", "--state-file", stateFile)
+		},
+	},
+	"state doctor": {
+		structured: true,
+		run: func(t *testing.T) {
+			stateFile := filepath.Join(t.TempDir(), "state.json")
+			// Healthy: nothing applied yet, so nothing to check — a clean
+			// exit and a parseable empty report. The full defect-class
+			// sweep and the doctor/repair round-trip live in state_test.go.
+			runBothFormats(t, "state doctor", "state", "doctor", "--state-file", stateFile, "--runtime", "fake")
+		},
+	},
+	"state repair": {
+		structured: true,
+		run: func(t *testing.T) {
+			stateFile := filepath.Join(t.TempDir(), "state.json")
+			out, err, code := run(t, "state", "repair", "--state-file", stateFile, "--runtime", "fake", "--yes", "-o", "json")
+			if err != nil || code != 0 {
+				t.Fatalf("state repair (healthy no-op) failed (code %d): %v\n%s", code, err, out)
+			}
+			assertJSON(t, "state repair -o json", out)
+		},
+	},
 }
 
 // TestOutputContractHarness runs every registered scenario.

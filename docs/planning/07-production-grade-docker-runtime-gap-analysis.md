@@ -764,17 +764,35 @@ Resolved in the Gate 1 close-out pass (2026-07-16):
 - [x] Fsync the state directory after rename (best-effort where the
       platform allows opening directories) — `localfile.Save`.
 
-**Disposition for the rest: explicitly deferred past the Gate 1 stage-gate.**
-Migration scaffolding already has a working precedent (the v1→v2 key
-migration in `state.Normalize`/`parseV1Key` with tests); formalizing it, the
-`state inspect/doctor/repair` helpers, and the remote-state decision are
-operator-tooling work tracked with the same epic as 1.3.
+Resolved (2026-07-18, `docs/planning/08` A3):
 
-- [ ] Add migration scaffolding and tests before changing state format
-      (beyond the existing v1→v2 path).
-- [ ] Add `platformctl state inspect`, `state doctor`, and `state repair`
-      helpers for corrupted or stale state.
-- [ ] Decide whether remote/shared state is in scope for Docker production.
+- [x] Migration scaffolding formalized: `internal/ports/state/state.go`'s
+      `migrations` is now an ordered, named chain
+      (`[]migration{FromVersion, Name, Apply}`) applied in
+      `State.Normalize`, replacing the inline `version < 2` branch — the
+      v1→v2 key migration is its first (and so far only) entry.
+      `TestMigrationChainHasNoGaps` (`internal/ports/state/migration_test.go`)
+      is the template/contiguity guard a future migration must satisfy:
+      append one entry, never touch the decode loop.
+- [x] `platformctl state inspect` (dump normalized state, read-only),
+      `state doctor` (reports: stale on-disk format version, legacy orphan
+      entries with no last-applied manifest, corrupt entries whose state
+      key disagrees with their own manifest's key, and Provider entries
+      whose backing container the runtime reports gone — exits 1 when
+      anything is found), and `state repair` (persists a migrated format
+      and drops confirmed-gone Provider entries, with confirmation unless
+      `--yes`; never touches legacy-orphan or corrupt entries, which have
+      no safe automatic fix; a no-op — no write — on healthy state) —
+      `cmd/platformctl/state.go`. Covered by a doctor/repair round-trip
+      fixture test exercising every defect class in one pass
+      (`cmd/platformctl/state_test.go`) and registered in the output-contract
+      harness (A7).
+
+**Disposition for the remainder: tracked as `docs/planning/08` A4.**
+
+- [ ] Decide whether remote/shared state is in scope for Docker production
+      (`docs/planning/08` A4 — design note first, then the S3-backed
+      implementation).
 
 Design notes:
 
