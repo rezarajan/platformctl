@@ -1,0 +1,20 @@
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-rpk8s-pf-test
+spec:
+  type: redpanda
+  runtime:
+    type: kubernetes
+    network: datascape-rpk8s-pf-test-ns
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: datascape-rpk8s-pf-test-events
+spec:
+  providerRef:
+    name: datascape-rpk8s-pf-test
+  partitions: 2
+  retention:
+    duration: 1d

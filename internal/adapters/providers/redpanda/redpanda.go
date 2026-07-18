@@ -53,9 +53,6 @@ func (p *Provider) hostPort() int {
 	return hostport.Resolve(configured, p.brokerName())
 }
 
-// HostAddr is the broker address reachable from the host (admin operations).
-func (p *Provider) HostAddr() string { return "127.0.0.1:" + strconv.Itoa(p.hostPort()) }
-
 // InternalAddr is the broker address reachable from containers on the shared
 // network (Debezium, sink connectors).
 func (p *Provider) InternalAddr() string {
@@ -69,12 +66,43 @@ func (p *Provider) network() string {
 	return "datascape"
 }
 
+// accessMode selects how CLI-side admin calls (reconcileTopic, Probe,
+// Destroy for EventStream) reach the broker on Kubernetes — one of the
+// runtime.Access* constants (docs/planning/08 B1). Docker ignores it: the
+// broker's host port is already reachable by construction.
+func (p *Provider) accessMode() string {
+	m, _ := p.cfg.RuntimeConfig["access"].(string)
+	return m
+}
+
+// advertisedAddr is the address baked into the broker's own EXTERNAL
+// listener config at startup (see reconcileBroker's --advertise-kafka-addr)
+// — the address the broker itself tells a connected Kafka client to use for
+// follow-up requests (Kafka's own client/broker protocol, independent of
+// platformctl). On Kubernetes this string is not necessarily dialable at
+// all: node-port's real port isn't known until the Service exists, and
+// port-forward's tunnel port is different on every call, so nothing fixed
+// at container-start time could ever be correct. kafka.go's adminClient
+// resolves this: every client dial to exactly this address is intercepted
+// and redirected to whatever reachableAddr just resolved to, decoupling
+// "what the broker advertises" from "where a request actually goes" — the
+// broker's own protocol never needs to be told the (changing) truth.
+func (p *Provider) advertisedAddr() string { return "127.0.0.1:" + strconv.Itoa(p.hostPort()) }
+
+// reachableAddr returns an address this process can dial right now to reach
+// the broker's admin (external Kafka) port, plus a close func that must
+// always be called — on Docker this is a cheap no-op; on Kubernetes it may
+// tear down a port-forward tunnel opened just for this call.
+func (p *Provider) reachableAddr(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
+	return rt.EnsureReachable(ctx, p.brokerName(), externalKafkaPort)
+}
+
 func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
 	switch res.Kind {
 	case "Provider":
 		return p.reconcileBroker(ctx, rt)
 	case "EventStream":
-		return p.reconcileTopic(ctx, res)
+		return p.reconcileTopic(ctx, res, rt)
 	default:
 		return status.Status{}, fmt.Errorf("redpanda provider cannot reconcile kind %s", res.Kind)
 	}
@@ -98,14 +126,15 @@ func (p *Provider) reconcileBroker(ctx context.Context, rt runtime.ContainerRunt
 
 	hostPort := p.hostPort()
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
-		Name:  name,
-		Image: image,
+		Name:       name,
+		Image:      image,
+		AccessMode: p.accessMode(),
 		Cmd: []string{
 			"redpanda", "start",
 			"--overprovisioned", "--smp", "1", "--memory", "512M", "--reserve-memory", "0M",
 			"--node-id", "0", "--check=false",
 			"--kafka-addr", fmt.Sprintf("INTERNAL://0.0.0.0:%d,EXTERNAL://0.0.0.0:%d", internalKafkaPort, externalKafkaPort),
-			"--advertise-kafka-addr", fmt.Sprintf("INTERNAL://%s:%d,EXTERNAL://127.0.0.1:%d", name, internalKafkaPort, hostPort),
+			"--advertise-kafka-addr", fmt.Sprintf("INTERNAL://%s:%d,EXTERNAL://%s", name, internalKafkaPort, p.advertisedAddr()),
 		},
 		Networks: []string{p.network()},
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/var/lib/redpanda/data"}},
@@ -140,7 +169,7 @@ func (p *Provider) reconcileBroker(ctx context.Context, rt runtime.ContainerRunt
 	return st, nil
 }
 
-func (p *Provider) reconcileTopic(ctx context.Context, res resource.Envelope) (status.Status, error) {
+func (p *Provider) reconcileTopic(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
 	st := status.Status{}
 	es, err := eventstream.FromEnvelope(res)
 	if err != nil {
@@ -156,7 +185,12 @@ func (p *Provider) reconcileTopic(ctx context.Context, res resource.Envelope) (s
 		return st, err
 	}
 
-	if err := ensureTopic(ctx, p.HostAddr(), topic, partitions, retentionMS); err != nil {
+	addr, closeAddr, err := p.reachableAddr(ctx, rt)
+	if err != nil {
+		return st, err
+	}
+	defer closeAddr()
+	if err := ensureTopic(ctx, addr, p.advertisedAddr(), topic, partitions, retentionMS); err != nil {
 		return st, err
 	}
 
@@ -187,7 +221,12 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		if ctr, found, err := rt.Inspect(ctx, p.brokerName()); err != nil || !found || !ctr.Running {
 			return err
 		}
-		return deleteTopic(ctx, p.HostAddr(), res.Metadata.Name)
+		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		if err != nil {
+			return err
+		}
+		defer closeAddr()
+		return deleteTopic(ctx, addr, p.advertisedAddr(), res.Metadata.Name)
 	default:
 		return fmt.Errorf("redpanda provider cannot destroy kind %s", res.Kind)
 	}
@@ -223,7 +262,12 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if err != nil {
 			return st, err
 		}
-		drift, reason, err := probeTopic(ctx, p.HostAddr(), res.Metadata.Name, wantPartitions, wantRetentionMS)
+		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		if err != nil {
+			return st, err
+		}
+		defer closeAddr()
+		drift, reason, err := probeTopic(ctx, addr, p.advertisedAddr(), res.Metadata.Name, wantPartitions, wantRetentionMS)
 		if err != nil {
 			return st, err
 		}

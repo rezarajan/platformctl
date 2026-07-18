@@ -3,6 +3,7 @@ package redpanda
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"time"
 
@@ -10,10 +11,29 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func adminClient(addr string) (*kadm.Client, *kgo.Client, error) {
-	cl, err := kgo.NewClient(kgo.SeedBrokers(addr))
+// adminClient connects using dialAddr — an address genuinely dialable right
+// now (from redpanda.go's reachableAddr) — but tells kgo to seed and
+// identify the broker by advertisedAddr, the (possibly Kubernetes-only-
+// meaningful-as-a-token) address baked into the broker's own
+// --advertise-kafka-addr. Kafka's client/broker protocol has the broker
+// tell connected clients which address to use for follow-up requests
+// (metadata, leader redirects, ...); on Kubernetes that address can't be
+// made correct at broker-start time (see redpanda.go's advertisedAddr doc).
+// The custom Dialer below intercepts every dial the client attempts —
+// including that follow-up redial to advertisedAddr — and transparently
+// redirects it to dialAddr, so the broker's own advertised value never
+// needs to be true, only stable for the lifetime of one admin call.
+func adminClient(dialAddr, advertisedAddr string) (*kadm.Client, *kgo.Client, error) {
+	dial := func(ctx context.Context, network, host string) (net.Conn, error) {
+		if host == advertisedAddr {
+			host = dialAddr
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, network, host)
+	}
+	cl, err := kgo.NewClient(kgo.SeedBrokers(advertisedAddr), kgo.Dialer(dial))
 	if err != nil {
-		return nil, nil, fmt.Errorf("connect to broker %s: %w", addr, err)
+		return nil, nil, fmt.Errorf("connect to broker %s: %w", dialAddr, err)
 	}
 	return kadm.NewClient(cl), cl, nil
 }
@@ -21,8 +41,8 @@ func adminClient(addr string) (*kadm.Client, *kgo.Client, error) {
 // ensureTopic is idempotent: creates the topic if absent, grows partitions if
 // the desired count is higher, and aligns retention.ms — issuing zero calls
 // when actual state already matches.
-func ensureTopic(ctx context.Context, addr, topic string, partitions int, retentionMS int64) error {
-	adm, cl, err := adminClient(addr)
+func ensureTopic(ctx context.Context, addr, advertisedAddr, topic string, partitions int, retentionMS int64) error {
+	adm, cl, err := adminClient(addr, advertisedAddr)
 	if err != nil {
 		return err
 	}
@@ -86,8 +106,8 @@ func ensureTopic(ctx context.Context, addr, topic string, partitions int, retent
 	return nil
 }
 
-func deleteTopic(ctx context.Context, addr, topic string) error {
-	adm, cl, err := adminClient(addr)
+func deleteTopic(ctx context.Context, addr, advertisedAddr, topic string) error {
+	adm, cl, err := adminClient(addr, advertisedAddr)
 	if err != nil {
 		return err
 	}
@@ -101,8 +121,8 @@ func deleteTopic(ctx context.Context, addr, topic string) error {
 }
 
 // probeTopic reports drift: (drifted, reason, error).
-func probeTopic(ctx context.Context, addr, topic string, wantPartitions int, wantRetentionMS int64) (bool, string, error) {
-	adm, cl, err := adminClient(addr)
+func probeTopic(ctx context.Context, addr, advertisedAddr, topic string, wantPartitions int, wantRetentionMS int64) (bool, string, error) {
+	adm, cl, err := adminClient(addr, advertisedAddr)
 	if err != nil {
 		return false, "", err
 	}

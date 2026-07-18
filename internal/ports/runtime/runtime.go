@@ -153,8 +153,24 @@ type ImagePullAuth struct {
 	Registry string
 }
 
+// Access modes for a container's CLI-side (outside-the-cluster) admin
+// reachability (docs/planning/08 B1). Docker always publishes to the host,
+// so these only differentiate Kubernetes behavior; the Docker and fake
+// adapters accept every value and ignore it.
+const (
+	AccessPortForward  = ""              // default: an ephemeral client-go port-forward tunnel per EnsureReachable call
+	AccessNodePort     = "node-port"     // Service type NodePort; reachable at <a-node-ip>:<node-port>
+	AccessLoadBalancer = "load-balancer" // Service type LoadBalancer; reachable at the provisioned ingress address
+	AccessInCluster    = "in-cluster"    // no host-reachable address; EnsureReachable refuses, naming the mode
+)
+
 type ContainerSpec struct {
 	Name string
+	// AccessMode selects how EnsureReachable makes this container's ports
+	// reachable from outside the runtime (one of the Access* constants
+	// above). Docker/fake ignore it — a published port is already
+	// host-reachable by construction.
+	AccessMode string
 	// Image is any runtime-resolvable reference, including digest-pinned
 	// form ("repo@sha256:..."), which is the recommended way to guarantee
 	// an exact image (docs/planning/07 §1.1/§2.5) — a tag is mutable, a
@@ -264,6 +280,19 @@ type ContainerRuntime interface {
 	// (e.g. the previous admin password during rotation) without that
 	// material ever living in inspectable env vars.
 	ReadFile(ctx context.Context, name, path string) ([]byte, error)
+	// EnsureReachable returns a "host:port" address this process (running
+	// outside the cluster/daemon) can dial right now to reach the named
+	// container's containerPort, plus a close func to release any tunnel
+	// opened to provide it — callers must always call close when done, even
+	// on the trivial passthrough adapters, so provider code stays portable.
+	// Docker/fake: the already-published host address (ContainerSpec.Ports
+	// intent already makes this host-reachable; close is a no-op).
+	// Kubernetes: depends on the container's ContainerSpec.AccessMode —
+	// port-forward opens an ephemeral client-go tunnel (close tears it
+	// down), node-port/load-balancer resolve the Service's observed
+	// address, in-cluster refuses with an error naming the mode
+	// (docs/planning/08 B1).
+	EnsureReachable(ctx context.Context, name string, containerPort int) (addr string, close func() error, err error)
 }
 
 // Datascape ownership labels — applied to every created object so

@@ -1,0 +1,21 @@
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-rpk8s-test
+spec:
+  type: redpanda
+  runtime:
+    type: kubernetes
+    network: datascape-rpk8s-test-ns
+    access: node-port
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: datascape-rpk8s-test-events
+spec:
+  providerRef:
+    name: datascape-rpk8s-test
+  partitions: 3
+  retention:
+    duration: 7d

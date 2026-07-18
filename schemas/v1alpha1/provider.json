@@ -60,6 +60,11 @@
               "type": "string",
               "enum": ["none"],
               "description": "kubernetes only; docker ignores it (a Docker network is always isolated). By default EnsureNetwork also provisions a default-deny + allow-same-namespace NetworkPolicy pair so the Namespace mapping isn't DNS-parity-only — without it, any pod anywhere in the cluster could reach a Service. Set to \"none\" to opt out (e.g. a CNI that doesn't enforce NetworkPolicy, or an operator with their own policy story); a stderr warning is printed when opted out."
+            },
+            "access": {
+              "type": "string",
+              "enum": ["port-forward", "node-port", "load-balancer", "in-cluster"],
+              "description": "kubernetes only; docker ignores it (a published host port is already reachable). Selects how platformctl itself, running outside the cluster, reaches this Provider's admin/control-plane ports (e.g. redpanda's Kafka admin API) to reconcile child resources like EventStream. Default (unset): port-forward, an ephemeral client-go tunnel opened per operation — zero cluster config but requires pods/portforward RBAC and a live apply process. node-port/load-balancer change the backing Service's type and use its externally-observed address — the same address `platformctl inventory` reports. in-cluster refuses CLI-side admin connections outright, naming the mode, for providers whose admin operations are expected to run from inside the cluster instead."
             }
           },
           "required": [

@@ -40,9 +40,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -54,7 +58,9 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/client-go/transport/spdy"
 	"k8s.io/client-go/util/retry"
 
 	runtimeport "github.com/rezarajan/platformctl/internal/ports/runtime"
@@ -66,6 +72,12 @@ import (
 // sha256 hex digest (64 chars) exceeds Kubernetes' 63-character label-value
 // limit.
 const specHashAnnotation = "io.datascape.spec-hash"
+
+// accessModeAnnotation records the ContainerSpec.AccessMode a Deployment was
+// last created/updated with, so EnsureReachable (which only receives a bare
+// name, the Docker port's contract) can recover which reachability strategy
+// to use without threading the spec through separately.
+const accessModeAnnotation = "io.datascape.access-mode"
 
 type Runtime struct {
 	clientset kubernetes.Interface
@@ -373,7 +385,7 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.Containe
 			return runtimeport.ContainerState{}, fmt.Errorf("deployment %q exists but is not managed by platformctl; refusing to replace it", spec.Name)
 		}
 		if existing.Annotations[specHashAnnotation] == desiredHash {
-			return stateFromDeployment(existing), nil // matches — no-op
+			return r.enrichedState(ctx, ns, existing), nil // matches — no-op
 		}
 	} else if !apierrors.IsNotFound(err) {
 		return runtimeport.ContainerState{}, fmt.Errorf("get deployment %q: %w", spec.Name, err)
@@ -400,7 +412,7 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.Containe
 		if err != nil {
 			return runtimeport.ContainerState{}, fmt.Errorf("create deployment %q: %w", spec.Name, err)
 		}
-		return stateFromDeployment(created), nil
+		return r.enrichedState(ctx, ns, created), nil
 	}
 	// The Deployment controller continuously bumps .status (replicas,
 	// conditions, observedGeneration) independently of our .spec change, so
@@ -421,7 +433,7 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.Containe
 	if err != nil {
 		return runtimeport.ContainerState{}, fmt.Errorf("update deployment %q: %w", spec.Name, err)
 	}
-	return stateFromDeployment(updated), nil
+	return r.enrichedState(ctx, ns, updated), nil
 }
 
 // ensureService creates or updates the ClusterIP Service backing a
@@ -649,6 +661,232 @@ func (r *Runtime) ensureOneService(ctx context.Context, ns, svcName string, spec
 	}
 }
 
+// enrichedState builds a ContainerState from a Deployment and, when its own
+// Service has a host-reachable address (NodePort/LoadBalancer — never
+// ClusterIP/port-forward), fills in HostIP/HostPort per port so `platformctl
+// inventory` reports real, observed exposure instead of always claiming
+// cluster-internal-only (docs/planning/08 B2). Best-effort: a Service lookup
+// failure just leaves ports cluster-internal, matching the pre-B2 behavior,
+// rather than failing the whole Inspect/ListManaged call.
+func (r *Runtime) enrichedState(ctx context.Context, ns string, d *appsv1.Deployment) runtimeport.ContainerState {
+	st := stateFromDeployment(d)
+	if len(st.Ports) == 0 {
+		return st
+	}
+	svc, err := r.clientset.CoreV1().Services(ns).Get(ctx, st.Name, metav1.GetOptions{})
+	if err != nil {
+		return st
+	}
+	for i, p := range st.Ports {
+		if hostIP, hostPort, ok := r.observedHostAddr(ctx, svc, int32(p.ContainerPort)); ok {
+			st.Ports[i].HostIP = hostIP
+			st.Ports[i].HostPort = hostPort
+		}
+	}
+	return st
+}
+
+// observedHostAddr resolves the real, currently-observed host-reachable
+// address for a Service port, per the Service's type — nothing for
+// ClusterIP (the port-forward/in-cluster access modes have no standing host
+// binding at all; EnsureReachable opens one on demand instead).
+func (r *Runtime) observedHostAddr(ctx context.Context, svc *corev1.Service, containerPort int32) (string, int, bool) {
+	switch svc.Spec.Type {
+	case corev1.ServiceTypeNodePort:
+		for _, p := range svc.Spec.Ports {
+			if p.Port != containerPort {
+				continue
+			}
+			if p.NodePort == 0 {
+				return "", 0, false
+			}
+			nodeIP, err := r.firstNodeAddr(ctx)
+			if err != nil || nodeIP == "" {
+				return "", 0, false
+			}
+			return nodeIP, int(p.NodePort), true
+		}
+	case corev1.ServiceTypeLoadBalancer:
+		if len(svc.Status.LoadBalancer.Ingress) == 0 {
+			return "", 0, false
+		}
+		ing := svc.Status.LoadBalancer.Ingress[0]
+		addr := ing.IP
+		if addr == "" {
+			addr = ing.Hostname
+		}
+		if addr == "" {
+			return "", 0, false
+		}
+		for _, p := range svc.Spec.Ports {
+			if p.Port == containerPort {
+				return addr, int(p.Port), true
+			}
+		}
+	}
+	return "", 0, false
+}
+
+// firstNodeAddr picks an address for reaching a NodePort Service: an
+// ExternalIP when the cluster has one (real/cloud clusters), falling back to
+// InternalIP (local clusters like minikube/kind, where platformctl itself
+// typically runs on the same host/network as the node).
+func (r *Runtime) firstNodeAddr(ctx context.Context) (string, error) {
+	nodes, err := r.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return "", fmt.Errorf("list nodes: %w", err)
+	}
+	var internal string
+	for _, node := range nodes.Items {
+		for _, addr := range node.Status.Addresses {
+			if addr.Type == corev1.NodeExternalIP && addr.Address != "" {
+				return addr.Address, nil
+			}
+			if addr.Type == corev1.NodeInternalIP && internal == "" {
+				internal = addr.Address
+			}
+		}
+	}
+	return internal, nil
+}
+
+// EnsureReachable makes a container's port reachable from this process
+// (running outside the cluster), per the AccessMode its Deployment was last
+// created/updated with (docs/planning/08 B1):
+//
+//   - in-cluster: refuses — there is no host-reachable address by design.
+//   - node-port/load-balancer: resolves the Service's observed address;
+//     close is a no-op (the Service itself is the standing tunnel).
+//   - port-forward (default): opens an ephemeral client-go port-forward
+//     tunnel to the container's current pod; close tears it down.
+func (r *Runtime) EnsureReachable(ctx context.Context, name string, containerPort int) (string, func() error, error) {
+	ns, d, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {
+		return r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	if d == nil {
+		return "", nil, fmt.Errorf("deployment %q not found", name)
+	}
+	accessMode := d.Annotations[accessModeAnnotation]
+
+	switch accessMode {
+	case runtimeport.AccessInCluster:
+		return "", nil, fmt.Errorf("container %q uses access mode %q; no CLI-side (outside-the-cluster) admin connection is possible — run admin operations from a pod inside the cluster instead", name, runtimeport.AccessInCluster)
+	case runtimeport.AccessNodePort, runtimeport.AccessLoadBalancer:
+		return r.serviceReachableAddr(ctx, ns, name, containerPort, accessMode)
+	default:
+		return r.portForwardReachableAddr(ctx, ns, name, containerPort)
+	}
+}
+
+// serviceReachableAddr resolves the node-port/load-balancer address and
+// polls until it is actually dialable, not merely assigned. Two distinct
+// delays separate "the Service object has an address" from "traffic sent to
+// it succeeds": a freshly (re)created LoadBalancer's ingress address can
+// take a while to provision, and — found live against minikube, not a
+// synthetic test — a NodePort number is allocated by the API server
+// synchronously at Service-creation time, before kube-proxy has programmed
+// the node's iptables/ipvs rule that actually accepts traffic on it, so a
+// dial immediately after the number appears can still see connection
+// refused for a brief window. EnsureReachable's contract is "a host:port
+// this process can dial right now" — resolving the address without proving
+// it's live would silently violate that for callers who dial only once.
+func (r *Runtime) serviceReachableAddr(ctx context.Context, ns, name string, containerPort int, accessMode string) (string, func() error, error) {
+	const pollTimeout = 60 * time.Second
+	deadline := time.Now().Add(pollTimeout)
+	for {
+		svc, err := r.clientset.CoreV1().Services(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return "", nil, fmt.Errorf("get service %q: %w", name, err)
+		}
+		if ip, port, ok := r.observedHostAddr(ctx, svc, int32(containerPort)); ok {
+			addr := net.JoinHostPort(ip, strconv.Itoa(port))
+			if dialable(addr) {
+				return addr, func() error { return nil }, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return "", nil, fmt.Errorf("service %q (access mode %q) did not become dialable for port %d within %s", name, accessMode, containerPort, pollTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return "", nil, ctx.Err()
+		case <-time.After(1 * time.Second):
+		}
+	}
+}
+
+// dialable reports whether a TCP connection to addr succeeds right now.
+func dialable(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// portForwardReachableAddr opens an ephemeral client-go port-forward tunnel
+// to the container's current pod on an OS-assigned local port, mirroring
+// `kubectl port-forward :containerPort`.
+func (r *Runtime) portForwardReachableAddr(ctx context.Context, ns, name string, containerPort int) (string, func() error, error) {
+	pods, err := r.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: "app=" + name})
+	if err != nil {
+		return "", nil, fmt.Errorf("list pods for %q: %w", name, err)
+	}
+	pod := newestReadyPod(pods.Items)
+	if pod == nil {
+		return "", nil, fmt.Errorf("no ready pod for %q to port-forward to", name)
+	}
+
+	transport, upgrader, err := spdy.RoundTripperFor(r.restConfig)
+	if err != nil {
+		return "", nil, fmt.Errorf("build port-forward transport: %w", err)
+	}
+	req := r.clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Namespace(ns).
+		Name(pod.Name).
+		SubResource("portforward")
+	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", req.URL())
+
+	stopCh := make(chan struct{})
+	readyCh := make(chan struct{})
+	var outBuf, errBuf bytes.Buffer
+	fw, err := portforward.New(dialer, []string{fmt.Sprintf("0:%d", containerPort)}, stopCh, readyCh, &outBuf, &errBuf)
+	if err != nil {
+		return "", nil, fmt.Errorf("create port-forwarder to pod %q: %w", pod.Name, err)
+	}
+	fwErrCh := make(chan error, 1)
+	go func() { fwErrCh <- fw.ForwardPorts() }()
+
+	select {
+	case <-readyCh:
+	case err := <-fwErrCh:
+		return "", nil, fmt.Errorf("port-forward to pod %q failed: %w (stderr: %s)", pod.Name, err, strings.TrimSpace(errBuf.String()))
+	case <-ctx.Done():
+		close(stopCh)
+		return "", nil, ctx.Err()
+	case <-time.After(15 * time.Second):
+		close(stopCh)
+		return "", nil, fmt.Errorf("port-forward to pod %q: timed out waiting to become ready", pod.Name)
+	}
+	ports, err := fw.GetPorts()
+	if err != nil || len(ports) == 0 {
+		close(stopCh)
+		return "", nil, fmt.Errorf("port-forward to pod %q: no local port allocated: %w", pod.Name, err)
+	}
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(int(ports[0].Local)))
+	var closeOnce sync.Once
+	closeFn := func() error {
+		closeOnce.Do(func() { close(stopCh) })
+		return nil
+	}
+	return addr, closeFn, nil
+}
+
 func (r *Runtime) WaitHealthy(ctx context.Context, name string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -676,7 +914,7 @@ func (r *Runtime) WaitHealthy(ctx context.Context, name string, timeout time.Dur
 }
 
 func (r *Runtime) Inspect(ctx context.Context, name string) (runtimeport.ContainerState, bool, error) {
-	_, d, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {
+	ns, d, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {
 		return r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
 	})
 	if err != nil {
@@ -685,7 +923,7 @@ func (r *Runtime) Inspect(ctx context.Context, name string) (runtimeport.Contain
 	if d == nil {
 		return runtimeport.ContainerState{}, false, nil
 	}
-	return stateFromDeployment(d), true, nil
+	return r.enrichedState(ctx, ns, d), true, nil
 }
 
 func (r *Runtime) Remove(ctx context.Context, name string) error {
@@ -761,7 +999,7 @@ func (r *Runtime) ListManaged(ctx context.Context) ([]runtimeport.ContainerState
 			return nil, fmt.Errorf("list deployments in namespace %q: %w", ns, err)
 		}
 		for i := range list.Items {
-			out = append(out, stateFromDeployment(&list.Items[i]))
+			out = append(out, r.enrichedState(ctx, ns, &list.Items[i]))
 		}
 	}
 	return out, nil

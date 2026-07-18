@@ -111,7 +111,7 @@ func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash stri
 			Name:        spec.Name,
 			Namespace:   namespace,
 			Labels:      labels,
-			Annotations: map[string]string{specHashAnnotation: hash},
+			Annotations: map[string]string{specHashAnnotation: hash, accessModeAnnotation: spec.AccessMode},
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
@@ -159,6 +159,13 @@ func buildService(namespace, serviceName string, spec runtimeport.ContainerSpec)
 	}
 	labels := withOwnership(spec.Labels)
 	labels["app"] = spec.Name
+	svcType := corev1.ServiceTypeClusterIP
+	switch spec.AccessMode {
+	case runtimeport.AccessNodePort:
+		svcType = corev1.ServiceTypeNodePort
+	case runtimeport.AccessLoadBalancer:
+		svcType = corev1.ServiceTypeLoadBalancer
+	}
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      serviceName,
@@ -166,6 +173,7 @@ func buildService(namespace, serviceName string, spec runtimeport.ContainerSpec)
 			Labels:    labels,
 		},
 		Spec: corev1.ServiceSpec{
+			Type:     svcType,
 			Selector: map[string]string{"app": spec.Name},
 			Ports:    ports,
 		},

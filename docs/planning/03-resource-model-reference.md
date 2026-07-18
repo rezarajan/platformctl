@@ -162,6 +162,15 @@ spec:
                                   # allow-same-namespace NetworkPolicy pair so the Namespace isn't DNS-parity-only —
                                   # without it any pod anywhere in the cluster could reach it. "none" opts out (prints
                                   # a stderr warning); docker ignores this entirely, a Docker network is always isolated.
+    access: ""                   # kubernetes only (docs/planning/08 B1); "" (default) is port-forward | node-port |
+                                  # load-balancer | in-cluster. Selects how platformctl itself (running outside the
+                                  # cluster) reaches this Provider's admin/control-plane port to reconcile child
+                                  # resources (e.g. redpanda's EventStream needs a live Kafka admin connection).
+                                  # port-forward opens an ephemeral client-go tunnel per operation (needs
+                                  # pods/portforward RBAC). node-port/load-balancer change the Service type and use
+                                  # its externally-observed address (also what `platformctl inventory` reports).
+                                  # in-cluster refuses CLI-side admin connections outright, naming the mode. docker
+                                  # ignores this entirely — a published host port is already reachable.
   configuration:                 # provider-specific, schema keyed by `type`
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
   secretRefs: []                 # optional list of SecretReference names, resolved and passed to the provider

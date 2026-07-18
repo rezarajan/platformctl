@@ -177,6 +177,22 @@ func (r *Runtime) ReadFile(_ context.Context, name, path string) ([]byte, error)
 	return nil, fmt.Errorf("file %q not found in container %q", path, name)
 }
 
+// EnsureReachable mirrors the Docker adapter's trivial passthrough: a fake
+// container's ports are already host-reachable by construction.
+func (r *Runtime) EnsureReachable(_ context.Context, name string, containerPort int) (string, func() error, error) {
+	r.mu.Lock()
+	spec, ok := r.containers[name]
+	r.mu.Unlock()
+	if !ok {
+		return "", nil, fmt.Errorf("container %q not found", name)
+	}
+	addr := r.stateOf(spec).HostAddr(containerPort)
+	if addr == "" {
+		return "", nil, fmt.Errorf("container %q publishes no host binding for port %d", name, containerPort)
+	}
+	return addr, func() error { return nil }, nil
+}
+
 func (r *Runtime) ListManaged(_ context.Context) ([]runtime.ContainerState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

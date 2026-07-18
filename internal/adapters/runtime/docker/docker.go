@@ -383,6 +383,25 @@ func (r *Runtime) Inspect(ctx context.Context, name string) (runtime.ContainerSt
 	return stateFromInspect(info), true, nil
 }
 
+// EnsureReachable returns the already-published host address for
+// containerPort — Docker's HostConfig.PortBindings already made it
+// host-reachable at container-creation time, so there is nothing to open;
+// close is a no-op kept only to satisfy the port's cross-runtime contract.
+func (r *Runtime) EnsureReachable(ctx context.Context, name string, containerPort int) (string, func() error, error) {
+	state, found, err := r.Inspect(ctx, name)
+	if err != nil {
+		return "", nil, err
+	}
+	if !found {
+		return "", nil, fmt.Errorf("container %q not found", name)
+	}
+	addr := state.HostAddr(containerPort)
+	if addr == "" {
+		return "", nil, fmt.Errorf("container %q publishes no host binding for port %d", name, containerPort)
+	}
+	return addr, func() error { return nil }, nil
+}
+
 func (r *Runtime) Remove(ctx context.Context, name string) error {
 	info, err := r.cli.ContainerInspect(ctx, name)
 	if errdefs.IsNotFound(err) {
