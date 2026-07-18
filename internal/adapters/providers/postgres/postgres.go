@@ -25,9 +25,9 @@ import (
 var catalog = versionprofile.Catalog{
 	Default: "16",
 	Profiles: map[string]versionprofile.Profile{
-		"16": {Version: "16", Image: "postgres:16", DataMount: "/var/lib/postgresql/data"},
-		"17": {Version: "17", Image: "postgres:17", DataMount: "/var/lib/postgresql/data"},
-		"18": {Version: "18", Image: "postgres:18", DataMount: "/var/lib/postgresql"},
+		"16": {Version: "16", Image: "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20", DataMount: "/var/lib/postgresql/data"},
+		"17": {Version: "17", Image: "postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d", DataMount: "/var/lib/postgresql/data"},
+		"18": {Version: "18", Image: "postgres:18@sha256:32ca0af8e77bfb8c6610c488e4691f83f972a3e9e64d3b02facf3ab111ad5500", DataMount: "/var/lib/postgresql"},
 	},
 }
 

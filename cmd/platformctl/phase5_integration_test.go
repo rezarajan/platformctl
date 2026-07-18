@@ -37,7 +37,7 @@ func TestImportEndToEnd(t *testing.T) {
 	// The pre-existing instance: plain `docker run`, no Datascape labels.
 	if out, err := exec.Command("docker", "run", "-d", "--name", "datascape-imp-pg",
 		"-e", "POSTGRES_USER=datascape_admin", "-e", "POSTGRES_PASSWORD=admin-secret-pw",
-		"-p", "15546:5432", "postgres:16").CombinedOutput(); err != nil {
+		"-p", "15546:5432", "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20").CombinedOutput(); err != nil {
 		t.Fatalf("out-of-band docker run: %v\n%s", err, out)
 	}
 
@@ -144,7 +144,7 @@ func TestExternalSourceEndToEnd(t *testing.T) {
 	if out, err := exec.Command("docker", "run", "-d", "--name", "datascape-ext-outofband-pg",
 		"--network", "datascape-ext-net",
 		"-e", "POSTGRES_USER=extuser", "-e", "POSTGRES_PASSWORD=extpw", "-e", "POSTGRES_DB=attendance",
-		"postgres:16", "postgres", "-c", "wal_level=logical").CombinedOutput(); err != nil {
+		"postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20", "postgres", "-c", "wal_level=logical").CombinedOutput(); err != nil {
 		t.Fatalf("out-of-band docker run: %v\n%s", err, out)
 	}
 	// No healthcheck on the out-of-band container; give initdb a moment.

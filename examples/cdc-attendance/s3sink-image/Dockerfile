@@ -3,7 +3,7 @@
 # ship no S3 sink, so this build step is required once:
 #
 #   docker build -t datascape-s3sink-connect:local examples/cdc-attendance/s3sink-image/
-FROM quay.io/debezium/connect:2.7
+FROM quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
 
 ADD https://github.com/Aiven-Open/s3-connector-for-apache-kafka/releases/download/v2.15.0/s3-connector-for-apache-kafka-2.15.0.tar /tmp/s3-connector.tar
 

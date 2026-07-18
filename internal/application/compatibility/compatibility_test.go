@@ -557,8 +557,8 @@ func TestVersionedProviderValidation(t *testing.T) {
 		catalog: versionprofile.Catalog{
 			Default: "18",
 			Profiles: map[string]versionprofile.Profile{
-				"16": {Version: "16", Image: "postgres:16", DataMount: "/var/lib/postgresql/data"},
-				"18": {Version: "18", Image: "postgres:18", DataMount: "/var/lib/postgresql"},
+				"16": {Version: "16", Image: "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20", DataMount: "/var/lib/postgresql/data"},
+				"18": {Version: "18", Image: "postgres:18@sha256:32ca0af8e77bfb8c6610c488e4691f83f972a3e9e64d3b02facf3ab111ad5500", DataMount: "/var/lib/postgresql"},
 			},
 		},
 	}
@@ -573,7 +573,7 @@ func TestVersionedProviderValidation(t *testing.T) {
 		t.Error("unknown postgres version accepted")
 	}
 	// Image without version — the reported instability.
-	err := Check(pg(map[string]any{"image": "postgres:18"}), resolvePG)
+	err := Check(pg(map[string]any{"image": "postgres:18@sha256:32ca0af8e77bfb8c6610c488e4691f83f972a3e9e64d3b02facf3ab111ad5500"}), resolvePG)
 	if err == nil || !strings.Contains(err.Error(), "without configuration.version") {
 		t.Errorf("image-without-version not rejected: %v", err)
 	}

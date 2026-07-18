@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	defaultImage = "ghcr.io/projectnessie/nessie:0.108.1"
+	defaultImage = "ghcr.io/projectnessie/nessie:0.108.1@sha256:0b1ffbe56a1cbc1b86641ccd83465ab3447339ea4ed17a1fca42c50288e1479d"
 	apiPort      = 19120
 )
 

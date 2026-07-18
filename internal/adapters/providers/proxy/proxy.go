@@ -25,7 +25,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
-const defaultImage = "alpine/socat:1.8.0.3"
+const defaultImage = "alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e"
 
 type Provider struct {
 	providerRes resource.Envelope

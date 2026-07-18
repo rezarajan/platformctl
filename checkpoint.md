@@ -272,6 +272,24 @@ Adding a provider with required configuration? Implement
   example validate) gating the integration+chaos job (pre-pulls images,
   runs the full -tags integration suite, which includes the acceptance
   scenario).
+- Image pinning (docs/planning/08 A10): `scripts/pinned-images.txt` is the
+  source of truth for every release-tested default image (provider
+  defaults, examples, testdata); `scripts/refresh-digests.sh` resolves each
+  to its current registry digest and rewrites every `repo:tag`/
+  `repo:tag@sha256:...` occurrence across `*.go`/`*.yaml`/Dockerfiles
+  in-place (idempotent — a second run with an unmoved upstream digest edits
+  nothing). `.github/workflows/refresh-digests.yml` runs it weekly
+  (`workflow_dispatch` also available) and opens a PR when a digest moved;
+  it never gates `ci.yml`'s push/pull_request triggers. Support window per
+  image: postgres (16/17/18), mysql (8.0/8.4), and mariadb (10.11/11) each
+  track their own upstream EOL — add/drop a version by editing the
+  provider's `versionprofile.Catalog` and `scripts/pinned-images.txt`
+  together. The single-version providers (redpanda, debezium, minio,
+  nessie, marquez, socat) are supported at exactly the pinned tag; bumping
+  one is a deliberate version-bump PR (edit the `defaultImage` constant,
+  `scripts/pinned-images.txt`, then run the refresh script), not something
+  the scheduled job does on its own — the scheduled job only refreshes the
+  digest *of the tag already pinned*, never changes which tag is pinned.
 
 ## How to verify state after resuming
 

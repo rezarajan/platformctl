@@ -20,7 +20,7 @@ spec:
     type: docker
     network: datascape-ext-net
   configuration:
-    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
     kafkaPort: 19195
 ---
 apiVersion: datascape.io/v1alpha1
@@ -33,7 +33,7 @@ spec:
     type: docker
     network: datascape-ext-net
   configuration:
-    image: quay.io/debezium/connect:2.7
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
     connectPort: 18187
     bootstrapServers: datascape-ext-rp:29092
     replicationSecretRef: ext-db-conn

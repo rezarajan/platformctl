@@ -34,7 +34,7 @@ import (
 
 // Debezium container images are published on quay.io (the Docker Hub
 // mirror stopped receiving 2.x tags).
-const defaultImage = "quay.io/debezium/connect:2.7"
+const defaultImage = "quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff"
 
 type Provider struct {
 	providerRes resource.Envelope

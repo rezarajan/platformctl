@@ -21,7 +21,7 @@ import (
 const (
 	internalKafkaPort = 29092
 	externalKafkaPort = 9092
-	defaultImage      = "docker.redpanda.com/redpandadata/redpanda:v24.2.1"
+	defaultImage      = "docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a"
 )
 
 type Provider struct {

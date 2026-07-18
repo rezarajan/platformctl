@@ -1,0 +1,18 @@
+# Release-tested default images, one bare `repo:tag` per line (comments and
+# blank lines ignored). This is the source of truth scripts/refresh-digests.sh
+# resolves against — add a new provider's default image here when it ships,
+# and refresh-digests.sh will find and pin every `image: <repo:tag>` (YAML)
+# and `"<repo:tag>"` (Go string literal) occurrence across the repo.
+docker.redpanda.com/redpandadata/redpanda:v24.2.1
+postgres:16
+postgres:17
+postgres:18
+mysql:8.0
+mysql:8.4
+mariadb:10.11
+mariadb:11
+quay.io/debezium/connect:2.7
+minio/minio:RELEASE.2025-04-22T22-12-26Z
+ghcr.io/projectnessie/nessie:0.108.1
+marquezproject/marquez:0.51.1
+alpine/socat:1.8.0.3

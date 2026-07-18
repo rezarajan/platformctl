@@ -49,16 +49,16 @@ func (p *Provider) mariadb() bool { return p.cfg.Type == "mariadb" }
 var mysqlCatalog = versionprofile.Catalog{
 	Default: "8.4",
 	Profiles: map[string]versionprofile.Profile{
-		"8.0": {Version: "8.0", Image: "mysql:8.0", DataMount: "/var/lib/mysql"},
-		"8.4": {Version: "8.4", Image: "mysql:8.4", DataMount: "/var/lib/mysql"},
+		"8.0": {Version: "8.0", Image: "mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b", DataMount: "/var/lib/mysql"},
+		"8.4": {Version: "8.4", Image: "mysql:8.4@sha256:c592c15aaf4a1961e15d82eb31ea5987dda862d1c4b1e93424438c0e91dc1f8d", DataMount: "/var/lib/mysql"},
 	},
 }
 
 var mariadbCatalog = versionprofile.Catalog{
 	Default: "11",
 	Profiles: map[string]versionprofile.Profile{
-		"10.11": {Version: "10.11", Image: "mariadb:10.11", DataMount: "/var/lib/mysql"},
-		"11":    {Version: "11", Image: "mariadb:11", DataMount: "/var/lib/mysql"},
+		"10.11": {Version: "10.11", Image: "mariadb:10.11@sha256:be981e4113326ada8d6004174dd09eeaefc03094037f811182a52d4f2e737350", DataMount: "/var/lib/mysql"},
+		"11":    {Version: "11", Image: "mariadb:11@sha256:efb4959ef2c835cd735dbc388eb9ad6aab0c78dd64febcd51bc17481111890c4", DataMount: "/var/lib/mysql"},
 	},
 }
 

@@ -1,7 +1,7 @@
 # Kafka Connect worker image for the s3sink provider integration test:
 # the stock Debezium Connect image plus Aiven's S3 sink connector plugin.
 # Built by cmd/platformctl/sink_integration_test.go as datascape-s3sink-connect:test.
-FROM quay.io/debezium/connect:2.7
+FROM quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
 
 ADD https://github.com/Aiven-Open/s3-connector-for-apache-kafka/releases/download/v2.15.0/s3-connector-for-apache-kafka-2.15.0.tar /tmp/s3-connector.tar
 

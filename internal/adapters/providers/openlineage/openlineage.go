@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	defaultImage   = "marquezproject/marquez:0.51.1"
-	defaultDBImage = "postgres:16"
+	defaultImage   = "marquezproject/marquez:0.51.1@sha256:0721c976cff17d8b14f7949d85d6dac9c7ea37cb9fe857caa19833730fcb1a50"
+	defaultDBImage = "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20"
 	marquezAPIPort = 5000
 )
 

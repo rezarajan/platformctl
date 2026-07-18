@@ -68,7 +68,7 @@ func TestLakehouse(t *testing.T) {
 	if out, err := exec.Command("docker", "run", "-d", "--name", "external-orders-db",
 		"--network", "datascape",
 		"-e", "POSTGRES_USER=orders_ro", "-e", "POSTGRES_PASSWORD=orders-pw", "-e", "POSTGRES_DB=orders",
-		"postgres:16", "postgres", "-c", "wal_level=logical").CombinedOutput(); err != nil {
+		"postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20", "postgres", "-c", "wal_level=logical").CombinedOutput(); err != nil {
 		t.Fatalf("out-of-band docker run: %v\n%s", err, out)
 	}
 

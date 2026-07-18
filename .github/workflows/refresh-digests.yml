@@ -1,0 +1,40 @@
+name: Refresh image digests
+
+# Non-blocking maintenance job (docs/planning/08 A10): release-tested default
+# images are pinned to a digest (scripts/pinned-images.txt is the source of
+# truth), which means they never move on their own — this is what keeps the
+# pins from silently rotting as upstream retags. Runs weekly and on demand;
+# never runs on the push/pull_request triggers that gate merges, so a
+# transient registry hiccup here cannot block anyone's PR.
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Monday 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    name: Resolve pinned digests and open a PR if any moved
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refresh digests
+        run: bash scripts/refresh-digests.sh
+
+      - name: Open PR if digests moved
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(images): refresh pinned digests"
+          title: "chore(images): refresh pinned digests"
+          body: |
+            Automated run of `scripts/refresh-digests.sh` — one or more
+            images in `scripts/pinned-images.txt` resolved to a new digest
+            upstream. Review that the tag itself hasn't changed meaning
+            (e.g. a moved `latest`-style tag) before merging; a same-tag
+            digest move is normally just a rebuild of the same release.
+          branch: chore/refresh-image-digests
+          labels: dependencies

@@ -10,7 +10,7 @@ metadata:
 spec:
   type: minio
   runtime: {type: docker, network: datascape}
-  configuration: {image: minio/minio:RELEASE.2025-04-22T22-12-26Z, port: 19010, rootSecretRef: lake-minio-root}
+  configuration: {image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e, port: 19010, rootSecretRef: lake-minio-root}
   secretRefs: [lake-minio-root]
 ---
 # Realizes Catalog(engine: nessie) — see catalog-and-connections.yaml.
@@ -74,7 +74,7 @@ spec:
   type: redpanda
   runtime: {type: docker, network: datascape}
   configuration:
-    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
     kafkaPort: 19096
 ---
 # The CDC worker for the external orders database. It lists the
@@ -88,7 +88,7 @@ spec:
   type: debezium
   runtime: {type: docker, network: datascape}
   configuration:
-    image: quay.io/debezium/connect:2.7
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
     connectPort: 18086
     bootstrapServers: lake-redpanda:29092
   secretRefs: [ext-orders-creds]

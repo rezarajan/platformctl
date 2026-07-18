@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	defaultImage = "minio/minio:RELEASE.2025-04-22T22-12-26Z"
+	defaultImage = "minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e"
 	apiPort      = 9000
 	// rootPasswordPath is where the bootstrap password file is mounted.
 	rootPasswordPath = "/run/datascape/root-password"
