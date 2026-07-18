@@ -517,12 +517,17 @@ func newDriftCmd(a *app) *cobra.Command {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
 
-			rows := [][]string{{"RESOURCE", "READY", "DRIFT", "REASON"}}
+			rows := [][]string{{"RESOURCE", "READY", "DRIFT", "REASON", "MESSAGE"}}
 			type driftRow struct {
 				Resource string `json:"resource"`
 				Ready    string `json:"ready"`
 				Drift    string `json:"drift"`
 				Reason   string `json:"reason"`
+				// Message carries the observed-vs-desired detail a Reason
+				// enum can't (e.g. which connector config keys drifted, or
+				// "wal_level is replica, want logical") — probes set it,
+				// but every consumer before this dropped it on the floor.
+				Message string `json:"message,omitempty"`
 			}
 			var data []driftRow
 			drifted := 0
@@ -534,12 +539,13 @@ func newDriftCmd(a *app) *cobra.Command {
 				if c, ok := r.Status.Condition(status.DriftDetected); ok {
 					row.Drift = string(c.Status)
 					row.Reason = c.Reason
+					row.Message = c.Message
 				}
 				if engine.HasDrift(r.Status) {
 					drifted++
 				}
 				data = append(data, row)
-				rows = append(rows, []string{row.Resource, row.Ready, row.Drift, row.Reason})
+				rows = append(rows, []string{row.Resource, row.Ready, row.Drift, row.Reason, row.Message})
 			}
 			payload := driftOutput{Resources: data, Drifted: drifted}
 			if isStructured(a.output) {
@@ -760,12 +766,15 @@ func newStatusCmd(a *app) *cobra.Command {
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
-			rows := [][]string{{"RESOURCE", "READY", "DRIFT", "REASON", "LIFECYCLE"}}
+			rows := [][]string{{"RESOURCE", "READY", "DRIFT", "REASON", "MESSAGE", "LIFECYCLE"}}
 			type statusRow struct {
-				Resource  string `json:"resource"`
-				Ready     string `json:"ready"`
-				Drift     string `json:"drift"`
-				Reason    string `json:"reason"`
+				Resource string `json:"resource"`
+				Ready    string `json:"ready"`
+				Drift    string `json:"drift"`
+				Reason   string `json:"reason"`
+				// Message carries the observed-vs-desired detail a Reason
+				// enum can't (e.g. "wal_level is replica, want logical").
+				Message   string `json:"message,omitempty"`
 				Lifecycle string `json:"lifecycle"`
 			}
 			var data []statusRow
@@ -777,6 +786,7 @@ func newStatusCmd(a *app) *cobra.Command {
 					if c, found := rs.Status.Condition("Ready"); found {
 						row.Ready = string(c.Status)
 						row.Reason = c.Reason
+						row.Message = c.Message
 					}
 					// Recorded by the last `drift` probe; "-" means never probed.
 					if c, found := rs.Status.Condition(status.DriftDetected); found {
@@ -786,7 +796,7 @@ func newStatusCmd(a *app) *cobra.Command {
 					row.Reason = "NotApplied"
 				}
 				data = append(data, row)
-				rows = append(rows, []string{row.Resource, row.Ready, row.Drift, row.Reason, row.Lifecycle})
+				rows = append(rows, []string{row.Resource, row.Ready, row.Drift, row.Reason, row.Message, row.Lifecycle})
 			}
 			return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, data, rows)
 		},

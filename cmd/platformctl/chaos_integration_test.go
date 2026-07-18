@@ -33,6 +33,7 @@ type driftReport struct {
 	Ready    string `json:"ready"`
 	Drift    string `json:"drift"`
 	Reason   string `json:"reason"`
+	Message  string `json:"message"`
 }
 
 func runDrift(t *testing.T, manifests, stateFile string) (map[string]driftReport, int) {
