@@ -1,0 +1,105 @@
+# Stage A task A9 (docs/planning/08): MariaDB CDC integration coverage.
+# `mariadb` shares the mysql adapter (same protocol; per-type image and
+# binlog flags) but had never been exercised by a `type: mariadb` Provider in
+# any test. Clones testdata/cdc-scenario's postgres CDC shape onto MariaDB.
+# Host ports are deliberately non-default and disjoint from cdc-scenario's to
+# avoid collisions when both run on a shared dev machine: MariaDB 13307,
+# Connect 18184, Kafka 19194.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: maria-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: maria-repl
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-maria-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-maria-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
+    kafkaPort: 19194
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-maria-db
+spec:
+  type: mariadb
+  runtime:
+    type: docker
+    network: datascape-maria-net
+  configuration:
+    version: "11"
+    port: 13307
+    rootSecretRef: maria-root
+    replicationSecretRef: maria-repl
+  secretRefs: [maria-root, maria-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-maria-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape-maria-net
+  configuration:
+    image: quay.io/debezium/connect:2.7
+    connectPort: 18184
+    bootstrapServers: datascape-maria-rp:29092
+    replicationSecretRef: maria-repl
+  secretRefs: [maria-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: maria-students
+spec:
+  engine: mariadb
+  providerRef:
+    name: datascape-maria-db
+  mariadb:
+    database: attendance
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: maria-attendance-events
+spec:
+  providerRef:
+    name: datascape-maria-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: maria-students-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: maria-students
+  targetRef:
+    name: maria-attendance-events
+  providerRef:
+    name: datascape-maria-dbz
+  options:
+    tables: [students]
+    snapshotMode: initial
