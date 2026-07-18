@@ -25,6 +25,16 @@ type VolumeSpec struct {
 	// namespace) needs it to know where to place the volume. Always set
 	// this to the same value as the container that will mount it.
 	Networks []string
+	// SizeBytes requests a sized volume. Docker volumes are unsized and
+	// ignore this; Kubernetes sets it as the PersistentVolumeClaim's
+	// storage request (0 = the adapter's own default, currently 10Gi). A
+	// size *increase* on an existing PVC is a live expansion (allowed when
+	// the StorageClass supports it); a decrease is refused — Kubernetes
+	// itself does not support shrinking a bound PVC.
+	SizeBytes int64
+	// StorageClass selects a Kubernetes StorageClass by name. Empty means
+	// the cluster's default StorageClass. Docker ignores this.
+	StorageClass string
 }
 
 type HealthCheck struct {

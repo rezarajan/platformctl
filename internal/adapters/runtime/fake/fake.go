@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,14 @@ type Runtime struct {
 	networks   map[string]runtime.NetworkSpec
 	volumes    map[string]runtime.VolumeSpec
 	containers map[string]runtime.ContainerSpec
+	// volumeFiles simulates a real volume's persistence independent of
+	// container lifecycle: content written under a mounted volume's path
+	// survives even once a later EnsureContainer generation no longer
+	// declares the FileMount that first placed it (docs/planning/08 B3's
+	// persistence conformance subtest needs this to be meaningful against
+	// the fake, not just Docker/Kubernetes). Keyed by volume name, then
+	// absolute path.
+	volumeFiles map[string]map[string][]byte
 
 	// MutationCount increments only when state actually changes — the
 	// conformance suite asserts idempotency against it.
@@ -27,9 +36,10 @@ type Runtime struct {
 
 func New() *Runtime {
 	return &Runtime{
-		networks:   make(map[string]runtime.NetworkSpec),
-		volumes:    make(map[string]runtime.VolumeSpec),
-		containers: make(map[string]runtime.ContainerSpec),
+		networks:    make(map[string]runtime.NetworkSpec),
+		volumes:     make(map[string]runtime.VolumeSpec),
+		containers:  make(map[string]runtime.ContainerSpec),
+		volumeFiles: make(map[string]map[string][]byte),
 	}
 }
 
@@ -58,6 +68,7 @@ func (r *Runtime) EnsureVolume(_ context.Context, spec runtime.VolumeSpec) error
 func (r *Runtime) EnsureContainer(_ context.Context, spec runtime.ContainerSpec) (runtime.ContainerState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.persistVolumeFiles(spec)
 	if existing, ok := r.containers[spec.Name]; ok && containerSpecEqual(existing, spec) {
 		return r.stateOf(existing), nil
 	}
@@ -65,6 +76,24 @@ func (r *Runtime) EnsureContainer(_ context.Context, spec runtime.ContainerSpec)
 	r.MutationCount++
 	r.nextID++
 	return r.stateOf(spec), nil
+}
+
+// persistVolumeFiles records this generation's FileMount content against
+// whichever mounted volume's path prefix contains it, so ReadFile can still
+// return it in a later generation that no longer declares that FileMount —
+// see the volumeFiles field doc.
+func (r *Runtime) persistVolumeFiles(spec runtime.ContainerSpec) {
+	for _, f := range spec.Files {
+		for _, vm := range spec.Volumes {
+			if !strings.HasPrefix(f.Path, vm.MountPath) {
+				continue
+			}
+			if r.volumeFiles[vm.VolumeName] == nil {
+				r.volumeFiles[vm.VolumeName] = make(map[string][]byte)
+			}
+			r.volumeFiles[vm.VolumeName][f.Path] = f.Content
+		}
+	}
 }
 
 func (r *Runtime) WaitHealthy(_ context.Context, name string, _ time.Duration) error {
@@ -111,6 +140,7 @@ func (r *Runtime) RemoveVolume(_ context.Context, name string) error {
 	defer r.mu.Unlock()
 	if _, ok := r.volumes[name]; ok {
 		delete(r.volumes, name)
+		delete(r.volumeFiles, name)
 		r.MutationCount++
 	}
 	return nil
@@ -135,6 +165,13 @@ func (r *Runtime) ReadFile(_ context.Context, name, path string) ([]byte, error)
 	for _, f := range spec.Files {
 		if f.Path == path {
 			return f.Content, nil
+		}
+	}
+	// Not declared by the current generation — a currently-mounted volume
+	// may still carry it from an earlier one (persistVolumeFiles).
+	for _, vm := range spec.Volumes {
+		if content, ok := r.volumeFiles[vm.VolumeName][path]; ok {
+			return content, nil
 		}
 	}
 	return nil, fmt.Errorf("file %q not found in container %q", path, name)

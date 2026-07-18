@@ -50,8 +50,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/retry"
 
 	runtimeport "github.com/rezarajan/platformctl/internal/ports/runtime"
@@ -66,6 +68,11 @@ const specHashAnnotation = "io.datascape.spec-hash"
 
 type Runtime struct {
 	clientset kubernetes.Interface
+	// restConfig is kept alongside clientset because the pods/exec
+	// subresource (ReadFile's live-path fallback, below) needs to build its
+	// own SPDY executor directly against the REST transport/auth — there is
+	// no exec method on kubernetes.Interface itself.
+	restConfig *rest.Config
 }
 
 // New connects using the standard kubeconfig loading rules (KUBECONFIG env,
@@ -81,7 +88,7 @@ func New(config map[string]any) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build kubernetes client: %w", err)
 	}
-	return &Runtime{clientset: clientset}, nil
+	return &Runtime{clientset: clientset, restConfig: restCfg}, nil
 }
 
 func loadConfig(config map[string]any) (*rest.Config, error) {
@@ -195,30 +202,63 @@ func targetNamespace(networks []string) (string, error) {
 	return networks[0], nil
 }
 
+// defaultVolumeSizeBytes preserves this adapter's original hardcoded
+// request (10Gi) as the default when VolumeSpec.SizeBytes is unset.
+const defaultVolumeSizeBytes int64 = 10 * 1024 * 1024 * 1024
+
 func (r *Runtime) EnsureVolume(ctx context.Context, spec runtimeport.VolumeSpec) error {
 	ns, err := targetNamespace(spec.Networks)
 	if err != nil {
 		return err
 	}
+	desiredSize := spec.SizeBytes
+	if desiredSize <= 0 {
+		desiredSize = defaultVolumeSizeBytes
+	}
+	desiredQty := *resource.NewQuantity(desiredSize, resource.BinarySI)
+
 	pvc, err := r.clientset.CoreV1().PersistentVolumeClaims(ns).Get(ctx, spec.Name, metav1.GetOptions{})
 	if err == nil {
 		if pvc.Labels[runtimeport.LabelManagedBy] != runtimeport.ManagedByValue {
 			return fmt.Errorf("volume %q exists but is not managed by platformctl; refusing to reuse it", spec.Name)
+		}
+		currentQty := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+		switch desiredQty.Cmp(currentQty) {
+		case 0:
+			return nil // already matches — no-op
+		case -1:
+			return fmt.Errorf("volume %q requests %s, smaller than its current %s — Kubernetes does not support shrinking a bound PersistentVolumeClaim; use a new volume name to start over",
+				spec.Name, desiredQty.String(), currentQty.String())
+		}
+		// Increase: a live PVC expansion patch. Succeeds only when the
+		// StorageClass has allowVolumeExpansion: true — otherwise the API
+		// server rejects it, surfaced to the caller as-is.
+		pvc.Spec.Resources.Requests = corev1.ResourceList{corev1.ResourceStorage: desiredQty}
+		if _, err := r.clientset.CoreV1().PersistentVolumeClaims(ns).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("expand persistentvolumeclaim %q to %s: %w", spec.Name, desiredQty.String(), err)
 		}
 		return nil
 	}
 	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get persistentvolumeclaim %q: %w", spec.Name, err)
 	}
-	_, err = r.clientset.CoreV1().PersistentVolumeClaims(ns).Create(ctx, &corev1.PersistentVolumeClaim{
+	desired := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: ns, Labels: withOwnership(spec.Labels)},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")},
+				Requests: corev1.ResourceList{corev1.ResourceStorage: desiredQty},
 			},
 		},
-	}, metav1.CreateOptions{})
+	}
+	// StorageClassName is immutable once a PVC is created — this only ever
+	// applies to a fresh volume; changing it on an existing VolumeSpec has
+	// no effect, matching Kubernetes' own behavior rather than erroring on
+	// something the API itself can't act on.
+	if spec.StorageClass != "" {
+		desired.Spec.StorageClassName = &spec.StorageClass
+	}
+	_, err = r.clientset.CoreV1().PersistentVolumeClaims(ns).Create(ctx, desired, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create persistentvolumeclaim %q: %w", spec.Name, err)
 	}
@@ -416,6 +456,13 @@ func (r *Runtime) ensureImagePullSecret(ctx context.Context, ns string, spec run
 
 // ReadFile maps the path back to its Secret key via the annotation
 // buildFilesSecret wrote, then returns that key's data.
+// ReadFile returns a FileMount's content when the path is one this adapter
+// placed itself (the fast, no-exec path every provider's bootstrap-secret
+// recovery actually uses); for any other path it falls back to a live
+// `cat` inside the pod (docs/planning/08 B3) — content the container's own
+// process wrote at runtime, e.g. into a mounted PersistentVolumeClaim. This
+// mirrors the Docker adapter's ReadFile, which reads any live path via
+// CopyFromContainer without a FileMount-vs-not distinction.
 func (r *Runtime) ReadFile(ctx context.Context, name, path string) ([]byte, error) {
 	_, secret, err := findAcrossNamespaces(ctx, r, func(ns string) (*corev1.Secret, error) {
 		return r.clientset.CoreV1().Secrets(ns).Get(ctx, filesSecretName(name), metav1.GetOptions{})
@@ -423,18 +470,104 @@ func (r *Runtime) ReadFile(ctx context.Context, name, path string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	if secret == nil {
-		return nil, fmt.Errorf("no files secret for container %q", name)
+	if secret != nil {
+		var paths map[string]string
+		if err := json.Unmarshal([]byte(secret.Annotations[filePathsAnnotation]), &paths); err == nil {
+			if key, ok := paths[path]; ok {
+				return secret.Data[key], nil
+			}
+		}
 	}
-	var paths map[string]string
-	if err := json.Unmarshal([]byte(secret.Annotations[filePathsAnnotation]), &paths); err != nil {
-		return nil, fmt.Errorf("files secret for %q has no path index: %w", name, err)
+	return r.readFileViaExec(ctx, name, path)
+}
+
+// readFileViaExec execs `cat <path>` in the deployment's current running
+// pod and returns stdout — the live-filesystem fallback ReadFile uses for
+// paths that aren't a FileMount, e.g. content a container's own process
+// wrote into a mounted volume.
+func (r *Runtime) readFileViaExec(ctx context.Context, name, path string) ([]byte, error) {
+	ns, d, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {
+		return r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+	})
+	if err != nil {
+		return nil, err
 	}
-	key, ok := paths[path]
-	if !ok {
-		return nil, fmt.Errorf("file %q not found in container %q", path, name)
+	if d == nil {
+		return nil, fmt.Errorf("no deployment %q found to read %q from", name, path)
 	}
-	return secret.Data[key], nil
+	pods, err := r.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: "app=" + name})
+	if err != nil {
+		return nil, fmt.Errorf("list pods for %q: %w", name, err)
+	}
+	pod := newestReadyPod(pods.Items)
+	if pod == nil {
+		return nil, fmt.Errorf("no ready pod for %q to read %q from", name, path)
+	}
+	// buildDeployment always names the (single) container after the
+	// Deployment itself — see its ObjectMeta.Name/container.Name — so name
+	// doubles as both the pod-selector value and the container to exec into.
+	stdout, stderr, err := r.execInPod(ctx, ns, pod.Name, name, []string{"cat", path})
+	if err != nil {
+		return nil, fmt.Errorf("read %q from pod %q: %w (stderr: %s)", path, pod.Name, err, strings.TrimSpace(stderr))
+	}
+	return []byte(stdout), nil
+}
+
+// newestReadyPod picks the most recently created Running pod with every
+// container ready, or nil if none qualify. A rolling Deployment update can
+// transiently leave an old (terminating) pod matching the same selector
+// alongside the new one — a bare "first match" is not reliably the current
+// generation's pod, which is what broke the first version of exec-based
+// ReadFile against a real rollout (found live against minikube, not just in
+// a synthetic test).
+func newestReadyPod(pods []corev1.Pod) *corev1.Pod {
+	var best *corev1.Pod
+	for i := range pods {
+		p := &pods[i]
+		if p.Status.Phase != corev1.PodRunning || p.DeletionTimestamp != nil {
+			continue
+		}
+		ready := len(p.Status.ContainerStatuses) > 0
+		for _, cs := range p.Status.ContainerStatuses {
+			if !cs.Ready {
+				ready = false
+				break
+			}
+		}
+		if !ready {
+			continue
+		}
+		if best == nil || p.CreationTimestamp.After(best.CreationTimestamp.Time) {
+			best = p
+		}
+	}
+	return best
+}
+
+// execInPod runs command in the named container of a pod via the
+// pods/exec subresource, returning captured stdout/stderr.
+func (r *Runtime) execInPod(ctx context.Context, ns, podName, containerName string, command []string) (stdout, stderr string, err error) {
+	req := r.clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(ns).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: containerName,
+			Command:   command,
+			Stdout:    true,
+			Stderr:    true,
+		}, scheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(r.restConfig, "POST", req.URL())
+	if err != nil {
+		return "", "", fmt.Errorf("build exec request: %w", err)
+	}
+	var outBuf, errBuf bytes.Buffer
+	if err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &outBuf, Stderr: &errBuf}); err != nil {
+		return outBuf.String(), errBuf.String(), err
+	}
+	return outBuf.String(), errBuf.String(), nil
 }
 
 // ensureService ensures one ClusterIP Service per addressable name: the
@@ -636,6 +769,11 @@ func (r *Runtime) ListManagedVolumes(ctx context.Context) ([]runtimeport.Managed
 	}
 	return out, nil
 }
+
+// RunsContainerCommands marks this adapter as one whose containers actually
+// execute their declared Cmd — see the Docker adapter's identical method
+// for why the conformance suite checks for it.
+func (r *Runtime) RunsContainerCommands() bool { return true }
 
 func (r *Runtime) Logs(ctx context.Context, name string, tail int) (string, error) {
 	ns, d, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {

@@ -328,6 +328,91 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		}
 	})
 
+	// commandRunner is optionally implemented by adapters whose containers
+	// actually execute their declared Cmd (Docker, Kubernetes) — the fake
+	// adapter never runs anything, so it cannot meaningfully prove "the
+	// container's own process wrote a file that survived a recreate."
+	// Structural coverage for the fake (the volume identity itself isn't
+	// lost across generations) still runs; the real write-recreate-readback
+	// proof is skipped there, not faked.
+	t.Run("Volume_persists_across_container_update", func(t *testing.T) {
+		ctrName := namePrefix + "-persist-ctr"
+		volName := namePrefix + "-persist-vol"
+		t.Cleanup(func() {
+			_ = rt.Remove(ctx, ctrName)
+			_ = rt.RemoveVolume(ctx, volName)
+		})
+		persistVol := runtime.VolumeSpec{Name: volName, Labels: labels, Networks: []string{netSpec.Name}, SizeBytes: 256 * 1024 * 1024}
+		if err := rt.EnsureVolume(ctx, persistVol); err != nil {
+			t.Fatalf("EnsureVolume: %v", err)
+		}
+
+		type commandRunner interface {
+			RunsContainerCommands() bool
+		}
+		cr, execCapable := rt.(commandRunner)
+		execCapable = execCapable && cr.RunsContainerCommands()
+
+		const path = "/data/marker"
+		const content = "persisted-across-update"
+		cmd := []string{"sleep", "300"}
+		if execCapable {
+			// The container's own process writes the marker — a real write
+			// into the volume's backing storage. Placing it via
+			// ContainerSpec.Files instead would be misleading here: on
+			// Kubernetes a FileMount is a Secret bind-mount overlay, not a
+			// write into the PVC itself, and would prove nothing about real
+			// volume durability.
+			cmd = []string{"sh", "-c", "echo -n '" + content + "' > " + path + " && sleep 300"}
+		}
+		gen1 := runtime.ContainerSpec{
+			Name:     ctrName,
+			Image:    "alpine:3.20",
+			Cmd:      cmd,
+			Networks: []string{netSpec.Name},
+			Volumes:  []runtime.VolumeMount{{VolumeName: volName, MountPath: "/data"}},
+			Env:      map[string]string{"GENERATION": "1"},
+			Labels:   labels,
+		}
+		if _, err := rt.EnsureContainer(ctx, gen1); err != nil {
+			t.Fatalf("EnsureContainer (generation 1): %v", err)
+		}
+		if err := rt.WaitHealthy(ctx, ctrName, 30*time.Second); err != nil {
+			t.Fatalf("generation 1 did not become healthy: %v", err)
+		}
+
+		if !execCapable {
+			// Structural check only: EnsureVolume against the same spec a
+			// second generation would also request stays a no-op, and the
+			// volume is still there to be mounted again.
+			if err := rt.EnsureVolume(ctx, persistVol); err != nil {
+				t.Fatalf("EnsureVolume (re-check): %v", err)
+			}
+			return
+		}
+
+		// Generation 2: a different env value forces recreation (a new
+		// spec hash) without rewriting the marker — only the volume's own
+		// persistence can make it survive.
+		gen2 := gen1
+		gen2.Cmd = []string{"sleep", "300"}
+		gen2.Env = map[string]string{"GENERATION": "2"}
+		if _, err := rt.EnsureContainer(ctx, gen2); err != nil {
+			t.Fatalf("EnsureContainer (generation 2): %v", err)
+		}
+		if err := rt.WaitHealthy(ctx, ctrName, 30*time.Second); err != nil {
+			t.Fatalf("generation 2 did not become healthy: %v", err)
+		}
+
+		got, err := rt.ReadFile(ctx, ctrName, path)
+		if err != nil {
+			t.Fatalf("ReadFile after update: %v", err)
+		}
+		if string(got) != content {
+			t.Errorf("volume content after container update = %q, want %q (volume did not persist)", got, content)
+		}
+	})
+
 	t.Run("Inspect_reports_observed_ports", func(t *testing.T) {
 		name := namePrefix + "-ports-ctr"
 		t.Cleanup(func() { _ = rt.Remove(ctx, name) })

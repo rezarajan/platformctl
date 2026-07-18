@@ -339,6 +339,14 @@ func (r *Runtime) tailLogs(ctx context.Context, name string) string {
 	return "; last log lines:\n" + out
 }
 
+// RunsContainerCommands marks this adapter as one whose containers actually
+// execute their declared Cmd — the conformance suite's persistence subtest
+// (docs/planning/08 B3) uses this to know whether a "the process writes a
+// file, does it survive a recreate" proof is meaningful (Docker,
+// Kubernetes) or structurally untestable (the fake adapter never executes
+// anything).
+func (r *Runtime) RunsContainerCommands() bool { return true }
+
 // Logs returns the last `tail` lines of the container's combined
 // stdout/stderr for diagnostics. tail <= 0 uses a sane default.
 func (r *Runtime) Logs(ctx context.Context, name string, tail int) (string, error) {

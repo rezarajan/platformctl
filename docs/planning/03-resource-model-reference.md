@@ -204,6 +204,35 @@ spec:
   configuration: {image: debezium/connect:2.7}
 ```
 
+Volume-creating providers (postgres, mysql/mariadb, redpanda, s3/minio, openlineage) accept an
+optional `configuration.storage` stanza (docs/planning/08 B3) sizing and classing their managed
+volume — currently wired end-to-end for `postgres` as the reference implementation; the same
+2-line pattern (`storage()` resolving `configuration.storage` into `runtime.VolumeSpec.SizeBytes`/
+`.StorageClass` via `internal/domain/storagesize`) is a mechanical follow-up for the rest:
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: local-postgres
+spec:
+  type: postgres
+  runtime: {type: kubernetes, network: datascape}
+  configuration:
+    version: "16"
+    superuserSecretRef: postgres-admin
+    storage:
+      size: 50Gi        # Ki|Mi|Gi|Ti (binary) or K|M|G|T (decimal) suffix, or a bare byte count.
+                         # Docker ignores this (volumes are unsized). Kubernetes sets it as the
+                         # PersistentVolumeClaim's storage request; omitted defaults to 10Gi.
+                         # Increasing an existing volume's size live-expands the PVC (only when
+                         # the StorageClass allows it); decreasing is refused — Kubernetes does
+                         # not support shrinking a bound PVC.
+      class: fast-ssd    # Kubernetes StorageClass name; omitted uses the cluster default.
+                         # Immutable once the volume is first created, like the PVC field itself.
+  secretRefs: [postgres-admin]
+```
+
 Optional, not required for v1.0.0:
 
 ```yaml

@@ -14,6 +14,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/source"
 	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/domain/storagesize"
 	"github.com/rezarajan/platformctl/internal/domain/versionprofile"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
@@ -88,6 +89,25 @@ func (p *Provider) network() string {
 	return "datascape"
 }
 
+// storage resolves configuration.storage.{size,class} (docs/planning/08 B3)
+// into a VolumeSpec's runtime-agnostic fields. Both are optional — an unset
+// size keeps the runtime adapter's own default (Docker: unsized; Kubernetes:
+// 10Gi), and an unset class keeps the cluster's default StorageClass.
+func (p *Provider) storage() (sizeBytes int64, class string, err error) {
+	cfg, _ := p.cfg.Configuration["storage"].(map[string]any)
+	if cfg == nil {
+		return 0, "", nil
+	}
+	if sizeStr, _ := cfg["size"].(string); sizeStr != "" {
+		sizeBytes, err = storagesize.ParseBytes(sizeStr)
+		if err != nil {
+			return 0, "", fmt.Errorf("Provider %q: configuration.storage.size: %w", p.containerName(), err)
+		}
+	}
+	class, _ = cfg["class"].(string)
+	return sizeBytes, class, nil
+}
+
 // superuser returns the bootstrap credentials: the SecretReference named by
 // configuration.superuserSecretRef, or the first declared secretRef.
 func (p *Provider) superuser() (user, pass string, err error) {
@@ -131,10 +151,17 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", name, name)
 	oldUser, oldPass, _ := p.liveSuperuser(ctx, rt)
 
+	sizeBytes, storageClass, err := p.storage()
+	if err != nil {
+		return st, err
+	}
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
 		return st, err
 	}
-	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name + "-data", Labels: labels, Networks: []string{p.network()}}); err != nil {
+	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{
+		Name: name + "-data", Labels: labels, Networks: []string{p.network()},
+		SizeBytes: sizeBytes, StorageClass: storageClass,
+	}); err != nil {
 		return st, err
 	}
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
