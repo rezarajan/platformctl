@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
 	envsecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/env"
 	filesecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/file"
 	secretrouter "github.com/rezarajan/platformctl/internal/adapters/secrets/router"
@@ -226,8 +228,49 @@ func (a *app) checkExternalGate(envelopes []resource.Envelope) error {
 	return nil
 }
 
+// kubernetesPreflight covers docs/planning/08 B6: for every distinct
+// kubernetes runtime config a manifest set declares, check the
+// KubernetesRuntime gate and a fast cluster connectivity/permission probe
+// before any command proceeds — a raw client-go error surfacing mid-apply,
+// deep inside a provider call, names neither the kubeconfig nor the fix.
+// A manifest set with no kubernetes runtime provider never dials out.
+func (a *app) kubernetesPreflight(envelopes []resource.Envelope) error {
+	type cfgKey struct{ kubeconfig, context string }
+	seen := make(map[cfgKey]bool)
+	for _, e := range envelopes {
+		if e.Kind != "Provider" {
+			continue
+		}
+		rt, _ := e.Spec["runtime"].(map[string]any)
+		if rt == nil {
+			continue
+		}
+		if t, _ := rt["type"].(string); t != "kubernetes" {
+			continue
+		}
+		if err := a.gates.Require("KubernetesRuntime"); err != nil {
+			return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("%s: %w", e.Key(), err))
+		}
+		kubeconfig, _ := rt["kubeconfig"].(string)
+		contextName, _ := rt["context"].(string)
+		key := cfgKey{kubeconfig, contextName}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := k8sruntime.Preflight(ctx, map[string]any{"kubeconfig": kubeconfig, "context": contextName})
+		cancel()
+		if err != nil {
+			return cliutil.Exit(cliutil.ExitValidation, err)
+		}
+	}
+	return nil
+}
+
 // loadAndValidate runs the full validate pipeline: manifests → kind
-// validation → graph (cycles) → compatibility. Returns envelopes + graph.
+// validation → graph (cycles) → compatibility → (kubernetes runtime only)
+// a cluster reachability/permission preflight. Returns envelopes + graph.
 func (a *app) loadAndValidate(path string) ([]resource.Envelope, *graph.Graph, error) {
 	envelopes, err := manifest.Load(path)
 	if err != nil {
@@ -241,6 +284,9 @@ func (a *app) loadAndValidate(path string) ([]resource.Envelope, *graph.Graph, e
 		return nil, nil, cliutil.Exit(cliutil.ExitValidation, err)
 	}
 	if err := a.checkExternalGate(envelopes); err != nil {
+		return nil, nil, err
+	}
+	if err := a.kubernetesPreflight(envelopes); err != nil {
 		return nil, nil, err
 	}
 	return envelopes, g, nil
@@ -276,7 +322,7 @@ type validateOutput struct {
 func newValidateCmd(a *app) *cobra.Command {
 	return &cobra.Command{
 		Use:   "validate [path]",
-		Short: "Schema + graph + compatibility validation only; no state, no runtime calls",
+		Short: "Schema + graph + compatibility validation only; no state, no mutating runtime calls (a kubernetes-runtime Provider gets a fast, read-only connectivity/permission check)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			envelopes, _, err := a.loadAndValidate(pathArg(args))
