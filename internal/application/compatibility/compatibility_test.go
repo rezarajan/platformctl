@@ -479,6 +479,63 @@ func TestExternalProviderRefRequiresConfigurer(t *testing.T) {
 	}
 }
 
+// TestExternalProviderRefRequiresConfigurerPerKind guards docs/planning/07
+// §0.3 / docs/planning/08 A6: every kind whose schema accepts
+// `spec.external: true` alongside a `providerRef` must be refused at
+// validate time, not silently accepted, when the resolved provider does not
+// implement ExternalConfigurer — audited kind by kind rather than assumed
+// from one example (TestExternalProviderRefRequiresConfigurer already covers
+// Dataset). Provider itself is excluded: its schema has no providerRef field
+// (a Provider cannot reference itself), so an external Provider always takes
+// the connection-resolvable-only path, never this check.
+func TestExternalProviderRefRequiresConfigurerPerKind(t *testing.T) {
+	prov := envelope("Provider", "svc", map[string]any{
+		"type":    "svc",
+		"runtime": map[string]any{"type": "fake"},
+	})
+	creds := envelope("SecretReference", "creds", map[string]any{
+		"backend": "env",
+		"keys":    []any{"password"},
+	})
+	cases := []struct {
+		kind string
+		spec map[string]any
+	}{
+		{"Source", map[string]any{
+			"engine":      "postgres",
+			"external":    true,
+			"providerRef": map[string]any{"name": "svc"},
+		}},
+		{"Catalog", map[string]any{
+			"engine":        "nessie",
+			"external":      true,
+			"providerRef":   map[string]any{"name": "svc"},
+			"connectionRef": map[string]any{"name": "creds"},
+		}},
+		{"Connection", map[string]any{
+			"port":        5432,
+			"host":        "db.example.com",
+			"external":    true,
+			"providerRef": map[string]any{"name": "svc"},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			manifests := []resource.Envelope{prov, creds, envelope(tc.kind, "target", tc.spec)}
+			err := Check(manifests, resolver(stubProvider{"svc"}))
+			if err == nil {
+				t.Fatalf("%s: validate accepted an external providerRef without ExternalConfigurer", tc.kind)
+			}
+			if !strings.Contains(err.Error(), "ExternalConfigurer") {
+				t.Fatalf("%s: error does not name ExternalConfigurer: %v", tc.kind, err)
+			}
+			if err := Check(manifests, resolver(externalConfigStub{stubProvider{"svc"}})); err != nil {
+				t.Fatalf("%s: external configurer rejected: %v", tc.kind, err)
+			}
+		})
+	}
+}
+
 // TestVersionedProviderValidation: a versioned provider's configuration is
 // checked at validate — unknown version rejected, image-without-version
 // rejected, valid version accepted. Uses the real registry resolver via a

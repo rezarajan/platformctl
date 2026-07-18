@@ -109,6 +109,39 @@ against* it. The moving parts:
    pieces (the forwarder, the connector) but never mutates the external
    system itself.
 
+### 3.3 External-lifecycle support, audited kind by kind
+
+`spec.external: true` is only schema-legal on the five kinds below — every
+other kind's schema sets `additionalProperties: false` on `spec` without an
+`external` property, so declaring it on `EventStream` or `Binding` fails at
+schema validation, not silently. Within the five, the engine takes one of two
+paths, chosen solely by whether `providerRef` is also set (`isExternalNoProvider`,
+`internal/application/engine/engine.go`):
+
+| Kind | `external` schema-legal? | With `providerRef` | Without `providerRef` |
+|---|---|---|---|
+| `Provider` | yes | N/A — a Provider has no `providerRef` field (it cannot reference itself); always takes the no-provider path | connection-resolvable-only: `connectionRef` reachability verified, nothing created |
+| `Source` | yes | requires the resolved Provider to implement `ExternalConfigurer`; refused at **validate** time otherwise (`compatibility.Check`, not merely at apply) | connection-resolvable-only via `connectionRef` (Connection or SecretReference) |
+| `Dataset` | yes | same — validate-time `ExternalConfigurer` requirement | connection-resolvable-only |
+| `Catalog` | yes | same — validate-time `ExternalConfigurer` requirement | connection-resolvable-only |
+| `Connection` | yes | same — validate-time `ExternalConfigurer` requirement | plain address record (`host`/`port`); nothing created, nothing to reach through a forwarder |
+| `EventStream` | no | schema-rejected | schema-rejected |
+| `Binding` | no | schema-rejected | schema-rejected |
+
+As of this writing **no shipped provider** (redpanda, postgres, mysql/mariadb,
+debezium, s3/minio, s3sink, nessie, openlineage, proxy) implements
+`ExternalConfigurer`. That means every `external: true` + `providerRef`
+combination above is refused today — this is a documented, validate-time
+capability gap (the same shape as an unsupported CDC engine or sink format),
+not an unaudited or silently-broken path. A future provider that implements
+`ExternalConfigurer` (e.g. registering a connector against an
+already-running, externally-operated Kafka Connect) makes that combination
+work with no core-model change. See
+`internal/application/compatibility/compatibility_test.go`'s
+`TestExternalProviderRefRequiresConfigurerPerKind` for the per-kind negative
+coverage, and `docs/planning/07-production-grade-docker-runtime-gap-analysis.md`
+§0.3 for the original open item this closes.
+
 ## 4. Kind: `Provider`
 
 Declares a technology (`type`) and where it runs (`runtime`). This is the resource that replaces
