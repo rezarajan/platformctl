@@ -395,14 +395,15 @@ when doc 08's Stage B exit criteria hold.
 | `KubernetesRuntime` | Phase 7 | Alpha | disabled | — |
 | `TerraformRuntimeAdapter` | Phase 8 | Alpha | disabled | — |
 | `OutOfProcessProviderPlugins` | Phase 8 | Alpha | disabled | — |
+| `SharedStateBackend` | 08 Stage A (A4) | Alpha | disabled | Beta once used by CI itself |
 
-Gates planned by the production-readiness backlog (`SharedStateBackend`,
-`KubernetesSecretBackend`, `HighAvailability`, `IngressProvider`,
-`TLSTermination`, `MonitoringStackProvider`, `BackupRestore`,
-`SchemaRegistrySupport`, `JDBCSinkProvider`, `IngestProvider`,
-`TunnelProvider`) are tracked with their introduction points and graduation
-intents in [08-production-readiness-plan.md](08-production-readiness-plan.md)
-§8; append each to this table in the commit that lands it.
+Gates planned by the production-readiness backlog (`KubernetesSecretBackend`,
+`HighAvailability`, `IngressProvider`, `TLSTermination`,
+`MonitoringStackProvider`, `BackupRestore`, `SchemaRegistrySupport`,
+`JDBCSinkProvider`, `IngestProvider`, `TunnelProvider`) are tracked with
+their introduction points and graduation intents in
+[08-production-readiness-plan.md](08-production-readiness-plan.md) §8;
+append each to this table in the commit that lands it.
 
 Gate mechanics: `--feature-gates=Name=true,Other=false` on the CLI, or a `featureGates:` block in
 a config file; `application/registry` consults the gate before constructing a provider/runtime,

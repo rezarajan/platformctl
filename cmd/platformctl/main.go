@@ -87,6 +87,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// Phase 6.
 	gates.Register("ParallelReconciliation", featuregate.Alpha, false)
 	gates.Register("VaultSecretBackend", featuregate.Alpha, false)
+	gates.Register("SharedStateBackend", featuregate.Alpha, false) // docs/design/003-shared-state.md
 	// Phase 6.5: orchestrator-ready infrastructure.
 	gates.Register("MySQLProvider", featuregate.Alpha, true)
 	gates.Register("NessieProvider", featuregate.Alpha, true)

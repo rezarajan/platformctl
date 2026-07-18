@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -14,7 +15,6 @@ import (
 	filesecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/file"
 	secretrouter "github.com/rezarajan/platformctl/internal/adapters/secrets/router"
 	vaultsecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/vault"
-	"github.com/rezarajan/platformctl/internal/adapters/state/localfile"
 	"github.com/rezarajan/platformctl/internal/application/archview"
 	"github.com/rezarajan/platformctl/internal/application/compatibility"
 	"github.com/rezarajan/platformctl/internal/application/docsgen"
@@ -40,6 +40,18 @@ type app struct {
 	output       string
 	envFile      string
 	wire         wiringFunc
+
+	// Shared/remote state backend (docs/design/003, gated
+	// SharedStateBackend). stateFile above remains the "local" backend's
+	// path; these are only consulted when stateBackend != "local".
+	stateBackend   string
+	stateBucket    string
+	statePrefix    string
+	stateEndpoint  string
+	stateRegion    string
+	stateSecretRef string
+	stateInsecure  bool
+	stateLockTTL   time.Duration
 
 	gates *featuregate.Registry
 	reg   *registry.Registry
@@ -101,10 +113,18 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 			return a.init()
 		},
 	}
-	root.PersistentFlags().StringVar(&a.stateFile, "state-file", ".datascape/state.json", "path to the state file")
+	root.PersistentFlags().StringVar(&a.stateFile, "state-file", ".datascape/state.json", "path to the state file (local backend only)")
 	root.PersistentFlags().StringVar(&a.featureGates, "feature-gates", "", "comma-separated Name=true|false overrides")
 	root.PersistentFlags().StringVarP(&a.output, "output", "o", "table", "output format: table|json|yaml")
 	root.PersistentFlags().StringVar(&a.envFile, "env-file", "", "load KEY=VALUE lines from a file into the environment before resolving secrets (shell environment wins on conflict)")
+	root.PersistentFlags().StringVar(&a.stateBackend, "state-backend", "local", "state backend: local|s3 (s3 requires the SharedStateBackend gate, see docs/design/003-shared-state.md)")
+	root.PersistentFlags().StringVar(&a.stateBucket, "state-bucket", "", "s3 backend: bucket holding state.json and the lock object")
+	root.PersistentFlags().StringVar(&a.statePrefix, "state-prefix", "", "s3 backend: object key prefix (e.g. \"team-a/\")")
+	root.PersistentFlags().StringVar(&a.stateEndpoint, "state-endpoint", "", "s3 backend: endpoint host:port (MinIO or S3-compatible; empty = AWS S3 default)")
+	root.PersistentFlags().StringVar(&a.stateRegion, "state-region", "", "s3 backend: region")
+	root.PersistentFlags().StringVar(&a.stateSecretRef, "state-secret-ref", "", "s3 backend: env-backend SecretReference name providing accessKey/secretKey (DATASCAPE_SECRET_<NAME>_{ACCESSKEY,SECRETKEY})")
+	root.PersistentFlags().BoolVar(&a.stateInsecure, "state-insecure", false, "s3 backend: use plain HTTP instead of TLS (local MinIO testing)")
+	root.PersistentFlags().DurationVar(&a.stateLockTTL, "state-lock-ttl", 0, "s3 backend: lock lease TTL (default 15m — must outlast the longest apply/destroy run)")
 
 	root.AddCommand(
 		newValidateCmd(a),
@@ -226,22 +246,26 @@ func (a *app) loadAndValidate(path string) ([]resource.Envelope, *graph.Graph, e
 	return envelopes, g, nil
 }
 
-func (a *app) newEngine() *engine.Engine {
+func (a *app) newEngine() (*engine.Engine, error) {
 	secrets := secretrouter.New().
 		Register(secret.BackendEnv, envsecrets.New()).
 		Register(secret.BackendFile, filesecrets.New())
 	if a.gates.Enabled("VaultSecretBackend") {
 		secrets.Register(secret.BackendVault, vaultsecrets.New())
 	}
+	store, err := a.stateStore()
+	if err != nil {
+		return nil, cliutil.Exit(cliutil.ExitValidation, err)
+	}
 	return &engine.Engine{
 		Registry:    a.reg,
-		StateStore:  localfile.New(a.stateFile),
+		StateStore:  store,
 		SecretStore: secrets,
 		Clock:       clock.Real{},
 		Log: func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, format+"\n", args...)
 		},
-	}
+	}, nil
 }
 
 type validateOutput struct {
@@ -279,7 +303,10 @@ func newPlanCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			store := localfile.New(a.stateFile)
+			store, err := a.stateStore()
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
+			}
 			st, err := store.Load(cmd.Context())
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
@@ -318,20 +345,22 @@ func newApplyCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			store := localfile.New(a.stateFile)
-			unlock, err := store.Lock(cmd.Context())
+			eng, err := a.newEngine()
+			if err != nil {
+				return err
+			}
+			unlock, err := eng.StateStore.Lock(cmd.Context())
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitLockHeld, err)
 			}
 			defer unlock() //nolint:errcheck
 
-			st, err := store.Load(cmd.Context())
+			st, err := eng.StateStore.Load(cmd.Context())
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
 			// Fail fast before touching any infrastructure: every declared
 			// secret must resolve, or the platform would half-apply.
-			eng := a.newEngine()
 			if err := eng.PreflightSecrets(cmd.Context(), envelopes); err != nil {
 				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
@@ -427,14 +456,17 @@ func newDestroyCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			store := localfile.New(a.stateFile)
-			unlock, err := store.Lock(cmd.Context())
+			eng, err := a.newEngine()
+			if err != nil {
+				return err
+			}
+			unlock, err := eng.StateStore.Lock(cmd.Context())
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitLockHeld, err)
 			}
 			defer unlock() //nolint:errcheck
 
-			st, err := store.Load(cmd.Context())
+			st, err := eng.StateStore.Load(cmd.Context())
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
@@ -470,7 +502,6 @@ func newDestroyCmd(a *app) *cobra.Command {
 					return nil
 				}
 			}
-			eng := a.newEngine()
 			eng.AllowDestructive = includeExternal && destructiveOK
 			result, err := eng.Destroy(cmd.Context(), p, envelopes, g)
 			if err != nil {
@@ -507,14 +538,17 @@ func newDriftCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			store := localfile.New(a.stateFile)
-			unlock, err := store.Lock(cmd.Context())
+			eng, err := a.newEngine()
+			if err != nil {
+				return err
+			}
+			unlock, err := eng.StateStore.Lock(cmd.Context())
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitLockHeld, err)
 			}
 			defer unlock() //nolint:errcheck
 
-			results, err := a.newEngine().Probe(cmd.Context(), envelopes)
+			results, err := eng.Probe(cmd.Context(), envelopes)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
@@ -594,14 +628,16 @@ func newImportCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			store := localfile.New(a.stateFile)
-			unlock, err := store.Lock(cmd.Context())
+			eng, err := a.newEngine()
+			if err != nil {
+				return err
+			}
+			unlock, err := eng.StateStore.Lock(cmd.Context())
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitLockHeld, err)
 			}
 			defer unlock() //nolint:errcheck
 
-			eng := a.newEngine()
 			if err := eng.PreflightSecrets(cmd.Context(), envelopes); err != nil {
 				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
@@ -645,7 +681,11 @@ func newInventoryCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			st, err := localfile.New(a.stateFile).Load(cmd.Context())
+			store, err := a.stateStore()
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
+			}
+			st, err := store.Load(cmd.Context())
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
@@ -764,7 +804,11 @@ func newStatusCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			st, err := localfile.New(a.stateFile).Load(cmd.Context())
+			store, err := a.stateStore()
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
+			}
+			st, err := store.Load(cmd.Context())
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}

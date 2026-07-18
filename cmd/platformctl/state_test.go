@@ -245,3 +245,19 @@ func TestStateInspectStructuredOutput(t *testing.T) {
 		t.Errorf("state inspect resource = %+v, want key default/Provider/p, imported true", r)
 	}
 }
+
+// TestStateInspectEmptyResourcesIsEmptyArray guards the same nil-slice class
+// of bug A7 found in `inventory` (docs/planning/08): a Go nil slice
+// marshals to JSON null, not [] — state inspect's Resources field must be
+// initialized to a non-nil empty slice so an empty state reports
+// "resources": [] rather than null.
+func TestStateInspectEmptyResourcesIsEmptyArray(t *testing.T) {
+	stateFile := writeStateFixture(t, `{"version": 2, "resources": {}}`)
+	out, err, code := run(t, "state", "inspect", "--state-file", stateFile, "-o", "json")
+	if err != nil || code != 0 {
+		t.Fatalf("state inspect failed (code %d): %v\n%s", code, err, out)
+	}
+	if !strings.Contains(out, `"resources": []`) {
+		t.Errorf("state inspect on empty state = %s, want \"resources\": []", out)
+	}
+}

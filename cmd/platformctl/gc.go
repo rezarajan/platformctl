@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/rezarajan/platformctl/internal/adapters/state/localfile"
 	"github.com/rezarajan/platformctl/internal/cliutil"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
@@ -139,7 +138,11 @@ func (a *app) gcOrphans(ctx context.Context, runtimeType string) ([]gcOrphan, er
 	if err != nil {
 		return nil, err
 	}
-	st, err := localfile.New(a.stateFile).Load(ctx)
+	store, err := a.stateStore()
+	if err != nil {
+		return nil, err
+	}
+	st, err := store.Load(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -2,20 +2,64 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
 	"sort"
 
 	"github.com/spf13/cobra"
 
+	envsecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/env"
 	"github.com/rezarajan/platformctl/internal/adapters/state/localfile"
+	s3state "github.com/rezarajan/platformctl/internal/adapters/state/s3"
 	"github.com/rezarajan/platformctl/internal/cliutil"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
+	"github.com/rezarajan/platformctl/internal/domain/secret"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 	"github.com/rezarajan/platformctl/internal/ports/state"
 )
+
+// stateStore constructs the configured StateStore backend
+// (docs/design/003-shared-state.md): "local" (default, the existing
+// single-file behavior) or "s3" (gated SharedStateBackend). Credentials for
+// the s3 backend resolve through the env SecretStore directly — state
+// operations (gc, state doctor/repair) have no manifest to resolve a
+// SecretReference from, so this bypasses the engine's SecretStore entirely
+// and always uses the env backend, matching the "no manifest context"
+// constraint documented in the design note.
+func (a *app) stateStore() (state.StateStore, error) {
+	switch a.stateBackend {
+	case "", "local":
+		return localfile.New(a.stateFile), nil
+	case "s3":
+		if err := a.gates.Require("SharedStateBackend"); err != nil {
+			return nil, err
+		}
+		if a.stateBucket == "" {
+			return nil, fmt.Errorf("--state-backend s3 requires --state-bucket")
+		}
+		var accessKey, secretKey string
+		if a.stateSecretRef != "" {
+			creds, err := envsecrets.New().Resolve(context.Background(), secret.SecretReference{
+				Name: a.stateSecretRef, Backend: secret.BackendEnv, Keys: []string{"accessKey", "secretKey"},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("--state-secret-ref: %w", err)
+			}
+			accessKey, secretKey = creds["accessKey"], creds["secretKey"]
+		}
+		return s3state.New(s3state.Config{
+			Endpoint:  a.stateEndpoint,
+			AccessKey: accessKey,
+			SecretKey: secretKey,
+			Bucket:    a.stateBucket,
+			Prefix:    a.statePrefix,
+			Secure:    !a.stateInsecure,
+			Region:    a.stateRegion,
+			LeaseTTL:  a.stateLockTTL,
+		})
+	default:
+		return nil, fmt.Errorf("unknown --state-backend %q (allowed: local, s3)", a.stateBackend)
+	}
+}
 
 // This file implements docs/planning/07 §1.4 / docs/planning/08 A3: state
 // inspection and repair. `state inspect` dumps the normalized state
@@ -83,38 +127,32 @@ func (f doctorFindings) report() stateDoctorReport {
 	}
 }
 
-// readFileVersion peeks at the on-disk version without going through
+// rawVersionReader is implemented by every StateStore backend (localfile,
+// s3) to report the on-disk/object version without going through
 // State.Normalize, which always reports CurrentVersion once loaded into
-// memory — doctor needs to know whether the *file* still carries a stale
-// format, i.e. whether a migration ran in memory but was never persisted.
-func readFileVersion(path string) (int, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return state.CurrentVersion, nil // nothing written yet — nothing to migrate
-	}
-	if err != nil {
-		return 0, fmt.Errorf("read state file %s: %w", path, err)
-	}
-	var probe struct {
-		Version int `json:"version"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return 0, fmt.Errorf("parse state file %s: %w", path, err)
-	}
-	if probe.Version == 0 {
-		return 1, nil // v1 files never wrote a version field
-	}
-	return probe.Version, nil
+// memory — doctor needs to know whether the *persisted* form still carries
+// a stale format, i.e. whether a migration ran in memory but was never
+// saved back.
+type rawVersionReader interface {
+	RawVersion(ctx context.Context) (int, error)
 }
 
 // stateDoctor loads state and runs every doctor check. Returns the loaded
 // state too so repair can act on it without a second Load.
 func (a *app) stateDoctor(ctx context.Context, runtimeType string) (doctorFindings, state.State, error) {
-	fileVersion, err := readFileVersion(a.stateFile)
+	store, err := a.stateStore()
 	if err != nil {
 		return doctorFindings{}, state.State{}, err
 	}
-	st, err := localfile.New(a.stateFile).Load(ctx)
+	rvr, ok := store.(rawVersionReader)
+	if !ok {
+		return doctorFindings{}, state.State{}, fmt.Errorf("state backend %T does not support version inspection (missing RawVersion)", store)
+	}
+	fileVersion, err := rvr.RawVersion(ctx)
+	if err != nil {
+		return doctorFindings{}, state.State{}, err
+	}
+	st, err := store.Load(ctx)
 	if err != nil {
 		return doctorFindings{}, state.State{}, err
 	}
@@ -185,7 +223,11 @@ func newStateCmd(a *app) *cobra.Command {
 		Use:   "inspect",
 		Short: "Dump the normalized state (read-only)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			st, err := localfile.New(a.stateFile).Load(cmd.Context())
+			store, err := a.stateStore()
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
+			}
+			st, err := store.Load(cmd.Context())
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
@@ -195,7 +237,7 @@ func newStateCmd(a *app) *cobra.Command {
 			}
 			sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
 
-			out := stateInspectOutput{Version: st.Version}
+			out := stateInspectOutput{Version: st.Version, Resources: []stateEntryOutput{}}
 			rows := [][]string{{"KEY", "SPEC HASH", "LIFECYCLE", "IMPORTED", "HAS LAST-APPLIED"}}
 			for _, k := range keys {
 				rs := st.Resources[k]
@@ -261,7 +303,10 @@ func newStateCmd(a *app) *cobra.Command {
 				return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, repairOutput{}, [][]string{{"ACTION", "DETAIL"}})
 			}
 
-			store := localfile.New(a.stateFile)
+			store, err := a.stateStore()
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
+			}
 			unlock, err := store.Lock(cmd.Context())
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitLockHeld, err)
@@ -303,8 +348,45 @@ func newStateCmd(a *app) *cobra.Command {
 	repairCmd.Flags().StringVar(&repairRuntime, "runtime", "docker", "runtime type to check Provider liveness against (docker|kubernetes)")
 	repairCmd.Flags().BoolVar(&autoApprove, "yes", false, "skip the interactive confirmation for dropping gone-object entries (for CI)")
 
-	stateCmd.AddCommand(inspectCmd, doctorCmd, repairCmd)
+	unlockCmd := &cobra.Command{
+		Use:   "unlock",
+		Short: "Force-release the state lock (escape hatch for a holder process that died)",
+		Long: "Removes the lock unconditionally, regardless of holder or lease expiry — the\n" +
+			"documented recovery path (docs/design/003-shared-state.md) when a platformctl\n" +
+			"process died mid-apply/destroy/repair and left the lock held. Only run this after\n" +
+			"confirming no other platformctl process is actually still running against this\n" +
+			"state.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			store, err := a.stateStore()
+			if err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, err)
+			}
+			fu, ok := store.(forceUnlocker)
+			if !ok {
+				return cliutil.Exit(cliutil.ExitExecution, fmt.Errorf("state backend %T does not support force-unlock", store))
+			}
+			if err := fu.ForceUnlock(cmd.Context()); err != nil {
+				return cliutil.Exit(cliutil.ExitExecution, err)
+			}
+			if !isStructured(a.output) {
+				fmt.Fprintln(cmd.OutOrStdout(), "state lock released")
+			}
+			return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, unlockOutput{Released: true}, [][]string{{"RELEASED"}, {"true"}})
+		},
+	}
+
+	stateCmd.AddCommand(inspectCmd, doctorCmd, repairCmd, unlockCmd)
 	return stateCmd
+}
+
+// forceUnlocker is implemented by every StateStore backend (localfile, s3)
+// to back `state unlock`'s unconditional release.
+type forceUnlocker interface {
+	ForceUnlock(ctx context.Context) error
+}
+
+type unlockOutput struct {
+	Released bool `json:"released" yaml:"released"`
 }
 
 type repairAction struct {

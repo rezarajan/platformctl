@@ -219,9 +219,14 @@ bin/platformctl destroy examples/cdc-attendance/ --auto-approve
 | `state inspect` | Dump the normalized state file (read-only). |
 | `state doctor [--runtime docker\|kubernetes]` | Report state defects: stale on-disk format, legacy orphan entries, corrupt key/manifest mismatches, Provider entries whose backing container is gone. Exit `1` when any check finds something. |
 | `state repair [--runtime docker\|kubernetes] [--yes]` | Apply doctor's safe fixes: persist a migrated format, drop entries for confirmed-gone Provider objects. No-op on healthy state. |
+| `state unlock` | Force-release the state lock (escape hatch for a holder process that died). |
 
-Global flags: `--state-file` (default `.datascape/state.json`),
-`--feature-gates`, `-o table|json|yaml`.
+Global flags: `--state-file` (default `.datascape/state.json`, local backend),
+`--feature-gates`, `-o table|json|yaml`. Shared state
+(`docs/design/003-shared-state.md`, gated `SharedStateBackend`):
+`--state-backend s3 --state-bucket ... --state-endpoint ... --state-secret-ref
+...` points every command at an S3-compatible bucket instead of a local file,
+with a lease-based lock so two operators can't corrupt each other's apply.
 
 ## 🧪 Development
 

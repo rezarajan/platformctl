@@ -111,3 +111,38 @@ func (s *Store) Lock(_ context.Context) (func() error, error) {
 		return os.Remove(lockPath)
 	}, nil
 }
+
+// RawVersion reports the on-disk version without going through Load's
+// Normalize (which always reports state.CurrentVersion once loaded into
+// memory) — `state doctor` needs to know whether the *file* still carries a
+// stale format, i.e. whether a migration ran in memory but was never
+// persisted. Absent file = CurrentVersion (nothing to migrate).
+func (s *Store) RawVersion(_ context.Context) (int, error) {
+	data, err := os.ReadFile(s.Path)
+	if errors.Is(err, os.ErrNotExist) {
+		return state.CurrentVersion, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read state file %s: %w", s.Path, err)
+	}
+	var probe struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return 0, fmt.Errorf("parse state file %s: %w", s.Path, err)
+	}
+	if probe.Version == 0 {
+		return 1, nil // v1 files never wrote a version field
+	}
+	return probe.Version, nil
+}
+
+// ForceUnlock removes the lock file unconditionally — the `platformctl
+// state unlock` escape hatch (docs/design/003), for a holder process that
+// died without releasing its flock. A no-op if no lock file exists.
+func (s *Store) ForceUnlock(_ context.Context) error {
+	if err := os.Remove(s.Path + ".lock"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove lock file %s.lock: %w", s.Path, err)
+	}
+	return nil
+}

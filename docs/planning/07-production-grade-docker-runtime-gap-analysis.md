@@ -809,11 +809,25 @@ Resolved (2026-07-18, `docs/planning/08` A3):
       (`cmd/platformctl/state_test.go`) and registered in the output-contract
       harness (A7).
 
-**Disposition for the remainder: tracked as `docs/planning/08` A4.**
+Resolved (2026-07-18, `docs/planning/08` A4):
 
-- [ ] Decide whether remote/shared state is in scope for Docker production
-      (`docs/planning/08` A4 — design note first, then the S3-backed
-      implementation).
+- [x] Remote/shared state: in scope, decided in
+      `docs/design/003-shared-state.md` — S3-compatible object storage
+      (`internal/adapters/state/s3`, MinIO tested), a second `StateStore`
+      implementation behind `--state-backend s3` and the `SharedStateBackend`
+      gate (Alpha, disabled). Locking is a lease object acquired via a
+      create-only-if-absent conditional PUT (MinIO's `SetMatchETagExcept`
+      extension), reclaimable once expired, with `platformctl state unlock`
+      as the force-release escape hatch — mirrored on the local backend too
+      (`localfile.Store.ForceUnlock`). `state inspect/doctor/repair` work
+      unchanged against either backend (both implement the same
+      `RawVersion`/`ForceUnlock` optional interfaces `state doctor`/
+      `state unlock` type-assert for). Verified: the state conformance suite
+      green against real MinIO; a CLI-level test where one apply holds the
+      lock and a second's apply attempt fails naming the first's holder,
+      with no interleaved write; end-to-end apply/status/destroy through the
+      real CLI against a real MinIO-backed bucket, gate off (refused) and on
+      (works).
 
 Design notes:
 

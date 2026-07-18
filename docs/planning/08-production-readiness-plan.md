@@ -104,9 +104,11 @@ team, over months, with private registries, shared state, recoverable
 mistakes, and auditable cleanup.
 
 **Stage exit criteria:**
-- [ ] Two operators on different machines can manage one platform through a
+- [x] Two operators on different machines can manage one platform through a
       shared state backend without corruption (locking proven by a
-      concurrent-apply test). — tracked in A4, not yet started.
+      concurrent-apply test). — A4: `internal/adapters/state/s3` (MinIO
+      tested), `TestSharedStateBackendConcurrentApplyOneBlocks`
+      (`cmd/platformctl`).
 - [x] `platformctl gc plan` / `state doctor` exist and are covered by
       integration tests against deliberately-orphaned objects/state (A2, A3).
 - [x] A private-registry image pulls successfully via a `SecretReference`

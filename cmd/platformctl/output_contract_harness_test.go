@@ -327,6 +327,17 @@ var commandScenarios = map[string]commandScenario{
 			assertJSON(t, "state repair -o json", out)
 		},
 	},
+	"state unlock": {
+		structured: true,
+		run: func(t *testing.T) {
+			stateFile := filepath.Join(t.TempDir(), "state.json")
+			out, err, code := run(t, "state", "unlock", "--state-file", stateFile, "-o", "json")
+			if err != nil || code != 0 {
+				t.Fatalf("state unlock failed (code %d): %v\n%s", code, err, out)
+			}
+			assertJSON(t, "state unlock -o json", out)
+		},
+	},
 }
 
 // TestOutputContractHarness runs every registered scenario.
