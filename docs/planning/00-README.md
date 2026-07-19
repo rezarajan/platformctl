@@ -25,10 +25,17 @@ assume the current `internal/` layout, resource-kind list, or CLI surface surviv
    cross-runtime (Kubernetes) portability findings. Analysis record; its open
    items are worked through the backlog below.
 8. **[08-production-readiness-plan.md](08-production-readiness-plan.md)** — the
-   current stage-gated backlog (Stages A–E) of individually actionable tasks
+   current stage-gated backlog (Stages A–F) of individually actionable tasks
    taking v1.0.0 to a production data-pipeline platform: operational
    hardening, Kubernetes to Beta/GA, HA/routing/TLS/monitoring/backup,
-   pipeline-infrastructure providers, and DX/contribution readiness.
+   pipeline-infrastructure providers, DX/contribution readiness, and the
+   segregation-readiness fixes from doc 09.
+9. **[09-systemic-findings-and-segregation-readiness.md](09-systemic-findings-and-segregation-readiness.md)**
+   — the post-Stage-B audit of every bug that only live testing caught: the
+   five recurring failure classes, the systems-level changes (doc 08 Stage F)
+   that close each class for all providers at once, the production-plane
+   analysis, and the definition of done for segregating core from
+   provider-specific logic (Phase 8 readiness).
 
 ## The one diagram that explains everything else
 

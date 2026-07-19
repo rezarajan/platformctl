@@ -1,6 +1,7 @@
 # Production Readiness Plan — Stage-Gated Task Backlog
 
-Audit date: 2026-07-17. Audited against: the full planning package (00–07),
+Audit date: 2026-07-17 (Stage F added 2026-07-19 from doc 09's
+live-testing audit). Audited against: the full planning package (00–07),
 `checkpoint.md`, `errors.md`, `feature-requests.md`, the remediation ledger
 (`docs/remediation/`, all 10 findings closed), and direct code inspection of
 `internal/` (runtime port, Docker and Kubernetes adapters, secrets router,
@@ -59,6 +60,7 @@ contributor without needing the rest of this document in context.
 | 9 | Capability seams with no provider: ingest (Dataset→EventStream), database sink (EventStream→Source), tunnels, TLS termination | Real pipelines need replay-from-lake, serve-to-database, VPC reach | D |
 | 10 | Registry auth, GC/doctor tooling, digest pinning workflow, output-contract harness, MariaDB coverage — the explicit Gate 1–3 deferrals | Each is a documented deferral that becomes a sharp edge in production | A/E |
 | 11 | No scaffolding/blueprints; provider-authoring contract is convention, not executable | The "headache-free" promise needs a zero-to-pipeline path and a contributor path | E |
+| 12 | Live-testing bug classes recur systemically: connectivity/discovery logic lives in dependents; the provider contract accretes setter interfaces (doc 09 audit, 2026-07-19) | Every new provider or runtime re-learns the same bugs; blocks segregating core from provider logic (Phase 8) | F |
 
 ---
 
@@ -932,7 +934,9 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
 
 ### E6: Provider author contract — guide, conformance suite, exemplars
 
-- **Size:** L. **Depends:** E5 (fragments are part of the contract).
+- **Size:** L. **Depends:** E5 (fragments are part of the contract); F5
+  (the invocation contract must stabilize before it is documented and
+  conformance-tested — doc 09 §3-F5).
 - **Context:** Doc 07 §3.4. Contribution requires executable contracts, not
   conventions.
 - **Do:** (1) `docs/contributing/provider-authoring.md`: lifecycle
@@ -977,6 +981,157 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
   upgrade-notes check) — mechanical enough for an agent to execute.
 - **Accept:** a tagged release produces downloadable binaries; CI matrix
   green; release checklist committed and exercised once.
+
+---
+
+## 7.5 Stage F — Segregation readiness (systemic fixes from live-testing findings)
+
+Theme: close the five recurring bug classes that live Kubernetes/Docker
+testing exposed (analysis and rationale:
+`docs/planning/09-systemic-findings-and-segregation-readiness.md`) at the
+**system level** — in `domain`/`ports`/`application` — so no current or
+future provider has to implement, or can forget, the fix. This stage is the
+hard prerequisite for E6 (provider-author contract) and Phase 8
+(out-of-process plugins / non-container runtimes): its exit bar is doc 09
+§5's segregation-readiness definition of done. No new feature gates — every
+task is an internal contract change, invisible at the manifest surface
+except where noted.
+
+Class → task mapping (doc 09 §2): Class 1 (topology leaked into
+dependents) → F1; Class 2 (exists ≠ ready ≠ reachable) → F3; Class 3
+(under-declared intent) → F2 + F6; Class 4 (identity by convention) → F4;
+Class 5 (contract tests don't prove translation) → F6; provider-contract
+instability (the `*Aware` setter accretion) → F5.
+
+**Stage exit criteria:**
+- [ ] The architecture test suite fails any provider or domain code that
+      constructs a loopback/localhost address (allowlist: in-container
+      healthcheck commands, runtime adapters).
+- [ ] `connection.DialAddress()`'s managed-Connection loopback guess no
+      longer exists; external Connections expose `DeclaredAddress()` only.
+- [ ] All nine providers' admin-call retry loops go through one shared
+      `WithReachable` helper that re-resolves the address per attempt.
+- [ ] `PortBinding` declares an explicit audience; the fake runtime refuses
+      resolution of undeclared ports (strict interpreter), and the
+      `HostPort: 0` magic value is retired.
+- [ ] The conformance suite contains entrypoint-faithfulness,
+      delayed-listen readiness, immediate-dialability, and port-audience
+      subtests, green on fake, Docker, and Kubernetes.
+- [ ] Providers receive all inputs through a single request-scoped struct;
+      the `ProviderResourceAware`/`SecretsAware`/`ResourceSetAware` setter
+      interfaces are removed; no provider holds cross-call state.
+
+### F1: Reachability closure — addresses become unconstructible
+
+- **Size:** M. **Depends:** —.
+- **Context:** Doc 09 Class 1: ten independent call sites (8 providers +
+  engine + domain) hardcoded `127.0.0.1:port`; all now route through
+  `EnsureReachable` (B1, `81025c9`, `88b8329`) — but by convention only;
+  nothing prevents call site number eleven.
+- **Do:** (1) Split `connection.Connection.DialAddress()`: external
+  Connections get `DeclaredAddress()`; the managed branch is deleted (a
+  managed Connection's reachable address requires a runtime — domain
+  cannot answer it, and the type system should say so). Audit
+  `HostEndpoint()` identically. (2) Add
+  `runtime.WithReachable(ctx, rt, name, port, opts, fn)` — resolve, call,
+  close, and on retryable failure re-resolve a fresh address per attempt
+  (the B8 nessie/openlineage fix, generalized), with a configurable
+  ready-wait (default 30s, the errors.md postgres fix generalized).
+  Migrate every provider's hand-rolled wait/retry loop to it. (3) An
+  architecture test (layering-grep style) banning loopback string literals
+  in `internal/adapters/providers` and `internal/domain`, allowlisting
+  in-container healthcheck commands and runtime adapters.
+- **Accept:** arch test in CI, proven by a fixture violation failing it;
+  grep for bespoke retry loops in providers comes back empty; full Docker +
+  K8s integration suites green (behavioral no-op on both runtimes).
+
+### F2: Explicit port audience in the runtime port
+
+- **Size:** M. **Depends:** —.
+- **Context:** Doc 09 Class 3 / K10: `HostPort: 0` was overloaded from
+  "random ephemeral publish" to "in-network only" (B8); undeclared
+  listeners worked on Docker and broke on Kubernetes (K8/K9).
+- **Do:** Add `PortBinding.Audience: host | internal` (explicit; the
+  `HostPort: 0` convention retired with a migration sweep over provider
+  call sites). Document the port-contract rule: every listener a dependent
+  may dial must be declared. Make the fake runtime the strict interpreter:
+  it refuses `EnsureReachable`/in-network resolution of undeclared ports,
+  so under-declaration fails in unit tests before any cluster sees it.
+  Conformance subtests for both audiences on all three adapters.
+- **Accept:** no `HostPort: 0` publishes remain; fake-strictness proven by
+  a test that an undeclared-port dial fails on fake but the same declared
+  spec passes everywhere; conformance green ×3.
+
+### F3: Ready-means-serving in the port contract
+
+- **Size:** S. **Depends:** F1 (the helper is the enforcement point).
+- **Context:** Doc 09 Class 2: API-object-exists, process-healthy, and
+  endpoint-reachable were repeatedly conflated (NodePort iptables race,
+  port-forward/listen race, pg_isready socket-only window).
+- **Do:** Harden `EnsureReachable`'s documented contract: the returned
+  address must be currently dialable — adapters absorb asynchronous
+  programming races (the K3 poll generalized). Conformance subtests:
+  immediate-dialability after (re)creation; delayed-listen container
+  (healthcheck green before TCP listen) documenting per-adapter
+  healthy-vs-serving semantics.
+- **Accept:** both subtests green on fake, Docker, and a live cluster;
+  provider code contains no residual bespoke ready-waits (enforced by
+  F1's migration).
+
+### F4: Identity by handle — one naming authority
+
+- **Size:** M. **Depends:** —.
+- **Context:** Doc 09 Class 4 / K7: the Connection-forwarder name was
+  guessed wrong twice, in two different sessions, because runtime object
+  naming is an unwritten convention re-derived at each call site.
+- **Do:** Centralize resource→runtime-object naming in one domain package
+  used by both realizing providers and every consumer (engine probes,
+  drift, gc, inventory). Extend endpoint facts
+  (`internal/domain/endpoint`) with `(runtime object name, containerPort,
+  audience)` and convert cross-resource dial sites (engine's Connection
+  probe, Binding wiring) to fact-lookup instead of name re-derivation.
+- **Accept:** grep shows no consumer-side name construction outside the
+  naming package; engine's Connection probe resolves via facts; a unit
+  test proves a renamed convention breaks exactly one package.
+
+### F5: Provider invocation contract — request struct, stateless providers
+
+- **Size:** L (short design note in the PR is enough; doc 09 §3-F5 is the
+  design). **Depends:** F1 (so the new contract never carries an
+  address-construction affordance).
+- **Context:** Doc 09 §3-F5: inputs reach providers via accreting setter
+  interfaces (`ProviderResourceAware`, `SecretsAware`, `ResourceSetAware`)
+  and widening method signatures (`LineageAware.ConfigureLineage` grew an
+  `rt` parameter in `81025c9`, breaking every implementor). Stateful
+  set-then-call providers cannot become out-of-process plugins.
+- **Do:** Introduce `reconciler.Request` (envelope, runtime, realizing
+  Provider resource, resolved secrets, validated resource set — additive
+  fields only) as the single input to Reconcile/Destroy/Probe and the
+  capability methods. Migrate incrementally behind an engine-side shim
+  (both shapes supported until all nine providers move; then delete the
+  setter interfaces and the shim). Capability *marker* interfaces stay.
+- **Accept:** setter interfaces gone; providers hold no cross-call state
+  (constructor takes nothing but static config); every capability method
+  takes the Request; engine special-cases for `*Aware` deleted; full
+  suites green on both runtimes.
+
+### F6: Conformance ratchet and translation-fidelity gate
+
+- **Size:** S (policy + back-fill; the subtests land in F2/F3).
+  **Depends:** F2, F3.
+- **Context:** Doc 09 Class 5: most live-caught bugs did not leave a
+  contract-level reproduction; the entrypoint-image (Cmd/Args) class still
+  has no conformance subtest today.
+- **Do:** Back-fill the entrypoint-faithfulness subtest (an image *with*
+  an ENTRYPOINT; Cmd must append, not replace). Record the policy in
+  doc 06 (agentic execution guide) and the provider/runtime authoring
+  docs: a bug found only by live testing lands with a contract-level
+  reproduction in the same commit, or a documented per-runtime-difference
+  entry in doc 07 when it can't be expressed at the contract level.
+  Formalize the runtime-parameterized real-examples suite (B8) as the
+  acceptance bar for any future runtime adapter.
+- **Accept:** entrypoint subtest green ×3; policy text committed; doc 07
+  Cross-Runtime section notes the gate for future adapters.
 
 ---
 
@@ -1050,8 +1205,13 @@ Stages overlap; tasks within a stage parallelize along the dependency edges.
    in parallel with C1's chain.
 4. **Continuously:** E3/E4/E7 as capabilities land; E5 → E6 once provider
    surface stabilizes; E8 near the end.
+5. **Stage F (doc 09) threads through:** F1–F4 are independent and can
+   start now — F1 first (it deletes the per-provider wait loops the other
+   tasks would otherwise touch); F5 after F1 and **before E6**; F6 closes
+   with F2/F3. Stage F must close before Phase 8 work begins.
 
 v-next milestones: **v1.1** = Stage A closed. **v1.2** = Stage B closed
 (Kubernetes Beta). **v1.3** = Stages C+D closed (HA + pipeline
-completeness). **v2.0** = Stage E closed — the "production data-pipeline
-platform, contribution-ready" declaration point.
+completeness). **v2.0** = Stages E+F closed — the "production data-pipeline
+platform, contribution-ready" declaration point; Stage F closing is also
+the go signal for Phase 8 (segregating core from provider logic).
