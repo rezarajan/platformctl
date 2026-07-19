@@ -138,7 +138,18 @@ func (p *Provider) reconcileBroker(ctx context.Context, rt runtime.ContainerRunt
 		},
 		Networks: []string{p.network()},
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/var/lib/redpanda/data"}},
-		Ports:    []runtime.PortBinding{{HostPort: hostPort, ContainerPort: externalKafkaPort}},
+		// INTERNAL (29092) needs no host publish (HostPort: 0) but must
+		// still be declared so the Kubernetes adapter's Service actually
+		// carries a port for it — a Service only forwards ports present in
+		// ContainerSpec.Ports (docs/planning/08 B8), unlike a Docker
+		// bridge network, which reaches every container port regardless of
+		// what's published. Docker itself already reached INTERNAL fine
+		// without this; this declaration is a documented no-op there
+		// (portMaps skips the host-binding side for HostPort: 0).
+		Ports: []runtime.PortBinding{
+			{HostPort: hostPort, ContainerPort: externalKafkaPort},
+			{HostPort: 0, ContainerPort: internalKafkaPort},
+		},
 		HealthCheck: &runtime.HealthCheck{
 			Test:     []string{"CMD-SHELL", "rpk cluster health --exit-when-healthy || exit 1"},
 			Interval: 2 * time.Second,

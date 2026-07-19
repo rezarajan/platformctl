@@ -84,6 +84,32 @@ func (p *Provider) reachableAPIURL(ctx context.Context, rt runtime.ContainerRunt
 	return "http://" + addr + "/api/v1/namespaces", closeAddr, nil
 }
 
+// waitAPIReady polls the API until it answers 200, re-resolving a fresh
+// EnsureReachable tunnel on every attempt rather than opening one and
+// reusing it for the whole wait — see nessie.Provider.waitAPIReady's doc
+// for why (found live against minikube: a tunnel opened while Marquez is
+// still starting can end up silently dead even once the app comes up).
+func (p *Provider) waitAPIReady(ctx context.Context, rt runtime.ContainerRuntime, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt); err == nil {
+			ok := httpOK(ctx, apiURL)
+			closeAPI()
+			if ok {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("marquez API did not answer 200 within %s", timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
 	st := status.Status{}
 	if res.Kind != "Provider" {
@@ -113,6 +139,15 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 		},
 		Networks: []string{p.network()},
 		Volumes:  []runtime.VolumeMount{{VolumeName: p.dbName() + "-data", MountPath: "/var/lib/postgresql/data"}},
+		// HostPort: 0 — no host publish (this DB is internal to the
+		// provider), but the port must still be declared: the Kubernetes
+		// adapter only creates a Service (and therefore a DNS name) for
+		// ports present here (docs/planning/08 B8), unlike Docker's bridge
+		// network, which reaches every container port by name regardless
+		// of what's declared. Marquez's own connection to this DB failed
+		// with UnknownHostException before this — found live against
+		// minikube, not a synthetic test.
+		Ports: []runtime.PortBinding{{HostPort: 0, ContainerPort: 5432}},
 		HealthCheck: &runtime.HealthCheck{
 			Test:     []string{"CMD-SHELL", "pg_isready -h 127.0.0.1 -U " + marquezInternalCred},
 			Interval: 2 * time.Second,
@@ -150,12 +185,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	if err := rt.WaitHealthy(ctx, p.name(), 120*time.Second); err != nil {
 		return st, err
 	}
-	apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt)
-	if err != nil {
-		return st, err
-	}
-	defer closeAPI()
-	if err := waitHTTPOK(ctx, apiURL, 180*time.Second); err != nil {
+	if err := p.waitAPIReady(ctx, rt, 180*time.Second); err != nil {
 		return st, err
 	}
 
@@ -240,21 +270,4 @@ func httpOK(ctx context.Context, url string) bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
-}
-
-func waitHTTPOK(ctx context.Context, url string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if httpOK(ctx, url) {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("endpoint %s did not answer 200 within %s", url, timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
 }

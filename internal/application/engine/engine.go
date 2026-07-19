@@ -663,7 +663,11 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 	if connEnv, ok := byKey[connRef.Key(env.Metadata.Namespace, "Connection")]; ok {
 		conn, err := connection.FromEnvelope(connEnv)
 		if err == nil {
-			if addr := conn.DialAddress(); addr != "" {
+			addr, closeAddr := e.connectionDialAddress(ctx, connEnv, conn, byKey)
+			if addr != "" {
+				if closeAddr != nil {
+					defer closeAddr()
+				}
 				if derr := probeTCPReachable(ctx, addr); derr != nil {
 					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ExternalEndpointUnreachable", Message: derr.Error()}, now)
 					st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ExternalEndpointUnreachable"}, now)
@@ -681,6 +685,35 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ExternalConnectionResolvable"}, now)
 	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
 	return st
+}
+
+// connectionDialAddress returns an address this process can dial right now
+// to reach conn, plus a close func (nil when none is needed) that must be
+// called once done. An external Connection's DialAddress() is already a
+// plain declared address, needing no runtime. A managed Connection's
+// DialAddress() is a domain-layer "127.0.0.1:port" guess correct only on
+// Docker — domain can't import ports/runtime to fix this itself
+// (docs/planning/08 B8), so here, with runtime access, resolve the
+// forwarder's real reachable address instead, through the same
+// runtime.EnsureReachable mechanism every provider's own admin calls use.
+// The forwarder container is named after the Connection itself, not its
+// realizing Provider (see proxy.reconcileConnection) — found live against
+// minikube after the "name it after the Provider" version failed with
+// "container \"edge\" not found", the exact same mistake fixed once
+// already in debezium's equivalent preflight.
+func (e *Engine) connectionDialAddress(ctx context.Context, connEnv resource.Envelope, conn connection.Connection, byKey map[resource.Key]resource.Envelope) (string, func() error) {
+	if conn.External {
+		return conn.DialAddress(), nil
+	}
+	_, rt, err := e.resolveProviderAndRuntime(ctx, connEnv, byKey)
+	if err != nil {
+		return "", nil
+	}
+	addr, closeAddr, err := rt.EnsureReachable(ctx, connEnv.Metadata.Name, conn.Port)
+	if err != nil {
+		return "", nil
+	}
+	return addr, closeAddr
 }
 
 // probeTCPReachable verifies an endpoint answers a TCP connection. A managed

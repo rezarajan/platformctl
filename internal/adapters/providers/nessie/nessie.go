@@ -84,6 +84,36 @@ func (p *Provider) reachableAPIURL(ctx context.Context, rt runtime.ContainerRunt
 	return "http://" + addr + "/api/v2", closeAddr, nil
 }
 
+// waitAPIReady polls path until it answers 200, re-resolving a fresh
+// EnsureReachable tunnel on every attempt rather than opening one and
+// reusing it for the whole wait. Found live against minikube, not a
+// synthetic test: a port-forward tunnel opened while the app is still
+// starting (its very first dial racing the JVM's listen()) can end up
+// silently dead for the rest of its life even once the app comes up,
+// while a fresh tunnel opened moments later against the same, by-then-
+// ready pod works every time — so retrying means "get a new tunnel", not
+// "poll through the one you already have."
+func (p *Provider) waitAPIReady(ctx context.Context, rt runtime.ContainerRuntime, path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt); err == nil {
+			ok := httpOK(ctx, apiURL+path)
+			closeAPI()
+			if ok {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("endpoint (path %s) did not answer 200 within %s", path, timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
 	switch res.Kind {
 	case "Provider":
@@ -121,12 +151,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
 		return st, err
 	}
-	apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt)
-	if err != nil {
-		return st, err
-	}
-	defer closeAPI()
-	if err := waitHTTPOK(ctx, apiURL+"/config", 120*time.Second); err != nil {
+	if err := p.waitAPIReady(ctx, rt, "/config", 120*time.Second); err != nil {
 		return st, err
 	}
 
@@ -163,14 +188,14 @@ func (p *Provider) reconcileCatalog(ctx context.Context, res resource.Envelope, 
 	if err != nil {
 		return st, err
 	}
+	if err := p.waitAPIReady(ctx, rt, "/config", 60*time.Second); err != nil {
+		return st, err
+	}
 	apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt)
 	if err != nil {
 		return st, err
 	}
 	defer closeAPI()
-	if err := waitHTTPOK(ctx, apiURL+"/config", 60*time.Second); err != nil {
-		return st, err
-	}
 	branch := defaultBranch(c)
 	if err := ensureBranch(ctx, apiURL, branch); err != nil {
 		return st, err
@@ -361,21 +386,4 @@ func httpOK(ctx context.Context, url string) bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
-}
-
-func waitHTTPOK(ctx context.Context, url string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if httpOK(ctx, url) {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("endpoint %s did not answer 200 within %s", url, timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
 }
