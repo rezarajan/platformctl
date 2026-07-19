@@ -149,5 +149,5 @@ type ResourceSetAware interface {
 // Implemented by `debezium` in v1.0.0.
 type LineageAware interface {
 	Provider
-	ConfigureLineage(ctx context.Context, endpoint lineage.LineageEndpoint) error
+	ConfigureLineage(ctx context.Context, endpoint lineage.LineageEndpoint, rt runtime.ContainerRuntime) error
 }

@@ -70,11 +70,19 @@ func (p *Provider) network() string {
 	return "datascape"
 }
 
-func (p *Provider) apiURL() string {
-	return fmt.Sprintf("http://127.0.0.1:%d/api/v2", p.hostPort())
+// reachableAPIURL returns an "http://host:port/api/v2" this process can
+// dial right now, plus a close func that must always be called
+// (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may tear down
+// a port-forward tunnel opened just for this call). Nessie's REST API is
+// stateless HTTP with no broker-style redirect, so the resolved address can
+// be used directly for one call.
+func (p *Provider) reachableAPIURL(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
+	addr, closeAddr, err := rt.EnsureReachable(ctx, p.containerName(), apiPort)
+	if err != nil {
+		return "", nil, err
+	}
+	return "http://" + addr + "/api/v2", closeAddr, nil
 }
-
-func (p *Provider) configURL() string { return p.apiURL() + "/config" }
 
 func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
 	switch res.Kind {
@@ -113,7 +121,12 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
 		return st, err
 	}
-	if err := waitHTTPOK(ctx, p.configURL(), 120*time.Second); err != nil {
+	apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt)
+	if err != nil {
+		return st, err
+	}
+	defer closeAPI()
+	if err := waitHTTPOK(ctx, apiURL+"/config", 120*time.Second); err != nil {
 		return st, err
 	}
 
@@ -150,11 +163,16 @@ func (p *Provider) reconcileCatalog(ctx context.Context, res resource.Envelope, 
 	if err != nil {
 		return st, err
 	}
-	if err := waitHTTPOK(ctx, p.configURL(), 60*time.Second); err != nil {
+	apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt)
+	if err != nil {
+		return st, err
+	}
+	defer closeAPI()
+	if err := waitHTTPOK(ctx, apiURL+"/config", 60*time.Second); err != nil {
 		return st, err
 	}
 	branch := defaultBranch(c)
-	if err := ensureBranch(ctx, p.apiURL(), branch); err != nil {
+	if err := ensureBranch(ctx, apiURL, branch); err != nil {
 		return st, err
 	}
 
@@ -213,7 +231,13 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if err != nil {
 			return st, err
 		}
-		healthy := found && ctrState.Healthy && httpOK(ctx, p.configURL())
+		healthy := false
+		if found && ctrState.Healthy {
+			if apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt); err == nil {
+				healthy = httpOK(ctx, apiURL+"/config")
+				closeAPI()
+			}
+		}
 		if healthy {
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
@@ -227,7 +251,12 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if err != nil {
 			return st, err
 		}
-		ok, err := branchExists(ctx, p.apiURL(), defaultBranch(c))
+		apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt)
+		var ok bool
+		if err == nil {
+			ok, err = branchExists(ctx, apiURL, defaultBranch(c))
+			closeAPI()
+		}
 		if err != nil || !ok {
 			reason := "BranchMissing"
 			if err != nil {

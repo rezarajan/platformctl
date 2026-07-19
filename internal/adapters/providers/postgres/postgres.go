@@ -82,6 +82,18 @@ func (p *Provider) hostPort() int {
 	return hostport.Resolve(configured, p.containerName())
 }
 
+// reachableAddr returns an address this process can dial right now to reach
+// the instance's Postgres port, plus a close func that must always be
+// called (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may
+// tear down a port-forward tunnel opened just for this call). Unlike
+// redpanda's Kafka admin connection, Postgres's wire protocol has no
+// broker-style "reconnect to this other address" redirect, so — unlike
+// redpanda's advertised-address indirection — the address this resolves to
+// can be used directly for the whole call, no placeholder needed.
+func (p *Provider) reachableAddr(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
+	return rt.EnsureReachable(ctx, p.containerName(), 5432)
+}
+
 func (p *Provider) network() string {
 	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
 		return n
@@ -140,7 +152,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	case "Provider":
 		return p.reconcileInstance(ctx, rt)
 	case "Source":
-		return p.reconcileSource(ctx, res)
+		return p.reconcileSource(ctx, res, rt)
 	default:
 		return status.Status{}, fmt.Errorf("postgres provider cannot reconcile kind %s", res.Kind)
 	}
@@ -206,7 +218,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
 		return st, err
 	}
-	if err := p.ensureSuperuser(ctx, user, pass, oldUser, oldPass); err != nil {
+	if err := p.ensureSuperuser(ctx, rt, user, pass, oldUser, oldPass); err != nil {
 		return st, err
 	}
 
@@ -251,15 +263,20 @@ func (p *Provider) liveSuperuser(ctx context.Context, rt runtime.ContainerRuntim
 	return user, pass, true
 }
 
-func (p *Provider) ensureSuperuser(ctx context.Context, desiredUser, desiredPass, previousUser, previousPass string) error {
-	desired := connString("127.0.0.1", p.hostPort(), desiredUser, desiredPass, "postgres")
+func (p *Provider) ensureSuperuser(ctx context.Context, rt runtime.ContainerRuntime, desiredUser, desiredPass, previousUser, previousPass string) error {
+	addr, closeAddr, err := p.reachableAddr(ctx, rt)
+	if err != nil {
+		return err
+	}
+	defer closeAddr()
+	desired := connStringAddr(addr, desiredUser, desiredPass, "postgres")
 	if previousUser == "" || previousPass == "" || (previousUser == desiredUser && previousPass == desiredPass) {
 		return waitReady(ctx, desired, 60*time.Second)
 	}
 	if err := waitReady(ctx, desired, 5*time.Second); err == nil {
 		return nil
 	}
-	previous := connString("127.0.0.1", p.hostPort(), previousUser, previousPass, "postgres")
+	previous := connStringAddr(addr, previousUser, previousPass, "postgres")
 	if err := waitReady(ctx, previous, 60*time.Second); err != nil {
 		return fmt.Errorf("postgres superuser credentials changed but neither the desired SecretReference nor the previous managed-container environment credentials can authenticate; manual recovery is required: %w", err)
 	}
@@ -272,7 +289,7 @@ func (p *Provider) ensureSuperuser(ctx context.Context, desiredUser, desiredPass
 // reconcileSource ensures the declared database exists, logical replication
 // is active (wal_level=logical is set at instance level), and the replication
 // role from configuration.replicationSecretRef exists with REPLICATION LOGIN.
-func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope) (status.Status, error) {
+func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
 	st := status.Status{}
 	src, err := source.FromEnvelope(res)
 	if err != nil {
@@ -297,7 +314,12 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope) (
 		replUser, replPass = creds["username"], creds["password"]
 	}
 
-	admin := connString("127.0.0.1", p.hostPort(), suUser, suPass, "postgres")
+	addr, closeAddr, err := p.reachableAddr(ctx, rt)
+	if err != nil {
+		return st, err
+	}
+	defer closeAddr()
+	admin := connStringAddr(addr, suUser, suPass, "postgres")
 	if err := waitReady(ctx, admin, 30*time.Second); err != nil {
 		return st, err
 	}
@@ -312,7 +334,7 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope) (
 	// The publication lives in the source database itself, created by the
 	// superuser so the replication role never needs table ownership.
 	// "dbz_publication" is Debezium's default publication.name.
-	if err := ensurePublication(ctx, connString("127.0.0.1", p.hostPort(), suUser, suPass, dbName), "dbz_publication"); err != nil {
+	if err := ensurePublication(ctx, connStringAddr(addr, suUser, suPass, dbName), "dbz_publication"); err != nil {
 		return st, err
 	}
 	if err := verifyLogicalWAL(ctx, admin); err != nil {
@@ -363,7 +385,12 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		if err != nil {
 			return err
 		}
-		return dropDatabase(ctx, connString("127.0.0.1", p.hostPort(), user, pass, "postgres"), dbName)
+		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		if err != nil {
+			return err
+		}
+		defer closeAddr()
+		return dropDatabase(ctx, connStringAddr(addr, user, pass, "postgres"), dbName)
 	default:
 		return fmt.Errorf("postgres provider cannot destroy kind %s", res.Kind)
 	}
@@ -396,7 +423,12 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if err != nil {
 			return st, err
 		}
-		admin := connString("127.0.0.1", p.hostPort(), suUser, suPass, "postgres")
+		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		if err != nil {
+			return st, err
+		}
+		defer closeAddr()
+		admin := connStringAddr(addr, suUser, suPass, "postgres")
 		// Full desired configuration, not just liveness (docs/planning/07
 		// §2.1): the database exists, WAL is logical (the CDC-readiness this
 		// provider declares), and the replication role still exists AND its
@@ -425,7 +457,7 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if replRefName, _ := p.cfg.Configuration["replicationSecretRef"].(string); replRefName != "" {
 			creds, ok := p.secrets[replRefName]
 			if ok {
-				replConn := connString("127.0.0.1", p.hostPort(), creds["username"], creds["password"], dbName)
+				replConn := connStringAddr(addr, creds["username"], creds["password"], dbName)
 				if err := ping(ctx, replConn); err != nil {
 					msg := fmt.Sprintf("replication credentials (%s) no longer authenticate", replRefName)
 					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ReplicationCredentialsInvalid", Message: msg}, now)

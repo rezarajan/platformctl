@@ -57,6 +57,14 @@ func (p *Provider) hostPort() int {
 	return hostport.Resolve(configured, p.containerName())
 }
 
+// reachableAddr returns an address this process can dial right now to reach
+// the store's S3 API port, plus a close func that must always be called
+// (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may tear down
+// a port-forward tunnel opened just for this call).
+func (p *Provider) reachableAddr(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
+	return rt.EnsureReachable(ctx, p.containerName(), apiPort)
+}
+
 func (p *Provider) network() string {
 	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
 		return n
@@ -87,7 +95,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	case "Provider":
 		return p.reconcileInstance(ctx, rt)
 	case "Dataset":
-		return p.reconcileDataset(ctx, res)
+		return p.reconcileDataset(ctx, res, rt)
 	default:
 		return status.Status{}, fmt.Errorf("s3 provider cannot reconcile kind %s", res.Kind)
 	}
@@ -185,7 +193,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	return st, nil
 }
 
-func (p *Provider) reconcileDataset(ctx context.Context, res resource.Envelope) (status.Status, error) {
+func (p *Provider) reconcileDataset(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
 	st := status.Status{}
 	ds, err := dataset.FromEnvelope(res)
 	if err != nil {
@@ -195,7 +203,12 @@ func (p *Provider) reconcileDataset(ctx context.Context, res resource.Envelope) 
 	if err != nil {
 		return st, err
 	}
-	cl, err := newClient("127.0.0.1:"+strconv.Itoa(p.hostPort()), user, pass)
+	addr, closeAddr, err := p.reachableAddr(ctx, rt)
+	if err != nil {
+		return st, err
+	}
+	defer closeAddr()
+	cl, err := newClient(addr, user, pass)
 	if err != nil {
 		return st, err
 	}
@@ -244,7 +257,12 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		if err != nil {
 			return err
 		}
-		cl, err := newClient("127.0.0.1:"+strconv.Itoa(p.hostPort()), user, pass)
+		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		if err != nil {
+			return err
+		}
+		defer closeAddr()
+		cl, err := newClient(addr, user, pass)
 		if err != nil {
 			return err
 		}
@@ -280,7 +298,12 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if err != nil {
 			return st, err
 		}
-		cl, err := newClient("127.0.0.1:"+strconv.Itoa(p.hostPort()), user, pass)
+		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		if err != nil {
+			return st, err
+		}
+		defer closeAddr()
+		cl, err := newClient(addr, user, pass)
 		if err != nil {
 			return st, err
 		}

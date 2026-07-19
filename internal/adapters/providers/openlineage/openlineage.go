@@ -72,8 +72,16 @@ func (p *Provider) network() string {
 // pretending a SecretReference could change them.
 const marquezInternalCred = "marquez"
 
-func (p *Provider) apiURL() string {
-	return fmt.Sprintf("http://127.0.0.1:%d/api/v1/namespaces", p.hostPort())
+// reachableAPIURL returns an "http://host:port/api/v1/namespaces" this
+// process can dial right now, plus a close func that must always be called
+// (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may tear down
+// a port-forward tunnel opened just for this call).
+func (p *Provider) reachableAPIURL(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
+	addr, closeAddr, err := rt.EnsureReachable(ctx, p.name(), marquezAPIPort)
+	if err != nil {
+		return "", nil, err
+	}
+	return "http://" + addr + "/api/v1/namespaces", closeAddr, nil
 }
 
 func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
@@ -142,7 +150,12 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	if err := rt.WaitHealthy(ctx, p.name(), 120*time.Second); err != nil {
 		return st, err
 	}
-	if err := waitHTTPOK(ctx, p.apiURL(), 180*time.Second); err != nil {
+	apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt)
+	if err != nil {
+		return st, err
+	}
+	defer closeAPI()
+	if err := waitHTTPOK(ctx, apiURL, 180*time.Second); err != nil {
 		return st, err
 	}
 
@@ -199,7 +212,13 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 	if err != nil {
 		return st, err
 	}
-	healthy := apiFound && api.Healthy && dbFound && db.Healthy && httpOK(ctx, p.apiURL())
+	healthy := false
+	if apiFound && api.Healthy && dbFound && db.Healthy {
+		if apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt); err == nil {
+			healthy = httpOK(ctx, apiURL)
+			closeAPI()
+		}
+	}
 	if healthy {
 		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "LineageBackendHealthy"}, now)
 		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)

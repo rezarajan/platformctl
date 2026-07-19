@@ -97,6 +97,14 @@ func (p *Provider) hostPort() int {
 	return hostport.Resolve(configured, p.containerName())
 }
 
+// reachableAddr returns an address this process can dial right now to reach
+// the instance's MySQL/MariaDB port, plus a close func that must always be
+// called (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may
+// tear down a port-forward tunnel opened just for this call).
+func (p *Provider) reachableAddr(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
+	return rt.EnsureReachable(ctx, p.containerName(), 3306)
+}
+
 func (p *Provider) network() string {
 	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
 		return n
@@ -127,7 +135,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	case "Provider":
 		return p.reconcileInstance(ctx, rt)
 	case "Source":
-		return p.reconcileSource(ctx, res)
+		return p.reconcileSource(ctx, res, rt)
 	default:
 		return status.Status{}, fmt.Errorf("%s provider cannot reconcile kind %s", p.cfg.Type, res.Kind)
 	}
@@ -194,7 +202,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	}
 	// Health says the server answers; make sure root auth over TCP works
 	// before declaring Ready (the images run an init phase like postgres's).
-	if err := p.ensureRootPassword(ctx, rootPass, oldRootPass); err != nil {
+	if err := p.ensureRootPassword(ctx, rt, rootPass, oldRootPass); err != nil {
 		return st, err
 	}
 
@@ -235,15 +243,20 @@ func (p *Provider) liveRootPassword(ctx context.Context, rt runtime.ContainerRun
 	return "", false
 }
 
-func (p *Provider) ensureRootPassword(ctx context.Context, desiredPass, previousPass string) error {
-	desired := dsn("127.0.0.1", p.hostPort(), "root", desiredPass, "")
+func (p *Provider) ensureRootPassword(ctx context.Context, rt runtime.ContainerRuntime, desiredPass, previousPass string) error {
+	addr, closeAddr, err := p.reachableAddr(ctx, rt)
+	if err != nil {
+		return err
+	}
+	defer closeAddr()
+	desired := dsnAddr(addr, "root", desiredPass, "")
 	if previousPass == "" || previousPass == desiredPass {
 		return waitReady(ctx, desired, 60*time.Second)
 	}
 	if err := waitReady(ctx, desired, 5*time.Second); err == nil {
 		return nil
 	}
-	previous := dsn("127.0.0.1", p.hostPort(), "root", previousPass, "")
+	previous := dsnAddr(addr, "root", previousPass, "")
 	if err := waitReady(ctx, previous, 60*time.Second); err != nil {
 		return fmt.Errorf("mysql root credentials changed but neither the desired SecretReference nor the previous managed-container environment password can authenticate; manual recovery is required: %w", err)
 	}
@@ -256,7 +269,7 @@ func (p *Provider) ensureRootPassword(ctx context.Context, desiredPass, previous
 // reconcileSource ensures the declared database exists, a replication-capable
 // user is provisioned from configuration.replicationSecretRef, and row-format
 // binary logging is active (what Debezium's MySQL/MariaDB connector needs).
-func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope) (status.Status, error) {
+func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
 	st := status.Status{}
 	src, err := source.FromEnvelope(res)
 	if err != nil {
@@ -271,7 +284,12 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope) (
 		return st, err
 	}
 
-	admin := dsn("127.0.0.1", p.hostPort(), "root", rootPass, "")
+	addr, closeAddr, err := p.reachableAddr(ctx, rt)
+	if err != nil {
+		return st, err
+	}
+	defer closeAddr()
+	admin := dsnAddr(addr, "root", rootPass, "")
 	if err := waitReady(ctx, admin, 30*time.Second); err != nil {
 		return st, err
 	}
@@ -336,7 +354,12 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		if err != nil {
 			return err
 		}
-		return dropDatabase(ctx, dsn("127.0.0.1", p.hostPort(), "root", rootPass, ""), dbName)
+		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		if err != nil {
+			return err
+		}
+		defer closeAddr()
+		return dropDatabase(ctx, dsnAddr(addr, "root", rootPass, ""), dbName)
 	default:
 		return fmt.Errorf("%s provider cannot destroy kind %s", p.cfg.Type, res.Kind)
 	}
@@ -369,7 +392,12 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if err != nil {
 			return st, err
 		}
-		admin := dsn("127.0.0.1", p.hostPort(), "root", rootPass, "")
+		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		if err != nil {
+			return st, err
+		}
+		defer closeAddr()
+		admin := dsnAddr(addr, "root", rootPass, "")
 		// Full desired configuration, not just liveness (docs/planning/07
 		// §2.1): database exists, binlog is row-format (the CDC-readiness
 		// this provider declares), and the replication user's declared
@@ -393,7 +421,7 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		}
 		if replRefName, _ := p.cfg.Configuration["replicationSecretRef"].(string); replRefName != "" {
 			if creds, ok := p.secrets[replRefName]; ok {
-				if err := ping(ctx, dsn("127.0.0.1", p.hostPort(), creds["username"], creds["password"], "")); err != nil {
+				if err := ping(ctx, dsnAddr(addr, creds["username"], creds["password"], "")); err != nil {
 					msg := fmt.Sprintf("replication credentials (%s) no longer authenticate", replRefName)
 					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ReplicationCredentialsInvalid", Message: msg}, now)
 					st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ReplicationCredentialsInvalid", Message: msg}, now)

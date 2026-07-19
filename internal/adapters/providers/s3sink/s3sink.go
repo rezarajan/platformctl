@@ -73,7 +73,25 @@ func (p *Provider) connectPort() int {
 	return hostport.Resolve(configured, p.containerName())
 }
 
+// connectURL is the Connect worker's configured-intent address — used only
+// for the informational ProviderState field surfaced by reconcileWorker, not
+// for actual REST calls (docs/planning/08 B8: those go through
+// reachableURL/EnsureReachable, since this "127.0.0.1:port" guess is wrong
+// on Kubernetes).
 func (p *Provider) connectURL() string { return "http://127.0.0.1:" + strconv.Itoa(p.connectPort()) }
+
+// reachableURL returns an "http://host:port" this process can dial right
+// now for the Connect worker's REST API, plus a close func that must always
+// be called. Kafka Connect's REST API is stateless HTTP with no
+// broker-style redirect protocol, so the resolved address can be used
+// directly for one call.
+func (p *Provider) reachableURL(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
+	addr, closeAddr, err := rt.EnsureReachable(ctx, p.containerName(), 8083)
+	if err != nil {
+		return "", nil, err
+	}
+	return "http://" + addr, closeAddr, nil
+}
 
 func (p *Provider) network() string {
 	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
@@ -87,7 +105,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	case "Provider":
 		return p.reconcileWorker(ctx, rt)
 	case "Binding":
-		return p.reconcileConnector(ctx, res)
+		return p.reconcileConnector(ctx, res, rt)
 	default:
 		return status.Status{}, fmt.Errorf("s3sink provider cannot reconcile kind %s", res.Kind)
 	}
@@ -237,18 +255,23 @@ func (p *Provider) desiredConnectorConfig(res resource.Envelope) (string, map[st
 
 // reconcileConnector registers or updates the S3 sink connector realizing a
 // Binding(mode: sink), then verifies it reaches RUNNING.
-func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope) (status.Status, error) {
+func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
 	st := status.Status{}
 	connectorName, config, err := p.desiredConnectorConfig(res)
 	if err != nil {
 		return st, err
 	}
 
-	if err := kafkaconnect.PutConnectorConfig(ctx, p.connectURL(), connectorName, config); err != nil {
+	url, closeURL, err := p.reachableURL(ctx, rt)
+	if err != nil {
+		return st, err
+	}
+	defer closeURL()
+	if err := kafkaconnect.PutConnectorConfig(ctx, url, connectorName, config); err != nil {
 		return st, err
 	}
 
-	state, err := kafkaconnect.WaitConnectorRunning(ctx, p.connectURL(), connectorName, 90*time.Second)
+	state, err := kafkaconnect.WaitConnectorRunning(ctx, url, connectorName, 90*time.Second)
 	now := time.Now()
 	if err != nil {
 		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorNotRunning", Message: err.Error()}, now)
@@ -294,7 +317,12 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		if ctr, found, err := rt.Inspect(ctx, p.containerName()); err != nil || !found || !ctr.Running {
 			return err
 		}
-		return kafkaconnect.DeleteConnector(ctx, p.connectURL(), res.Metadata.Name)
+		url, closeURL, err := p.reachableURL(ctx, rt)
+		if err != nil {
+			return err
+		}
+		defer closeURL()
+		return kafkaconnect.DeleteConnector(ctx, url, res.Metadata.Name)
 	default:
 		return fmt.Errorf("s3sink provider cannot destroy kind %s", res.Kind)
 	}
@@ -318,7 +346,12 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		}
 		return st, nil
 	case "Binding":
-		state, err := kafkaconnect.ConnectorState(ctx, p.connectURL(), res.Metadata.Name)
+		url, closeURL, err := p.reachableURL(ctx, rt)
+		if err != nil {
+			return st, err
+		}
+		defer closeURL()
+		state, err := kafkaconnect.ConnectorState(ctx, url, res.Metadata.Name)
 		if err != nil {
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorMissing", Message: err.Error()}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorMissing"}, now)
@@ -335,7 +368,7 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		// must still match the manifest-derived one. Drifted key *names*
 		// only — values may carry credentials and must never leak into
 		// conditions.
-		if drifted := p.connectorConfigDrift(ctx, res); len(drifted) > 0 {
+		if drifted := p.connectorConfigDrift(ctx, res, url); len(drifted) > 0 {
 			msg := "connector config differs from manifest at: " + strings.Join(drifted, ", ")
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorConfigDrift", Message: msg}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorConfigDrift", Message: msg}, now)
@@ -353,12 +386,12 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 // manifest-derived one and returns the drifted key names (sorted), or nil
 // when equivalent. Extra live keys beyond the desired set are Connect-added
 // defaults, not drift.
-func (p *Provider) connectorConfigDrift(ctx context.Context, res resource.Envelope) []string {
+func (p *Provider) connectorConfigDrift(ctx context.Context, res resource.Envelope, url string) []string {
 	name, desired, err := p.desiredConnectorConfig(res)
 	if err != nil {
 		return []string{"(desired config unresolvable: " + err.Error() + ")"}
 	}
-	actual, err := kafkaconnect.GetConnectorConfig(ctx, p.connectURL(), name)
+	actual, err := kafkaconnect.GetConnectorConfig(ctx, url, name)
 	if err != nil {
 		return []string{"(live config unreadable: " + err.Error() + ")"}
 	}

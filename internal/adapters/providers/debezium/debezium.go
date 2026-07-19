@@ -81,7 +81,26 @@ func (p *Provider) connectPort() int {
 	return hostport.Resolve(configured, p.containerName())
 }
 
+// connectURL is the Connect worker's configured-intent address — used only
+// for the informational ProviderState field surfaced by reconcileWorker, not
+// for actual REST calls (docs/planning/08 B8: those go through
+// reachableAddr/EnsureReachable, since this "127.0.0.1:port" guess is wrong
+// on Kubernetes).
 func (p *Provider) connectURL() string { return "http://127.0.0.1:" + strconv.Itoa(p.connectPort()) }
+
+// reachableURL returns an "http://host:port" this process can dial right
+// now for the Connect worker's REST API, plus a close func that must always
+// be called. Kafka Connect's REST API is stateless HTTP with no
+// broker-style redirect protocol, so — unlike redpanda's Kafka admin
+// connection — the resolved address can be used directly for one call, no
+// placeholder/dialer-interception trick needed.
+func (p *Provider) reachableURL(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
+	addr, closeAddr, err := rt.EnsureReachable(ctx, p.containerName(), 8083)
+	if err != nil {
+		return "", nil, err
+	}
+	return "http://" + addr, closeAddr, nil
+}
 
 func (p *Provider) network() string {
 	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
@@ -95,7 +114,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	case "Provider":
 		return p.reconcileWorker(ctx, rt)
 	case "Binding":
-		return p.reconcileConnector(ctx, res)
+		return p.reconcileConnector(ctx, res, rt)
 	default:
 		return status.Status{}, fmt.Errorf("debezium provider cannot reconcile kind %s", res.Kind)
 	}
@@ -176,14 +195,25 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 // live config — docs/planning/07 §2.1: RUNNING with the wrong topic, table
 // filter, or credentials is drift, not health).
 type desiredConnector struct {
-	name          string
-	config        map[string]string
-	engine        string
-	dbName        string
-	preflightHost string
-	preflightPort int
-	credsUser     string
-	credsPass     string
+	name   string
+	config map[string]string
+	engine string
+	dbName string
+	// preflightHost/Port dial an external Connection's declared address
+	// directly — no runtime involved, since it's outside platformctl's
+	// management entirely. preflightConnectionName/Port instead name a
+	// managed Connection's own forwarder container (the proxy provider
+	// names its Connection-realizing container after the Connection, not
+	// after itself — see proxy.reconcileConnection) + port, resolved
+	// through runtime.EnsureReachable at reconcile time (docs/planning/08
+	// B8): the forwarder's actual reachable address, like every other
+	// provider's admin connection, cannot be a domain-layer
+	// "127.0.0.1:port" guess.
+	preflightHost           string
+	preflightPort           int
+	preflightConnectionName string
+	credsUser               string
+	credsPass               string
 }
 
 func (p *Provider) desiredConnector(res resource.Envelope) (desiredConnector, error) {
@@ -234,8 +264,12 @@ func (p *Provider) desiredConnector(res resource.Envelope) (desiredConnector, er
 				return d, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
 			}
 			dbHost, dbPort = conn.Endpoint(connEnv.Metadata.Name)
-			if host, port, ok := hostPort(conn.DialAddress()); ok {
-				d.preflightHost, d.preflightPort = host, port
+			if conn.External {
+				if host, port, ok := hostPort(conn.DialAddress()); ok {
+					d.preflightHost, d.preflightPort = host, port
+				}
+			} else {
+				d.preflightConnectionName, d.preflightPort = connEnv.Metadata.Name, conn.Port
 			}
 			if conn.SecretRef != nil {
 				connSecretRef = *conn.SecretRef
@@ -327,7 +361,7 @@ func (p *Provider) desiredConnector(res resource.Envelope) (desiredConnector, er
 
 // reconcileConnector registers or updates the Debezium connector realizing a
 // Binding(mode: cdc), then verifies it reaches RUNNING.
-func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope) (status.Status, error) {
+func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
 	st := status.Status{}
 	d, err := p.desiredConnector(res)
 	if err != nil {
@@ -341,13 +375,34 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 		if err := verifyDatabaseConnection(ctx, d.engine, d.preflightHost, d.preflightPort, d.dbName, d.credsUser, d.credsPass); err != nil {
 			return st, fmt.Errorf("Binding %q: database connection preflight failed before registering connector: %w", res.Metadata.Name, err)
 		}
+	} else if d.preflightConnectionName != "" {
+		addr, closeAddr, err := rt.EnsureReachable(ctx, d.preflightConnectionName, d.preflightPort)
+		if err != nil {
+			return st, fmt.Errorf("Binding %q: resolve reachable address for Connection %q: %w", res.Metadata.Name, d.preflightConnectionName, err)
+		}
+		host, port, ok := hostPort(addr)
+		if ok {
+			err = verifyDatabaseConnection(ctx, d.engine, host, port, d.dbName, d.credsUser, d.credsPass)
+		}
+		closeAddr()
+		if !ok {
+			return st, fmt.Errorf("Binding %q: reachable address %q for Connection %q is not a valid host:port", res.Metadata.Name, addr, d.preflightConnectionName)
+		}
+		if err != nil {
+			return st, fmt.Errorf("Binding %q: database connection preflight failed before registering connector: %w", res.Metadata.Name, err)
+		}
 	}
-	if err := kafkaconnect.PutConnectorConfig(ctx, p.connectURL(), connectorName, config); err != nil {
+	url, closeURL, err := p.reachableURL(ctx, rt)
+	if err != nil {
+		return st, err
+	}
+	defer closeURL()
+	if err := kafkaconnect.PutConnectorConfig(ctx, url, connectorName, config); err != nil {
 		return st, err
 	}
 	p.lastConnector = connectorName
 
-	state, err := kafkaconnect.WaitConnectorRunning(ctx, p.connectURL(), connectorName, 90*time.Second)
+	state, err := kafkaconnect.WaitConnectorRunning(ctx, url, connectorName, 90*time.Second)
 	now := time.Now()
 	if err != nil {
 		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorNotRunning", Message: err.Error()}, now)
@@ -369,17 +424,22 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 
 // ConfigureLineage implements LineageAware: forwards the endpoint into
 // Debezium's native OpenLineage integration by updating the connector config.
-func (p *Provider) ConfigureLineage(ctx context.Context, endpoint lineage.LineageEndpoint) error {
+func (p *Provider) ConfigureLineage(ctx context.Context, endpoint lineage.LineageEndpoint, rt runtime.ContainerRuntime) error {
 	p.lineage = &endpoint
 	if p.lastConnector == "" {
 		return nil // worker-level reconcile; endpoint applies at next connector registration
 	}
-	current, err := kafkaconnect.GetConnectorConfig(ctx, p.connectURL(), p.lastConnector)
+	url, closeURL, err := p.reachableURL(ctx, rt)
+	if err != nil {
+		return err
+	}
+	defer closeURL()
+	current, err := kafkaconnect.GetConnectorConfig(ctx, url, p.lastConnector)
 	if err != nil {
 		return err
 	}
 	p.applyLineage(current)
-	return kafkaconnect.PutConnectorConfig(ctx, p.connectURL(), p.lastConnector, current)
+	return kafkaconnect.PutConnectorConfig(ctx, url, p.lastConnector, current)
 }
 
 func (p *Provider) applyLineage(config map[string]string) {
@@ -456,7 +516,12 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		if ctr, found, err := rt.Inspect(ctx, p.containerName()); err != nil || !found || !ctr.Running {
 			return err
 		}
-		return kafkaconnect.DeleteConnector(ctx, p.connectURL(), res.Metadata.Name)
+		url, closeURL, err := p.reachableURL(ctx, rt)
+		if err != nil {
+			return err
+		}
+		defer closeURL()
+		return kafkaconnect.DeleteConnector(ctx, url, res.Metadata.Name)
 	default:
 		return fmt.Errorf("debezium provider cannot destroy kind %s", res.Kind)
 	}
@@ -481,7 +546,12 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		}
 		return st, nil
 	case "Binding":
-		state, err := kafkaconnect.ConnectorState(ctx, p.connectURL(), res.Metadata.Name)
+		url, closeURL, err := p.reachableURL(ctx, rt)
+		if err != nil {
+			return st, err
+		}
+		defer closeURL()
+		state, err := kafkaconnect.ConnectorState(ctx, url, res.Metadata.Name)
 		if err != nil {
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorMissing", Message: err.Error()}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorMissing"}, now)
@@ -498,7 +568,7 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		// must still match the manifest-derived one. Drifted key *names*
 		// only — values may carry credentials and must never leak into
 		// conditions.
-		if drifted := p.connectorConfigDrift(ctx, res); len(drifted) > 0 {
+		if drifted := p.connectorConfigDrift(ctx, res, url); len(drifted) > 0 {
 			msg := "connector config differs from manifest at: " + strings.Join(drifted, ", ")
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorConfigDrift", Message: msg}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorConfigDrift", Message: msg}, now)
@@ -544,12 +614,12 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 // when equivalent. Lineage keys (openlineage.*) are engine-managed after
 // registration and deliberately excluded; extra live keys beyond the
 // desired set are Connect-added defaults, not drift.
-func (p *Provider) connectorConfigDrift(ctx context.Context, res resource.Envelope) []string {
+func (p *Provider) connectorConfigDrift(ctx context.Context, res resource.Envelope, url string) []string {
 	d, err := p.desiredConnector(res)
 	if err != nil {
 		return []string{"(desired config unresolvable: " + err.Error() + ")"}
 	}
-	actual, err := kafkaconnect.GetConnectorConfig(ctx, p.connectURL(), d.name)
+	actual, err := kafkaconnect.GetConnectorConfig(ctx, url, d.name)
 	if err != nil {
 		return []string{"(live config unreadable: " + err.Error() + ")"}
 	}

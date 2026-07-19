@@ -35,7 +35,7 @@ type fakeLineageProvider struct {
 
 func (f *fakeLineageProvider) Type() string { return "fakelineage" }
 
-func (f *fakeLineageProvider) ConfigureLineage(_ context.Context, ep lineage.LineageEndpoint) error {
+func (f *fakeLineageProvider) ConfigureLineage(_ context.Context, ep lineage.LineageEndpoint, _ runtime.ContainerRuntime) error {
 	f.received = &ep
 	return nil
 }

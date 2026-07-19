@@ -435,7 +435,7 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 				if err != nil {
 					return fmt.Errorf("resolve observer %q: %w", obs.Name, err)
 				}
-				if err := la.ConfigureLineage(ctx, endpoint); err != nil {
+				if err := la.ConfigureLineage(ctx, endpoint, rt); err != nil {
 					return fmt.Errorf("configure lineage from observer %q: %w", obs.Name, err)
 				}
 			}

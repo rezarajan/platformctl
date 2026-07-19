@@ -15,7 +15,7 @@ func TestDSNSurvivesSpecialCharacterCredentials(t *testing.T) {
 		{"root", "perfectly-normal"},
 	}
 	for _, tc := range cases {
-		conn := dsn("127.0.0.1", 3306, tc.user, tc.pass, "app")
+		conn := dsnAddr("127.0.0.1:3306", tc.user, tc.pass, "app")
 		cfg, err := godriver.ParseDSN(conn)
 		if err != nil {
 			t.Fatalf("ParseDSN(%q): %v", conn, err)

@@ -3,22 +3,23 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 )
 
-// connString builds the connection URL through net/url so credentials
+// connStringAddr builds the connection URL through net/url so credentials
 // containing @, :, /, #, spaces, or quotes survive intact — secret values
-// must not depend on lucky demo passwords (docs/planning/07 §2.2).
-func connString(host string, port int, user, pass, db string) string {
+// must not depend on lucky demo passwords (docs/planning/07 §2.2). addr is
+// a "host:port" this process can dial right now (docs/planning/08 B8: from
+// Provider.reachableAddr/runtime.EnsureReachable, not a hardcoded guess —
+// the only address Docker ever needed, but wrong for Kubernetes).
+func connStringAddr(addr, user, pass, db string) string {
 	u := url.URL{
 		Scheme:   "postgres",
 		User:     url.UserPassword(user, pass),
-		Host:     net.JoinHostPort(host, strconv.Itoa(port)),
+		Host:     addr,
 		Path:     "/" + db,
 		RawQuery: "sslmode=disable",
 	}

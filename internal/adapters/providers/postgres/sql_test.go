@@ -16,7 +16,7 @@ func TestConnStringSurvivesSpecialCharacterCredentials(t *testing.T) {
 		{"admin", "perfectly-normal"},
 	}
 	for _, tc := range cases {
-		conn := connString("127.0.0.1", 5432, tc.user, tc.pass, "postgres")
+		conn := connStringAddr("127.0.0.1:5432", tc.user, tc.pass, "postgres")
 		cfg, err := pgx.ParseConfig(conn)
 		if err != nil {
 			t.Fatalf("ParseConfig(%q): %v", conn, err)
