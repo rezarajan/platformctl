@@ -264,26 +264,27 @@ func (p *Provider) liveSuperuser(ctx context.Context, rt runtime.ContainerRuntim
 }
 
 func (p *Provider) ensureSuperuser(ctx context.Context, rt runtime.ContainerRuntime, desiredUser, desiredPass, previousUser, previousPass string) error {
+	name := p.containerName()
+	buildDesired := func(addr string) string { return connStringAddr(addr, desiredUser, desiredPass, "postgres") }
+	if previousUser == "" || previousPass == "" || (previousUser == desiredUser && previousPass == desiredPass) {
+		return waitReadyReachable(ctx, rt, name, 5432, buildDesired, 60*time.Second)
+	}
+	if err := waitReadyReachable(ctx, rt, name, 5432, buildDesired, 5*time.Second); err == nil {
+		return nil
+	}
+	buildPrevious := func(addr string) string { return connStringAddr(addr, previousUser, previousPass, "postgres") }
+	if err := waitReadyReachable(ctx, rt, name, 5432, buildPrevious, 60*time.Second); err != nil {
+		return fmt.Errorf("postgres superuser credentials changed but neither the desired SecretReference nor the previous managed-container environment credentials can authenticate; manual recovery is required: %w", err)
+	}
 	addr, closeAddr, err := p.reachableAddr(ctx, rt)
 	if err != nil {
 		return err
 	}
 	defer closeAddr()
-	desired := connStringAddr(addr, desiredUser, desiredPass, "postgres")
-	if previousUser == "" || previousPass == "" || (previousUser == desiredUser && previousPass == desiredPass) {
-		return waitReady(ctx, desired, 60*time.Second)
-	}
-	if err := waitReady(ctx, desired, 5*time.Second); err == nil {
-		return nil
-	}
-	previous := connStringAddr(addr, previousUser, previousPass, "postgres")
-	if err := waitReady(ctx, previous, 60*time.Second); err != nil {
-		return fmt.Errorf("postgres superuser credentials changed but neither the desired SecretReference nor the previous managed-container environment credentials can authenticate; manual recovery is required: %w", err)
-	}
-	if err := ensureSuperuserCredentials(ctx, previous, desiredUser, desiredPass); err != nil {
+	if err := ensureSuperuserCredentials(ctx, connStringAddr(addr, previousUser, previousPass, "postgres"), desiredUser, desiredPass); err != nil {
 		return err
 	}
-	return waitReady(ctx, desired, 30*time.Second)
+	return waitReadyReachable(ctx, rt, name, 5432, buildDesired, 30*time.Second)
 }
 
 // reconcileSource ensures the declared database exists, logical replication
@@ -314,15 +315,17 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope, r
 		replUser, replPass = creds["username"], creds["password"]
 	}
 
+	if err := waitReadyReachable(ctx, rt, p.containerName(), 5432, func(addr string) string {
+		return connStringAddr(addr, suUser, suPass, "postgres")
+	}, 30*time.Second); err != nil {
+		return st, err
+	}
 	addr, closeAddr, err := p.reachableAddr(ctx, rt)
 	if err != nil {
 		return st, err
 	}
 	defer closeAddr()
 	admin := connStringAddr(addr, suUser, suPass, "postgres")
-	if err := waitReady(ctx, admin, 30*time.Second); err != nil {
-		return st, err
-	}
 	if err := ensureDatabase(ctx, admin, dbName); err != nil {
 		return st, err
 	}

@@ -84,30 +84,24 @@ func (p *Provider) reachableAPIURL(ctx context.Context, rt runtime.ContainerRunt
 	return "http://" + addr + "/api/v1/namespaces", closeAddr, nil
 }
 
-// waitAPIReady polls the API until it answers 200, re-resolving a fresh
-// EnsureReachable tunnel on every attempt rather than opening one and
-// reusing it for the whole wait — see nessie.Provider.waitAPIReady's doc
-// for why (found live against minikube: a tunnel opened while Marquez is
-// still starting can end up silently dead even once the app comes up).
+// waitAPIReady polls the API until it answers 200, via runtime.WithReachable
+// (docs/planning/09 Class 2 / F1) so every attempt gets a freshly-resolved
+// tunnel rather than reusing one across the whole wait — see
+// nessie.Provider.waitAPIReady's doc for why (found live against minikube:
+// a tunnel opened while Marquez is still starting can end up silently dead
+// even once the app comes up).
 func (p *Provider) waitAPIReady(ctx context.Context, rt runtime.ContainerRuntime, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt); err == nil {
-			ok := httpOK(ctx, apiURL)
-			closeAPI()
-			if ok {
-				return nil
-			}
+	opts := runtime.ReachableOptions{Timeout: timeout, Interval: 2 * time.Second}
+	err := runtime.WithReachable(ctx, rt, p.name(), marquezAPIPort, opts, func(ctx context.Context, addr string) error {
+		if !httpOK(ctx, "http://"+addr+"/api/v1/namespaces") {
+			return fmt.Errorf("marquez API did not answer 200")
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("marquez API did not answer 200 within %s", timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("marquez API did not answer 200 within %s: %w", timeout, err)
 	}
+	return nil
 }
 
 func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {

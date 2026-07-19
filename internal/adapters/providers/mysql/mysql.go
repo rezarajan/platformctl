@@ -244,26 +244,27 @@ func (p *Provider) liveRootPassword(ctx context.Context, rt runtime.ContainerRun
 }
 
 func (p *Provider) ensureRootPassword(ctx context.Context, rt runtime.ContainerRuntime, desiredPass, previousPass string) error {
+	name := p.containerName()
+	buildDesired := func(addr string) string { return dsnAddr(addr, "root", desiredPass, "") }
+	if previousPass == "" || previousPass == desiredPass {
+		return waitReadyReachable(ctx, rt, name, 3306, buildDesired, 60*time.Second)
+	}
+	if err := waitReadyReachable(ctx, rt, name, 3306, buildDesired, 5*time.Second); err == nil {
+		return nil
+	}
+	buildPrevious := func(addr string) string { return dsnAddr(addr, "root", previousPass, "") }
+	if err := waitReadyReachable(ctx, rt, name, 3306, buildPrevious, 60*time.Second); err != nil {
+		return fmt.Errorf("mysql root credentials changed but neither the desired SecretReference nor the previous managed-container environment password can authenticate; manual recovery is required: %w", err)
+	}
 	addr, closeAddr, err := p.reachableAddr(ctx, rt)
 	if err != nil {
 		return err
 	}
 	defer closeAddr()
-	desired := dsnAddr(addr, "root", desiredPass, "")
-	if previousPass == "" || previousPass == desiredPass {
-		return waitReady(ctx, desired, 60*time.Second)
-	}
-	if err := waitReady(ctx, desired, 5*time.Second); err == nil {
-		return nil
-	}
-	previous := dsnAddr(addr, "root", previousPass, "")
-	if err := waitReady(ctx, previous, 60*time.Second); err != nil {
-		return fmt.Errorf("mysql root credentials changed but neither the desired SecretReference nor the previous managed-container environment password can authenticate; manual recovery is required: %w", err)
-	}
-	if err := rotateRootPassword(ctx, previous, desiredPass); err != nil {
+	if err := rotateRootPassword(ctx, dsnAddr(addr, "root", previousPass, ""), desiredPass); err != nil {
 		return err
 	}
-	return waitReady(ctx, desired, 30*time.Second)
+	return waitReadyReachable(ctx, rt, name, 3306, buildDesired, 30*time.Second)
 }
 
 // reconcileSource ensures the declared database exists, a replication-capable
@@ -284,15 +285,17 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope, r
 		return st, err
 	}
 
+	if err := waitReadyReachable(ctx, rt, p.containerName(), 3306, func(addr string) string {
+		return dsnAddr(addr, "root", rootPass, "")
+	}, 30*time.Second); err != nil {
+		return st, err
+	}
 	addr, closeAddr, err := p.reachableAddr(ctx, rt)
 	if err != nil {
 		return st, err
 	}
 	defer closeAddr()
 	admin := dsnAddr(addr, "root", rootPass, "")
-	if err := waitReady(ctx, admin, 30*time.Second); err != nil {
-		return st, err
-	}
 	if err := ensureDatabase(ctx, admin, dbName); err != nil {
 		return st, err
 	}

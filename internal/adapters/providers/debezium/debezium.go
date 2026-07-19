@@ -81,13 +81,6 @@ func (p *Provider) connectPort() int {
 	return hostport.Resolve(configured, p.containerName())
 }
 
-// connectURL is the Connect worker's configured-intent address — used only
-// for the informational ProviderState field surfaced by reconcileWorker, not
-// for actual REST calls (docs/planning/08 B8: those go through
-// reachableAddr/EnsureReachable, since this "127.0.0.1:port" guess is wrong
-// on Kubernetes).
-func (p *Provider) connectURL() string { return "http://127.0.0.1:" + strconv.Itoa(p.connectPort()) }
-
 // reachableURL returns an "http://host:port" this process can dial right
 // now for the Connect worker's REST API, plus a close func that must always
 // be called. Kafka Connect's REST API is stateless HTTP with no
@@ -173,15 +166,14 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectWorkerHealthy"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
-	// Observed binding, not intent (connectURL() stays intent-based for the
-	// provider's own REST calls, a documented Docker-mode assumption).
+	// Observed binding, not configured intent (docs/planning/09 F1: no
+	// domain-layer address guess is kept around for this).
 	hostAddr := ctrState.HostAddr(8083)
 	hostURL := ""
 	if hostAddr != "" {
 		hostURL = "http://" + hostAddr
 	}
 	st.ProviderState = map[string]any{
-		"connectUrl": p.connectURL(),
 		endpoint.Key: endpoint.List{
 			{Name: "connect-rest", Scheme: "http", Host: hostURL, Internal: fmt.Sprintf("http://%s:8083", p.containerName()), Insecure: true},
 		}.ToState(),
@@ -206,9 +198,9 @@ type desiredConnector struct {
 	// names its Connection-realizing container after the Connection, not
 	// after itself — see proxy.reconcileConnection) + port, resolved
 	// through runtime.EnsureReachable at reconcile time (docs/planning/08
-	// B8): the forwarder's actual reachable address, like every other
-	// provider's admin connection, cannot be a domain-layer
-	// "127.0.0.1:port" guess.
+	// B8, docs/planning/09 F1): the forwarder's actual reachable address,
+	// like every other provider's admin connection, cannot be a
+	// domain-layer loopback-address guess.
 	preflightHost           string
 	preflightPort           int
 	preflightConnectionName string
@@ -265,8 +257,10 @@ func (p *Provider) desiredConnector(res resource.Envelope) (desiredConnector, er
 			}
 			dbHost, dbPort = conn.Endpoint(connEnv.Metadata.Name)
 			if conn.External {
-				if host, port, ok := hostPort(conn.DialAddress()); ok {
-					d.preflightHost, d.preflightPort = host, port
+				if addr, ok := conn.ExternalAddress(); ok {
+					if host, port, ok := hostPort(addr); ok {
+						d.preflightHost, d.preflightPort = host, port
+					}
 				}
 			} else {
 				d.preflightConnectionName, d.preflightPort = connEnv.Metadata.Name, conn.Port

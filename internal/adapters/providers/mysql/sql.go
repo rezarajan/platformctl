@@ -9,6 +9,8 @@ import (
 
 	// Also registers the "mysql" database/sql driver.
 	godriver "github.com/go-sql-driver/mysql"
+
+	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
 // dsnAddr builds the DSN through the driver's own Config type so credentials
@@ -36,31 +38,21 @@ func open(conn string) (*sql.DB, error) {
 	return db, nil
 }
 
-// waitReady ping-loops until the server accepts authenticated connections —
-// the images serve their health ping during an init phase that still
-// refuses real logins.
-func waitReady(ctx context.Context, conn string, timeout time.Duration) error {
-	db, err := open(conn)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for {
-		lastErr = db.PingContext(ctx)
-		if lastErr == nil {
-			return nil
+// waitReadyReachable ping-loops until the server accepts authenticated
+// connections — the images serve their health ping during an init phase
+// that still refuses real logins — re-resolving a fresh EnsureReachable
+// address on every attempt via runtime.WithReachable (docs/planning/09
+// Class 2 / F1) rather than retrying against one address resolved before
+// the wait began.
+func waitReadyReachable(ctx context.Context, rt runtime.ContainerRuntime, name string, port int, buildConn func(addr string) string, timeout time.Duration) error {
+	return runtime.WithReachable(ctx, rt, name, port, runtime.ReachableOptions{Timeout: timeout}, func(ctx context.Context, addr string) error {
+		db, err := open(buildConn(addr))
+		if err != nil {
+			return err
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("mysql not reachable within %s: %w", timeout, lastErr)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
-		}
-	}
+		defer db.Close()
+		return db.PingContext(ctx)
+	})
 }
 
 func rotateRootPassword(ctx context.Context, adminConn, newPass string) error {

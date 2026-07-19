@@ -87,7 +87,9 @@ func (p *Provider) accessMode() string {
 // and redirected to whatever reachableAddr just resolved to, decoupling
 // "what the broker advertises" from "where a request actually goes" — the
 // broker's own protocol never needs to be told the (changing) truth.
-func (p *Provider) advertisedAddr() string { return "127.0.0.1:" + strconv.Itoa(p.hostPort()) }
+func (p *Provider) advertisedAddr() string {
+	return "127.0.0.1:" + strconv.Itoa(p.hostPort()) // archtest:allow-loopback: sentinel never dialed directly, only matched+redirected by kafka.go's kgo.Dialer
+}
 
 // reachableAddr returns an address this process can dial right now to reach
 // the broker's admin (external Kafka) port, plus a close func that must

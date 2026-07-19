@@ -203,16 +203,7 @@ func (p *Provider) reconcileDataset(ctx context.Context, res resource.Envelope, 
 	if err != nil {
 		return st, err
 	}
-	addr, closeAddr, err := p.reachableAddr(ctx, rt)
-	if err != nil {
-		return st, err
-	}
-	defer closeAddr()
-	cl, err := newClient(addr, user, pass)
-	if err != nil {
-		return st, err
-	}
-	if err := ensureBucket(ctx, cl, ds.Bucket); err != nil {
+	if err := ensureBucket(ctx, rt, p.containerName(), apiPort, user, pass, ds.Bucket); err != nil {
 		return st, err
 	}
 

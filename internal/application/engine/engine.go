@@ -689,21 +689,21 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 
 // connectionDialAddress returns an address this process can dial right now
 // to reach conn, plus a close func (nil when none is needed) that must be
-// called once done. An external Connection's DialAddress() is already a
-// plain declared address, needing no runtime. A managed Connection's
-// DialAddress() is a domain-layer "127.0.0.1:port" guess correct only on
-// Docker — domain can't import ports/runtime to fix this itself
-// (docs/planning/08 B8), so here, with runtime access, resolve the
-// forwarder's real reachable address instead, through the same
-// runtime.EnsureReachable mechanism every provider's own admin calls use.
-// The forwarder container is named after the Connection itself, not its
-// realizing Provider (see proxy.reconcileConnection) — found live against
-// minikube after the "name it after the Provider" version failed with
-// "container \"edge\" not found", the exact same mistake fixed once
-// already in debezium's equivalent preflight.
+// called once done. An external Connection's ExternalAddress() is already a
+// plain declared address, needing no runtime. A managed Connection has no
+// domain-layer address at all (domain can't import ports/runtime to guess
+// one — docs/planning/09 F1), so here, with runtime access, resolve the
+// forwarder's real reachable address through the same runtime.EnsureReachable
+// mechanism every provider's own admin calls use. The forwarder container is
+// named after the Connection itself, not its realizing Provider (see
+// proxy.reconcileConnection) — found live against minikube after the "name
+// it after the Provider" version failed with "container \"edge\" not
+// found", the exact same mistake fixed once already in debezium's
+// equivalent preflight.
 func (e *Engine) connectionDialAddress(ctx context.Context, connEnv resource.Envelope, conn connection.Connection, byKey map[resource.Key]resource.Envelope) (string, func() error) {
 	if conn.External {
-		return conn.DialAddress(), nil
+		addr, _ := conn.ExternalAddress()
+		return addr, nil
 	}
 	_, rt, err := e.resolveProviderAndRuntime(ctx, connEnv, byKey)
 	if err != nil {

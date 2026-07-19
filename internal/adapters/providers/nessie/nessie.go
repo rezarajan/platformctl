@@ -84,34 +84,26 @@ func (p *Provider) reachableAPIURL(ctx context.Context, rt runtime.ContainerRunt
 	return "http://" + addr + "/api/v2", closeAddr, nil
 }
 
-// waitAPIReady polls path until it answers 200, re-resolving a fresh
-// EnsureReachable tunnel on every attempt rather than opening one and
-// reusing it for the whole wait. Found live against minikube, not a
-// synthetic test: a port-forward tunnel opened while the app is still
-// starting (its very first dial racing the JVM's listen()) can end up
-// silently dead for the rest of its life even once the app comes up,
-// while a fresh tunnel opened moments later against the same, by-then-
-// ready pod works every time — so retrying means "get a new tunnel", not
-// "poll through the one you already have."
+// waitAPIReady polls path until it answers 200, via runtime.WithReachable
+// (docs/planning/09 Class 2 / F1) so every attempt gets a freshly-resolved
+// tunnel rather than reusing one across the whole wait. Found live against
+// minikube, not a synthetic test: a port-forward tunnel opened while the
+// app is still starting (its very first dial racing the JVM's listen())
+// can end up silently dead for the rest of its life even once the app
+// comes up, while a fresh tunnel opened moments later against the same,
+// by-then-ready pod works every time.
 func (p *Provider) waitAPIReady(ctx context.Context, rt runtime.ContainerRuntime, path string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt); err == nil {
-			ok := httpOK(ctx, apiURL+path)
-			closeAPI()
-			if ok {
-				return nil
-			}
+	opts := runtime.ReachableOptions{Timeout: timeout, Interval: 2 * time.Second}
+	err := runtime.WithReachable(ctx, rt, p.containerName(), apiPort, opts, func(ctx context.Context, addr string) error {
+		if !httpOK(ctx, "http://"+addr+path) {
+			return fmt.Errorf("endpoint (path %s) did not answer 200", path)
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("endpoint (path %s) did not answer 200 within %s", path, timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("endpoint (path %s) did not answer 200 within %s: %w", path, timeout, err)
 	}
+	return nil
 }
 
 func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {

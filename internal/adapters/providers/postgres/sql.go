@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
 // connStringAddr builds the connection URL through net/url so credentials
@@ -36,28 +38,22 @@ func connect(ctx context.Context, conn string) (*pgx.Conn, error) {
 	return c, nil
 }
 
-// waitReady ping-loops until the server accepts connections. Container
-// health and host-port reachability are not the same instant on every
-// runtime; provisioning right after WaitHealthy must tolerate the gap.
-func waitReady(ctx context.Context, conn string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for {
-		c, err := connect(ctx, conn)
-		if err == nil {
-			_ = c.Close(ctx)
-			return nil
+// waitReadyReachable ping-loops until the server accepts connections,
+// re-resolving a fresh EnsureReachable address on every attempt via
+// runtime.WithReachable (docs/planning/09 Class 2 / F1) rather than
+// retrying against one address resolved before the wait began — a
+// port-forward tunnel opened while the server is still starting can end up
+// silently dead for the rest of the wait window even once the server comes
+// up. buildConn turns a freshly-resolved "host:port" into a full connection
+// string for the credentials this call is checking.
+func waitReadyReachable(ctx context.Context, rt runtime.ContainerRuntime, name string, port int, buildConn func(addr string) string, timeout time.Duration) error {
+	return runtime.WithReachable(ctx, rt, name, port, runtime.ReachableOptions{Timeout: timeout}, func(ctx context.Context, addr string) error {
+		c, err := connect(ctx, buildConn(addr))
+		if err != nil {
+			return err
 		}
-		lastErr = err
-		if time.Now().After(deadline) {
-			return fmt.Errorf("postgres not reachable within %s: %w", timeout, lastErr)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
-		}
-	}
+		return c.Close(ctx)
+	})
 }
 
 func ensureSuperuserCredentials(ctx context.Context, adminConn, user, pass string) error {

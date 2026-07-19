@@ -93,23 +93,21 @@ func (c Connection) Endpoint(name string) (host string, port int) {
 	return name, c.Port
 }
 
-// HostEndpoint returns the address host-side tools use, or "" when the
-// Connection is external (nothing is published locally for it).
-func (c Connection) HostEndpoint() string {
-	if c.External {
-		return ""
+// ExternalAddress returns the declared host:port for an External
+// Connection's target, and true. It returns ("", false) for a managed
+// Connection: that address is only known by resolving the forwarder
+// through the runtime (runtime.WithReachable against the Connection's own
+// name and port) — domain has no runtime access, so this method refuses to
+// guess rather than return a loopback address that is only correct on
+// Docker (docs/planning/09 Class 1 — this was exactly that guess, until it
+// was found live against a real cluster and both of its call sites were
+// migrated to EnsureReachable, leaving the guess itself unused and unsafe
+// to resurrect).
+func (c Connection) ExternalAddress() (string, bool) {
+	if !c.External {
+		return "", false
 	}
-	return "127.0.0.1:" + strconv.Itoa(c.Port)
-}
-
-// DialAddress returns the host-reachable TCP address a liveness probe can
-// dial: the published forwarder port for a managed connection, the declared
-// host:port for an external one.
-func (c Connection) DialAddress() string {
-	if c.External {
-		return net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
-	}
-	return "127.0.0.1:" + strconv.Itoa(c.Port)
+	return net.JoinHostPort(c.Host, strconv.Itoa(c.Port)), true
 }
 
 func refName(spec map[string]any, field string) string {
