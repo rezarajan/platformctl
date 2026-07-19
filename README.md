@@ -230,12 +230,14 @@ with a lease-based lock so two operators can't corrupt each other's apply.
 
 ## ☸️ Running against Kubernetes
 
-Set `spec.runtime.type: kubernetes` on a Provider (behind the `KubernetesRuntime`
-feature gate — `--feature-gates KubernetesRuntime=true`) to reconcile against a
-real cluster instead of the local Docker daemon, using the standard kubeconfig
-loading rules (`config["kubeconfig"]`/`config["context"]` override). `validate`/
-`plan` preflight the cluster — connectivity and every permission the adapter
-needs — before any mutating call, naming exactly what's missing.
+Set `spec.runtime.type: kubernetes` on a Provider to reconcile against a real
+cluster instead of the local Docker daemon, using the standard kubeconfig
+loading rules (`config["kubeconfig"]`/`config["context"]` override). The
+`KubernetesRuntime` feature gate is Beta (enabled by default) — no
+`--feature-gates` flag needed; `--feature-gates KubernetesRuntime=false`
+turns it back off. `validate`/`plan` preflight the cluster — connectivity and
+every permission the adapter needs — before any mutating call, naming exactly
+what's missing.
 
 `spec.runtime.access` (`port-forward` default | `node-port` | `load-balancer` |
 `in-cluster`) controls how platformctl itself, running outside the cluster,
@@ -301,7 +303,7 @@ providers (see docs/design/001-bindings-are-directed-edges.md).
 ---
 
 <div align="center">
-<sub>Built docker-first on purpose: the resource model is validated against
-the cheapest real runtime before Kubernetes/Terraform adapters (phases 7–8)
-make it portable.</sub>
+<sub>Built docker-first on purpose: the resource model was validated against
+the cheapest real runtime before the Kubernetes adapter (phase 7, Beta) proved
+it portable — Terraform (phase 8) is still future work.</sub>
 </div>

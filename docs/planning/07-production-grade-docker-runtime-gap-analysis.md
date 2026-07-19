@@ -64,8 +64,8 @@ Phase 8 (Terraform/external) were both listed as "future, not started," and
 "planned but not yet available."
 
 A real Kubernetes `ContainerRuntime` adapter now exists
-(`internal/adapters/runtime/kubernetes`, Alpha, behind the
-`KubernetesRuntime` gate — disabled by default) and:
+(`internal/adapters/runtime/kubernetes`, Beta as of docs/planning/08 Stage B
+close, behind the `KubernetesRuntime` gate — enabled by default) and:
 
 - Passes the exact same conformance suite the Docker adapter passes
   (`internal/ports/runtime/conformance`), run against a real cluster
@@ -166,7 +166,7 @@ unless truly technology-specific" standard):
   runtime-specific meaning worth exposing, even though Docker can only
   approximate it.
 
-### Still open (this adapter is an early, Alpha proof, not production-ready)
+### Status after Stage B (docs/planning/08 §4) — resolved
 
 - [x] ~~Namespace-collision refusal message names no remedy~~ resolved
       (2026-07-17, `docs/remediation/F-009`): `EnsureNetwork`'s unmanaged-
@@ -174,40 +174,73 @@ unless truly technology-specific" standard):
       notes that colliding with a cluster's pre-existing system namespaces
       (`default`, `kube-system`, ...) is expected, not a bug. Verified live
       against a real cluster.
-- [ ] **External reachability.** A container's Service is ClusterIP-only;
-      nothing outside the cluster network can reach it, including
-      `platformctl` itself when run from outside the cluster — verified
-      live: applying the redpanda Provider succeeded (Deployment healthy in
-      ~2.5s), but the dependent EventStream's own topic-management call
-      failed with `dial tcp 127.0.0.1:19093: connect: connection refused`,
-      because that call runs from the CLI process, not from in-cluster. This
-      is the Kubernetes-adapter instance of Gate 1.1's "host bind address
-      and published-port inspection" item, and is the single biggest
-      remaining gap before this adapter is useful for anything beyond a
-      Provider with no CLI-side control-plane calls. Closing it needs a
-      deliberate design choice: NodePort exposure, `kubectl port-forward`-
-      style tunneling built into the adapter (client-go's
-      `tools/portforward` package), or documenting that `platformctl`
-      targeting Kubernetes must run in-cluster.
-  - [ ] `ContainerState`/`Inspect` do not yet report actual bind
-        addresses for the Kubernetes adapter either (same gap as Docker's
-        Gate 1.1 item).
-- [ ] No conformance/integration coverage yet for volumes actually
-      persisting data across a Deployment update (PVC reuse is exercised by
-      idempotency tests, not by writing-then-reading real data).
-- [ ] No RBAC/ServiceAccount design — the adapter uses whatever permissions
-      the ambient kubeconfig grants; a production posture needs a documented
-      minimal ClusterRole.
+- [x] ~~External reachability~~ resolved (08 B1): `spec.runtime.access`
+      (`port-forward` default | `node-port` | `load-balancer` | `in-cluster`)
+      on the Provider runtime block. `port-forward` opens an ephemeral
+      client-go tunnel per CLI-side admin call; `node-port`/`load-balancer`
+      change the backing Service's type and resolve its real address,
+      polling until it's actually dialable (kube-proxy programs a NodePort's
+      iptables rule asynchronously after the Service object gains the port
+      number — a real race found live, not by a synthetic test). Redpanda's
+      Kafka admin protocol additionally needed a custom `kgo.Dialer`
+      redirect (its own client/broker protocol has the broker tell clients
+      which address to reconnect to, baked into the broker's own startup
+      config — a value that can never be correct ahead of time on
+      Kubernetes); every other provider's admin connection (Postgres, MySQL,
+      Kafka Connect REST, Nessie, Marquez, S3) has no such redirect and
+      resolves `EnsureReachable` directly per call.
+  - [x] ~~`ContainerState`/`Inspect` do not yet report actual bind
+        addresses~~ resolved (08 B2): `Inspect`/`ListManaged`/
+        `EnsureContainer` enrich `ContainerState.Ports` with the Service's
+        observed host address for `node-port`/`load-balancer`, so
+        `platformctl inventory` reports genuinely reachable endpoints
+        instead of always claiming cluster-internal-only.
+- [x] ~~No conformance/integration coverage yet for volumes actually
+      persisting data~~ resolved (08 B3): a conformance subtest writes data
+      through a running container, recreates it with an updated spec, and
+      reads the data back through the *new* container — verified live
+      against minikube via real pod exec, not a fake runtime's in-memory
+      shortcut.
+- [x] ~~No RBAC/ServiceAccount design~~ resolved (08 B5):
+      `deploy/kubernetes/rbac/{role,serviceaccount,binding}.yaml` — a
+      ClusterRole scoped to exactly the verbs the adapter uses, kept in sync
+      with `preflight.go`'s permission check. Proven sufficient by running
+      the full Kubernetes-tagged integration suite under exactly this
+      ServiceAccount (a minted, token-scoped kubeconfig) against a real
+      cluster, not merely documented as such.
 - [ ] No coverage of multi-replica scenarios, PodDisruptionBudgets, or
       anti-affinity — this adapter targets "one Pod per managed container,"
-      matching Docker's model, deliberately not more.
+      matching Docker's model, deliberately not more. Still open; not part
+      of Stage B's scope.
 - [ ] Terraform/external adapters remain untouched — this work only
       addresses the Kubernetes half of the goal. `registry.PlannedRuntimes`
-      still rejects `external`/`terraform` construction.
-- [ ] `docs/planning/04-roadmap-and-feature-gates.md` Phase 7 status and
+      still rejects `external`/`terraform` construction. Still open; Phase 8.
+- [x] ~~`docs/planning/04-roadmap-and-feature-gates.md` Phase 7 status and
       `schemas/v1alpha1/provider.json`'s `runtime.type` description need
-      updating now that `kubernetes` is a real (Alpha) adapter, not merely
-      schema-accepted-for-forward-compatibility.
+      updating~~ resolved (08 B9): both updated, `KubernetesRuntime`
+      graduated Alpha → Beta (enabled by default) in
+      `application/featuregate`.
+
+Two further gaps were found only by running the full `examples/cdc-attendance`
+and `examples/lakehouse` scenarios end-to-end against a real cluster (08 B8),
+neither anticipated by this section when it was first written:
+
+- [x] ~~redpanda's internal (29092) Kafka listener was never declared in
+      `ContainerSpec.Ports`~~ resolved (08 B8): only the external port
+      (9092) was declared, so the Kubernetes Service backing it carried no
+      port 29092 entry at all — Docker's bridge network reaches every
+      container port regardless of what's published, so this was invisible
+      there. In-cluster Kafka Connect workers (Debezium, s3sink) couldn't
+      reach the broker until the internal port was declared with
+      `HostPort: 0` ("in-network only, no host publish" — a convention
+      `docker.go`'s `portMaps` didn't previously support; `HostPort: 0` used
+      to mean "publish to a random ephemeral host port" instead).
+- [x] ~~openlineage's internal Marquez-metadata Postgres declared no `Ports`
+      at all~~ resolved (08 B8): "not published to the host" is true, but
+      Kubernetes also needs a port declared to create *any* Service — i.e.
+      any DNS name — for a container. Marquez itself failed with
+      `UnknownHostException` trying to reach it. Same fix shape: declare the
+      port with `HostPort: 0`.
 
 ## Stage Gates
 

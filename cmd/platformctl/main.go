@@ -87,18 +87,23 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// Phase 6.
 	gates.Register("ParallelReconciliation", featuregate.Alpha, false)
 	gates.Register("VaultSecretBackend", featuregate.Alpha, false)
-	gates.Register("SharedStateBackend", featuregate.Alpha, false)      // docs/design/003-shared-state.md
-	gates.Register("KubernetesSecretBackend", featuregate.Alpha, false) // docs/planning/08 B4
+	gates.Register("SharedStateBackend", featuregate.Alpha, false)    // docs/design/003-shared-state.md
+	gates.Register("KubernetesSecretBackend", featuregate.Beta, true) // docs/planning/08 B4; graduated with KubernetesRuntime at B9
 	// Phase 6.5: orchestrator-ready infrastructure.
 	gates.Register("MySQLProvider", featuregate.Alpha, true)
 	gates.Register("NessieProvider", featuregate.Alpha, true)
 	gates.Register("OpenLineageProvider", featuregate.Alpha, true)
 	gates.Register("ProxyProvider", featuregate.Alpha, true)
-	// Phase 7 (early): second runtime adapter, proving the provider/runtime
-	// split for real (docs/planning/04-roadmap-and-feature-gates.md §10).
-	// Alpha and disabled by default given the blast radius of a second
-	// runtime; long hardening period expected before Beta.
-	gates.Register("KubernetesRuntime", featuregate.Alpha, false)
+	// Phase 7 / docs/planning/08 Stage B: second runtime adapter, proving
+	// the provider/runtime split for real
+	// (docs/planning/04-roadmap-and-feature-gates.md §10). Graduated to
+	// Beta (enabled by default) at Stage B close (B9): external
+	// reachability (B1/B2), storage sizing/persistence (B3), a Kubernetes
+	// SecretStore backend (B4), a minimal RBAC posture proven sufficient
+	// in CI (B5), connection preflight (B6), NetworkPolicy parity (B7),
+	// and the full cdc-attendance/lakehouse example scenarios (B8) all
+	// verified against a real cluster.
+	gates.Register("KubernetesRuntime", featuregate.Beta, true)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")

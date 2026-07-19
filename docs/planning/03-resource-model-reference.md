@@ -156,7 +156,7 @@ metadata:
 spec:
   type: redpanda                 # redpanda | postgres | mysql | mariadb | debezium | s3 | minio | s3sink | nessie | openlineage | proxy
   runtime:
-    type: docker                 # docker | kubernetes (Alpha, KubernetesRuntime gate) | external (future) | terraform (future)
+    type: docker                 # docker | kubernetes (Beta, KubernetesRuntime gate, enabled by default) | external (future) | terraform (future)
     network: datascape           # docker: the shared network name. kubernetes: the Namespace name (EnsureNetwork creates it).
     networkPolicy: ""            # kubernetes only (docs/planning/08 B7); "" (default) provisions a default-deny +
                                   # allow-same-namespace NetworkPolicy pair so the Namespace isn't DNS-parity-only —
@@ -280,11 +280,12 @@ Field notes:
   (Kubernetes) would realise the same intent as a Service — the provider states the desire, the
   runtime materialises it.
 - `spec.runtime.type` selects which `ContainerRuntime` (or future non-container runtime port) is
-  constructed and injected. `kubernetes` is a real (Alpha, `KubernetesRuntime` gate,
-  `internal/adapters/runtime/kubernetes`) second adapter as of Phase 7 — see
-  docs/planning/07-production-grade-docker-runtime-gap-analysis.md's "Cross-Runtime Portability"
-  section for its mapping decisions and known limitations (the biggest: no external reachability
-  yet, since a container's Service is ClusterIP-only).
+  constructed and injected. `kubernetes` is a real (Beta, `KubernetesRuntime` gate, enabled by
+  default as of docs/planning/08 Stage B close, `internal/adapters/runtime/kubernetes`) second
+  adapter — see docs/planning/07-production-grade-docker-runtime-gap-analysis.md's "Cross-Runtime
+  Portability" section for its mapping decisions, `spec.runtime.access` for how CLI-side admin
+  calls reach it from outside the cluster, and `deploy/kubernetes/rbac/README.md` for the minimal
+  RBAC posture.
 - `spec.runtime` fields beyond `type` are runtime-specific and validated by the runtime adapter's
   own schema fragment.
 
@@ -600,7 +601,7 @@ kind: SecretReference
 metadata:
   name: postgres-replication-creds
 spec:
-  backend: env                     # env | file (both implemented) | vault (implemented, VaultSecretBackend gate, Alpha/disabled) | kubernetes (implemented, KubernetesSecretBackend gate, Alpha/disabled)
+  backend: env                     # env | file (both implemented) | vault (implemented, VaultSecretBackend gate, Alpha/disabled) | kubernetes (implemented, KubernetesSecretBackend gate, Beta/enabled)
   keys:
     - username
     - password

@@ -318,7 +318,7 @@ provider code — technologies realize nouns, they never become nouns.
 their hardening period). `LineageObservability` Alpha → Beta,
 `ImportedResources` Alpha → Beta.
 
-## 10. Phase 7 — Kubernetes Runtime Adapter (started, Alpha; early)
+## 10. Phase 7 — Kubernetes Runtime Adapter (Stage B complete, Beta)
 
 **Status update (2026-07-16):** started. `internal/adapters/runtime/kubernetes`
 implements `ContainerRuntime` against a real cluster (client-go), passes the
@@ -345,25 +345,25 @@ equivalent Kinds) was needed: the existing `VolumeSpec` expresses the
 Kubernetes adapter's volume model (a `PersistentVolumeClaim` per named
 volume) once it carried a namespace hint.
 
-Remaining before this leaves Alpha: external reachability (a container's
-Service is ClusterIP-only; nothing outside the cluster — including
-`platformctl` itself run from a laptop — can reach it yet), bind-address/
-published-port inspection, an RBAC/ServiceAccount posture, and volume
-persistence-across-update coverage. See the gap-analysis doc for the full
-list.
+Stage B (docs/planning/08 §4) closed all of the above: external
+reachability via per-Provider access modes (port-forward | node-port |
+load-balancer | in-cluster, B1), observed bind-address/published-port
+inspection so `inventory` tells the truth (B2), storage sizing/class and a
+persistence-across-update proof (B3), a Kubernetes SecretStore backend
+(B4), a minimal RBAC posture proven sufficient by running the full K8s
+suite under it in CI (B5), connection preflight with named remedies (B6),
+NetworkPolicy parity with Docker's network isolation (B7), and the full
+cdc-attendance/lakehouse example scenarios verified end-to-end against a
+real cluster (B8). See docs/planning/08 §4 for the verification detail
+behind each item and `deploy/kubernetes/rbac/README.md` for the RBAC
+posture itself.
 
-**Feature gates:** `KubernetesRuntime` (Alpha, disabled by default; long
-hardening period expected before Beta given blast radius).
+**Feature gates:** `KubernetesRuntime` (Beta, enabled by default as of
+Stage B close).
 
-**Task breakdown (2026-07-17):** the remaining Phase 7 work is fully sliced
-into actionable tasks in
-[08-production-readiness-plan.md](08-production-readiness-plan.md): Stage B
-(B1–B9: external-reachability access modes, observed endpoints, storage
-classes/sizing/persistence, the kubernetes secret backend, RBAC posture,
-connection preflight, NetworkPolicy parity, the full provider matrix in CI,
-docs/schema sync) takes the adapter to Beta; Stage C (C1 replicas/stable
-identity and the HA scenarios built on it) takes it toward GA. Phase 7 closes
-when doc 08's Stage B exit criteria hold.
+**Task breakdown:** Stage B (B1–B9) took the adapter to Beta; Stage C (C1
+replicas/stable identity and the HA scenarios built on it) takes it toward
+GA. Phase 7 closes with Stage B's exit criteria held (docs/planning/08 §4).
 
 ## 11. Phase 8 — External/Terraform Adapter, Out-of-Process Provider Plugins (future)
 
@@ -392,11 +392,11 @@ when doc 08's Stage B exit criteria hold.
 | `DriftDetection` | Phase 5 | Alpha | disabled | Beta Phase 5 |
 | `ParallelReconciliation` | Phase 6 | Alpha | disabled | — |
 | `VaultSecretBackend` | Phase 6 | Alpha | disabled | — |
-| `KubernetesRuntime` | Phase 7 | Alpha | disabled | — |
+| `KubernetesRuntime` | Phase 7 | Beta (08 Stage B/B9) | enabled | GA in Stage C |
 | `TerraformRuntimeAdapter` | Phase 8 | Alpha | disabled | — |
 | `OutOfProcessProviderPlugins` | Phase 8 | Alpha | disabled | — |
 | `SharedStateBackend` | 08 Stage A (A4) | Alpha | disabled | Beta once used by CI itself |
-| `KubernetesSecretBackend` | 08 Stage B (B4) | Alpha | disabled | Beta with KubernetesRuntime |
+| `KubernetesSecretBackend` | 08 Stage B (B4) | Beta (08 Stage B/B9) | enabled | GA with KubernetesRuntime |
 
 Gates planned by the production-readiness backlog (`HighAvailability`,
 `IngressProvider`, `TLSTermination`, `MonitoringStackProvider`,
