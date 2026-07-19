@@ -313,6 +313,22 @@ type ContainerRuntime interface {
 	// container's containerPort, plus a close func to release any tunnel
 	// opened to provide it — callers must always call close when done, even
 	// on the trivial passthrough adapters, so provider code stays portable.
+	//
+	// Contract (docs/planning/08 F3): the returned address must be
+	// *currently dialable*, not merely plausible from declared intent or
+	// object metadata — "the Service has a NodePort assigned" and "the
+	// port-forward tunnel's SPDY stream is up" are both exists/ready
+	// signals that can be true while the container's own process hasn't
+	// called listen() yet (docs/planning/09 Class 2, K3/K11). Every adapter
+	// absorbs that race itself — with a direct dial check (Docker), by
+	// polling the observed address (Kubernetes node-port/load-balancer), or
+	// by construction (fake) — so a caller that dials on the first attempt
+	// sees a real connection, not a race it has to paper over itself. A
+	// caller that wants to *wait* for readiness rather than fail once
+	// should use runtime.WithReachable, which retries and re-resolves a
+	// fresh address on each attempt rather than reusing one across the
+	// whole wait window.
+	//
 	// Docker/fake: the already-published host address (ContainerSpec.Ports
 	// intent already makes this host-reachable; close is a no-op).
 	// Kubernetes: depends on the container's ContainerSpec.AccessMode —

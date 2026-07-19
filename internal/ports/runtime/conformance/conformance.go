@@ -7,6 +7,7 @@ package conformance
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
@@ -495,6 +496,68 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 				t.Errorf("Audience: internal port 82 reported a host binding: %+v", p)
 			}
 		}
+	})
+
+	// EnsureReachable_dialable_immediately_after_WaitHealthy proves the F3
+	// contract: once WaitHealthy returns, the very first EnsureReachable
+	// call — no caller-side retry loop — must hand back an address that
+	// accepts a real connection right now (docs/planning/08 F3,
+	// docs/planning/09 Class 2 / K3 / K11). commandRunner-gated the same way
+	// Volume_persists_across_container_update is: only an adapter whose
+	// containers actually run a process can be dialed for real; the fake
+	// proves the plumbing (EnsureReachable succeeds, returns a non-empty
+	// address) without claiming to prove networking it doesn't have.
+	t.Run("EnsureReachable_dialable_immediately_after_WaitHealthy", func(t *testing.T) {
+		name := namePrefix + "-reachable-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+
+		type commandRunner interface {
+			RunsContainerCommands() bool
+		}
+		cr, execCapable := rt.(commandRunner)
+		execCapable = execCapable && cr.RunsContainerCommands()
+
+		spec := runtime.ContainerSpec{
+			Name:     name,
+			Image:    "nginx:1.27-alpine", // listens on 80 the instant its process starts — no artificial healthy-before-listening gap
+			Networks: []string{netSpec.Name},
+			Ports:    []runtime.PortBinding{{ContainerPort: 80, Audience: runtime.AudienceHost}},
+			Labels:   labels,
+		}
+		if !execCapable {
+			// The fake never runs a real process; nginx would never
+			// actually listen, and the fake doesn't simulate Docker's
+			// ephemeral host-port assignment for HostPort: 0. Exercise the
+			// same spec shape with an explicit host port so the fake still
+			// proves EnsureContainer/EnsureReachable's contract plumbing,
+			// just not real dialability.
+			spec.Image = "alpine:3.20"
+			spec.Cmd = []string{"sleep", "300"}
+			spec.Ports = []runtime.PortBinding{{HostPort: 28997, ContainerPort: 80, Audience: runtime.AudienceHost}}
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer: %v", err)
+		}
+		if err := rt.WaitHealthy(ctx, name, 60*time.Second); err != nil {
+			t.Fatalf("WaitHealthy: %v", err)
+		}
+
+		addr, closeFn, err := rt.EnsureReachable(ctx, name, 80)
+		if err != nil {
+			t.Fatalf("EnsureReachable immediately after WaitHealthy: %v", err)
+		}
+		defer func() { _ = closeFn() }()
+		if addr == "" {
+			t.Fatal("EnsureReachable returned an empty address")
+		}
+		if !execCapable {
+			return
+		}
+		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+		if err != nil {
+			t.Fatalf("dial %q immediately after EnsureReachable: %v (address was not actually dialable)", addr, err)
+		}
+		_ = conn.Close()
 	})
 
 	t.Run("Remove_then_absent", func(t *testing.T) {

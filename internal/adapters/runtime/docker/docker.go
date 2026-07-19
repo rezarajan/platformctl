@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -387,6 +388,12 @@ func (r *Runtime) Inspect(ctx context.Context, name string) (runtime.ContainerSt
 // containerPort — Docker's HostConfig.PortBindings already made it
 // host-reachable at container-creation time, so there is nothing to open;
 // close is a no-op kept only to satisfy the port's cross-runtime contract.
+// Per the port contract (docs/planning/08 F3), a returned address must be
+// *currently dialable*, not merely "Docker says this port is published": a
+// published port accepts the TCP handshake as soon as the daemon proxies it,
+// which can be before the container's own process calls listen() — the
+// adapter, not every caller, absorbs that race with a bounded direct dial
+// check rather than trusting the port-binding metadata alone.
 func (r *Runtime) EnsureReachable(ctx context.Context, name string, containerPort int) (string, func() error, error) {
 	state, found, err := r.Inspect(ctx, name)
 	if err != nil {
@@ -399,7 +406,31 @@ func (r *Runtime) EnsureReachable(ctx context.Context, name string, containerPor
 	if addr == "" {
 		return "", nil, fmt.Errorf("container %q publishes no host binding for port %d", name, containerPort)
 	}
+	if !dialable(ctx, addr) {
+		return "", nil, fmt.Errorf("container %q: resolved address %q for port %d is not currently accepting connections", name, addr, containerPort)
+	}
 	return addr, func() error { return nil }, nil
+}
+
+// dialable reports whether a TCP connection to addr succeeds right now,
+// honoring ctx's deadline (bounded to 2s when ctx has none) rather than
+// hanging on an address nothing will ever answer.
+func dialable(ctx context.Context, addr string) bool {
+	timeout := 2 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < timeout {
+			timeout = remaining
+		}
+	}
+	if timeout <= 0 {
+		return false
+	}
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func (r *Runtime) Remove(ctx context.Context, name string) error {

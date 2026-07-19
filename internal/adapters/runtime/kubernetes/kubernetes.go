@@ -884,6 +884,19 @@ func (r *Runtime) portForwardReachableAddr(ctx context.Context, ns, name string,
 		closeOnce.Do(func() { close(stopCh) })
 		return nil
 	}
+	// readyCh only proves the tunnel itself is up (the SPDY stream to the
+	// kubelet is established) — not that the container's own process is
+	// listening on containerPort yet (the K11 class: a tunnel opened before
+	// listen() can look ready forever while carrying no traffic). Per the
+	// port contract (docs/planning/08 F3), EnsureReachable must not return
+	// an address that isn't currently dialable, so prove it with one direct
+	// dial through the tunnel before handing the address back; a caller
+	// using runtime.WithReachable (F1) will retry with a fresh tunnel on
+	// this error rather than being handed a dead one to discover later.
+	if !dialable(addr) {
+		closeFn()
+		return "", nil, fmt.Errorf("port-forward to pod %q: tunnel is up but port %d is not currently accepting connections", pod.Name, containerPort)
+	}
 	return addr, closeFn, nil
 }
 
