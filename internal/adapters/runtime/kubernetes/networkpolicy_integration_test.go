@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	runtimeport "github.com/rezarajan/platformctl/internal/ports/runtime"
@@ -57,17 +58,19 @@ func TestEnsureNetworkProvisionsIsolationBoundary(t *testing.T) {
 			}
 		}
 
-		// Idempotent: a second call updates cleanly, doesn't error or
-		// duplicate.
+		// Idempotent: a second call updates cleanly, doesn't error. Both
+		// fixed, hardcoded names must still resolve — Kubernetes' own
+		// per-namespace name uniqueness rules out a "duplicate" existing
+		// under either name, so re-confirming both Gets succeed (rather
+		// than enumerating via List, a permission the adapter itself never
+		// needs — see deploy/kubernetes/rbac/role.yaml) is a complete check.
 		if err := rt.EnsureNetwork(ctx, runtimeport.NetworkSpec{Name: ns, Labels: labels}); err != nil {
 			t.Fatalf("second EnsureNetwork: %v", err)
 		}
-		list, err := rt.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			t.Fatalf("list networkpolicies: %v", err)
-		}
-		if len(list.Items) != 2 {
-			t.Errorf("networkpolicy count = %d, want exactly 2 (no duplicates)", len(list.Items))
+		for _, name := range []string{denyAllIngressPolicyName, allowSameNamespacePolicyName} {
+			if _, err := rt.clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, name, metav1.GetOptions{}); err != nil {
+				t.Errorf("networkpolicy %q missing after second EnsureNetwork: %v", name, err)
+			}
 		}
 	})
 
@@ -78,12 +81,10 @@ func TestEnsureNetworkProvisionsIsolationBoundary(t *testing.T) {
 		if err := rt.EnsureNetwork(ctx, runtimeport.NetworkSpec{Name: ns, Labels: labels, IsolationPolicy: runtimeport.IsolationNone}); err != nil {
 			t.Fatalf("EnsureNetwork with IsolationNone: %v", err)
 		}
-		list, err := rt.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			t.Fatalf("list networkpolicies: %v", err)
-		}
-		if len(list.Items) != 0 {
-			t.Errorf("networkpolicy count = %d with IsolationNone, want 0", len(list.Items))
+		for _, name := range []string{denyAllIngressPolicyName, allowSameNamespacePolicyName} {
+			if _, err := rt.clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+				t.Errorf("networkpolicy %q: err = %v, want IsNotFound (IsolationNone must provision neither policy)", name, err)
+			}
 		}
 	})
 }

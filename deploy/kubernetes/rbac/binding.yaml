@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: platformctl
+subjects:
+  - kind: ServiceAccount
+    name: platformctl
+    namespace: platformctl-system
+roleRef:
+  kind: ClusterRole
+  name: platformctl
+  apiGroup: rbac.authorization.k8s.io

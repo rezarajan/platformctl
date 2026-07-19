@@ -228,6 +228,30 @@ Global flags: `--state-file` (default `.datascape/state.json`, local backend),
 ...` points every command at an S3-compatible bucket instead of a local file,
 with a lease-based lock so two operators can't corrupt each other's apply.
 
+## ☸️ Running against Kubernetes
+
+Set `spec.runtime.type: kubernetes` on a Provider (behind the `KubernetesRuntime`
+feature gate — `--feature-gates KubernetesRuntime=true`) to reconcile against a
+real cluster instead of the local Docker daemon, using the standard kubeconfig
+loading rules (`config["kubeconfig"]`/`config["context"]` override). `validate`/
+`plan` preflight the cluster — connectivity and every permission the adapter
+needs — before any mutating call, naming exactly what's missing.
+
+`spec.runtime.access` (`port-forward` default | `node-port` | `load-balancer` |
+`in-cluster`) controls how platformctl itself, running outside the cluster,
+reaches a Provider's admin/control-plane port to reconcile child resources
+(e.g. redpanda's EventStream needs a live Kafka admin connection) —
+`port-forward` needs no cluster config beyond RBAC; `node-port`/`load-balancer`
+change the backing Service's type and are what `platformctl inventory` reports
+as the reachable endpoint.
+
+RBAC: see [`deploy/kubernetes/rbac/`](deploy/kubernetes/rbac/README.md) for
+the minimal ClusterRole/ServiceAccount/binding manifests (exactly the verbs
+the adapter uses, kept in sync with the preflight check) and the cluster-admin
+dev shortcut. CI's Kubernetes integration job runs the full K8s test suite
+under that minimal role against a fresh `kind` cluster to prove it's actually
+sufficient.
+
 ## 🧪 Development
 
 ```sh

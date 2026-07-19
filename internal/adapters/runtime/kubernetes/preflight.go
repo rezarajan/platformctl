@@ -21,6 +21,7 @@ var preflightChecks = []authorizationv1.ResourceAttributes{
 	{Verb: "create", Resource: "namespaces"},
 	{Verb: "delete", Resource: "namespaces"},
 	{Verb: "list", Resource: "namespaces"},
+	{Verb: "list", Resource: "nodes"}, // node-port access mode (docs/planning/08 B1): resolves a node address
 	{Verb: "get", Group: "apps", Resource: "deployments"},
 	{Verb: "create", Group: "apps", Resource: "deployments"},
 	{Verb: "update", Group: "apps", Resource: "deployments"},
@@ -43,6 +44,7 @@ var preflightChecks = []authorizationv1.ResourceAttributes{
 	{Verb: "get", Resource: "pods"},
 	{Verb: "list", Resource: "pods"},
 	{Verb: "get", Resource: "pods/log"},
+	{Verb: "create", Resource: "pods/exec"}, // ReadFile's live-path fallback (readFileViaExec)
 	{Verb: "create", Resource: "pods/portforward"},
 	{Verb: "get", Group: "networking.k8s.io", Resource: "networkpolicies"},
 	{Verb: "create", Group: "networking.k8s.io", Resource: "networkpolicies"},

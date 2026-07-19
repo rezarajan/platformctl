@@ -76,3 +76,60 @@ jobs:
       # against already-dead infrastructure.
       - name: Integration & chaos tests
         run: go test -tags integration -timeout 3600s ./...
+
+  integration-k8s:
+    name: Integration tests (Kubernetes, minimal RBAC role)
+    runs-on: ubuntu-latest
+    needs: unit
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+
+      # docs/planning/08 B5: exercise the K8s runtime under exactly the
+      # ServiceAccount/ClusterRole deploy/kubernetes/rbac ships as the
+      # minimal production posture — not the kind-admin kubeconfig
+      # kind-action leaves active — to prove that role is actually
+      # sufficient, not merely documented as such.
+      - name: Apply minimal RBAC and mint a scoped kubeconfig
+        run: |
+          kubectl apply -f deploy/kubernetes/rbac/serviceaccount.yaml \
+                        -f deploy/kubernetes/rbac/role.yaml \
+                        -f deploy/kubernetes/rbac/binding.yaml
+
+          TOKEN=$(kubectl create token platformctl -n platformctl-system --duration=25m)
+          SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+          CAPATH=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.certificate-authority}')
+          if [ -n "$CAPATH" ]; then
+            CERT_ARG="--certificate-authority=$CAPATH"
+          else
+            kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' \
+              | base64 -d > "$RUNNER_TEMP/platformctl-ca.pem"
+            CERT_ARG="--certificate-authority=$RUNNER_TEMP/platformctl-ca.pem"
+          fi
+
+          kubectl config set-cluster platformctl-cluster --server="$SERVER" $CERT_ARG --embed-certs=true \
+            --kubeconfig="$RUNNER_TEMP/platformctl.kubeconfig"
+          kubectl config set-credentials platformctl --token="$TOKEN" \
+            --kubeconfig="$RUNNER_TEMP/platformctl.kubeconfig"
+          kubectl config set-context platformctl --cluster=platformctl-cluster --user=platformctl \
+            --kubeconfig="$RUNNER_TEMP/platformctl.kubeconfig"
+          kubectl config use-context platformctl --kubeconfig="$RUNNER_TEMP/platformctl.kubeconfig"
+
+          echo "PLATFORMCTL_KUBECONFIG=$RUNNER_TEMP/platformctl.kubeconfig" >> "$GITHUB_ENV"
+
+      - name: Kubernetes runtime integration tests
+        env:
+          KUBECONFIG: ${{ env.PLATFORMCTL_KUBECONFIG }}
+          PLATFORMCTL_REQUIRE_K8S: "1"
+        run: |
+          go test -tags integration -timeout 1200s \
+            ./internal/adapters/runtime/kubernetes/... \
+            ./internal/adapters/secrets/kubernetes/...
+          go test -tags integration -timeout 1200s -run Kubernetes ./cmd/platformctl/...

@@ -1,0 +1,58 @@
+# Minimal permissions the Kubernetes ContainerRuntime adapter
+# (internal/adapters/runtime/kubernetes) needs — exactly the verbs its
+# Ensure*/Remove*/List*/Logs/ReadFile/EnsureReachable methods call, kept in
+# sync with internal/adapters/runtime/kubernetes/preflight.go's
+# preflightChecks (docs/planning/08 B5/B6). A ClusterRole, not a namespaced
+# Role: the adapter creates and operates in Namespaces it names dynamically
+# from each Provider's spec.runtime.network, so its reach can't be scoped to
+# one namespace ahead of time. Bind it with binding.yaml for the minimal
+# production posture; see README.md in this directory for the alternative
+# cluster-admin dev shortcut.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: platformctl
+rules:
+  # Namespaces and Nodes are cluster-scoped — no Role can grant access to
+  # them, only a ClusterRole.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "create", "delete", "list"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"] # node-port access mode: resolves a node address to advertise/dial
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "create", "update", "delete", "list"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "create", "update", "delete", "list"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "create", "update", "delete", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"] # ReadFile's live-path fallback (readFileViaExec)
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create"] # port-forward access mode (docs/planning/08 B1), the default
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "create", "update", "delete"]
+  # Preflight's own permission check (docs/planning/08 B6). Most clusters
+  # already grant this to every authenticated principal via the built-in
+  # system:basic-user ClusterRole bound to system:authenticated; listed
+  # explicitly so this Role is self-contained on a cluster where that
+  # default binding was removed.
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["selfsubjectaccessreviews"]
+    verbs: ["create"]
