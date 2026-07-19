@@ -425,3 +425,28 @@ failing → `t.Skipf` with instructions; runners that are *supposed* to
 provide a cluster set `PLATFORMCTL_REQUIRE_K8S=1` to turn the skip back
 into a failure. Verified both ways: skips under `KUBECONFIG=/nonexistent`,
 runs the full suite (56s) against a live minikube.
+
+## CI Failure on Kubernetes
+
+Kuberentes CI integration test fails with the following error message:
+
+```text
+  go test -tags integration -timeout 1200s \
+    ./internal/adapters/runtime/kubernetes/... \
+    ./internal/adapters/secrets/kubernetes/...
+  go test -tags integration -timeout 1200s -run Kubernetes ./cmd/platformctl/...
+  shell: /usr/bin/bash -e {0}
+  env:
+    PLATFORMCTL_KUBECONFIG: /home/runner/work/_temp/platformctl.kubeconfig
+    KUBECONFIG: /home/runner/work/_temp/platformctl.kubeconfig
+    PLATFORMCTL_REQUIRE_K8S: 1
+warning: namespace "datascape-netpol-none-test" uses networkPolicy: none — no isolation boundary is provisioned; every pod in the cluster can reach it unless something else in the cluster restricts it
+E0719 06:30:23.850900   11552 portforward.go:351] "Unhandled Error" err="error creating error stream for port 46521 -> 80: Timeout occurred" logger="UnhandledError"
+--- FAIL: TestEnsureReachable (72.78s)
+    --- FAIL: TestEnsureReachable/node_port_mode_is_reachable_and_observed_by_inspect (64.20s)
+        reachability_integration_test.go:138: EnsureReachable: service "datascape-reach-np" (access mode "node-port") did not become dialable for port 80 within 1m0s
+FAIL
+FAIL	github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes	180.035s
+ok  	github.com/rezarajan/platformctl/internal/adapters/secrets/kubernetes	0.053s
+FAIL
+```
