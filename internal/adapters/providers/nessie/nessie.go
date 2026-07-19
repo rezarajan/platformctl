@@ -134,7 +134,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		Name:     name,
 		Image:    image,
 		Networks: []string{p.network()},
-		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: apiPort}},
+		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
 		Labels:   labels,
 	})
 	if err != nil {

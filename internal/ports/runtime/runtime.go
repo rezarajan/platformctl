@@ -79,11 +79,39 @@ type FileMount struct {
 	Mode    uint32 // e.g. 0o444; 0 = default 0o444
 }
 
+// Port audience constants (docs/planning/08 F2, docs/planning/09 K10):
+// every declared port states, explicitly, who may dial it — replacing the
+// retired HostPort: 0 "in-network only" convention, which by construction
+// left that intent implicit in whether a provider happened to zero a
+// numeric field. AudienceHost/AudienceInternal below are the only valid values;
+// the fake runtime refuses an EnsureContainer spec that leaves a port's
+// Audience unset or misspelled, so an omission fails in unit tests before
+// any adapter — permissive by design — has a chance to paper over it.
+const (
+	// AudienceHost: a dependent outside the runtime (this CLI process, an
+	// operator) may need to dial this port. Docker publishes it to the
+	// host; Kubernetes additionally promotes it per the container's
+	// AccessMode (node-port/load-balancer/port-forward).
+	AudienceHost = "host"
+	// AudienceInternal: only other containers/pods on the same network may
+	// dial this port. Docker never publishes it to the host (the network's
+	// own DNS already reaches it); Kubernetes still creates a Service port
+	// for it (in-cluster DNS needs one), just never promotes it to a
+	// host-reachable address.
+	AudienceInternal = "internal"
+)
+
 type PortBinding struct {
-	HostIP        string
+	HostIP string
+	// HostPort is meaningful only when Audience is AudienceHost: the host
+	// port to publish to, or 0 to let the runtime assign one. Ignored for
+	// AudienceInternal.
 	HostPort      int
 	ContainerPort int
-	Protocol      string // "tcp" (default) | "udp"
+	// Audience is one of the Audience* constants above. Required — see the
+	// package-level doc on those constants for what an omission costs.
+	Audience string
+	Protocol string // "tcp" (default) | "udp"
 }
 
 // RestartPolicy controls what the runtime does when a container's process

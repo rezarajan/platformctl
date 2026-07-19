@@ -421,7 +421,7 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 			Image:    "alpine:3.20",
 			Cmd:      []string{"sleep", "300"},
 			Networks: []string{netSpec.Name},
-			Ports:    []runtime.PortBinding{{HostPort: 28999, ContainerPort: 80}},
+			Ports:    []runtime.PortBinding{{HostPort: 28999, ContainerPort: 80, Audience: runtime.AudienceHost}},
 			Labels:   labels,
 		}
 		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
@@ -446,6 +446,54 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		// and may leave HostIP empty.
 		if got.HostPort != 0 && got.HostIP == "" {
 			t.Errorf("published port reported with empty HostIP: %+v", *got)
+		}
+	})
+
+	// PortBinding_audience_internal_never_host_bound proves the core F2
+	// invariant across every adapter: a port declared Audience: internal
+	// never gets a host-reachable address, no matter how permissive the
+	// adapter otherwise is (docs/planning/08 F2, docs/planning/09 K10).
+	// Audience: host is accepted alongside it in the same spec so the test
+	// also proves EnsureContainer tolerates both audiences declared at once
+	// — the shape every multi-listener provider (e.g. redpanda) actually
+	// sends.
+	t.Run("PortBinding_audience_internal_never_host_bound", func(t *testing.T) {
+		name := namePrefix + "-audience-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		spec := runtime.ContainerSpec{
+			Name:     name,
+			Image:    "alpine:3.20",
+			Cmd:      []string{"sleep", "300"},
+			Networks: []string{netSpec.Name},
+			Ports: []runtime.PortBinding{
+				{HostPort: 28998, ContainerPort: 81, Audience: runtime.AudienceHost},
+				{ContainerPort: 82, Audience: runtime.AudienceInternal},
+			},
+			Labels: labels,
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer: %v", err)
+		}
+		mc, hasCounter := rt.(MutationCounter)
+		before := 0
+		if hasCounter {
+			before = mc.Mutations()
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("second EnsureContainer with identical audience spec: %v", err)
+		}
+		if hasCounter && mc.Mutations() != before {
+			t.Errorf("second EnsureContainer with identical audience spec mutated state (NFR-2 violation)")
+		}
+
+		st, found, err := rt.Inspect(ctx, name)
+		if err != nil || !found {
+			t.Fatalf("Inspect: found=%v err=%v", found, err)
+		}
+		for _, p := range st.Ports {
+			if p.ContainerPort == 82 && p.HostPort != 0 {
+				t.Errorf("Audience: internal port 82 reported a host binding: %+v", p)
+			}
 		}
 	})
 

@@ -147,7 +147,7 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 			"CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE": "false",
 		},
 		Networks: []string{p.network()},
-		Ports:    []runtime.PortBinding{{HostPort: p.connectPort(), ContainerPort: 8083}},
+		Ports:    []runtime.PortBinding{{HostPort: p.connectPort(), ContainerPort: 8083, Audience: runtime.AudienceHost}},
 		HealthCheck: &runtime.HealthCheck{
 			Test:     []string{"CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"},
 			Interval: 3 * time.Second,

@@ -61,7 +61,7 @@ func TestEnsureReachable(t *testing.T) {
 			Name:       name,
 			Image:      "nginx:1.27-alpine",
 			Networks:   []string{ns},
-			Ports:      []runtimeport.PortBinding{{ContainerPort: 80}},
+			Ports:      []runtimeport.PortBinding{{ContainerPort: 80, Audience: runtimeport.AudienceHost}},
 			Labels:     labels,
 			AccessMode: accessMode,
 		}

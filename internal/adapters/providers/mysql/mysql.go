@@ -184,7 +184,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		Files:    files,
 		Networks: []string{p.network()},
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: prof.DataMount}},
-		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: 3306}},
+		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: 3306, Audience: runtime.AudienceHost}},
 		HealthCheck: &runtime.HealthCheck{
 			// TCP ping, no credentials required for liveness.
 			Test:     []string{"CMD-SHELL", adminTool + " ping -h 127.0.0.1 --silent"},

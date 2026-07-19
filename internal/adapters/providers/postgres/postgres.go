@@ -199,7 +199,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		Files:    []runtime.FileMount{{Path: superuserPasswordPath, Content: []byte(pass)}},
 		Networks: []string{p.network()},
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: prof.DataMount}},
-		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: 5432}},
+		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: 5432, Audience: runtime.AudienceHost}},
 		HealthCheck: &runtime.HealthCheck{
 			// Force a TCP check: the plain unix-socket pg_isready answers
 			// during the image's initdb temp-server phase, before the real

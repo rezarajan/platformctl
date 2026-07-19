@@ -114,7 +114,7 @@ func (p *Provider) reconcileConnection(ctx context.Context, res resource.Envelop
 			"tcp-connect:" + conn.Target,
 		},
 		Networks: []string{p.network()},
-		Ports:    []runtime.PortBinding{{HostPort: conn.Port, ContainerPort: conn.Port}},
+		Ports:    []runtime.PortBinding{{HostPort: conn.Port, ContainerPort: conn.Port, Audience: runtime.AudienceHost}},
 		Labels:   connLabels,
 	})
 	if err != nil {

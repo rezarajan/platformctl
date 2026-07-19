@@ -66,6 +66,9 @@ func (r *Runtime) EnsureVolume(_ context.Context, spec runtime.VolumeSpec) error
 }
 
 func (r *Runtime) EnsureContainer(_ context.Context, spec runtime.ContainerSpec) (runtime.ContainerState, error) {
+	if err := validatePortAudiences(spec); err != nil {
+		return runtime.ContainerState{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.persistVolumeFiles(spec)
@@ -178,7 +181,14 @@ func (r *Runtime) ReadFile(_ context.Context, name, path string) ([]byte, error)
 }
 
 // EnsureReachable mirrors the Docker adapter's trivial passthrough: a fake
-// container's ports are already host-reachable by construction.
+// container's host-audience ports are already host-reachable by
+// construction. Per F2, the fake is the strict interpreter of port
+// audience: an internal-audience port — or one never declared at all —
+// refuses, rather than silently succeeding the way a more permissive
+// runtime's default access mode might (docs/planning/08 F2, docs/planning/09
+// K10). This is deliberately stricter than Kubernetes' port-forward access
+// mode, which can reach any pod port regardless of audience; the fake exists
+// to catch under-declaration in `go test ./...` before a cluster ever does.
 func (r *Runtime) EnsureReachable(_ context.Context, name string, containerPort int) (string, func() error, error) {
 	r.mu.Lock()
 	spec, ok := r.containers[name]
@@ -186,11 +196,34 @@ func (r *Runtime) EnsureReachable(_ context.Context, name string, containerPort 
 	if !ok {
 		return "", nil, fmt.Errorf("container %q not found", name)
 	}
+	for _, p := range spec.Ports {
+		if p.ContainerPort != containerPort {
+			continue
+		}
+		if p.Audience == runtime.AudienceInternal {
+			return "", nil, fmt.Errorf("container %q port %d is declared Audience: internal; it has no host-reachable address", name, containerPort)
+		}
+	}
 	addr := r.stateOf(spec).HostAddr(containerPort)
 	if addr == "" {
 		return "", nil, fmt.Errorf("container %q publishes no host binding for port %d", name, containerPort)
 	}
 	return addr, func() error { return nil }, nil
+}
+
+// validatePortAudiences enforces the F2 port-contract requirement: every
+// declared port states, explicitly, who may dial it. A blank or misspelled
+// Audience is exactly the class of under-declaration this check exists to
+// catch — in a unit test, not on a live cluster.
+func validatePortAudiences(spec runtime.ContainerSpec) error {
+	for _, p := range spec.Ports {
+		switch p.Audience {
+		case runtime.AudienceHost, runtime.AudienceInternal:
+		default:
+			return fmt.Errorf("container %q: port %d declares Audience %q; must be %q or %q", spec.Name, p.ContainerPort, p.Audience, runtime.AudienceHost, runtime.AudienceInternal)
+		}
+	}
+	return nil
 }
 
 func (r *Runtime) ListManaged(_ context.Context) ([]runtime.ContainerState, error) {
@@ -243,16 +276,21 @@ func (r *Runtime) stateOf(spec runtime.ContainerSpec) runtime.ContainerState {
 }
 
 // observedPorts mirrors what the Docker adapter reports from inspect:
-// published ports with the concrete bind address filled in (127.0.0.1 when
-// the spec left HostIP empty) — the fake must present observed exposure the
-// same way the real runtime does.
+// host-audience ports get the concrete bind address filled in (127.0.0.1
+// when the spec left HostIP empty); internal-audience ports report no host
+// binding at all, matching Docker's own real non-publish behavior for them
+// (docs/planning/08 F2) — the fake must present observed exposure the same
+// way the real runtime does.
 func observedPorts(ports []runtime.PortBinding) []runtime.PortBinding {
 	if len(ports) == 0 {
 		return nil
 	}
 	out := make([]runtime.PortBinding, len(ports))
 	for i, p := range ports {
-		if p.HostIP == "" {
+		if p.Audience == runtime.AudienceInternal {
+			p.HostIP = ""
+			p.HostPort = 0
+		} else if p.HostIP == "" {
 			p.HostIP = "127.0.0.1"
 		}
 		if p.Protocol == "" {

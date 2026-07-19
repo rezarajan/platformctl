@@ -144,7 +144,7 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 			"CONNECT_CONSUMER_METADATA_MAX_AGE_MS": "10000",
 		},
 		Networks: []string{p.network()},
-		Ports:    []runtime.PortBinding{{HostPort: p.connectPort(), ContainerPort: 8083}},
+		Ports:    []runtime.PortBinding{{HostPort: p.connectPort(), ContainerPort: 8083, Audience: runtime.AudienceHost}},
 		HealthCheck: &runtime.HealthCheck{
 			Test:     []string{"CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"},
 			Interval: 3 * time.Second,

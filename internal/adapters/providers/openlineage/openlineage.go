@@ -133,7 +133,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 		},
 		Networks: []string{p.network()},
 		Volumes:  []runtime.VolumeMount{{VolumeName: p.dbName() + "-data", MountPath: "/var/lib/postgresql/data"}},
-		// HostPort: 0 — no host publish (this DB is internal to the
+		// Audience: internal — no host publish (this DB is internal to the
 		// provider), but the port must still be declared: the Kubernetes
 		// adapter only creates a Service (and therefore a DNS name) for
 		// ports present here (docs/planning/08 B8), unlike Docker's bridge
@@ -141,7 +141,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 		// of what's declared. Marquez's own connection to this DB failed
 		// with UnknownHostException before this — found live against
 		// minikube, not a synthetic test.
-		Ports: []runtime.PortBinding{{HostPort: 0, ContainerPort: 5432}},
+		Ports: []runtime.PortBinding{{ContainerPort: 5432, Audience: runtime.AudienceInternal}},
 		HealthCheck: &runtime.HealthCheck{
 			Test:     []string{"CMD-SHELL", "pg_isready -h 127.0.0.1 -U " + marquezInternalCred},
 			Interval: 2 * time.Second,
@@ -170,7 +170,7 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 			"POSTGRES_PASSWORD":  marquezInternalCred,
 		},
 		Networks: []string{p.network()},
-		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: marquezAPIPort}},
+		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: marquezAPIPort, Audience: runtime.AudienceHost}},
 		Labels:   labels,
 	})
 	if err != nil {

@@ -602,22 +602,26 @@ func portMaps(ports []runtime.PortBinding) (nat.PortSet, nat.PortMap, error) {
 			return nil, nil, fmt.Errorf("invalid port %d/%s: %w", p.ContainerPort, proto, err)
 		}
 		exposed[port] = struct{}{}
-		// HostPort 0 means "in-network only, no host publish" (the
-		// Kubernetes adapter's ClusterIP-only ports use the same
-		// convention) — Docker's own network already reaches every
-		// container port regardless of publish status, so this is a
-		// deliberate no-op on the host-binding side, not an ephemeral-port
-		// request (nat.PortBinding{HostPort: "0"} would ask Docker to
-		// publish to a random host port instead, which is not what an
-		// unset HostPort is declaring).
-		if p.HostPort == 0 {
+		// AudienceInternal (docs/planning/08 F2): no host publish — the
+		// Docker network already reaches every container port regardless of
+		// publish status, so this is a deliberate no-op on the host-binding
+		// side. Anything else (including the empty string, for callers that
+		// predate the Audience field) is treated as AudienceHost.
+		if p.Audience == runtime.AudienceInternal {
 			continue
 		}
 		hostIP := p.HostIP
 		if hostIP == "" {
 			hostIP = "127.0.0.1"
 		}
-		bindings[port] = []nat.PortBinding{{HostIP: hostIP, HostPort: strconv.Itoa(p.HostPort)}}
+		// HostPort 0 for a host-audience port means "let Docker assign one";
+		// nat.PortBinding wants an empty string for that, not the literal
+		// "0", which some daemon versions reject as an invalid port.
+		hostPort := ""
+		if p.HostPort != 0 {
+			hostPort = strconv.Itoa(p.HostPort)
+		}
+		bindings[port] = []nat.PortBinding{{HostIP: hostIP, HostPort: hostPort}}
 	}
 	return exposed, bindings, nil
 }

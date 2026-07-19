@@ -158,7 +158,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		Files:    []runtime.FileMount{{Path: rootPasswordPath, Content: []byte(pass)}},
 		Networks: []string{p.network()},
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/data"}},
-		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: apiPort}},
+		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
 		HealthCheck: &runtime.HealthCheck{
 			Test:     []string{"CMD-SHELL", fmt.Sprintf("curl -sf http://localhost:%d/minio/health/live || exit 1", apiPort)},
 			Interval: 2 * time.Second,
