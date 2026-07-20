@@ -7,6 +7,7 @@ package conformance
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -558,6 +559,65 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 			t.Fatalf("dial %q immediately after EnsureReachable: %v (address was not actually dialable)", addr, err)
 		}
 		_ = conn.Close()
+	})
+
+	// DelayedListenReadiness_HealthyBeforeListening backfills the D1/K11
+	// class (docs/planning/08 F3, docs/planning/09 Class 2): "healthy"
+	// (no declared HealthCheck means healthy-when-running, the same
+	// contract postgres's own pg_isready-over-the-unix-socket gap
+	// exercised live) can report true before the container's declared port
+	// actually accepts connections — a container that sleeps briefly
+	// before opening its listener reproduces the shape generically,
+	// documenting whatever gap this adapter has (t.Skip when the adapter
+	// happens to have none) and proving runtime.WithReachable (F1/F3)
+	// absorbs it regardless: a caller that dials once right after
+	// WaitHealthy can lose the race, but one using WithReachable does not.
+	t.Run("DelayedListenReadiness_HealthyBeforeListening", func(t *testing.T) {
+		type commandRunner interface {
+			RunsContainerCommands() bool
+		}
+		cr, execCapable := rt.(commandRunner)
+		execCapable = execCapable && cr.RunsContainerCommands()
+		if !execCapable {
+			// The fake reports healthy without ever running a process, so
+			// it has no healthy-vs-listening gap to document.
+			return
+		}
+
+		name := namePrefix + "-delayed-listen-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		const listenDelay = 5 * time.Second
+		spec := runtime.ContainerSpec{
+			Name:  name,
+			Image: "alpine:3.20",
+			// No HealthCheck declared: healthy means running, the instant
+			// the process starts — well before the delayed listener opens.
+			Cmd:      []string{"sh", "-c", fmt.Sprintf("sleep %d && nc -l -p 8080", int(listenDelay.Seconds()))},
+			Networks: []string{netSpec.Name},
+			Ports:    []runtime.PortBinding{{HostPort: 28995, ContainerPort: 8080, Audience: runtime.AudienceHost}},
+			Labels:   labels,
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer: %v", err)
+		}
+		start := time.Now()
+		if err := rt.WaitHealthy(ctx, name, 30*time.Second); err != nil {
+			t.Fatalf("WaitHealthy: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed >= listenDelay {
+			t.Skipf("WaitHealthy itself took %s (>= the %s listen delay); this adapter/environment left no healthy-before-listening gap to document here", elapsed, listenDelay)
+		}
+
+		err := runtime.WithReachable(ctx, rt, name, 8080, runtime.ReachableOptions{Timeout: listenDelay + 15*time.Second, Interval: 500 * time.Millisecond}, func(ctx context.Context, addr string) error {
+			conn, derr := net.DialTimeout("tcp", addr, 2*time.Second)
+			if derr != nil {
+				return derr
+			}
+			return conn.Close()
+		})
+		if err != nil {
+			t.Fatalf("WithReachable never dialed the delayed listener despite the container being healthy well before it opened: %v", err)
+		}
 	})
 
 	// EntrypointFaithfulness_CmdAppendsNotReplaces backfills the K1 class

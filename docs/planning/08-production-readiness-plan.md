@@ -1004,20 +1004,20 @@ Class 5 (contract tests don't prove translation) → F6; provider-contract
 instability (the `*Aware` setter accretion) → F5.
 
 **Stage exit criteria:**
-- [ ] The architecture test suite fails any provider or domain code that
+- [x] The architecture test suite fails any provider or domain code that
       constructs a loopback/localhost address (allowlist: in-container
       healthcheck commands, runtime adapters).
-- [ ] `connection.DialAddress()`'s managed-Connection loopback guess no
+- [x] `connection.DialAddress()`'s managed-Connection loopback guess no
       longer exists; external Connections expose `DeclaredAddress()` only.
-- [ ] All nine providers' admin-call retry loops go through one shared
+- [x] All nine providers' admin-call retry loops go through one shared
       `WithReachable` helper that re-resolves the address per attempt.
-- [ ] `PortBinding` declares an explicit audience; the fake runtime refuses
+- [x] `PortBinding` declares an explicit audience; the fake runtime refuses
       resolution of undeclared ports (strict interpreter), and the
       `HostPort: 0` magic value is retired.
-- [ ] The conformance suite contains entrypoint-faithfulness,
+- [x] The conformance suite contains entrypoint-faithfulness,
       delayed-listen readiness, immediate-dialability, and port-audience
       subtests, green on fake, Docker, and Kubernetes.
-- [ ] Providers receive all inputs through a single request-scoped struct;
+- [x] Providers receive all inputs through a single request-scoped struct;
       the `ProviderResourceAware`/`SecretsAware`/`ResourceSetAware` setter
       interfaces are removed; no provider holds cross-call state.
 
