@@ -878,7 +878,7 @@ doc 07 Gate 3 (public API and contribution readiness). Most tasks are
 independent and parallelizable; E1/E2 deliver the largest direct UX value.
 
 **Stage exit criteria:**
-- [ ] `platformctl init cdc-to-lake && platformctl apply` reaches Ready on
+- [x] `platformctl init cdc-to-lake && platformctl apply` reaches Ready on
       a machine with only Docker installed, no manifest editing.
 - [ ] Every schema-legal misconfiguration class in the negative-test corpus
       fails at `validate`, not apply.
