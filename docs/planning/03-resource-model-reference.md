@@ -162,6 +162,12 @@ spec:
                                   # allow-same-namespace NetworkPolicy pair so the Namespace isn't DNS-parity-only —
                                   # without it any pod anywhere in the cluster could reach it. "none" opts out (prints
                                   # a stderr warning); docker ignores this entirely, a Docker network is always isolated.
+                                  # Exception (errors.md, 2026-07-20): a container using access node-port/load-balancer
+                                  # additionally gets a per-container `datascape-allow-external-<name>` NetworkPolicy that
+                                  # opens this wall to exactly its declared ports. External traffic arrives SNAT'd to a
+                                  # non-pod source that allow-same-namespace never matches, so without the hole the very
+                                  # node-port/load-balancer traffic those modes exist to admit would time out. The hole
+                                  # is created only when the wall exists (never restricts a networkPolicy:none namespace).
     access: ""                   # kubernetes only (docs/planning/08 B1); "" (default) is port-forward | node-port |
                                   # load-balancer | in-cluster. Selects how platformctl itself (running outside the
                                   # cluster) reaches this Provider's admin/control-plane port to reconcile child

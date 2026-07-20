@@ -225,6 +225,51 @@ func (r *Runtime) ensureNetworkPolicies(ctx context.Context, ns string, labels m
 	return nil
 }
 
+// ensureExternalIngressPolicy reconciles the per-container NetworkPolicy that
+// opens the namespace's default-deny boundary for the ports of a container
+// exposed outside it (node-port/load-balancer). It is idempotent at the
+// EnsureContainer level: a spec whose hash is unchanged never reaches here,
+// and an access-mode change (which changes the hash) converges the policy —
+// created when the mode becomes external, deleted when it stops being.
+//
+// The hole is only provisioned when the namespace actually carries the
+// default-deny wall: with no wall there is nothing to punch through, and a
+// pod-selecting policy would instead *restrict* an IsolationNone pod to just
+// these ports — the opposite of that namespace's declared "no isolation".
+func (r *Runtime) ensureExternalIngressPolicy(ctx context.Context, ns string, spec runtimeport.ContainerSpec) error {
+	name := externalIngressPolicyName(spec.Name)
+	desired := buildExternalIngressPolicy(ns, spec)
+	if desired != nil {
+		if _, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, denyAllIngressPolicyName, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+			desired = nil // no wall in this namespace; no hole to punch
+		} else if err != nil {
+			return fmt.Errorf("get default-deny policy in %q: %w", ns, err)
+		}
+	}
+	if desired == nil {
+		if err := r.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete external-ingress policy %q: %w", name, err)
+		}
+		return nil
+	}
+	existing, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		if _, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create external-ingress policy %q: %w", name, err)
+		}
+		return nil
+	case err != nil:
+		return fmt.Errorf("get external-ingress policy %q: %w", name, err)
+	default:
+		desired.ResourceVersion = existing.ResourceVersion
+		if _, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Update(ctx, desired, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update external-ingress policy %q: %w", name, err)
+		}
+		return nil
+	}
+}
+
 func (r *Runtime) RemoveNetwork(ctx context.Context, name string) error {
 	ns, err := r.clientset.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -398,6 +443,9 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.Containe
 		return runtimeport.ContainerState{}, err
 	}
 	if err := r.ensureService(ctx, ns, spec); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
+	if err := r.ensureExternalIngressPolicy(ctx, ns, spec); err != nil {
 		return runtimeport.ContainerState{}, err
 	}
 	if err := r.ensureFilesSecret(ctx, ns, spec); err != nil {
@@ -971,6 +1019,12 @@ func (r *Runtime) Remove(ctx context.Context, name string) error {
 	}
 	if err := r.clientset.CoreV1().Secrets(ns).Delete(ctx, filesSecretName(name), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete files secret for %q: %w", name, err)
+	}
+	// Delete the per-container external-ingress hole (if any) by its
+	// deterministic name — the minimal RBAC role grants delete but not list
+	// on networkpolicies, so this must not enumerate.
+	if err := r.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, externalIngressPolicyName(name), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete external-ingress policy for %q: %w", name, err)
 	}
 	// Foreground propagation means the Deployment stays visible (with a
 	// deletionTimestamp) until its ReplicaSet/Pods are actually gone.

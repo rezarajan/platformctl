@@ -241,6 +241,26 @@ neither anticipated by this section when it was first written:
       any DNS name — for a container. Marquez itself failed with
       `UnknownHostException` trying to reach it. Same fix shape: declare the
       port with `HostPort: 0`.
+- [x] ~~NodePort/LoadBalancer external ingress is dropped by the B7
+      default-deny wall~~ resolved (errors.md, 2026-07-20): a namespace's
+      default-deny + allow-same-namespace NetworkPolicy pair (08 B7 / K13)
+      silently drops the very external traffic the `node-port`/`load-balancer`
+      access modes (08 B1) exist to admit — that traffic reaches the pod
+      SNAT'd to a node/LB address (a source that is not a pod in the
+      namespace), so `allow-same-namespace` never matches it and the dial
+      times out (precisely the CI symptom, reproduced on kindnet). This is a
+      Kubernetes-only difference with no Docker analogue (Docker's bridge
+      admits every source regardless of policy), so it cannot be expressed in
+      the runtime conformance suite — it is documented here per the doc 09
+      §3-F6 ratchet's "semantic lives outside the port → record it in doc 07's
+      per-runtime differences" branch, of which the K13/B7 isolation case was
+      the named model. Fix: each container in an external access mode gets a
+      per-container NetworkPolicy `datascape-allow-external-<name>` that opens
+      the wall to exactly its declared ports, created only when the wall
+      exists (so an `IsolationNone` namespace is never inadvertently
+      restricted) and deleted by name on `Remove`. Guarded by the unit test
+      `TestBuildExternalIngressPolicy` and the live node-port subtest of
+      `reachability_integration_test.go`.
 
 ## Stage Gates
 

@@ -218,6 +218,63 @@ func buildNetworkPolicies(namespace string, labels map[string]string) []*network
 	}
 }
 
+// externalIngressPolicyName is the per-container NetworkPolicy that opens the
+// namespace's default-deny boundary for a container deliberately exposed
+// outside it (node-port/load-balancer access modes).
+func externalIngressPolicyName(containerName string) string {
+	return "datascape-allow-external-" + containerName
+}
+
+// buildExternalIngressPolicy returns a NetworkPolicy that admits external
+// ingress to the ports of a container exposed outside the namespace via the
+// node-port/load-balancer access modes, or nil when no such hole is needed.
+//
+// Without it, the namespace's default-deny-ingress boundary
+// (buildNetworkPolicies) silently drops the very NodePort/LoadBalancer
+// traffic those modes exist to admit: such traffic reaches the pod SNAT'd to
+// a node/LB address (or, worst case, the client's own external IP) — never a
+// pod in this namespace — so the allow-same-namespace rule never matches it,
+// and the connection times out. This was observed live: kindnet enforces
+// NetworkPolicy, and a NodePort Service that is dialable with no policy times
+// out the instant the default-deny pair is applied.
+//
+// nil for modes that need no hole: port-forward reaches pods through the
+// kubelet stream, which bypasses NetworkPolicy; in-cluster and the default
+// ClusterIP are namespace-internal and already served by allow-same-namespace.
+// An ingress rule carrying ports but no `from` admits any source, but only to
+// these deliberately-exposed ports — every other port stays default-denied.
+func buildExternalIngressPolicy(namespace string, spec runtimeport.ContainerSpec) *networkingv1.NetworkPolicy {
+	if spec.AccessMode != runtimeport.AccessNodePort && spec.AccessMode != runtimeport.AccessLoadBalancer {
+		return nil
+	}
+	var ports []networkingv1.NetworkPolicyPort
+	for _, p := range spec.Ports {
+		proto := corev1.ProtocolTCP
+		if strings.EqualFold(p.Protocol, "udp") {
+			proto = corev1.ProtocolUDP
+		}
+		port := intstr.FromInt32(int32(p.ContainerPort))
+		ports = append(ports, networkingv1.NetworkPolicyPort{Protocol: &proto, Port: &port})
+	}
+	if len(ports) == 0 {
+		return nil
+	}
+	labels := withOwnership(spec.Labels)
+	labels["app"] = spec.Name
+	return &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      externalIngressPolicyName(spec.Name),
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": spec.Name}},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress:     []networkingv1.NetworkPolicyIngressRule{{Ports: ports}},
+		},
+	}
+}
+
 func filesSecretName(containerName string) string { return containerName + "-files" }
 
 func fileKey(i int) string { return fmt.Sprintf("f%d", i) }
