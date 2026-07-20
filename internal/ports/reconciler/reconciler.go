@@ -13,11 +13,51 @@ import (
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
+// Request is the single input to Reconcile/Destroy/Probe and every
+// capability method that needs more than a provider's own static config
+// (docs/planning/08 F5, docs/planning/09 §3-F5). It replaces an accretion
+// of setter interfaces (ProviderResourceAware, SecretsAware,
+// ResourceSetAware) that made providers stateful (a Set* call before
+// Reconcile is a temporal coupling the compiler can't check) and made
+// adding a cross-cutting input either a breaking signature change
+// (LineageAware.ConfigureLineage grew a runtime.ContainerRuntime parameter
+// in 81025c9, breaking every implementor) or another *Aware interface plus
+// an engine special case.
+//
+// Adding a field here is non-breaking for every implementor — the open/
+// closed property the setter pattern lacked — and a provider built against
+// it holds no state across calls: its constructor takes nothing but static
+// config, and every call is self-contained, which is what an out-of-process
+// plugin (Phase 8) requires. A zero field means "not resolved/applicable
+// for this call" (e.g. Secrets is empty when the Provider declares no
+// secretRefs); providers must not assume any field is populated beyond what
+// their own resource declares.
+type Request struct {
+	// Resource is the envelope actually being reconciled/destroyed/probed —
+	// may be the Provider itself, or a dependent resource (EventStream,
+	// Source, Binding, Connection, Catalog, ...) the Provider realizes.
+	Resource resource.Envelope
+	// Runtime is the constructed ContainerRuntime for Resource's realizing
+	// Provider's spec.runtime.
+	Runtime runtime.ContainerRuntime
+	// Provider is the realizing Provider resource's own envelope — Resource
+	// itself when Resource.Kind == "Provider".
+	Provider resource.Envelope
+	// Secrets holds every SecretReference the Provider declared in
+	// spec.secretRefs, resolved and keyed by reference name, then by key.
+	// Empty when the Provider declares none.
+	Secrets map[string]map[string]string
+	// Resources is the full validated resource set for this operation,
+	// keyed by resource.Key — used to resolve related resources (a
+	// Binding's sourceRef/targetRef, a Source's connectionRef, ...).
+	Resources map[resource.Key]resource.Envelope
+}
+
 type Provider interface {
 	Type() string // "redpanda", "postgres", "debezium", "s3", "s3sink"
-	Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error)
-	Destroy(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) error
-	Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error)
+	Reconcile(ctx context.Context, req Request) (status.Status, error)
+	Destroy(ctx context.Context, req Request) error
+	Probe(ctx context.Context, req Request) (status.Status, error)
 }
 
 // ExternalConfigurer is the only provider capability allowed to mutate or
@@ -25,7 +65,7 @@ type Provider interface {
 // External resources without providerRef remain connection/probe-only.
 type ExternalConfigurer interface {
 	Provider
-	ConfigureExternal(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error)
+	ConfigureExternal(ctx context.Context, req Request) (status.Status, error)
 }
 
 // CDCCapableProvider is declared by a provider that can sit behind a
@@ -87,10 +127,13 @@ type ConnectionCapableProvider interface {
 // configuration.version; the provider resolves the pinned Profile (image +
 // internals together) from the catalog, so an image can never be run with a
 // mismatched mount. Providers without version-coupled internals do not
-// implement this and remain single-profile (image-only).
+// implement this and remain single-profile (image-only). cfg is the
+// resource's own parsed config — mirroring SpecValidator.ValidateSpec — so a
+// provider whose catalog depends on its own type (mysql vs. mariadb) needs
+// no stored state to answer this at validate time, before any Request exists.
 type VersionedProvider interface {
 	Provider
-	VersionCatalog() versionprofile.Catalog
+	VersionCatalog(cfg provider.Provider) versionprofile.Catalog
 }
 
 // SpecValidator is optionally implemented by providers that can check their
@@ -115,39 +158,14 @@ type BindingOptionsValidator interface {
 	ValidateBindingOptions(mode string, options map[string]any) error
 }
 
-// ProviderResourceAware is optionally implemented by providers that need
-// their own Provider resource's spec (configuration, runtime block) when
-// reconciling dependent resources — e.g. redpanda needs the broker address it
-// declared when reconciling an EventStream. The engine calls
-// SetProviderResource after construction, before any Reconcile/Destroy/Probe.
-// (Implementation-revealed addition; pending doc amendment to 02-architecture.md §4.2.)
-type ProviderResourceAware interface {
-	Provider
-	SetProviderResource(env resource.Envelope)
-}
-
-// SecretsAware is optionally implemented by providers whose Provider resource
-// declares spec.secretRefs. The engine resolves each named SecretReference via
-// the SecretStore port and calls SetSecrets (keyed by reference name, then by
-// key) before any Reconcile/Destroy/Probe.
-type SecretsAware interface {
-	Provider
-	SetSecrets(secrets map[string]map[string]string)
-}
-
-// ResourceSetAware is optionally implemented by providers that must resolve
-// other resources while reconciling one — e.g. debezium reconciling a Binding
-// needs the Source's provider (database host) and the EventStream's provider
-// (broker address). The engine passes the full validated resource set.
-type ResourceSetAware interface {
-	Provider
-	SetResourceSet(byKey map[resource.Key]resource.Envelope)
-}
-
 // LineageAware is declared by a provider that knows how to consume a lineage
 // backend's connection details and wire them into its own, real integration.
-// Implemented by `debezium` in v1.0.0.
+// Implemented by `debezium` in v1.0.0. Takes Request like every other
+// capability method: a future cross-cutting need lands as an additive
+// Request field, not another widened signature (docs/planning/08 F5) — the
+// exact breakage this method caused once already (81025c9 added
+// runtime.ContainerRuntime as a bare parameter).
 type LineageAware interface {
 	Provider
-	ConfigureLineage(ctx context.Context, endpoint lineage.LineageEndpoint, rt runtime.ContainerRuntime) error
+	ConfigureLineage(ctx context.Context, req Request, endpoint lineage.LineageEndpoint) error
 }

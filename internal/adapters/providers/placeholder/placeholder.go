@@ -14,6 +14,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -32,7 +33,8 @@ func names(res resource.Envelope, cfg provider.Provider) (network, volume, conta
 	return network, container + "-data", container
 }
 
-func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
 	cfg, err := provider.FromEnvelope(res)
 	if err != nil {
@@ -84,7 +86,8 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	return st, nil
 }
 
-func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) error {
+func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
+	res, rt := req.Resource, req.Runtime
 	cfg, err := provider.FromEnvelope(res)
 	if err != nil {
 		return err
@@ -102,7 +105,8 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 	return nil
 }
 
-func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
 	cfg, err := provider.FromEnvelope(res)
 	if err != nil {

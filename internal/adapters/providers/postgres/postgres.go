@@ -12,11 +12,11 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
-	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/source"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/domain/storagesize"
 	"github.com/rezarajan/platformctl/internal/domain/versionprofile"
+	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -33,46 +33,38 @@ var catalog = versionprofile.Catalog{
 	},
 }
 
-// VersionCatalog implements reconciler.VersionedProvider.
-func (p *Provider) VersionCatalog() versionprofile.Catalog { return catalog }
+// VersionCatalog implements reconciler.VersionedProvider. Postgres has a
+// single catalog regardless of the resource's own config (unlike mysql's
+// mysql/mariadb split), but still takes cfg to satisfy the interface
+// uniformly (docs/planning/08 F5).
+func (p *Provider) VersionCatalog(_ provider.Provider) versionprofile.Catalog { return catalog }
 
 // profile resolves the pinned version profile, applying an optional image
 // override (a private mirror of the same version) while keeping the version's
 // internals.
-func (p *Provider) profile() (versionprofile.Profile, error) {
-	version, _ := p.cfg.Configuration["version"].(string)
+func profile(cfg provider.Provider) (versionprofile.Profile, error) {
+	version, _ := cfg.Configuration["version"].(string)
 	prof, err := catalog.Resolve(version)
 	if err != nil {
 		return prof, err
 	}
-	if img, _ := p.cfg.Configuration["image"].(string); img != "" {
+	if img, _ := cfg.Configuration["image"].(string); img != "" {
 		prof.Image = img
 	}
 	return prof, nil
 }
 
-type Provider struct {
-	providerRes resource.Envelope
-	cfg         provider.Provider
-	secrets     map[string]map[string]string
-}
+// Provider holds no cross-call state (docs/planning/08 F5): every method
+// receives what it needs via reconciler.Request.
+type Provider struct{}
 
 func New() *Provider { return &Provider{} }
 
 func (p *Provider) Type() string { return "postgres" }
 
-func (p *Provider) SetProviderResource(env resource.Envelope) {
-	p.providerRes = env
-	p.cfg, _ = provider.FromEnvelope(env)
-}
-
-func (p *Provider) SetSecrets(secrets map[string]map[string]string) { p.secrets = secrets }
-
-func (p *Provider) containerName() string { return naming.RuntimeObjectName(p.providerRes) }
-
-func (p *Provider) hostPort() int {
+func hostPort(cfg provider.Provider, name string) int {
 	configured := 0
-	if v, ok := p.cfg.Configuration["port"]; ok {
+	if v, ok := cfg.Configuration["port"]; ok {
 		switch n := v.(type) {
 		case int:
 			configured = n
@@ -80,7 +72,7 @@ func (p *Provider) hostPort() int {
 			configured = int(n)
 		}
 	}
-	return hostport.Resolve(configured, p.containerName())
+	return hostport.Resolve(configured, name)
 }
 
 // reachableAddr returns an address this process can dial right now to reach
@@ -91,12 +83,12 @@ func (p *Provider) hostPort() int {
 // broker-style "reconnect to this other address" redirect, so — unlike
 // redpanda's advertised-address indirection — the address this resolves to
 // can be used directly for the whole call, no placeholder needed.
-func (p *Provider) reachableAddr(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
-	return rt.EnsureReachable(ctx, p.containerName(), 5432)
+func reachableAddr(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
+	return rt.EnsureReachable(ctx, name, 5432)
 }
 
-func (p *Provider) network() string {
-	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
+func network(cfg provider.Provider) string {
+	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
 		return n
 	}
 	return "datascape"
@@ -106,8 +98,8 @@ func (p *Provider) network() string {
 // (docs/planning/08 B7) into runtime.NetworkSpec's opt-out field. Docker
 // ignores it (a network is always isolated there); empty keeps the
 // Kubernetes adapter's default NetworkPolicy provisioning.
-func (p *Provider) networkIsolationPolicy() string {
-	policy, _ := p.cfg.RuntimeConfig["networkPolicy"].(string)
+func networkIsolationPolicy(cfg provider.Provider) string {
+	policy, _ := cfg.RuntimeConfig["networkPolicy"].(string)
 	return policy
 }
 
@@ -115,73 +107,78 @@ func (p *Provider) networkIsolationPolicy() string {
 // into a VolumeSpec's runtime-agnostic fields. Both are optional — an unset
 // size keeps the runtime adapter's own default (Docker: unsized; Kubernetes:
 // 10Gi), and an unset class keeps the cluster's default StorageClass.
-func (p *Provider) storage() (sizeBytes int64, class string, err error) {
-	cfg, _ := p.cfg.Configuration["storage"].(map[string]any)
-	if cfg == nil {
+func storage(cfg provider.Provider, name string) (sizeBytes int64, class string, err error) {
+	storageCfg, _ := cfg.Configuration["storage"].(map[string]any)
+	if storageCfg == nil {
 		return 0, "", nil
 	}
-	if sizeStr, _ := cfg["size"].(string); sizeStr != "" {
+	if sizeStr, _ := storageCfg["size"].(string); sizeStr != "" {
 		sizeBytes, err = storagesize.ParseBytes(sizeStr)
 		if err != nil {
-			return 0, "", fmt.Errorf("Provider %q: configuration.storage.size: %w", p.containerName(), err)
+			return 0, "", fmt.Errorf("Provider %q: configuration.storage.size: %w", name, err)
 		}
 	}
-	class, _ = cfg["class"].(string)
+	class, _ = storageCfg["class"].(string)
 	return sizeBytes, class, nil
 }
 
 // superuser returns the bootstrap credentials: the SecretReference named by
 // configuration.superuserSecretRef, or the first declared secretRef.
-func (p *Provider) superuser() (user, pass string, err error) {
-	refName, _ := p.cfg.Configuration["superuserSecretRef"].(string)
-	if refName == "" && len(p.cfg.SecretRefs) > 0 {
-		refName = p.cfg.SecretRefs[0]
+func superuser(cfg provider.Provider, secrets map[string]map[string]string, name string) (user, pass string, err error) {
+	refName, _ := cfg.Configuration["superuserSecretRef"].(string)
+	if refName == "" && len(cfg.SecretRefs) > 0 {
+		refName = cfg.SecretRefs[0]
 	}
-	creds, ok := p.secrets[refName]
+	creds, ok := secrets[refName]
 	if !ok {
-		return "", "", fmt.Errorf("Provider %q (type: postgres): no resolved credentials for secretRef %q", p.containerName(), refName)
+		return "", "", fmt.Errorf("Provider %q (type: postgres): no resolved credentials for secretRef %q", name, refName)
 	}
 	user, pass = creds["username"], creds["password"]
 	if user == "" || pass == "" {
-		return "", "", fmt.Errorf("Provider %q: secretRef %q must provide username and password keys", p.containerName(), refName)
+		return "", "", fmt.Errorf("Provider %q: secretRef %q must provide username and password keys", name, refName)
 	}
 	return user, pass, nil
 }
 
-func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
-	switch res.Kind {
+func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	switch req.Resource.Kind {
 	case "Provider":
-		return p.reconcileInstance(ctx, rt)
+		return p.reconcileInstance(ctx, req)
 	case "Source":
-		return p.reconcileSource(ctx, res, rt)
+		return p.reconcileSource(ctx, req)
 	default:
-		return status.Status{}, fmt.Errorf("postgres provider cannot reconcile kind %s", res.Kind)
+		return status.Status{}, fmt.Errorf("postgres provider cannot reconcile kind %s", req.Resource.Kind)
 	}
 }
 
-func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	rt := req.Runtime
 	st := status.Status{}
-	name := p.containerName()
-	prof, err := p.profile()
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
+	prof, err := profile(cfg)
 	if err != nil {
 		return st, fmt.Errorf("Provider %q (type: postgres): %w", name, err)
 	}
-	user, pass, err := p.superuser()
+	user, pass, err := superuser(cfg, req.Secrets, name)
 	if err != nil {
 		return st, err
 	}
-	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", name, name)
-	oldUser, oldPass, _ := p.liveSuperuser(ctx, rt)
+	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
+	oldUser, oldPass, _ := liveSuperuser(ctx, rt, name)
 
-	sizeBytes, storageClass, err := p.storage()
+	sizeBytes, storageClass, err := storage(cfg, name)
 	if err != nil {
 		return st, err
 	}
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels, IsolationPolicy: p.networkIsolationPolicy()}); err != nil {
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels, IsolationPolicy: networkIsolationPolicy(cfg)}); err != nil {
 		return st, err
 	}
 	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{
-		Name: name + "-data", Labels: labels, Networks: []string{p.network()},
+		Name: name + "-data", Labels: labels, Networks: []string{network(cfg)},
 		SizeBytes: sizeBytes, StorageClass: storageClass,
 	}); err != nil {
 		return st, err
@@ -198,9 +195,9 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 			"POSTGRES_PASSWORD_FILE": superuserPasswordPath,
 		},
 		Files:    []runtime.FileMount{{Path: superuserPasswordPath, Content: []byte(pass)}},
-		Networks: []string{p.network()},
+		Networks: []string{network(cfg)},
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: prof.DataMount}},
-		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: 5432, Audience: runtime.AudienceHost}},
+		Ports:    []runtime.PortBinding{{HostPort: hostPort(cfg, name), ContainerPort: 5432, Audience: runtime.AudienceHost}},
 		HealthCheck: &runtime.HealthCheck{
 			// Force a TCP check: the plain unix-socket pg_isready answers
 			// during the image's initdb temp-server phase, before the real
@@ -219,7 +216,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
 		return st, err
 	}
-	if err := p.ensureSuperuser(ctx, rt, user, pass, oldUser, oldPass); err != nil {
+	if err := ensureSuperuser(ctx, rt, name, user, pass, oldUser, oldPass); err != nil {
 		return st, err
 	}
 
@@ -244,14 +241,14 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 // superuserPasswordPath is where the bootstrap password file is mounted.
 const superuserPasswordPath = "/run/datascape/superuser-password"
 
-func (p *Provider) liveSuperuser(ctx context.Context, rt runtime.ContainerRuntime) (string, string, bool) {
-	ctr, found, err := rt.Inspect(ctx, p.containerName())
+func liveSuperuser(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, string, bool) {
+	ctr, found, err := rt.Inspect(ctx, name)
 	if err != nil || !found {
 		return "", "", false
 	}
 	user := ctr.Env["POSTGRES_USER"]
 	pass := ""
-	if data, err := rt.ReadFile(ctx, p.containerName(), superuserPasswordPath); err == nil {
+	if data, err := rt.ReadFile(ctx, name, superuserPasswordPath); err == nil {
 		pass = string(data)
 	} else {
 		// Containers created before the file-mount change carried the
@@ -264,8 +261,7 @@ func (p *Provider) liveSuperuser(ctx context.Context, rt runtime.ContainerRuntim
 	return user, pass, true
 }
 
-func (p *Provider) ensureSuperuser(ctx context.Context, rt runtime.ContainerRuntime, desiredUser, desiredPass, previousUser, previousPass string) error {
-	name := p.containerName()
+func ensureSuperuser(ctx context.Context, rt runtime.ContainerRuntime, name, desiredUser, desiredPass, previousUser, previousPass string) error {
 	buildDesired := func(addr string) string { return connStringAddr(addr, desiredUser, desiredPass, "postgres") }
 	if previousUser == "" || previousPass == "" || (previousUser == desiredUser && previousPass == desiredPass) {
 		return waitReadyReachable(ctx, rt, name, 5432, buildDesired, 60*time.Second)
@@ -277,7 +273,7 @@ func (p *Provider) ensureSuperuser(ctx context.Context, rt runtime.ContainerRunt
 	if err := waitReadyReachable(ctx, rt, name, 5432, buildPrevious, 60*time.Second); err != nil {
 		return fmt.Errorf("postgres superuser credentials changed but neither the desired SecretReference nor the previous managed-container environment credentials can authenticate; manual recovery is required: %w", err)
 	}
-	addr, closeAddr, err := p.reachableAddr(ctx, rt)
+	addr, closeAddr, err := reachableAddr(ctx, rt, name)
 	if err != nil {
 		return err
 	}
@@ -291,8 +287,14 @@ func (p *Provider) ensureSuperuser(ctx context.Context, rt runtime.ContainerRunt
 // reconcileSource ensures the declared database exists, logical replication
 // is active (wal_level=logical is set at instance level), and the replication
 // role from configuration.replicationSecretRef exists with REPLICATION LOGIN.
-func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) reconcileSource(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
 	src, err := source.FromEnvelope(res)
 	if err != nil {
 		return st, err
@@ -301,27 +303,27 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope, r
 	if dbName == "" {
 		return st, fmt.Errorf("Source %q: spec.postgres.database is required", res.Metadata.Name)
 	}
-	suUser, suPass, err := p.superuser()
+	suUser, suPass, err := superuser(cfg, req.Secrets, name)
 	if err != nil {
 		return st, err
 	}
 
-	replRefName, _ := p.cfg.Configuration["replicationSecretRef"].(string)
+	replRefName, _ := cfg.Configuration["replicationSecretRef"].(string)
 	var replUser, replPass string
 	if replRefName != "" {
-		creds, ok := p.secrets[replRefName]
+		creds, ok := req.Secrets[replRefName]
 		if !ok {
 			return st, fmt.Errorf("Source %q: no resolved credentials for replicationSecretRef %q", res.Metadata.Name, replRefName)
 		}
 		replUser, replPass = creds["username"], creds["password"]
 	}
 
-	if err := waitReadyReachable(ctx, rt, p.containerName(), 5432, func(addr string) string {
+	if err := waitReadyReachable(ctx, rt, name, 5432, func(addr string) string {
 		return connStringAddr(addr, suUser, suPass, "postgres")
 	}, 30*time.Second); err != nil {
 		return st, err
 	}
-	addr, closeAddr, err := p.reachableAddr(ctx, rt)
+	addr, closeAddr, err := reachableAddr(ctx, rt, name)
 	if err != nil {
 		return st, err
 	}
@@ -352,17 +354,22 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope, r
 	return st, nil
 }
 
-func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) error {
+func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
+	res, rt := req.Resource, req.Runtime
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
 	switch res.Kind {
 	case "Provider":
-		name := p.containerName()
 		if err := rt.Remove(ctx, name); err != nil {
 			return err
 		}
 		if err := rt.RemoveVolume(ctx, name+"-data"); err != nil {
 			return err
 		}
-		_ = rt.RemoveNetwork(ctx, p.network())
+		_ = rt.RemoveNetwork(ctx, network(cfg))
 		return nil
 	case "Source":
 		// deletionPolicy governs the data (docs/planning/07 §2.2): retain
@@ -382,14 +389,14 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		}
 		// Tolerate already-dead backing infra (Inspect-first guard, like
 		// every provider's sub-resource destroy).
-		if ctr, found, ierr := rt.Inspect(ctx, p.containerName()); ierr != nil || !found || !ctr.Running {
+		if ctr, found, ierr := rt.Inspect(ctx, name); ierr != nil || !found || !ctr.Running {
 			return ierr
 		}
-		user, pass, err := p.superuser()
+		user, pass, err := superuser(cfg, req.Secrets, name)
 		if err != nil {
 			return err
 		}
-		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		addr, closeAddr, err := reachableAddr(ctx, rt, name)
 		if err != nil {
 			return err
 		}
@@ -400,12 +407,18 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 	}
 }
 
-func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
 	now := time.Now()
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
 	switch res.Kind {
 	case "Provider":
-		ctrState, found, err := rt.Inspect(ctx, p.containerName())
+		ctrState, found, err := rt.Inspect(ctx, name)
 		if err != nil {
 			return st, err
 		}
@@ -423,11 +436,11 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 			return st, err
 		}
 		dbName, _ := src.EngineConfig["database"].(string)
-		suUser, suPass, err := p.superuser()
+		suUser, suPass, err := superuser(cfg, req.Secrets, name)
 		if err != nil {
 			return st, err
 		}
-		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		addr, closeAddr, err := reachableAddr(ctx, rt, name)
 		if err != nil {
 			return st, err
 		}
@@ -458,8 +471,8 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "WALNotLogical", Message: msg}, now)
 			return st, nil
 		}
-		if replRefName, _ := p.cfg.Configuration["replicationSecretRef"].(string); replRefName != "" {
-			creds, ok := p.secrets[replRefName]
+		if replRefName, _ := cfg.Configuration["replicationSecretRef"].(string); replRefName != "" {
+			creds, ok := req.Secrets[replRefName]
 			if ok {
 				replConn := connStringAddr(addr, creds["username"], creds["password"], dbName)
 				if err := ping(ctx, replConn); err != nil {

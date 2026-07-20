@@ -38,7 +38,7 @@ type fakeLineageProvider struct {
 
 func (f *fakeLineageProvider) Type() string { return "fakelineage" }
 
-func (f *fakeLineageProvider) ConfigureLineage(_ context.Context, ep lineage.LineageEndpoint, _ runtime.ContainerRuntime) error {
+func (f *fakeLineageProvider) ConfigureLineage(_ context.Context, _ reconciler.Request, ep lineage.LineageEndpoint) error {
 	f.received = &ep
 	return nil
 }
@@ -180,7 +180,7 @@ type driftingProvider struct {
 
 func (d *driftingProvider) Type() string { return "drifty" }
 
-func (d *driftingProvider) Probe(_ context.Context, _ resource.Envelope, _ runtime.ContainerRuntime) (status.Status, error) {
+func (d *driftingProvider) Probe(_ context.Context, _ reconciler.Request) (status.Status, error) {
 	st := status.Status{}
 	now := time.Now()
 	if d.ReconcileCount < 2 {
@@ -254,8 +254,8 @@ type externalConfigProvider struct {
 
 func (p *externalConfigProvider) Type() string { return "external-config" }
 
-func (p *externalConfigProvider) Reconcile(_ context.Context, res resource.Envelope, _ runtime.ContainerRuntime) (status.Status, error) {
-	if res.Kind != "Provider" {
+func (p *externalConfigProvider) Reconcile(_ context.Context, req reconciler.Request) (status.Status, error) {
+	if req.Resource.Kind != "Provider" {
 		return status.Status{}, errors.New("external resource used Reconcile")
 	}
 	st := status.Status{}
@@ -263,8 +263,8 @@ func (p *externalConfigProvider) Reconcile(_ context.Context, res resource.Envel
 	return st, nil
 }
 
-func (p *externalConfigProvider) ConfigureExternal(_ context.Context, res resource.Envelope, _ runtime.ContainerRuntime) (status.Status, error) {
-	if res.Kind != "Dataset" {
+func (p *externalConfigProvider) ConfigureExternal(_ context.Context, req reconciler.Request) (status.Status, error) {
+	if req.Resource.Kind != "Dataset" {
 		return status.Status{}, errors.New("unexpected external resource")
 	}
 	p.configured++
@@ -485,7 +485,7 @@ type slowProvider struct {
 
 func (s *slowProvider) Type() string { return "slow" }
 
-func (s *slowProvider) Reconcile(_ context.Context, _ resource.Envelope, _ runtime.ContainerRuntime) (status.Status, error) {
+func (s *slowProvider) Reconcile(_ context.Context, _ reconciler.Request) (status.Status, error) {
 	s.mu.Lock()
 	s.active++
 	if s.active > s.maxSeen {

@@ -11,19 +11,18 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/domain/versionprofile"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
-	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
 type stubProvider struct{ typeName string }
 
 func (s stubProvider) Type() string { return s.typeName }
-func (s stubProvider) Reconcile(context.Context, resource.Envelope, runtime.ContainerRuntime) (status.Status, error) {
+func (s stubProvider) Reconcile(context.Context, reconciler.Request) (status.Status, error) {
 	return status.Status{}, nil
 }
-func (s stubProvider) Destroy(context.Context, resource.Envelope, runtime.ContainerRuntime) error {
+func (s stubProvider) Destroy(context.Context, reconciler.Request) error {
 	return nil
 }
-func (s stubProvider) Probe(context.Context, resource.Envelope, runtime.ContainerRuntime) (status.Status, error) {
+func (s stubProvider) Probe(context.Context, reconciler.Request) (status.Status, error) {
 	return status.Status{}, nil
 }
 
@@ -37,7 +36,7 @@ func (sinkStub) SupportedSinkFormats() []string { return []string{"parquet", "js
 
 type externalConfigStub struct{ stubProvider }
 
-func (externalConfigStub) ConfigureExternal(context.Context, resource.Envelope, runtime.ContainerRuntime) (status.Status, error) {
+func (externalConfigStub) ConfigureExternal(context.Context, reconciler.Request) (status.Status, error) {
 	return status.Status{}, nil
 }
 
@@ -51,7 +50,7 @@ type versionedStub struct {
 	catalog versionprofile.Catalog
 }
 
-func (v versionedStub) VersionCatalog() versionprofile.Catalog { return v.catalog }
+func (v versionedStub) VersionCatalog(provider.Provider) versionprofile.Catalog { return v.catalog }
 
 func envelope(kind, name string, spec map[string]any) resource.Envelope {
 	e := resource.Envelope{}

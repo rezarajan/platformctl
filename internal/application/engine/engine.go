@@ -30,7 +30,6 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/clock"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
-	"github.com/rezarajan/platformctl/internal/ports/runtime"
 	"github.com/rezarajan/platformctl/internal/ports/secretstore"
 	"github.com/rezarajan/platformctl/internal/ports/state"
 )
@@ -397,7 +396,7 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 		return e.reconcileExternal(ctx, entry, env, byKey, deps, st)
 	}
 	if isExternal(env) {
-		prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
+		prov, req, err := e.resolveRequest(ctx, env, byKey)
 		if err != nil {
 			return err
 		}
@@ -405,7 +404,7 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 		if !ok {
 			return fmt.Errorf("%s is External with providerRef, but provider type %q does not implement ExternalConfigurer", env.Key(), prov.Type())
 		}
-		newStatus, err := configurer.ConfigureExternal(ctx, env, rt)
+		newStatus, err := configurer.ConfigureExternal(ctx, req)
 		if err != nil {
 			return err
 		}
@@ -417,12 +416,12 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 		return e.StateStore.Save(ctx, *st)
 	}
 
-	prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
+	prov, req, err := e.resolveRequest(ctx, env, byKey)
 	if err != nil {
 		return err
 	}
 
-	newStatus, err := prov.Reconcile(ctx, env, rt)
+	newStatus, err := prov.Reconcile(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -437,7 +436,7 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 				if err != nil {
 					return fmt.Errorf("resolve observer %q: %w", obs.Name, err)
 				}
-				if err := la.ConfigureLineage(ctx, endpoint, rt); err != nil {
+				if err := la.ConfigureLineage(ctx, req, endpoint); err != nil {
 					return fmt.Errorf("configure lineage from observer %q: %w", obs.Name, err)
 				}
 			}
@@ -538,10 +537,10 @@ func (e *Engine) probeOneAgainstState(ctx context.Context, env resource.Envelope
 		return e.externalConnectionStatus(ctx, env, byKey)
 	}
 
-	prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
+	prov, req, err := e.resolveRequest(ctx, env, byKey)
 	if err == nil {
 		var probed status.Status
-		probed, err = prov.Probe(ctx, env, rt)
+		probed, err = prov.Probe(ctx, req)
 		if err == nil {
 			return probed
 		}
@@ -712,7 +711,7 @@ func (e *Engine) connectionDialAddress(ctx context.Context, connEnv resource.Env
 		addr, _ := conn.ExternalAddress()
 		return addr, nil
 	}
-	_, rt, err := e.resolveProviderAndRuntime(ctx, connEnv, byKey)
+	_, req, err := e.resolveRequest(ctx, connEnv, byKey)
 	if err != nil {
 		return "", nil
 	}
@@ -723,7 +722,7 @@ func (e *Engine) connectionDialAddress(ctx context.Context, connEnv resource.Env
 			break
 		}
 	}
-	addr, closeAddr, err := rt.EnsureReachable(ctx, runtimeName, containerPort)
+	addr, closeAddr, err := req.Runtime.EnsureReachable(ctx, runtimeName, containerPort)
 	if err != nil {
 		return "", nil
 	}
@@ -896,11 +895,11 @@ func (e *Engine) applyDeleteOne(ctx context.Context, entry plan.Entry, env resou
 		e.stateMu.Unlock()
 		return err
 	}
-	prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
+	prov, req, err := e.resolveRequest(ctx, env, byKey)
 	if err != nil {
 		return err
 	}
-	if err := prov.Destroy(ctx, env, rt); err != nil {
+	if err := prov.Destroy(ctx, req); err != nil {
 		return err
 	}
 	e.stateMu.Lock()
@@ -1036,14 +1035,14 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 			e.logf("ok   destroy %s", entry.Key)
 			continue
 		}
-		prov, rt, err := e.resolveProviderAndRuntime(ctx, env, byKey)
+		prov, req, err := e.resolveRequest(ctx, env, byKey)
 		if err != nil {
 			res.Failed[entry.Key] = err
 			e.logf("fail destroy %s: %v", entry.Key, err)
 			block(entry.Key)
 			continue
 		}
-		if err := prov.Destroy(ctx, env, rt); err != nil {
+		if err := prov.Destroy(ctx, req); err != nil {
 			res.Failed[entry.Key] = err
 			e.logf("fail destroy %s: %v", entry.Key, err)
 			block(entry.Key)
@@ -1063,60 +1062,66 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 	return res, nil
 }
 
-// resolveProviderAndRuntime resolves the resource's Provider (via providerRef,
-// or the resource itself if it is a Provider) and constructs its runtime.
-func (e *Engine) resolveProviderAndRuntime(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope) (reconciler.Provider, runtime.ContainerRuntime, error) {
+// resolveRequest resolves the resource's Provider (via providerRef, or the
+// resource itself if it is a Provider), constructs its runtime, resolves
+// any declared secrets, and assembles the reconciler.Request every
+// Reconcile/Destroy/Probe/capability-method call uses as its single input
+// (docs/planning/08 F5) — replacing the old resolveProviderAndRuntime's
+// Set*-before-call dance (SetProviderResource/SetResourceSet/SetSecrets)
+// with one immutable value built once per call, so a provider never holds
+// state across calls.
+func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope) (reconciler.Provider, reconciler.Request, error) {
 	provEnv := env
 	if env.Kind != "Provider" {
 		ref := resource.RefFromSpec(env.Spec, "providerRef")
 		if ref.Name == "" {
-			return nil, nil, fmt.Errorf("%s: no providerRef to resolve a provider from", env.Key())
+			return nil, reconciler.Request{}, fmt.Errorf("%s: no providerRef to resolve a provider from", env.Key())
 		}
 		pe, ok := byKey[ref.Key(env.Metadata.Namespace, "Provider")]
 		if !ok {
-			return nil, nil, fmt.Errorf("%s: providerRef %q does not resolve to a Provider in namespace %q", env.Key(), ref.Name, ref.NamespaceOr(env.Metadata.Namespace))
+			return nil, reconciler.Request{}, fmt.Errorf("%s: providerRef %q does not resolve to a Provider in namespace %q", env.Key(), ref.Name, ref.NamespaceOr(env.Metadata.Namespace))
 		}
 		provEnv = pe
 	}
 
 	p, err := provider.FromEnvelope(provEnv)
 	if err != nil {
-		return nil, nil, err
+		return nil, reconciler.Request{}, err
 	}
 	prov, err := e.Registry.Provider(p.Type)
 	if err != nil {
-		return nil, nil, err
+		return nil, reconciler.Request{}, err
 	}
-	if aware, ok := prov.(reconciler.ProviderResourceAware); ok {
-		aware.SetProviderResource(provEnv)
-	}
-	if aware, ok := prov.(reconciler.ResourceSetAware); ok {
-		aware.SetResourceSet(byKey)
-	}
-	if aware, ok := prov.(reconciler.SecretsAware); ok && len(p.SecretRefs) > 0 {
+	var secrets map[string]map[string]string
+	if len(p.SecretRefs) > 0 {
 		if e.SecretStore == nil {
-			return nil, nil, fmt.Errorf("Provider %q declares secretRefs but no secret store is configured", provEnv.Metadata.Name)
+			return nil, reconciler.Request{}, fmt.Errorf("Provider %q declares secretRefs but no secret store is configured", provEnv.Metadata.Name)
 		}
-		secrets := make(map[string]map[string]string, len(p.SecretRefs))
+		secrets = make(map[string]map[string]string, len(p.SecretRefs))
 		for _, refName := range p.SecretRefs {
 			refEnv, ok := byKey[resource.Key{Namespace: provEnv.Key().Namespace, Kind: "SecretReference", Name: refName}]
 			if !ok {
-				return nil, nil, fmt.Errorf("Provider %q: secretRef %q does not resolve to a SecretReference in namespace %q", provEnv.Metadata.Name, refName, provEnv.Key().Namespace)
+				return nil, reconciler.Request{}, fmt.Errorf("Provider %q: secretRef %q does not resolve to a SecretReference in namespace %q", provEnv.Metadata.Name, refName, provEnv.Key().Namespace)
 			}
 			ref := secretRefFrom(refEnv)
 			resolved, err := e.SecretStore.Resolve(ctx, ref)
 			if err != nil {
-				return nil, nil, err
+				return nil, reconciler.Request{}, err
 			}
 			secrets[refName] = resolved
 		}
-		aware.SetSecrets(secrets)
 	}
 	rt, err := e.Registry.Runtime(p.RuntimeType, p.RuntimeConfig)
 	if err != nil {
-		return nil, nil, err
+		return nil, reconciler.Request{}, err
 	}
-	return prov, rt, nil
+	return prov, reconciler.Request{
+		Resource:  env,
+		Runtime:   rt,
+		Provider:  provEnv,
+		Secrets:   secrets,
+		Resources: byKey,
+	}, nil
 }
 
 func (e *Engine) resolveLineageEndpoint(ctx context.Context, observer resource.ObserverRef, defaultNamespace string, byKey map[resource.Key]resource.Envelope, st *state.State) (lineage.LineageEndpoint, error) {

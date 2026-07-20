@@ -169,9 +169,9 @@ const (
 // pull (docs/planning/07 §1.1 deferral: `ImagePull` previously sent no
 // RegistryAuth header at all). The runtime port has no SecretStore access,
 // so this always carries already-resolved values — a provider resolves
-// `configuration.imagePullSecretRef` via the same SecretsAware/SetSecrets
-// plumbing it uses for any other credential (e.g. postgres's superuser
-// password), never a bare reference the adapter would need to re-resolve.
+// `configuration.imagePullSecretRef` via the same reconciler.Request.Secrets
+// it uses for any other credential (e.g. postgres's superuser password),
+// never a bare reference the adapter would need to re-resolve.
 type ImagePullAuth struct {
 	Username string
 	Password string

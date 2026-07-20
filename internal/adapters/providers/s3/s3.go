@@ -14,8 +14,8 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
-	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -26,28 +26,17 @@ const (
 	rootPasswordPath = "/run/datascape/root-password"
 )
 
-type Provider struct {
-	providerRes resource.Envelope
-	cfg         provider.Provider
-	secrets     map[string]map[string]string
-}
+// Provider holds no cross-call state (docs/planning/08 F5): every method
+// receives what it needs via reconciler.Request.
+type Provider struct{}
 
 func New() *Provider { return &Provider{} }
 
 func (p *Provider) Type() string { return "s3" }
 
-func (p *Provider) SetProviderResource(env resource.Envelope) {
-	p.providerRes = env
-	p.cfg, _ = provider.FromEnvelope(env)
-}
-
-func (p *Provider) SetSecrets(secrets map[string]map[string]string) { p.secrets = secrets }
-
-func (p *Provider) containerName() string { return naming.RuntimeObjectName(p.providerRes) }
-
-func (p *Provider) hostPort() int {
+func hostPort(cfg provider.Provider, name string) int {
 	configured := 0
-	if v, ok := p.cfg.Configuration["port"]; ok {
+	if v, ok := cfg.Configuration["port"]; ok {
 		switch n := v.(type) {
 		case int:
 			configured = n
@@ -55,19 +44,19 @@ func (p *Provider) hostPort() int {
 			configured = int(n)
 		}
 	}
-	return hostport.Resolve(configured, p.containerName())
+	return hostport.Resolve(configured, name)
 }
 
 // reachableAddr returns an address this process can dial right now to reach
 // the store's S3 API port, plus a close func that must always be called
 // (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may tear down
 // a port-forward tunnel opened just for this call).
-func (p *Provider) reachableAddr(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
-	return rt.EnsureReachable(ctx, p.containerName(), apiPort)
+func reachableAddr(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
+	return rt.EnsureReachable(ctx, name, apiPort)
 }
 
-func (p *Provider) network() string {
-	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
+func network(cfg provider.Provider) string {
+	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
 		return n
 	}
 	return "datascape"
@@ -75,30 +64,30 @@ func (p *Provider) network() string {
 
 // rootCredentials returns the MinIO root credentials: the SecretReference
 // named by configuration.rootSecretRef, or the first declared secretRef.
-func (p *Provider) rootCredentials() (user, pass string, err error) {
-	refName, _ := p.cfg.Configuration["rootSecretRef"].(string)
-	if refName == "" && len(p.cfg.SecretRefs) > 0 {
-		refName = p.cfg.SecretRefs[0]
+func rootCredentials(cfg provider.Provider, secrets map[string]map[string]string, name string) (user, pass string, err error) {
+	refName, _ := cfg.Configuration["rootSecretRef"].(string)
+	if refName == "" && len(cfg.SecretRefs) > 0 {
+		refName = cfg.SecretRefs[0]
 	}
-	creds, ok := p.secrets[refName]
+	creds, ok := secrets[refName]
 	if !ok {
-		return "", "", fmt.Errorf("Provider %q (type: s3): no resolved credentials for secretRef %q", p.containerName(), refName)
+		return "", "", fmt.Errorf("Provider %q (type: s3): no resolved credentials for secretRef %q", name, refName)
 	}
 	user, pass = creds["username"], creds["password"]
 	if user == "" || pass == "" {
-		return "", "", fmt.Errorf("Provider %q: secretRef %q must provide username and password keys", p.containerName(), refName)
+		return "", "", fmt.Errorf("Provider %q: secretRef %q must provide username and password keys", name, refName)
 	}
 	return user, pass, nil
 }
 
-func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
-	switch res.Kind {
+func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	switch req.Resource.Kind {
 	case "Provider":
-		return p.reconcileInstance(ctx, rt)
+		return p.reconcileInstance(ctx, req)
 	case "Dataset":
-		return p.reconcileDataset(ctx, res, rt)
+		return p.reconcileDataset(ctx, req)
 	default:
-		return status.Status{}, fmt.Errorf("s3 provider cannot reconcile kind %s", res.Kind)
+		return status.Status{}, fmt.Errorf("s3 provider cannot reconcile kind %s", req.Resource.Kind)
 	}
 }
 
@@ -106,42 +95,47 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 // §1.1 deferral, docs/planning/08 A1) into runtime credentials, or returns
 // nil when unset — private-image pulls stay opt-in, and the runtime's
 // ambient/daemon-level credentials keep working unchanged either way.
-func (p *Provider) imagePullAuth() (*runtime.ImagePullAuth, error) {
-	refName, _ := p.cfg.Configuration["imagePullSecretRef"].(string)
+func imagePullAuth(cfg provider.Provider, secrets map[string]map[string]string, name string) (*runtime.ImagePullAuth, error) {
+	refName, _ := cfg.Configuration["imagePullSecretRef"].(string)
 	if refName == "" {
 		return nil, nil
 	}
-	creds, ok := p.secrets[refName]
+	creds, ok := secrets[refName]
 	if !ok {
-		return nil, fmt.Errorf("Provider %q: no resolved credentials for imagePullSecretRef %q", p.containerName(), refName)
+		return nil, fmt.Errorf("Provider %q: no resolved credentials for imagePullSecretRef %q", name, refName)
 	}
 	if creds["username"] == "" || creds["password"] == "" {
-		return nil, fmt.Errorf("Provider %q: imagePullSecretRef %q must provide username and password keys", p.containerName(), refName)
+		return nil, fmt.Errorf("Provider %q: imagePullSecretRef %q must provide username and password keys", name, refName)
 	}
 	return &runtime.ImagePullAuth{Username: creds["username"], Password: creds["password"], Registry: creds["registry"]}, nil
 }
 
-func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	rt := req.Runtime
 	st := status.Status{}
-	name := p.containerName()
-	image, _ := p.cfg.Configuration["image"].(string)
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
+	image, _ := cfg.Configuration["image"].(string)
 	if image == "" {
 		image = defaultImage
 	}
-	user, pass, err := p.rootCredentials()
+	user, pass, err := rootCredentials(cfg, req.Secrets, name)
 	if err != nil {
 		return st, err
 	}
-	pullAuth, err := p.imagePullAuth()
+	pullAuth, err := imagePullAuth(cfg, req.Secrets, name)
 	if err != nil {
 		return st, err
 	}
-	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", name, name)
+	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
 
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
 		return st, err
 	}
-	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name + "-data", Labels: labels, Networks: []string{p.network()}}); err != nil {
+	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name + "-data", Labels: labels, Networks: []string{network(cfg)}}); err != nil {
 		return st, err
 	}
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
@@ -157,9 +151,9 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 			"MINIO_ROOT_PASSWORD_FILE": rootPasswordPath,
 		},
 		Files:    []runtime.FileMount{{Path: rootPasswordPath, Content: []byte(pass)}},
-		Networks: []string{p.network()},
+		Networks: []string{network(cfg)},
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/data"}},
-		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
+		Ports:    []runtime.PortBinding{{HostPort: hostPort(cfg, name), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
 		HealthCheck: &runtime.HealthCheck{
 			Test:     []string{"CMD-SHELL", fmt.Sprintf("curl -sf http://localhost:%d/minio/health/live || exit 1", apiPort)},
 			Interval: 2 * time.Second,
@@ -194,17 +188,22 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	return st, nil
 }
 
-func (p *Provider) reconcileDataset(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) reconcileDataset(ctx context.Context, req reconciler.Request) (status.Status, error) {
 	st := status.Status{}
-	ds, err := dataset.FromEnvelope(res)
+	ds, err := dataset.FromEnvelope(req.Resource)
 	if err != nil {
 		return st, err
 	}
-	user, pass, err := p.rootCredentials()
+	cfg, err := provider.FromEnvelope(req.Provider)
 	if err != nil {
 		return st, err
 	}
-	if err := ensureBucket(ctx, rt, p.containerName(), apiPort, user, pass, ds.Bucket); err != nil {
+	name := naming.RuntimeObjectName(req.Provider)
+	user, pass, err := rootCredentials(cfg, req.Secrets, name)
+	if err != nil {
+		return st, err
+	}
+	if err := ensureBucket(ctx, req.Runtime, name, apiPort, user, pass, ds.Bucket); err != nil {
 		return st, err
 	}
 
@@ -215,17 +214,22 @@ func (p *Provider) reconcileDataset(ctx context.Context, res resource.Envelope, 
 	return st, nil
 }
 
-func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) error {
+func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
+	res, rt := req.Resource, req.Runtime
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
 	switch res.Kind {
 	case "Provider":
-		name := p.containerName()
 		if err := rt.Remove(ctx, name); err != nil {
 			return err
 		}
 		if err := rt.RemoveVolume(ctx, name+"-data"); err != nil {
 			return err
 		}
-		_ = rt.RemoveNetwork(ctx, p.network())
+		_ = rt.RemoveNetwork(ctx, network(cfg))
 		return nil
 	case "Dataset":
 		ds, err := dataset.FromEnvelope(res)
@@ -242,14 +246,14 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		// If the backing store is already gone (killed out-of-band), its
 		// data went with it — nothing left to remove, and failing here
 		// would strand the Dataset in state forever.
-		if ctr, found, err := rt.Inspect(ctx, p.containerName()); err != nil || !found || !ctr.Running {
+		if ctr, found, err := rt.Inspect(ctx, name); err != nil || !found || !ctr.Running {
 			return err
 		}
-		user, pass, err := p.rootCredentials()
+		user, pass, err := rootCredentials(cfg, req.Secrets, name)
 		if err != nil {
 			return err
 		}
-		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		addr, closeAddr, err := reachableAddr(ctx, rt, name)
 		if err != nil {
 			return err
 		}
@@ -264,12 +268,18 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 	}
 }
 
-func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
 	now := time.Now()
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
 	switch res.Kind {
 	case "Provider":
-		ctrState, found, err := rt.Inspect(ctx, p.containerName())
+		ctrState, found, err := rt.Inspect(ctx, name)
 		if err != nil {
 			return st, err
 		}
@@ -286,11 +296,11 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		if err != nil {
 			return st, err
 		}
-		user, pass, err := p.rootCredentials()
+		user, pass, err := rootCredentials(cfg, req.Secrets, name)
 		if err != nil {
 			return st, err
 		}
-		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		addr, closeAddr, err := reachableAddr(ctx, rt, name)
 		if err != nil {
 			return st, err
 		}

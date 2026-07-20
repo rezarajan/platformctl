@@ -37,24 +37,23 @@ func TestValidateSpecRequiresImagePullSecretRefWiring(t *testing.T) {
 // naming the missing secretRef, not a nil-pointer surprise later), and
 // resolved (username/password/registry carried through unchanged).
 func TestImagePullAuthResolution(t *testing.T) {
-	p := New()
-	p.cfg = provider.Provider{Configuration: map[string]any{}}
-	p.providerRes.Metadata.Name = "store"
+	cfg := provider.Provider{Configuration: map[string]any{}}
+	const name = "store"
 
-	auth, err := p.imagePullAuth()
+	auth, err := imagePullAuth(cfg, nil, name)
 	if err != nil || auth != nil {
 		t.Fatalf("imagePullAuth() with no ref = %+v, %v; want nil, nil", auth, err)
 	}
 
-	p.cfg.Configuration["imagePullSecretRef"] = "registry-creds"
-	if _, err := p.imagePullAuth(); err == nil {
+	cfg.Configuration["imagePullSecretRef"] = "registry-creds"
+	if _, err := imagePullAuth(cfg, nil, name); err == nil {
 		t.Fatal("imagePullAuth() accepted a secretRef with no resolved credentials")
 	}
 
-	p.secrets = map[string]map[string]string{
+	secrets := map[string]map[string]string{
 		"registry-creds": {"username": "u", "password": "p", "registry": "ghcr.io"},
 	}
-	auth, err = p.imagePullAuth()
+	auth, err = imagePullAuth(cfg, secrets, name)
 	if err != nil {
 		t.Fatalf("imagePullAuth(): %v", err)
 	}

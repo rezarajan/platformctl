@@ -14,34 +14,23 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
-	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/source"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/domain/versionprofile"
+	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
-type Provider struct {
-	providerRes resource.Envelope
-	cfg         provider.Provider
-	secrets     map[string]map[string]string
-}
+// Provider holds no cross-call state (docs/planning/08 F5): every method
+// receives what it needs via reconciler.Request.
+type Provider struct{}
 
 func New() *Provider { return &Provider{} }
 
 func (p *Provider) Type() string { return "mysql" }
 
-func (p *Provider) SetProviderResource(env resource.Envelope) {
-	p.providerRes = env
-	p.cfg, _ = provider.FromEnvelope(env)
-}
-
-func (p *Provider) SetSecrets(secrets map[string]map[string]string) { p.secrets = secrets }
-
-func (p *Provider) containerName() string { return naming.RuntimeObjectName(p.providerRes) }
-
 // mariadb reports whether this Provider resource was declared type: mariadb.
-func (p *Provider) mariadb() bool { return p.cfg.Type == "mariadb" }
+func mariadb(cfg provider.Provider) bool { return cfg.Type == "mariadb" }
 
 // mysqlCatalog / mariadbCatalog pin each engine's supported versions. Both
 // store data at /var/lib/mysql across these versions; the catalog still
@@ -63,31 +52,33 @@ var mariadbCatalog = versionprofile.Catalog{
 	},
 }
 
-func (p *Provider) catalog() versionprofile.Catalog {
-	if p.mariadb() {
+func catalogFor(cfg provider.Provider) versionprofile.Catalog {
+	if mariadb(cfg) {
 		return mariadbCatalog
 	}
 	return mysqlCatalog
 }
 
 // VersionCatalog implements reconciler.VersionedProvider.
-func (p *Provider) VersionCatalog() versionprofile.Catalog { return p.catalog() }
+func (p *Provider) VersionCatalog(cfg provider.Provider) versionprofile.Catalog {
+	return catalogFor(cfg)
+}
 
-func (p *Provider) profile() (versionprofile.Profile, error) {
-	version, _ := p.cfg.Configuration["version"].(string)
-	prof, err := p.catalog().Resolve(version)
+func profile(cfg provider.Provider) (versionprofile.Profile, error) {
+	version, _ := cfg.Configuration["version"].(string)
+	prof, err := catalogFor(cfg).Resolve(version)
 	if err != nil {
 		return prof, err
 	}
-	if img, _ := p.cfg.Configuration["image"].(string); img != "" {
+	if img, _ := cfg.Configuration["image"].(string); img != "" {
 		prof.Image = img
 	}
 	return prof, nil
 }
 
-func (p *Provider) hostPort() int {
+func hostPort(cfg provider.Provider, name string) int {
 	configured := 0
-	if v, ok := p.cfg.Configuration["port"]; ok {
+	if v, ok := cfg.Configuration["port"]; ok {
 		switch n := v.(type) {
 		case int:
 			configured = n
@@ -95,19 +86,19 @@ func (p *Provider) hostPort() int {
 			configured = int(n)
 		}
 	}
-	return hostport.Resolve(configured, p.containerName())
+	return hostport.Resolve(configured, name)
 }
 
 // reachableAddr returns an address this process can dial right now to reach
 // the instance's MySQL/MariaDB port, plus a close func that must always be
 // called (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may
 // tear down a port-forward tunnel opened just for this call).
-func (p *Provider) reachableAddr(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
-	return rt.EnsureReachable(ctx, p.containerName(), 3306)
+func reachableAddr(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
+	return rt.EnsureReachable(ctx, name, 3306)
 }
 
-func (p *Provider) network() string {
-	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
+func network(cfg provider.Provider) string {
+	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
 		return n
 	}
 	return "datascape"
@@ -116,57 +107,66 @@ func (p *Provider) network() string {
 // rootPassword returns the server root password: the "password" key of the
 // SecretReference named by configuration.rootSecretRef, or the first
 // declared secretRef.
-func (p *Provider) rootPassword() (string, error) {
-	refName, _ := p.cfg.Configuration["rootSecretRef"].(string)
-	if refName == "" && len(p.cfg.SecretRefs) > 0 {
-		refName = p.cfg.SecretRefs[0]
+func rootPassword(cfg provider.Provider, secrets map[string]map[string]string, name string) (string, error) {
+	refName, _ := cfg.Configuration["rootSecretRef"].(string)
+	if refName == "" && len(cfg.SecretRefs) > 0 {
+		refName = cfg.SecretRefs[0]
 	}
-	creds, ok := p.secrets[refName]
+	creds, ok := secrets[refName]
 	if !ok {
-		return "", fmt.Errorf("Provider %q (type: %s): no resolved credentials for secretRef %q", p.containerName(), p.cfg.Type, refName)
+		return "", fmt.Errorf("Provider %q (type: %s): no resolved credentials for secretRef %q", name, cfg.Type, refName)
 	}
 	if creds["password"] == "" {
-		return "", fmt.Errorf("Provider %q: secretRef %q must provide a password key", p.containerName(), refName)
+		return "", fmt.Errorf("Provider %q: secretRef %q must provide a password key", name, refName)
 	}
 	return creds["password"], nil
 }
 
-func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
-	switch res.Kind {
+func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return status.Status{}, err
+	}
+	switch req.Resource.Kind {
 	case "Provider":
-		return p.reconcileInstance(ctx, rt)
+		return p.reconcileInstance(ctx, req)
 	case "Source":
-		return p.reconcileSource(ctx, res, rt)
+		return p.reconcileSource(ctx, req)
 	default:
-		return status.Status{}, fmt.Errorf("%s provider cannot reconcile kind %s", p.cfg.Type, res.Kind)
+		return status.Status{}, fmt.Errorf("%s provider cannot reconcile kind %s", cfg.Type, req.Resource.Kind)
 	}
 }
 
-func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	rt := req.Runtime
 	st := status.Status{}
-	name := p.containerName()
-	prof, err := p.profile()
-	if err != nil {
-		return st, fmt.Errorf("Provider %q (type: %s): %w", name, p.cfg.Type, err)
-	}
-	rootPass, err := p.rootPassword()
+	cfg, err := provider.FromEnvelope(req.Provider)
 	if err != nil {
 		return st, err
 	}
-	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", name, name)
-	oldRootPass, _ := p.liveRootPassword(ctx, rt)
+	name := naming.RuntimeObjectName(req.Provider)
+	prof, err := profile(cfg)
+	if err != nil {
+		return st, fmt.Errorf("Provider %q (type: %s): %w", name, cfg.Type, err)
+	}
+	rootPass, err := rootPassword(cfg, req.Secrets, name)
+	if err != nil {
+		return st, err
+	}
+	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
+	oldRootPass, _ := liveRootPassword(ctx, rt, name)
 
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
 		return st, err
 	}
-	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name + "-data", Labels: labels, Networks: []string{p.network()}}); err != nil {
+	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name + "-data", Labels: labels, Networks: []string{network(cfg)}}); err != nil {
 		return st, err
 	}
 	// The password rides a file mount, not env — env is readable by anyone
 	// with `docker inspect` access (docs/planning/07 Gate 1 checkbox 4);
 	// both official images consume *_FILE natively.
 	env := map[string]string{"MYSQL_ROOT_PASSWORD_FILE": rootPasswordPath}
-	if p.mariadb() {
+	if mariadb(cfg) {
 		env["MARIADB_ROOT_PASSWORD_FILE"] = rootPasswordPath
 	}
 	files := []runtime.FileMount{{Path: rootPasswordPath, Content: []byte(rootPass)}}
@@ -174,7 +174,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	// for. Setting it explicitly on both keeps CDC-readiness uniform.
 	cmd := []string{"--log-bin=binlog", "--binlog-format=ROW", "--server-id=1"}
 	adminTool := "mysqladmin"
-	if p.mariadb() {
+	if mariadb(cfg) {
 		adminTool = "mariadb-admin"
 	}
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
@@ -183,9 +183,9 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 		Cmd:      cmd,
 		Env:      env,
 		Files:    files,
-		Networks: []string{p.network()},
+		Networks: []string{network(cfg)},
 		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: prof.DataMount}},
-		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: 3306, Audience: runtime.AudienceHost}},
+		Ports:    []runtime.PortBinding{{HostPort: hostPort(cfg, name), ContainerPort: 3306, Audience: runtime.AudienceHost}},
 		HealthCheck: &runtime.HealthCheck{
 			// TCP ping, no credentials required for liveness.
 			Test:     []string{"CMD-SHELL", adminTool + " ping -h 127.0.0.1 --silent"},
@@ -203,7 +203,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	}
 	// Health says the server answers; make sure root auth over TCP works
 	// before declaring Ready (the images run an init phase like postgres's).
-	if err := p.ensureRootPassword(ctx, rt, rootPass, oldRootPass); err != nil {
+	if err := ensureRootPassword(ctx, rt, name, rootPass, oldRootPass); err != nil {
 		return st, err
 	}
 
@@ -225,12 +225,12 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 // rootPasswordPath is where the bootstrap password file is mounted.
 const rootPasswordPath = "/run/datascape/root-password"
 
-func (p *Provider) liveRootPassword(ctx context.Context, rt runtime.ContainerRuntime) (string, bool) {
-	ctr, found, err := rt.Inspect(ctx, p.containerName())
+func liveRootPassword(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, bool) {
+	ctr, found, err := rt.Inspect(ctx, name)
 	if err != nil || !found {
 		return "", false
 	}
-	if data, err := rt.ReadFile(ctx, p.containerName(), rootPasswordPath); err == nil && len(data) > 0 {
+	if data, err := rt.ReadFile(ctx, name, rootPasswordPath); err == nil && len(data) > 0 {
 		return string(data), true
 	}
 	// Containers created before the file-mount change carried the password
@@ -244,8 +244,7 @@ func (p *Provider) liveRootPassword(ctx context.Context, rt runtime.ContainerRun
 	return "", false
 }
 
-func (p *Provider) ensureRootPassword(ctx context.Context, rt runtime.ContainerRuntime, desiredPass, previousPass string) error {
-	name := p.containerName()
+func ensureRootPassword(ctx context.Context, rt runtime.ContainerRuntime, name, desiredPass, previousPass string) error {
 	buildDesired := func(addr string) string { return dsnAddr(addr, "root", desiredPass, "") }
 	if previousPass == "" || previousPass == desiredPass {
 		return waitReadyReachable(ctx, rt, name, 3306, buildDesired, 60*time.Second)
@@ -257,7 +256,7 @@ func (p *Provider) ensureRootPassword(ctx context.Context, rt runtime.ContainerR
 	if err := waitReadyReachable(ctx, rt, name, 3306, buildPrevious, 60*time.Second); err != nil {
 		return fmt.Errorf("mysql root credentials changed but neither the desired SecretReference nor the previous managed-container environment password can authenticate; manual recovery is required: %w", err)
 	}
-	addr, closeAddr, err := p.reachableAddr(ctx, rt)
+	addr, closeAddr, err := reachableAddr(ctx, rt, name)
 	if err != nil {
 		return err
 	}
@@ -271,8 +270,14 @@ func (p *Provider) ensureRootPassword(ctx context.Context, rt runtime.ContainerR
 // reconcileSource ensures the declared database exists, a replication-capable
 // user is provisioned from configuration.replicationSecretRef, and row-format
 // binary logging is active (what Debezium's MySQL/MariaDB connector needs).
-func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) reconcileSource(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
 	src, err := source.FromEnvelope(res)
 	if err != nil {
 		return st, err
@@ -281,17 +286,17 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope, r
 	if dbName == "" {
 		return st, fmt.Errorf("Source %q: spec.%s.database is required", res.Metadata.Name, src.Engine)
 	}
-	rootPass, err := p.rootPassword()
+	rootPass, err := rootPassword(cfg, req.Secrets, name)
 	if err != nil {
 		return st, err
 	}
 
-	if err := waitReadyReachable(ctx, rt, p.containerName(), 3306, func(addr string) string {
+	if err := waitReadyReachable(ctx, rt, name, 3306, func(addr string) string {
 		return dsnAddr(addr, "root", rootPass, "")
 	}, 30*time.Second); err != nil {
 		return st, err
 	}
-	addr, closeAddr, err := p.reachableAddr(ctx, rt)
+	addr, closeAddr, err := reachableAddr(ctx, rt, name)
 	if err != nil {
 		return st, err
 	}
@@ -300,10 +305,10 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope, r
 	if err := ensureDatabase(ctx, admin, dbName); err != nil {
 		return st, err
 	}
-	replRefName, _ := p.cfg.Configuration["replicationSecretRef"].(string)
+	replRefName, _ := cfg.Configuration["replicationSecretRef"].(string)
 	replUser := ""
 	if replRefName != "" {
-		creds, ok := p.secrets[replRefName]
+		creds, ok := req.Secrets[replRefName]
 		if !ok {
 			return st, fmt.Errorf("Source %q: no resolved credentials for replicationSecretRef %q", res.Metadata.Name, replRefName)
 		}
@@ -323,17 +328,22 @@ func (p *Provider) reconcileSource(ctx context.Context, res resource.Envelope, r
 	return st, nil
 }
 
-func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) error {
+func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
+	res, rt := req.Resource, req.Runtime
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
 	switch res.Kind {
 	case "Provider":
-		name := p.containerName()
 		if err := rt.Remove(ctx, name); err != nil {
 			return err
 		}
 		if err := rt.RemoveVolume(ctx, name+"-data"); err != nil {
 			return err
 		}
-		_ = rt.RemoveNetwork(ctx, p.network())
+		_ = rt.RemoveNetwork(ctx, network(cfg))
 		return nil
 	case "Source":
 		// deletionPolicy governs the data (docs/planning/07 §2.2): retain
@@ -351,30 +361,36 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		if dbName == "" {
 			return nil
 		}
-		if ctr, found, ierr := rt.Inspect(ctx, p.containerName()); ierr != nil || !found || !ctr.Running {
+		if ctr, found, ierr := rt.Inspect(ctx, name); ierr != nil || !found || !ctr.Running {
 			return ierr
 		}
-		rootPass, err := p.rootPassword()
+		rootPass, err := rootPassword(cfg, req.Secrets, name)
 		if err != nil {
 			return err
 		}
-		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		addr, closeAddr, err := reachableAddr(ctx, rt, name)
 		if err != nil {
 			return err
 		}
 		defer closeAddr()
 		return dropDatabase(ctx, dsnAddr(addr, "root", rootPass, ""), dbName)
 	default:
-		return fmt.Errorf("%s provider cannot destroy kind %s", p.cfg.Type, res.Kind)
+		return fmt.Errorf("%s provider cannot destroy kind %s", cfg.Type, res.Kind)
 	}
 }
 
-func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
 	now := time.Now()
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
 	switch res.Kind {
 	case "Provider":
-		ctrState, found, err := rt.Inspect(ctx, p.containerName())
+		ctrState, found, err := rt.Inspect(ctx, name)
 		if err != nil {
 			return st, err
 		}
@@ -392,11 +408,11 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 			return st, err
 		}
 		dbName, _ := src.EngineConfig["database"].(string)
-		rootPass, err := p.rootPassword()
+		rootPass, err := rootPassword(cfg, req.Secrets, name)
 		if err != nil {
 			return st, err
 		}
-		addr, closeAddr, err := p.reachableAddr(ctx, rt)
+		addr, closeAddr, err := reachableAddr(ctx, rt, name)
 		if err != nil {
 			return st, err
 		}
@@ -423,8 +439,8 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "BinlogNotRowFormat", Message: msg}, now)
 			return st, nil
 		}
-		if replRefName, _ := p.cfg.Configuration["replicationSecretRef"].(string); replRefName != "" {
-			if creds, ok := p.secrets[replRefName]; ok {
+		if replRefName, _ := cfg.Configuration["replicationSecretRef"].(string); replRefName != "" {
+			if creds, ok := req.Secrets[replRefName]; ok {
 				if err := ping(ctx, dsnAddr(addr, creds["username"], creds["password"], "")); err != nil {
 					msg := fmt.Sprintf("replication credentials (%s) no longer authenticate", replRefName)
 					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ReplicationCredentialsInvalid", Message: msg}, now)
@@ -437,7 +453,7 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
 		return st, nil
 	default:
-		return st, fmt.Errorf("%s provider cannot probe kind %s", p.cfg.Type, res.Kind)
+		return st, fmt.Errorf("%s provider cannot probe kind %s", cfg.Type, res.Kind)
 	}
 }
 
@@ -451,11 +467,5 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 	} else if len(cfg.SecretRefs) == 0 {
 		return fmt.Errorf("spec.secretRefs must name at least one SecretReference (the root credentials; configuration.rootSecretRef selects one explicitly)")
 	}
-	// ValidateSpec runs on a fresh instance (SetProviderResource not called),
-	// so pick the catalog from the passed spec's type, not p.cfg.
-	cat := mysqlCatalog
-	if cfg.Type == "mariadb" {
-		cat = mariadbCatalog
-	}
-	return cat.ValidateConfig(cfg.Configuration)
+	return catalogFor(cfg).ValidateConfig(cfg.Configuration)
 }

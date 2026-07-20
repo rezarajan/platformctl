@@ -15,8 +15,8 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
-	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -28,26 +28,19 @@ const (
 
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
-type Provider struct {
-	providerRes resource.Envelope
-	cfg         provider.Provider
-}
+// Provider holds no cross-call state (docs/planning/08 F5): every method
+// receives what it needs via reconciler.Request.
+type Provider struct{}
 
 func New() *Provider { return &Provider{} }
 
 func (p *Provider) Type() string { return "openlineage" }
 
-func (p *Provider) SetProviderResource(env resource.Envelope) {
-	p.providerRes = env
-	p.cfg, _ = provider.FromEnvelope(env)
-}
+func dbName(name string) string { return name + "-db" }
 
-func (p *Provider) name() string   { return naming.RuntimeObjectName(p.providerRes) }
-func (p *Provider) dbName() string { return p.name() + "-db" }
-
-func (p *Provider) hostPort() int {
+func hostPort(cfg provider.Provider, name string) int {
 	configured := 0
-	if v, ok := p.cfg.Configuration["apiPort"]; ok {
+	if v, ok := cfg.Configuration["apiPort"]; ok {
 		switch n := v.(type) {
 		case int:
 			configured = n
@@ -55,11 +48,11 @@ func (p *Provider) hostPort() int {
 			configured = int(n)
 		}
 	}
-	return hostport.Resolve(configured, p.name())
+	return hostport.Resolve(configured, name)
 }
 
-func (p *Provider) network() string {
-	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
+func network(cfg provider.Provider) string {
+	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
 		return n
 	}
 	return "datascape"
@@ -77,8 +70,8 @@ const marquezInternalCred = "marquez"
 // process can dial right now, plus a close func that must always be called
 // (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may tear down
 // a port-forward tunnel opened just for this call).
-func (p *Provider) reachableAPIURL(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
-	addr, closeAddr, err := rt.EnsureReachable(ctx, p.name(), marquezAPIPort)
+func reachableAPIURL(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
+	addr, closeAddr, err := rt.EnsureReachable(ctx, name, marquezAPIPort)
 	if err != nil {
 		return "", nil, err
 	}
@@ -91,9 +84,9 @@ func (p *Provider) reachableAPIURL(ctx context.Context, rt runtime.ContainerRunt
 // nessie.Provider.waitAPIReady's doc for why (found live against minikube:
 // a tunnel opened while Marquez is still starting can end up silently dead
 // even once the app comes up).
-func (p *Provider) waitAPIReady(ctx context.Context, rt runtime.ContainerRuntime, timeout time.Duration) error {
+func waitAPIReady(ctx context.Context, rt runtime.ContainerRuntime, name string, timeout time.Duration) error {
 	opts := runtime.ReachableOptions{Timeout: timeout, Interval: 2 * time.Second}
-	err := runtime.WithReachable(ctx, rt, p.name(), marquezAPIPort, opts, func(ctx context.Context, addr string) error {
+	err := runtime.WithReachable(ctx, rt, name, marquezAPIPort, opts, func(ctx context.Context, addr string) error {
 		if !httpOK(ctx, "http://"+addr+"/api/v1/namespaces") {
 			return fmt.Errorf("marquez API did not answer 200")
 		}
@@ -105,35 +98,42 @@ func (p *Provider) waitAPIReady(ctx context.Context, rt runtime.ContainerRuntime
 	return nil
 }
 
-func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	rt := req.Runtime
 	st := status.Status{}
-	if res.Kind != "Provider" {
-		return st, fmt.Errorf("openlineage provider cannot reconcile kind %s", res.Kind)
+	if req.Resource.Kind != "Provider" {
+		return st, fmt.Errorf("openlineage provider cannot reconcile kind %s", req.Resource.Kind)
 	}
-	image, _ := p.cfg.Configuration["image"].(string)
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
+	db := dbName(name)
+	image, _ := cfg.Configuration["image"].(string)
 	if image == "" {
 		image = defaultImage
 	}
-	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", p.name(), p.name())
+	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
 
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
 		return st, err
 	}
 	// Marquez's metadata store: a dedicated Postgres, internal to the
 	// provider (not published to the host).
-	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: p.dbName() + "-data", Labels: labels, Networks: []string{p.network()}}); err != nil {
+	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: db + "-data", Labels: labels, Networks: []string{network(cfg)}}); err != nil {
 		return st, err
 	}
-	_, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
-		Name:  p.dbName(),
+	_, err = rt.EnsureContainer(ctx, runtime.ContainerSpec{
+		Name:  db,
 		Image: defaultDBImage,
 		Env: map[string]string{
 			"POSTGRES_USER":     marquezInternalCred,
 			"POSTGRES_PASSWORD": marquezInternalCred,
 			"POSTGRES_DB":       "marquez",
 		},
-		Networks: []string{p.network()},
-		Volumes:  []runtime.VolumeMount{{VolumeName: p.dbName() + "-data", MountPath: "/var/lib/postgresql/data"}},
+		Networks: []string{network(cfg)},
+		Volumes:  []runtime.VolumeMount{{VolumeName: db + "-data", MountPath: "/var/lib/postgresql/data"}},
 		// Audience: internal — no host publish (this DB is internal to the
 		// provider), but the port must still be declared: the Kubernetes
 		// adapter only creates a Service (and therefore a DNS name) for
@@ -154,33 +154,33 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 	if err != nil {
 		return st, err
 	}
-	if err := rt.WaitHealthy(ctx, p.dbName(), 120*time.Second); err != nil {
+	if err := rt.WaitHealthy(ctx, db, 120*time.Second); err != nil {
 		return st, err
 	}
 
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
-		Name:  p.name(),
+		Name:  name,
 		Image: image,
 		Env: map[string]string{
 			"MARQUEZ_PORT":       "5000",
 			"MARQUEZ_ADMIN_PORT": "5001",
-			"POSTGRES_HOST":      p.dbName(),
+			"POSTGRES_HOST":      db,
 			"POSTGRES_PORT":      "5432",
 			"POSTGRES_DB":        "marquez",
 			"POSTGRES_USER":      marquezInternalCred,
 			"POSTGRES_PASSWORD":  marquezInternalCred,
 		},
-		Networks: []string{p.network()},
-		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: marquezAPIPort, Audience: runtime.AudienceHost}},
+		Networks: []string{network(cfg)},
+		Ports:    []runtime.PortBinding{{HostPort: hostPort(cfg, name), ContainerPort: marquezAPIPort, Audience: runtime.AudienceHost}},
 		Labels:   labels,
 	})
 	if err != nil {
 		return st, err
 	}
-	if err := rt.WaitHealthy(ctx, p.name(), 120*time.Second); err != nil {
+	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
 		return st, err
 	}
-	if err := p.waitAPIReady(ctx, rt, 180*time.Second); err != nil {
+	if err := waitAPIReady(ctx, rt, name, 180*time.Second); err != nil {
 		return st, err
 	}
 
@@ -197,49 +197,58 @@ func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runt
 		"containerId": ctrState.ID,
 		// The engine resolves observers against this: the in-network base
 		// URL OpenLineage transports post to.
-		"url":     fmt.Sprintf("http://%s:%d", p.name(), marquezAPIPort),
+		"url":     fmt.Sprintf("http://%s:%d", name, marquezAPIPort),
 		"hostApi": hostAPI,
 		endpoint.Key: endpoint.List{
-			{Name: "openlineage", Scheme: "http", Host: hostAPI, Internal: fmt.Sprintf("http://%s:%d/api/v1", p.name(), marquezAPIPort), Insecure: true},
+			{Name: "openlineage", Scheme: "http", Host: hostAPI, Internal: fmt.Sprintf("http://%s:%d/api/v1", name, marquezAPIPort), Insecure: true},
 		}.ToState(),
 	}
 	return st, nil
 }
 
-func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) error {
-	if res.Kind != "Provider" {
-		return fmt.Errorf("openlineage provider cannot destroy kind %s", res.Kind)
+func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
+	rt := req.Runtime
+	if req.Resource.Kind != "Provider" {
+		return fmt.Errorf("openlineage provider cannot destroy kind %s", req.Resource.Kind)
 	}
-	if err := rt.Remove(ctx, p.name()); err != nil {
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
 		return err
 	}
-	if err := rt.Remove(ctx, p.dbName()); err != nil {
+	name := naming.RuntimeObjectName(req.Provider)
+	db := dbName(name)
+	if err := rt.Remove(ctx, name); err != nil {
 		return err
 	}
-	if err := rt.RemoveVolume(ctx, p.dbName()+"-data"); err != nil {
+	if err := rt.Remove(ctx, db); err != nil {
 		return err
 	}
-	_ = rt.RemoveNetwork(ctx, p.network())
+	if err := rt.RemoveVolume(ctx, db+"-data"); err != nil {
+		return err
+	}
+	_ = rt.RemoveNetwork(ctx, network(cfg))
 	return nil
 }
 
-func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	rt := req.Runtime
 	st := status.Status{}
 	now := time.Now()
-	if res.Kind != "Provider" {
-		return st, fmt.Errorf("openlineage provider cannot probe kind %s", res.Kind)
+	if req.Resource.Kind != "Provider" {
+		return st, fmt.Errorf("openlineage provider cannot probe kind %s", req.Resource.Kind)
 	}
-	api, apiFound, err := rt.Inspect(ctx, p.name())
+	name := naming.RuntimeObjectName(req.Provider)
+	api, apiFound, err := rt.Inspect(ctx, name)
 	if err != nil {
 		return st, err
 	}
-	db, dbFound, err := rt.Inspect(ctx, p.dbName())
+	db, dbFound, err := rt.Inspect(ctx, dbName(name))
 	if err != nil {
 		return st, err
 	}
 	healthy := false
 	if apiFound && api.Healthy && dbFound && db.Healthy {
-		if apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt); err == nil {
+		if apiURL, closeAPI, err := reachableAPIURL(ctx, rt, name); err == nil {
 			healthy = httpOK(ctx, apiURL)
 			closeAPI()
 		}

@@ -21,17 +21,16 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
-	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
 const defaultImage = "alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e"
 
-type Provider struct {
-	providerRes resource.Envelope
-	cfg         provider.Provider
-}
+// Provider holds no cross-call state (docs/planning/08 F5): every method
+// receives what it needs via reconciler.Request.
+type Provider struct{}
 
 func New() *Provider { return &Provider{} }
 
@@ -42,79 +41,81 @@ func (p *Provider) Type() string { return "proxy" }
 // works through it.
 func (p *Provider) SupportedConnectionSchemes() []string { return []string{"tcp"} }
 
-func (p *Provider) SetProviderResource(env resource.Envelope) {
-	p.providerRes = env
-	p.cfg, _ = provider.FromEnvelope(env)
-}
-
-func (p *Provider) name() string { return naming.RuntimeObjectName(p.providerRes) }
-
-func (p *Provider) network() string {
-	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
+func network(cfg provider.Provider) string {
+	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
 		return n
 	}
 	return "datascape"
 }
 
-func (p *Provider) image() string {
-	if img, ok := p.cfg.Configuration["image"].(string); ok && img != "" {
+func image(cfg provider.Provider) string {
+	if img, ok := cfg.Configuration["image"].(string); ok && img != "" {
 		return img
 	}
 	return defaultImage
 }
 
-func (p *Provider) labels() map[string]string {
-	return runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", p.name(), p.name())
-}
-
-func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
-	switch res.Kind {
+func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	switch req.Resource.Kind {
 	case "Provider":
-		return p.reconcileInstance(ctx, rt)
+		return p.reconcileInstance(ctx, req)
 	case "Connection":
-		return p.reconcileConnection(ctx, res, rt)
+		return p.reconcileConnection(ctx, req)
 	default:
-		return status.Status{}, fmt.Errorf("proxy provider cannot reconcile kind %s", res.Kind)
+		return status.Status{}, fmt.Errorf("proxy provider cannot reconcile kind %s", req.Resource.Kind)
 	}
 }
 
 // reconcileInstance: the proxy has no central container — its Provider
 // resource only anchors the shared network and the configuration defaults
 // each Connection's forwarder inherits.
-func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request) (status.Status, error) {
 	st := status.Status{}
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: p.labels()}); err != nil {
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
+	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
+	if err := req.Runtime.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
 		return st, err
 	}
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "EntrypointSurfaceReady"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
-	st.ProviderState = map[string]any{"network": p.network(), "image": p.image()}
+	st.ProviderState = map[string]any{"network": network(cfg), "image": image(cfg)}
 	return st, nil
 }
 
 // reconcileConnection runs the Connection's forwarder: one socat container
 // named after the Connection, listening on spec.port (network + host),
 // forwarding to spec.target.
-func (p *Provider) reconcileConnection(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
 	conn, err := connection.FromEnvelope(res)
 	if err != nil {
 		return st, err
 	}
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
 	name := naming.RuntimeObjectName(res)
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: p.labels()}); err != nil {
+	providerName := naming.RuntimeObjectName(req.Provider)
+	providerLabels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", providerName, providerName)
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: providerLabels}); err != nil {
 		return st, err
 	}
 	connLabels := runtime.ManagedLabels(res.Metadata.Namespace, res.Kind, name, name)
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
 		Name:  name,
-		Image: p.image(),
+		Image: image(cfg),
 		Cmd: []string{
 			fmt.Sprintf("tcp-listen:%d,fork,reuseaddr", conn.Port),
 			"tcp-connect:" + conn.Target,
 		},
-		Networks: []string{p.network()},
+		Networks: []string{network(cfg)},
 		Ports:    []runtime.PortBinding{{HostPort: conn.Port, ContainerPort: conn.Port, Audience: runtime.AudienceHost}},
 		Labels:   connLabels,
 	})
@@ -143,19 +144,24 @@ func (p *Provider) reconcileConnection(ctx context.Context, res resource.Envelop
 	return st, nil
 }
 
-func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) error {
-	switch res.Kind {
+func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
+	switch req.Resource.Kind {
 	case "Provider":
-		_ = rt.RemoveNetwork(ctx, p.network())
+		cfg, err := provider.FromEnvelope(req.Provider)
+		if err != nil {
+			return err
+		}
+		_ = req.Runtime.RemoveNetwork(ctx, network(cfg))
 		return nil
 	case "Connection":
-		return rt.Remove(ctx, naming.RuntimeObjectName(res))
+		return req.Runtime.Remove(ctx, naming.RuntimeObjectName(req.Resource))
 	default:
-		return fmt.Errorf("proxy provider cannot destroy kind %s", res.Kind)
+		return fmt.Errorf("proxy provider cannot destroy kind %s", req.Resource.Kind)
 	}
 }
 
-func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
 	now := time.Now()
 	switch res.Kind {

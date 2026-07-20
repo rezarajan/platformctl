@@ -6,9 +6,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
-	"github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 )
 
 type Provider struct {
@@ -20,7 +19,7 @@ func New() *Provider { return &Provider{} }
 
 func (p *Provider) Type() string { return "noop" }
 
-func (p *Provider) Reconcile(_ context.Context, _ resource.Envelope, _ runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) Reconcile(_ context.Context, _ reconciler.Request) (status.Status, error) {
 	p.ReconcileCount++
 	st := status.Status{}
 	now := time.Now()
@@ -29,11 +28,11 @@ func (p *Provider) Reconcile(_ context.Context, _ resource.Envelope, _ runtime.C
 	return st, nil
 }
 
-func (p *Provider) Destroy(_ context.Context, _ resource.Envelope, _ runtime.ContainerRuntime) error {
+func (p *Provider) Destroy(_ context.Context, _ reconciler.Request) error {
 	return nil
 }
 
-func (p *Provider) Probe(_ context.Context, _ resource.Envelope, _ runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) Probe(_ context.Context, _ reconciler.Request) (status.Status, error) {
 	st := status.Status{}
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "NoopHealthy"}, now)

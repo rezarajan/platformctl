@@ -23,6 +23,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -31,12 +32,9 @@ import (
 // contain the Aiven S3 sink connector on the plugin path.
 const connectorClass = "io.aiven.kafka.connect.s3.AivenKafkaConnectS3SinkConnector"
 
-type Provider struct {
-	providerRes resource.Envelope
-	cfg         provider.Provider
-	secrets     map[string]map[string]string
-	resources   map[resource.Key]resource.Envelope
-}
+// Provider holds no cross-call state (docs/planning/08 F5): every method
+// receives what it needs via reconciler.Request.
+type Provider struct{}
 
 func New() *Provider { return &Provider{} }
 
@@ -49,20 +47,9 @@ func (p *Provider) SupportedSinkFormats() []string {
 	return []string{"json", "jsonl", "csv", "parquet"}
 }
 
-func (p *Provider) SetProviderResource(env resource.Envelope) {
-	p.providerRes = env
-	p.cfg, _ = provider.FromEnvelope(env)
-}
-
-func (p *Provider) SetSecrets(secrets map[string]map[string]string) { p.secrets = secrets }
-
-func (p *Provider) SetResourceSet(byKey map[resource.Key]resource.Envelope) { p.resources = byKey }
-
-func (p *Provider) containerName() string { return naming.RuntimeObjectName(p.providerRes) }
-
-func (p *Provider) connectPort() int {
+func connectPort(cfg provider.Provider, name string) int {
 	configured := 0
-	if v, ok := p.cfg.Configuration["connectPort"]; ok {
+	if v, ok := cfg.Configuration["connectPort"]; ok {
 		switch n := v.(type) {
 		case int:
 			configured = n
@@ -70,7 +57,7 @@ func (p *Provider) connectPort() int {
 			configured = int(n)
 		}
 	}
-	return hostport.Resolve(configured, p.containerName())
+	return hostport.Resolve(configured, name)
 }
 
 // reachableURL returns an "http://host:port" this process can dial right
@@ -78,46 +65,51 @@ func (p *Provider) connectPort() int {
 // be called. Kafka Connect's REST API is stateless HTTP with no
 // broker-style redirect protocol, so the resolved address can be used
 // directly for one call.
-func (p *Provider) reachableURL(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
-	addr, closeAddr, err := rt.EnsureReachable(ctx, p.containerName(), 8083)
+func reachableURL(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
+	addr, closeAddr, err := rt.EnsureReachable(ctx, name, 8083)
 	if err != nil {
 		return "", nil, err
 	}
 	return "http://" + addr, closeAddr, nil
 }
 
-func (p *Provider) network() string {
-	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
+func network(cfg provider.Provider) string {
+	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
 		return n
 	}
 	return "datascape"
 }
 
-func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
-	switch res.Kind {
+func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	switch req.Resource.Kind {
 	case "Provider":
-		return p.reconcileWorker(ctx, rt)
+		return p.reconcileWorker(ctx, req)
 	case "Binding":
-		return p.reconcileConnector(ctx, res, rt)
+		return p.reconcileConnector(ctx, req)
 	default:
-		return status.Status{}, fmt.Errorf("s3sink provider cannot reconcile kind %s", res.Kind)
+		return status.Status{}, fmt.Errorf("s3sink provider cannot reconcile kind %s", req.Resource.Kind)
 	}
 }
 
-func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	rt := req.Runtime
 	st := status.Status{}
-	name := p.containerName()
-	image, _ := p.cfg.Configuration["image"].(string)
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
+	name := naming.RuntimeObjectName(req.Provider)
+	image, _ := cfg.Configuration["image"].(string)
 	if image == "" {
 		return st, fmt.Errorf("Provider %q (type: s3sink): spec.configuration.image is required (a Connect image carrying the S3 sink plugin)", name)
 	}
-	bootstrap, _ := p.cfg.Configuration["bootstrapServers"].(string)
+	bootstrap, _ := cfg.Configuration["bootstrapServers"].(string)
 	if bootstrap == "" {
 		return st, fmt.Errorf("Provider %q (type: s3sink): spec.configuration.bootstrapServers is required", name)
 	}
-	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", name, name)
+	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
 
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
 		return st, err
 	}
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
@@ -144,8 +136,8 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 			// default would stall CDC topics that appear on first table event.
 			"CONNECT_CONSUMER_METADATA_MAX_AGE_MS": "10000",
 		},
-		Networks: []string{p.network()},
-		Ports:    []runtime.PortBinding{{HostPort: p.connectPort(), ContainerPort: 8083, Audience: runtime.AudienceHost}},
+		Networks: []string{network(cfg)},
+		Ports:    []runtime.PortBinding{{HostPort: connectPort(cfg, name), ContainerPort: 8083, Audience: runtime.AudienceHost}},
 		HealthCheck: &runtime.HealthCheck{
 			Test:     []string{"CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"},
 			Interval: 3 * time.Second,
@@ -173,7 +165,7 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 	}
 	st.ProviderState = map[string]any{
 		endpoint.Key: endpoint.List{
-			{Name: "connect-rest", Scheme: "http", Host: hostURL, Internal: fmt.Sprintf("http://%s:8083", p.containerName()), Insecure: true},
+			{Name: "connect-rest", Scheme: "http", Host: hostURL, Internal: fmt.Sprintf("http://%s:8083", name), Insecure: true},
 		}.ToState(),
 	}
 	return st, nil
@@ -183,7 +175,8 @@ func (p *Provider) reconcileWorker(ctx context.Context, rt runtime.ContainerRunt
 // shared by reconcile (to register) and Probe (to diff against the live
 // config; docs/planning/07 §2.1: RUNNING with the wrong bucket, topic
 // filter, or credentials is drift, not health).
-func (p *Provider) desiredConnectorConfig(res resource.Envelope) (string, map[string]string, error) {
+func desiredConnectorConfig(req reconciler.Request) (string, map[string]string, error) {
+	res := req.Resource
 	b, err := binding.FromEnvelope(res)
 	if err != nil {
 		return "", nil, err
@@ -193,11 +186,11 @@ func (p *Provider) desiredConnectorConfig(res resource.Envelope) (string, map[st
 	}
 
 	sourceRef := resource.RefFromSpec(res.Spec, "sourceRef")
-	if _, ok := p.resources[sourceRef.Key(res.Metadata.Namespace, "EventStream")]; !ok {
+	if _, ok := req.Resources[sourceRef.Key(res.Metadata.Namespace, "EventStream")]; !ok {
 		return "", nil, fmt.Errorf("Binding %q: sourceRef %q not found", res.Metadata.Name, b.SourceRef)
 	}
 	targetRef := resource.RefFromSpec(res.Spec, "targetRef")
-	dsEnv, ok := p.resources[targetRef.Key(res.Metadata.Namespace, "Dataset")]
+	dsEnv, ok := req.Resources[targetRef.Key(res.Metadata.Namespace, "Dataset")]
 	if !ok {
 		return "", nil, fmt.Errorf("Binding %q: targetRef %q not found", res.Metadata.Name, b.TargetRef)
 	}
@@ -206,15 +199,19 @@ func (p *Provider) desiredConnectorConfig(res resource.Envelope) (string, map[st
 		return "", nil, err
 	}
 
-	endpoint, err := p.objectStoreEndpoint(dsEnv, ds, b)
+	objectStoreEP, err := objectStoreEndpoint(req, dsEnv, ds, b)
 	if err != nil {
 		return "", nil, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
 	}
 
-	credsRefName, _ := p.cfg.Configuration["credentialsSecretRef"].(string)
-	creds, ok := p.secrets[credsRefName]
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return "", nil, err
+	}
+	credsRefName, _ := cfg.Configuration["credentialsSecretRef"].(string)
+	creds, ok := req.Secrets[credsRefName]
 	if !ok {
-		return "", nil, fmt.Errorf("Binding %q: s3sink Provider %q needs configuration.credentialsSecretRef naming a declared secretRef", res.Metadata.Name, p.containerName())
+		return "", nil, fmt.Errorf("Binding %q: s3sink Provider %q needs configuration.credentialsSecretRef naming a declared secretRef", res.Metadata.Name, naming.RuntimeObjectName(req.Provider))
 	}
 
 	config := map[string]string{
@@ -223,7 +220,7 @@ func (p *Provider) desiredConnectorConfig(res resource.Envelope) (string, map[st
 		"aws.access.key.id":     creds["username"],
 		"aws.secret.access.key": creds["password"],
 		"aws.s3.bucket.name":    ds.Bucket,
-		"aws.s3.endpoint":       endpoint,
+		"aws.s3.endpoint":       objectStoreEP,
 		"aws.s3.region":         "us-east-1",
 		// CDC traffic arrives on per-table topics prefixed with the
 		// EventStream name (<stream>.<schema>.<table>); match the stream's own
@@ -247,14 +244,15 @@ func (p *Provider) desiredConnectorConfig(res resource.Envelope) (string, map[st
 
 // reconcileConnector registers or updates the S3 sink connector realizing a
 // Binding(mode: sink), then verifies it reaches RUNNING.
-func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) reconcileConnector(ctx context.Context, req reconciler.Request) (status.Status, error) {
 	st := status.Status{}
-	connectorName, config, err := p.desiredConnectorConfig(res)
+	connectorName, config, err := desiredConnectorConfig(req)
 	if err != nil {
 		return st, err
 	}
 
-	url, closeURL, err := p.reachableURL(ctx, rt)
+	name := naming.RuntimeObjectName(req.Provider)
+	url, closeURL, err := reachableURL(ctx, req.Runtime, name)
 	if err != nil {
 		return st, err
 	}
@@ -279,7 +277,7 @@ func (p *Provider) reconcileConnector(ctx context.Context, res resource.Envelope
 // objectStoreEndpoint resolves the S3 endpoint reachable from the Connect
 // worker container: an explicit options.endpoint wins (external stores),
 // otherwise the Dataset's Provider container on the shared network.
-func (p *Provider) objectStoreEndpoint(dsEnv resource.Envelope, ds dataset.Dataset, b binding.Binding) (string, error) {
+func objectStoreEndpoint(req reconciler.Request, dsEnv resource.Envelope, ds dataset.Dataset, b binding.Binding) (string, error) {
 	if ep, ok := b.Options["endpoint"].(string); ok && ep != "" {
 		return ep, nil
 	}
@@ -287,29 +285,35 @@ func (p *Provider) objectStoreEndpoint(dsEnv resource.Envelope, ds dataset.Datas
 		return "", fmt.Errorf("cannot determine object-store endpoint (no providerRef on Dataset and no options.endpoint)")
 	}
 	providerRef := resource.RefFromSpec(dsEnv.Spec, "providerRef")
-	if _, ok := p.resources[providerRef.Key(dsEnv.Metadata.Namespace, "Provider")]; !ok {
+	if _, ok := req.Resources[providerRef.Key(dsEnv.Metadata.Namespace, "Provider")]; !ok {
 		return "", fmt.Errorf("Dataset providerRef %q not found", ds.ProviderRef)
 	}
 	// The s3 provider always serves the S3 API on 9000 inside the network.
 	return "http://" + ds.ProviderRef + ":9000", nil
 }
 
-func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) error {
+func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
+	res, rt := req.Resource, req.Runtime
+	name := naming.RuntimeObjectName(req.Provider)
 	switch res.Kind {
 	case "Provider":
-		if err := rt.Remove(ctx, p.containerName()); err != nil {
+		cfg, err := provider.FromEnvelope(req.Provider)
+		if err != nil {
 			return err
 		}
-		_ = rt.RemoveNetwork(ctx, p.network())
+		if err := rt.Remove(ctx, name); err != nil {
+			return err
+		}
+		_ = rt.RemoveNetwork(ctx, network(cfg))
 		return nil
 	case "Binding":
 		// A dead Connect worker takes its connectors with it; requiring a
 		// live REST API here would make destroy unable to converge after
 		// out-of-band failures.
-		if ctr, found, err := rt.Inspect(ctx, p.containerName()); err != nil || !found || !ctr.Running {
+		if ctr, found, err := rt.Inspect(ctx, name); err != nil || !found || !ctr.Running {
 			return err
 		}
-		url, closeURL, err := p.reachableURL(ctx, rt)
+		url, closeURL, err := reachableURL(ctx, rt, name)
 		if err != nil {
 			return err
 		}
@@ -320,12 +324,14 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 	}
 }
 
-func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
 	now := time.Now()
+	name := naming.RuntimeObjectName(req.Provider)
 	switch res.Kind {
 	case "Provider":
-		ctrState, found, err := rt.Inspect(ctx, p.containerName())
+		ctrState, found, err := rt.Inspect(ctx, name)
 		if err != nil {
 			return st, err
 		}
@@ -338,7 +344,7 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		}
 		return st, nil
 	case "Binding":
-		url, closeURL, err := p.reachableURL(ctx, rt)
+		url, closeURL, err := reachableURL(ctx, rt, name)
 		if err != nil {
 			return st, err
 		}
@@ -360,7 +366,7 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		// must still match the manifest-derived one. Drifted key *names*
 		// only — values may carry credentials and must never leak into
 		// conditions.
-		if drifted := p.connectorConfigDrift(ctx, res, url); len(drifted) > 0 {
+		if drifted := connectorConfigDrift(ctx, req, url); len(drifted) > 0 {
 			msg := "connector config differs from manifest at: " + strings.Join(drifted, ", ")
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorConfigDrift", Message: msg}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorConfigDrift", Message: msg}, now)
@@ -378,8 +384,8 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 // manifest-derived one and returns the drifted key names (sorted), or nil
 // when equivalent. Extra live keys beyond the desired set are Connect-added
 // defaults, not drift.
-func (p *Provider) connectorConfigDrift(ctx context.Context, res resource.Envelope, url string) []string {
-	name, desired, err := p.desiredConnectorConfig(res)
+func connectorConfigDrift(ctx context.Context, req reconciler.Request, url string) []string {
+	name, desired, err := desiredConnectorConfig(req)
 	if err != nil {
 		return []string{"(desired config unresolvable: " + err.Error() + ")"}
 	}

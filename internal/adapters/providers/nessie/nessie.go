@@ -22,6 +22,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -32,10 +33,9 @@ const (
 
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
-type Provider struct {
-	providerRes resource.Envelope
-	cfg         provider.Provider
-}
+// Provider holds no cross-call state (docs/planning/08 F5): every method
+// receives what it needs via reconciler.Request.
+type Provider struct{}
 
 func New() *Provider { return &Provider{} }
 
@@ -44,16 +44,11 @@ func (p *Provider) Type() string { return "nessie" }
 // SupportedCatalogEngines implements CatalogCapableProvider.
 func (p *Provider) SupportedCatalogEngines() []string { return []string{"nessie"} }
 
-func (p *Provider) SetProviderResource(env resource.Envelope) {
-	p.providerRes = env
-	p.cfg, _ = provider.FromEnvelope(env)
-}
+func containerName(provEnv resource.Envelope) string { return naming.RuntimeObjectName(provEnv) }
 
-func (p *Provider) containerName() string { return naming.RuntimeObjectName(p.providerRes) }
-
-func (p *Provider) hostPort() int {
+func hostPort(cfg provider.Provider, name string) int {
 	configured := 0
-	if v, ok := p.cfg.Configuration["port"]; ok {
+	if v, ok := cfg.Configuration["port"]; ok {
 		switch n := v.(type) {
 		case int:
 			configured = n
@@ -61,11 +56,11 @@ func (p *Provider) hostPort() int {
 			configured = int(n)
 		}
 	}
-	return hostport.Resolve(configured, p.containerName())
+	return hostport.Resolve(configured, name)
 }
 
-func (p *Provider) network() string {
-	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
+func network(cfg provider.Provider) string {
+	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
 		return n
 	}
 	return "datascape"
@@ -77,8 +72,8 @@ func (p *Provider) network() string {
 // a port-forward tunnel opened just for this call). Nessie's REST API is
 // stateless HTTP with no broker-style redirect, so the resolved address can
 // be used directly for one call.
-func (p *Provider) reachableAPIURL(ctx context.Context, rt runtime.ContainerRuntime) (string, func() error, error) {
-	addr, closeAddr, err := rt.EnsureReachable(ctx, p.containerName(), apiPort)
+func reachableAPIURL(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
+	addr, closeAddr, err := rt.EnsureReachable(ctx, name, apiPort)
 	if err != nil {
 		return "", nil, err
 	}
@@ -93,9 +88,9 @@ func (p *Provider) reachableAPIURL(ctx context.Context, rt runtime.ContainerRunt
 // can end up silently dead for the rest of its life even once the app
 // comes up, while a fresh tunnel opened moments later against the same,
 // by-then-ready pod works every time.
-func (p *Provider) waitAPIReady(ctx context.Context, rt runtime.ContainerRuntime, path string, timeout time.Duration) error {
+func waitAPIReady(ctx context.Context, rt runtime.ContainerRuntime, name, path string, timeout time.Duration) error {
 	opts := runtime.ReachableOptions{Timeout: timeout, Interval: 2 * time.Second}
-	err := runtime.WithReachable(ctx, rt, p.containerName(), apiPort, opts, func(ctx context.Context, addr string) error {
+	err := runtime.WithReachable(ctx, rt, name, apiPort, opts, func(ctx context.Context, addr string) error {
 		// path is relative to the /api/v2 base (matching reachableAPIURL's
 		// convention) — a regression here once polled "/config" directly
 		// instead of "/api/v2/config", a 404 that always failed the check
@@ -112,26 +107,31 @@ func (p *Provider) waitAPIReady(ctx context.Context, rt runtime.ContainerRuntime
 	return nil
 }
 
-func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
-	switch res.Kind {
+func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	switch req.Resource.Kind {
 	case "Provider":
-		return p.reconcileInstance(ctx, rt)
+		return p.reconcileInstance(ctx, req)
 	case "Catalog":
-		return p.reconcileCatalog(ctx, res, rt)
+		return p.reconcileCatalog(ctx, req)
 	default:
-		return status.Status{}, fmt.Errorf("nessie provider cannot reconcile kind %s", res.Kind)
+		return status.Status{}, fmt.Errorf("nessie provider cannot reconcile kind %s", req.Resource.Kind)
 	}
 }
 
-func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	rt := req.Runtime
 	st := status.Status{}
-	name := p.containerName()
-	image, _ := p.cfg.Configuration["image"].(string)
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
+	name := containerName(req.Provider)
+	image, _ := cfg.Configuration["image"].(string)
 	if image == "" {
 		image = defaultImage
 	}
-	labels := runtime.ManagedLabels(p.providerRes.Metadata.Namespace, "Provider", name, name)
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: labels}); err != nil {
+	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
 		return st, err
 	}
 	// No in-container healthcheck: the distroless Quarkus image ships no
@@ -139,8 +139,8 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
 		Name:     name,
 		Image:    image,
-		Networks: []string{p.network()},
-		Ports:    []runtime.PortBinding{{HostPort: p.hostPort(), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
+		Networks: []string{network(cfg)},
+		Ports:    []runtime.PortBinding{{HostPort: hostPort(cfg, name), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
 		Labels:   labels,
 	})
 	if err != nil {
@@ -149,7 +149,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
 		return st, err
 	}
-	if err := p.waitAPIReady(ctx, rt, "/config", 120*time.Second); err != nil {
+	if err := waitAPIReady(ctx, rt, name, "/config", 120*time.Second); err != nil {
 		return st, err
 	}
 
@@ -180,16 +180,18 @@ func (p *Provider) reconcileInstance(ctx context.Context, rt runtime.ContainerRu
 // reconcileCatalog realizes a Catalog(engine: nessie): the REST API must
 // answer and the declared default branch must exist (created from main when
 // missing).
-func (p *Provider) reconcileCatalog(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) reconcileCatalog(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	rt := req.Runtime
 	st := status.Status{}
-	c, err := catalog.FromEnvelope(res)
+	c, err := catalog.FromEnvelope(req.Resource)
 	if err != nil {
 		return st, err
 	}
-	if err := p.waitAPIReady(ctx, rt, "/config", 60*time.Second); err != nil {
+	name := containerName(req.Provider)
+	if err := waitAPIReady(ctx, rt, name, "/config", 60*time.Second); err != nil {
 		return st, err
 	}
-	apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt)
+	apiURL, closeAPI, err := reachableAPIURL(ctx, rt, name)
 	if err != nil {
 		return st, err
 	}
@@ -204,7 +206,7 @@ func (p *Provider) reconcileCatalog(ctx context.Context, res resource.Envelope, 
 	// against, so inventory must answer from the Catalog resource —
 	// docs/planning/07 §2.3: "what exact config do I paste into my tool?").
 	hostIceberg, hostAPI := "", ""
-	if ctr, found, err := rt.Inspect(ctx, p.containerName()); err == nil && found {
+	if ctr, found, err := rt.Inspect(ctx, name); err == nil && found {
 		if addr := ctr.HostAddr(apiPort); addr != "" {
 			hostIceberg = "http://" + addr + "/iceberg"
 			hostAPI = "http://" + addr + "/api/v2"
@@ -218,45 +220,53 @@ func (p *Provider) reconcileCatalog(ctx context.Context, res resource.Envelope, 
 		"engine":        "nessie",
 		"defaultBranch": branch,
 		"hostApi":       hostAPI,
-		"internalApi":   fmt.Sprintf("http://%s:%d/api/v2", p.containerName(), apiPort),
-		"icebergUri":    fmt.Sprintf("http://%s:%d/iceberg", p.containerName(), apiPort),
+		"internalApi":   fmt.Sprintf("http://%s:%d/api/v2", name, apiPort),
+		"icebergUri":    fmt.Sprintf("http://%s:%d/iceberg", name, apiPort),
 		endpoint.Key: endpoint.List{
-			{Name: "iceberg-rest", Scheme: "http", Host: hostIceberg, Internal: fmt.Sprintf("http://%s:%d/iceberg", p.containerName(), apiPort), Insecure: true},
-			{Name: "nessie-api", Scheme: "http", Host: hostAPI, Internal: fmt.Sprintf("http://%s:%d/api/v2", p.containerName(), apiPort), Insecure: true},
+			{Name: "iceberg-rest", Scheme: "http", Host: hostIceberg, Internal: fmt.Sprintf("http://%s:%d/iceberg", name, apiPort), Insecure: true},
+			{Name: "nessie-api", Scheme: "http", Host: hostAPI, Internal: fmt.Sprintf("http://%s:%d/api/v2", name, apiPort), Insecure: true},
 		}.ToState(),
 	}
 	return st, nil
 }
 
-func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) error {
-	switch res.Kind {
+func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
+	rt := req.Runtime
+	name := containerName(req.Provider)
+	switch req.Resource.Kind {
 	case "Provider":
-		if err := rt.Remove(ctx, p.containerName()); err != nil {
+		if err := rt.Remove(ctx, name); err != nil {
 			return err
 		}
-		_ = rt.RemoveNetwork(ctx, p.network())
+		cfg, err := provider.FromEnvelope(req.Provider)
+		if err != nil {
+			return err
+		}
+		_ = rt.RemoveNetwork(ctx, network(cfg))
 		return nil
 	case "Catalog":
 		// Deleting branches would be data loss beyond the declared contract;
 		// the instance teardown (Provider destroy) removes everything anyway.
 		return nil
 	default:
-		return fmt.Errorf("nessie provider cannot destroy kind %s", res.Kind)
+		return fmt.Errorf("nessie provider cannot destroy kind %s", req.Resource.Kind)
 	}
 }
 
-func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {
+func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	rt := req.Runtime
 	st := status.Status{}
 	now := time.Now()
-	switch res.Kind {
+	name := containerName(req.Provider)
+	switch req.Resource.Kind {
 	case "Provider":
-		ctrState, found, err := rt.Inspect(ctx, p.containerName())
+		ctrState, found, err := rt.Inspect(ctx, name)
 		if err != nil {
 			return st, err
 		}
 		healthy := false
 		if found && ctrState.Healthy {
-			if apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt); err == nil {
+			if apiURL, closeAPI, err := reachableAPIURL(ctx, rt, name); err == nil {
 				healthy = httpOK(ctx, apiURL+"/config")
 				closeAPI()
 			}
@@ -270,11 +280,11 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		}
 		return st, nil
 	case "Catalog":
-		c, err := catalog.FromEnvelope(res)
+		c, err := catalog.FromEnvelope(req.Resource)
 		if err != nil {
 			return st, err
 		}
-		apiURL, closeAPI, err := p.reachableAPIURL(ctx, rt)
+		apiURL, closeAPI, err := reachableAPIURL(ctx, rt, name)
 		var ok bool
 		if err == nil {
 			ok, err = branchExists(ctx, apiURL, defaultBranch(c))
@@ -293,7 +303,7 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
 		return st, nil
 	default:
-		return st, fmt.Errorf("nessie provider cannot probe kind %s", res.Kind)
+		return st, fmt.Errorf("nessie provider cannot probe kind %s", req.Resource.Kind)
 	}
 }
 

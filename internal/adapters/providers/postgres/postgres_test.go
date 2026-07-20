@@ -10,17 +10,16 @@ import (
 // is optional and, when present, its size string parses through
 // storagesize.ParseBytes into VolumeSpec's runtime-agnostic bytes/class.
 func TestStorageResolution(t *testing.T) {
-	p := New()
+	cfg := provider.Provider{Configuration: map[string]any{}}
+	const name = "db"
 
-	p.cfg = provider.Provider{Configuration: map[string]any{}}
-	p.providerRes.Metadata.Name = "db"
-	size, class, err := p.storage()
+	size, class, err := storage(cfg, name)
 	if err != nil || size != 0 || class != "" {
 		t.Fatalf("storage() with no stanza = %d, %q, %v; want 0, \"\", nil", size, class, err)
 	}
 
-	p.cfg.Configuration["storage"] = map[string]any{"size": "50Gi", "class": "fast-ssd"}
-	size, class, err = p.storage()
+	cfg.Configuration["storage"] = map[string]any{"size": "50Gi", "class": "fast-ssd"}
+	size, class, err = storage(cfg, name)
 	if err != nil {
 		t.Fatalf("storage(): %v", err)
 	}
@@ -31,8 +30,8 @@ func TestStorageResolution(t *testing.T) {
 		t.Errorf("class = %q, want fast-ssd", class)
 	}
 
-	p.cfg.Configuration["storage"] = map[string]any{"size": "not-a-size"}
-	if _, _, err := p.storage(); err == nil {
+	cfg.Configuration["storage"] = map[string]any{"size": "not-a-size"}
+	if _, _, err := storage(cfg, name); err == nil {
 		t.Fatal("storage() accepted an unparseable size")
 	}
 }
