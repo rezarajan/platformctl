@@ -828,6 +828,47 @@ note first (per doc 06 §3).
 - **Accept:** note committed with a decision and a task spec for the chosen
   provider (added to this backlog as D10 when accepted).
 
+### D10: Trino compute-engine provider
+
+- **Size:** L. **Depends:** C1 (coordinator/worker replicas); D8 helpful,
+  not required (warehouseRef makes catalog-to-Dataset wiring first-class,
+  but `spec.nessie` already carries warehouse config today per D8's
+  context, so the Trino provider can read either shape).
+- **Context:** design note `docs/design/006-compute-engines.md` decided
+  Trino first: read path completes the lakehouse story, catalog
+  auto-configuration is the strongest inventory UX win, and Trino's
+  stateless-of-its-own-data shape avoids the storage questions a stateful
+  engine would raise. `inventory --for trino`
+  (`cmd/platformctl/toolconfig.go:226-243`) today assumes a user-operated
+  engine and only renders a paste-ready snippet.
+- **Do:** `trino` provider: one coordinator container + N worker
+  containers via C1's `ContainerSpec.Replicas` (`StableIdentity: false` —
+  workers hold no durable per-replica state). New
+  `Provider(type: trino).spec.configuration.catalogRef` (Catalog,
+  kind-checked, same graph-ordering discipline as D8's warehouseRef —
+  Catalog reconciles before the Trino Provider that reads it); the
+  provider resolves the referenced Catalog's REST endpoint and its
+  warehouse Dataset's S3/MinIO Provider endpoint + `SecretReference`,
+  and writes `etc/catalog/lakehouse.properties` into the coordinator on
+  reconcile (drift-checked: out-of-band catalog config edits are detected
+  and healed, matching the debezium/s3sink config-drift bar). Probe:
+  coordinator `/v1/info` reachable and `starting: false`, worker count in
+  `ContainerState.ReadyReplicas` matches declared replicas. `inventory
+  --for trino` gains a live-endpoint branch: when a `trino` Provider
+  exists in the applied state, render the coordinator's JDBC URL / UI
+  address instead of (or alongside) the paste-ready snippet — "it's
+  already running" per the design note. Gate `TrinoProvider` (Alpha,
+  disabled).
+- **Accept:** integration: `trino` Provider + `catalogRef` to the
+  lakehouse Catalog reaches Ready; a query against a table written by the
+  existing CDC→Parquet path (D1/D2) returns rows through the coordinator;
+  scale-up (1→3 workers) is in-place, no coordinator restart;
+  out-of-band catalog config change reported as drift and healed;
+  idempotent re-apply makes zero Docker API calls beyond probes;
+  `inventory --for trino` reflects the live coordinator once the provider
+  is applied; capability/negative-path test: `catalogRef` to a
+  non-Catalog kind rejected at validate with the standard error.
+
 ---
 
 ## 7. Stage E — Effortless-pipeline DX and contribution readiness
@@ -1153,6 +1194,7 @@ Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
 | `JDBCSinkProvider` | D3 | disabled | Beta after soak |
 | `IngestProvider` | D4 | disabled | Beta after soak |
 | `TunnelProvider` | D5 | disabled | Beta after real-VPC validation |
+| `TrinoProvider` | D10 | disabled | Beta after soak |
 | Phase 6.5 gates (`MySQLProvider`, `NessieProvider`, `OpenLineageProvider`, `ProxyProvider`) | — | enabled (Alpha) | promote to Beta at Stage A close (their hardening period ends with the ops-hardening stage) |
 
 ## 9. Mapping to doc 07's open items
