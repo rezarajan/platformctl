@@ -261,6 +261,25 @@ neither anticipated by this section when it was first written:
       restricted) and deleted by name on `Remove`. Guarded by the unit test
       `TestBuildExternalIngressPolicy` and the live node-port subtest of
       `reachability_integration_test.go`.
+- [x] ~~A shared-namespace `destroy` wiped sibling providers and any
+      unmanaged workload alongside them~~ resolved (errors.md, 2026-07-20):
+      every provider best-effort-calls `RemoveNetwork` on `Destroy`, and the
+      lakehouse example places them all on one namespace next to an
+      out-of-band `external-orders-db`. Docker's `NetworkRemove` refuses
+      ("network has active endpoints") and never deletes containers, so the
+      shared network survives until its last member; the Kubernetes adapter
+      instead deleted the whole Namespace, cascading to every object in it —
+      so the first provider destroyed wiped its siblings and the unmanaged
+      database. Unlike the NodePort/B7 case above, this class *is* expressible
+      at the port level (both runtimes must refuse to remove a network still
+      in use), so per the doc 09 §3-F6 ratchet's primary branch it is pinned
+      in the conformance suite as `RemoveNetwork_refuses_while_container_
+      attached` — passed by the fake, Docker, and Kubernetes adapters — with
+      the contract stated on `ContainerRuntime.RemoveNetwork`. Fix: the
+      Kubernetes `RemoveNetwork` refuses while any Deployment remains in the
+      namespace and deletes it only once emptied of workloads (`Remove`
+      already blocks until its Deployment is gone, so the last member still
+      reclaims the namespace).
 
 ## Stage Gates
 

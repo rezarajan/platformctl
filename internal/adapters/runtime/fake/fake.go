@@ -131,10 +131,25 @@ func (r *Runtime) Remove(_ context.Context, name string) error {
 func (r *Runtime) RemoveNetwork(_ context.Context, name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.networks[name]; ok {
-		delete(r.networks, name)
-		r.MutationCount++
+	if _, ok := r.networks[name]; !ok {
+		return nil
 	}
+	// A network with a container still attached cannot be removed — the same
+	// refusal Docker gives ("network has active endpoints") and the Kubernetes
+	// adapter gives (a Namespace that still holds a Deployment). Providers that
+	// share one network rely on it: each best-effort-calls RemoveNetwork on
+	// Destroy, and the network must outlive every member but the last rather
+	// than be torn down (with its members) by the first. Pinned by the
+	// conformance suite's RemoveNetwork_refuses_while_container_attached.
+	for cname, spec := range r.containers {
+		for _, n := range spec.Networks {
+			if n == name {
+				return fmt.Errorf("network %q still has container %q attached; refusing to remove it", name, cname)
+			}
+		}
+	}
+	delete(r.networks, name)
+	r.MutationCount++
 	return nil
 }
 

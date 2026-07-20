@@ -665,6 +665,41 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		}
 	})
 
+	t.Run("RemoveNetwork_refuses_while_container_attached", func(t *testing.T) {
+		// ctrSpec is still attached to netSpec here — Remove_then_absent
+		// (below) is what finally tears it down. Removing a network out from
+		// under a container still attached to it must fail and change nothing.
+		// The shared-network destroy pattern depends on this: every provider
+		// best-effort-calls RemoveNetwork on Destroy, so the network must
+		// outlive every member but the last, and RemoveNetwork must never
+		// cascade-delete a member. Docker enforces it via "network has active
+		// endpoints"; the Kubernetes adapter must not let a Namespace deletion
+		// cascade to a still-running Deployment (regression: a shared-namespace
+		// destroy that wiped its siblings and any unmanaged workload alongside
+		// them — errors.md, 2026-07-20).
+		if err := rt.RemoveNetwork(ctx, netSpec.Name); err == nil {
+			t.Fatal("RemoveNetwork removed a network that still has a container attached")
+		}
+		if _, found, err := rt.Inspect(ctx, ctrSpec.Name); err != nil {
+			t.Fatalf("Inspect after refused RemoveNetwork: %v", err)
+		} else if !found {
+			t.Fatal("container was deleted as a side effect of RemoveNetwork")
+		}
+		nets, err := rt.ListManagedNetworks(ctx)
+		if err != nil {
+			t.Fatalf("ListManagedNetworks: %v", err)
+		}
+		var stillThere bool
+		for _, n := range nets {
+			if n.Name == netSpec.Name {
+				stillThere = true
+			}
+		}
+		if !stillThere {
+			t.Errorf("network %q missing after a refused RemoveNetwork", netSpec.Name)
+		}
+	})
+
 	t.Run("Remove_then_absent", func(t *testing.T) {
 		if err := rt.Remove(ctx, ctrSpec.Name); err != nil {
 			t.Fatalf("Remove: %v", err)

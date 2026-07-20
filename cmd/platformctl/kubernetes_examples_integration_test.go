@@ -29,6 +29,32 @@ import (
 // (docs/planning/08 B8's own suggestion: "a runtime-parameterized manifest
 // fixture" — this parameterizes the literal example manifests rather than
 // hand-maintaining a second, driftable copy of them).
+// loadImageIntoCluster copies a locally-built image onto the test cluster's
+// node(s) so a Deployment referencing it (with imagePullPolicy other than
+// Always) can start without a registry. The CI cluster is kind
+// (helm/kind-action, see .github/workflows/ci.yml), while local runs may use
+// minikube — dispatch on whichever is actually present rather than assuming
+// one. kind is tried first: `kind get clusters` exits 0 with empty output
+// when no kind cluster exists, so an empty list cleanly falls through to the
+// minikube path.
+func loadImageIntoCluster(t *testing.T, image string) {
+	t.Helper()
+	if out, err := exec.Command("kind", "get", "clusters").Output(); err == nil {
+		clusters := strings.Fields(strings.TrimSpace(string(out)))
+		if len(clusters) > 0 {
+			for _, name := range clusters {
+				if out, err := exec.Command("kind", "load", "docker-image", image, "--name", name).CombinedOutput(); err != nil {
+					t.Fatalf("kind load docker-image into %q: %v\n%s", name, err, out)
+				}
+			}
+			return
+		}
+	}
+	if out, err := exec.Command("minikube", "image", "load", image).CombinedOutput(); err != nil {
+		t.Fatalf("minikube image load: %v\n%s", err, out)
+	}
+}
+
 func rewriteExampleForKubernetes(t *testing.T, srcDir, ns, access string) string {
 	t.Helper()
 	entries, err := os.ReadDir(srcDir)
@@ -100,16 +126,14 @@ func TestCDCAttendanceExampleOnKubernetes(t *testing.T) {
 	t.Setenv("DATASCAPE_SECRET_MINIO_ROOT_CREDS_PASSWORD", "minioadmin-pw")
 
 	// The s3sink connector image has no public registry copy (built
-	// on-demand, same as the Docker acceptance test) — minikube's node
+	// on-demand, same as the Docker acceptance test) — the cluster's node
 	// needs its own copy since it doesn't share the host's Docker image
 	// cache the way `docker run` does.
 	build := exec.Command("docker", "build", "-t", "datascape-s3sink-connect:local", "../../examples/cdc-attendance/s3sink-image")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build sink connect image: %v\n%s", err, out)
 	}
-	if out, err := exec.Command("minikube", "image", "load", "datascape-s3sink-connect:local").CombinedOutput(); err != nil {
-		t.Fatalf("minikube image load: %v\n%s", err, out)
-	}
+	loadImageIntoCluster(t, "datascape-s3sink-connect:local")
 
 	rt, err := k8sruntime.New(nil)
 	if err != nil {
@@ -256,7 +280,15 @@ func TestLakehouseExampleOnKubernetes(t *testing.T) {
 	}
 	ctx := context.Background()
 	const ns = "datascape-lakehouse-example-test"
-	cleanup := func() { _ = rt.RemoveNetwork(ctx, ns) }
+	// external-orders-db is stood up out-of-band below and is never part of
+	// platformctl's managed lifecycle, so RemoveNetwork now refuses to delete
+	// the namespace while it (a workload) is still present — the same "network
+	// in use" refusal Docker gives. Tear it down explicitly first so cleanup
+	// can actually drop the namespace and leave nothing behind.
+	cleanup := func() {
+		_ = rt.Remove(ctx, "external-orders-db")
+		_ = rt.RemoveNetwork(ctx, ns)
+	}
 	cleanup()
 	t.Cleanup(cleanup)
 

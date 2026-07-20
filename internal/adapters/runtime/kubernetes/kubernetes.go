@@ -281,6 +281,26 @@ func (r *Runtime) RemoveNetwork(ctx context.Context, name string) error {
 	if ns.Labels[runtimeport.LabelManagedBy] != runtimeport.ManagedByValue {
 		return fmt.Errorf("namespace %q is not managed by platformctl; refusing to remove it", name)
 	}
+	// A Docker network cannot be removed while containers are still attached
+	// (NetworkRemove returns "network has active endpoints"). Providers that
+	// share one network each best-effort-call RemoveNetwork on Destroy and
+	// lean on that refusal: the shared network outlives every member but the
+	// last, and no container is ever deleted as a side effect of removing the
+	// network. Deleting a Kubernetes Namespace, by contrast, cascades to every
+	// object inside it — so without the same "in use" guard, destroying one
+	// Provider on a shared namespace would wipe its siblings and any unmanaged
+	// workload placed alongside them. Mirror Docker: a Deployment is the
+	// container analog, so refuse while any Deployment still lives here and
+	// delete the namespace only once it has been emptied of workloads. (Remove
+	// blocks until its Deployment is fully gone, so a just-removed member does
+	// not linger in this List.)
+	deployments, err := r.clientset.AppsV1().Deployments(name).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list deployments in namespace %q: %w", name, err)
+	}
+	if n := len(deployments.Items); n > 0 {
+		return fmt.Errorf("namespace %q still has %d active workload(s); refusing to remove it", name, n)
+	}
 	if err := r.clientset.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete namespace %q: %w", name, err)
 	}

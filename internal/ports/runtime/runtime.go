@@ -289,6 +289,15 @@ type ContainerRuntime interface {
 	WaitHealthy(ctx context.Context, name string, timeout time.Duration) error
 	Inspect(ctx context.Context, name string) (ContainerState, bool, error)
 	Remove(ctx context.Context, name string) error
+	// RemoveNetwork must never delete containers/workloads as a side effect,
+	// and must refuse (return a non-nil error, leaving the network intact)
+	// while any container is still attached to it — the way Docker's
+	// NetworkRemove reports "network has active endpoints". Providers that
+	// share one network each call RemoveNetwork on Destroy and rely on this
+	// refusal so the shared network outlives every member but the last; a
+	// runtime that instead cascade-deletes the network's members (as deleting
+	// a Kubernetes Namespace naively would) breaks that contract. Pinned by
+	// the conformance suite's RemoveNetwork_refuses_while_container_attached.
 	RemoveNetwork(ctx context.Context, name string) error
 	RemoveVolume(ctx context.Context, name string) error
 	ListManaged(ctx context.Context) ([]ContainerState, error) // everything labeled as Datascape-owned

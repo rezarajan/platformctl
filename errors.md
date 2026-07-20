@@ -89,3 +89,57 @@ external exposure was requested, leaving every other port default-denied.
 Validated on the live kind cluster: `TestEnsureReachable` (all three subtests,
 including `node_port_mode_is_reachable_and_observed_by_inspect`) and
 `TestEnsureNetworkProvisionsIsolationBoundary` pass.
+
+## Follow-up: two further failures (the netpol fix held; these were next in line)
+
+With the reachability fix in place the `internal/adapters/runtime/kubernetes`
+package now passes (`ok ... 148s`, `TestEnsureReachable` gone). The next CI run
+surfaced two *different*, unrelated failures in `cmd/platformctl`:
+
+### 1. CDC example: `minikube image load: exit status 14` — cluster does not exist
+
+`TestCDCAttendanceExampleOnKubernetes` built the s3sink connector image and
+loaded it onto the node with a hardcoded `minikube image load`. **CI runs on
+kind** (`helm/kind-action`, `.github/workflows/ci.yml`), where no `minikube`
+cluster exists, so the load aborts (`MK_USAGE: cluster "minikube" does not
+exist`) before the test does anything. Purely a test-harness assumption, not a
+product bug.
+
+- Fix: `loadImageIntoCluster` dispatches on whichever CLI is actually present —
+  `kind load docker-image` when `kind get clusters` reports one (CI), falling
+  back to `minikube image load` for local runs.
+
+### 2. Lakehouse example: `external-orders-db missing after destroy`
+
+`TestLakehouseExampleOnKubernetes` stands up `external-orders-db` as a real but
+*unmanaged-by-platformctl* Deployment in the shared namespace, then asserts
+`destroy` leaves it untouched. It was gone afterward.
+
+Root cause — a **product bug on the Kubernetes runtime**: every provider's
+`Destroy` best-effort-calls `RemoveNetwork(network(cfg))`, and in this scenario
+every provider *shares one namespace*. On Docker this is safe: `NetworkRemove`
+never deletes containers and *refuses* ("network has active endpoints") while
+any container is still attached, so the shared network outlives all but the
+last member and the error is harmlessly ignored. On Kubernetes, `RemoveNetwork`
+deleted the whole **namespace**, cascading to every object in it — so the first
+provider destroyed wiped its siblings *and* the unmanaged `external-orders-db`.
+
+- Fix (`internal/adapters/runtime/kubernetes/kubernetes.go`, `RemoveNetwork`):
+  mirror Docker's "in use" refusal. A Deployment is the container analog, so
+  refuse to delete the namespace while any Deployment still lives there; delete
+  only once it has been emptied of workloads. `Remove` already blocks until its
+  Deployment is fully gone, so the last member's namespace is still reclaimed.
+- Per the doc 09 §3-F6 ratchet, a bug found only by live testing must land with
+  a contract-level reproduction. This class *is* expressible at the port level
+  (Docker refuses the same way — "network has active endpoints"), so it is
+  pinned in the shared conformance suite as
+  `RemoveNetwork_refuses_while_container_attached` — passed by the fake, Docker
+  (validated live), and Kubernetes adapters — with the contract stated on
+  `ContainerRuntime.RemoveNetwork`. The fake's `RemoveNetwork` was made honest
+  (it previously deleted a network out from under an attached container) so the
+  strict interpreter matches the real runtimes. A k8s-specific fast unit test
+  (`removenetwork_test.go`, fake clientset) additionally pins the namespace-
+  cascade case in `go test ./...`, where no live cluster runs. Recorded in
+  docs/planning/07's per-runtime findings ledger. The lakehouse test's cleanup
+  now tears down `external-orders-db` explicitly so the namespace can still be
+  reclaimed under the stricter semantics.
