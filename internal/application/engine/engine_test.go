@@ -17,8 +17,11 @@ import (
 	"github.com/rezarajan/platformctl/internal/application/featuregate"
 	"github.com/rezarajan/platformctl/internal/application/plan"
 	"github.com/rezarajan/platformctl/internal/application/registry"
+	"github.com/rezarajan/platformctl/internal/domain/connection"
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/graph"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
+	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/clock"
@@ -698,5 +701,82 @@ func TestProbeTCPReachable(t *testing.T) {
 	// Nothing listening.
 	if err := probeTCPReachable(ctx, "127.0.0.1:1"); err == nil {
 		t.Error("closed port reported reachable")
+	}
+}
+
+// TestConnectionDialAddressUsesPublishedFactNotResourceName proves the F4
+// fix directly: a managed Connection's forwarder is not guaranteed to be
+// named after the Connection resource itself — that was only a convention,
+// and re-deriving it from connEnv.Metadata.Name is exactly the K7 mistake
+// (docs/planning/08 F4, docs/planning/09 Class 4). Here the runtime object
+// is deliberately named differently from the Connection ("orders-db-fwd" vs.
+// "orders-db"); connectionDialAddress must resolve via the endpoint fact
+// (RuntimeName/ContainerPort) recorded in the Connection's own
+// Status.ProviderState, not by guessing the Connection's own name.
+func TestConnectionDialAddressUsesPublishedFactNotResourceName(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
+	fakeRT := fakeruntime.New()
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeRT, nil
+	})
+
+	ctx := context.Background()
+	const runtimeObjectName = "orders-db-fwd" // deliberately NOT "orders-db"
+	if _, err := fakeRT.EnsureContainer(ctx, runtime.ContainerSpec{
+		Name:  runtimeObjectName,
+		Image: "alpine/socat:1.8.0.3",
+		Ports: []runtime.PortBinding{{HostPort: 15432, ContainerPort: 5432, Audience: runtime.AudienceHost}},
+	}); err != nil {
+		t.Fatalf("EnsureContainer: %v", err)
+	}
+
+	eng := newTestEngine(t, reg)
+	provEnv := envelope("Provider", "cfg", map[string]any{
+		"type":    "noop",
+		"runtime": map[string]any{"type": "fake"},
+	})
+	connEnv := envelope("Connection", "orders-db", map[string]any{
+		"providerRef": map[string]any{"name": "cfg"},
+		"port":        5432,
+		"target":      "upstream:5432",
+	})
+	facts := endpoint.List{
+		{Name: "forward", Scheme: "tcp", RuntimeName: runtimeObjectName, ContainerPort: 5432, Audience: runtime.AudienceHost},
+	}.ToState()
+	// Status.ProviderState is only ever populated from a real state-file
+	// load in production, which round-trips through JSON — []map[string]any
+	// becomes []any of map[string]any, not the Go slice type directly; build
+	// it the same way so this test exercises the real decode path.
+	factsAny := make([]any, len(facts))
+	for i, f := range facts {
+		factsAny[i] = f
+	}
+	connEnv.Status.ProviderState = map[string]any{endpoint.Key: factsAny}
+	byKey := map[resource.Key]resource.Envelope{
+		provEnv.Key(): provEnv,
+		connEnv.Key(): connEnv,
+	}
+
+	conn, err := connection.FromEnvelope(connEnv)
+	if err != nil {
+		t.Fatalf("connection.FromEnvelope: %v", err)
+	}
+
+	addr, closeFn := eng.connectionDialAddress(ctx, connEnv, conn, byKey)
+	if closeFn != nil {
+		defer closeFn()
+	}
+	if addr == "" {
+		t.Fatal("connectionDialAddress returned no address; want it to resolve via the published endpoint fact")
+	}
+
+	// Sanity check the premise: naming.RuntimeObjectName(connEnv) (the old
+	// re-derivation) names a container that does not exist, so a
+	// regression back to that behavior would make this test fail with an
+	// empty address above, not silently pass for the wrong reason.
+	if naming.RuntimeObjectName(connEnv) == runtimeObjectName {
+		t.Fatal("test setup invalid: resource name and runtime object name must differ")
 	}
 }

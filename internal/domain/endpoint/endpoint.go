@@ -26,6 +26,23 @@ type Endpoint struct {
 	// `inventory` renders it so nobody points production traffic at an
 	// unlabeled plaintext port.
 	Insecure bool `json:"insecure,omitempty"`
+	// RuntimeName, ContainerPort, and Audience are the runtime-object facts
+	// behind Host/Internal (docs/planning/08 F4, docs/planning/09 Class 4):
+	// the exact (name, port, audience) the realizing provider passed to
+	// ContainerRuntime.EnsureContainer for this endpoint. A consumer that
+	// needs to call EnsureReachable itself (the engine's Connection probe
+	// is the one case today) reads these instead of re-deriving a runtime
+	// object name from the resource's own name — a Connection's forwarder
+	// happening to be named after the Connection is this endpoint's fact,
+	// not a convention every consumer must independently know and
+	// re-derive correctly (K7 was exactly that re-derivation, guessed
+	// wrong twice).
+	RuntimeName   string `json:"runtimeName,omitempty"`
+	ContainerPort int    `json:"containerPort,omitempty"`
+	// Audience mirrors runtime.AudienceHost ("host") / runtime.AudienceInternal
+	// ("internal") by value — this package cannot import internal/ports/runtime
+	// (layering: domain imports nothing else in this repo).
+	Audience string `json:"audience,omitempty"`
 }
 
 // List is an ordered set of a component's endpoints.
@@ -46,6 +63,15 @@ func (l List) ToState() []map[string]any {
 		}
 		if e.Insecure {
 			m["insecure"] = true
+		}
+		if e.RuntimeName != "" {
+			m["runtimeName"] = e.RuntimeName
+		}
+		if e.ContainerPort != 0 {
+			m["containerPort"] = e.ContainerPort
+		}
+		if e.Audience != "" {
+			m["audience"] = e.Audience
 		}
 		out = append(out, m)
 	}
@@ -75,6 +101,14 @@ func FromState(v any) List {
 		e.Internal, _ = m["internal"].(string)
 		if v, ok := m["insecure"].(bool); ok {
 			e.Insecure = v
+		}
+		e.RuntimeName, _ = m["runtimeName"].(string)
+		e.Audience, _ = m["audience"].(string)
+		switch v := m["containerPort"].(type) {
+		case float64: // the common case: state persists providerState as JSON, decoded back into map[string]any
+			e.ContainerPort = int(v)
+		case int:
+			e.ContainerPort = v
 		}
 		out = append(out, e)
 	}

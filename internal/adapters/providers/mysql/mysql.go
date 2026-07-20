@@ -12,6 +12,7 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/hostport"
+	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/source"
@@ -37,7 +38,7 @@ func (p *Provider) SetProviderResource(env resource.Envelope) {
 
 func (p *Provider) SetSecrets(secrets map[string]map[string]string) { p.secrets = secrets }
 
-func (p *Provider) containerName() string { return p.providerRes.Metadata.Name }
+func (p *Provider) containerName() string { return naming.RuntimeObjectName(p.providerRes) }
 
 // mariadb reports whether this Provider resource was declared type: mariadb.
 func (p *Provider) mariadb() bool { return p.cfg.Type == "mariadb" }

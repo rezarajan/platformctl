@@ -21,7 +21,9 @@ import (
 	"github.com/rezarajan/platformctl/internal/application/plan"
 	"github.com/rezarajan/platformctl/internal/application/registry"
 	"github.com/rezarajan/platformctl/internal/domain/connection"
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
+	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/secret"
@@ -694,12 +696,17 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 // domain-layer address at all (domain can't import ports/runtime to guess
 // one — docs/planning/09 F1), so here, with runtime access, resolve the
 // forwarder's real reachable address through the same runtime.EnsureReachable
-// mechanism every provider's own admin calls use. The forwarder container is
-// named after the Connection itself, not its realizing Provider (see
-// proxy.reconcileConnection) — found live against minikube after the "name
-// it after the Provider" version failed with "container \"edge\" not
-// found", the exact same mistake fixed once already in debezium's
-// equivalent preflight.
+// mechanism every provider's own admin calls use — by (runtime name,
+// container port) fact published by the realizing provider itself
+// (endpoint.Endpoint.RuntimeName/ContainerPort, docs/planning/08 F4), not by
+// re-deriving which resource's name the forwarder runs under. Before facts
+// existed, this re-derived the name directly from the Connection's own
+// Metadata.Name — correct only because proxy happens to name the forwarder
+// after the Connection, not its realizing Provider (found live against
+// minikube after a first version guessed "name it after the Provider" and
+// failed with "container \"edge\" not found", the exact same mistake fixed
+// once already in debezium's equivalent preflight). The fallback below
+// keeps working the same way for state persisted before facts existed.
 func (e *Engine) connectionDialAddress(ctx context.Context, connEnv resource.Envelope, conn connection.Connection, byKey map[resource.Key]resource.Envelope) (string, func() error) {
 	if conn.External {
 		addr, _ := conn.ExternalAddress()
@@ -709,7 +716,14 @@ func (e *Engine) connectionDialAddress(ctx context.Context, connEnv resource.Env
 	if err != nil {
 		return "", nil
 	}
-	addr, closeAddr, err := rt.EnsureReachable(ctx, connEnv.Metadata.Name, conn.Port)
+	runtimeName, containerPort := naming.RuntimeObjectName(connEnv), conn.Port
+	for _, ep := range endpoint.FromState(connEnv.Status.ProviderState[endpoint.Key]) {
+		if ep.RuntimeName != "" && ep.ContainerPort != 0 {
+			runtimeName, containerPort = ep.RuntimeName, ep.ContainerPort
+			break
+		}
+	}
+	addr, closeAddr, err := rt.EnsureReachable(ctx, runtimeName, containerPort)
 	if err != nil {
 		return "", nil
 	}

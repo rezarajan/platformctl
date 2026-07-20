@@ -19,6 +19,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/dataset"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/hostport"
+	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -57,7 +58,7 @@ func (p *Provider) SetSecrets(secrets map[string]map[string]string) { p.secrets 
 
 func (p *Provider) SetResourceSet(byKey map[resource.Key]resource.Envelope) { p.resources = byKey }
 
-func (p *Provider) containerName() string { return p.providerRes.Metadata.Name }
+func (p *Provider) containerName() string { return naming.RuntimeObjectName(p.providerRes) }
 
 func (p *Provider) connectPort() int {
 	configured := 0

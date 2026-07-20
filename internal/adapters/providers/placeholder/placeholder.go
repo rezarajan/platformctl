@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -27,7 +28,8 @@ func names(res resource.Envelope, cfg provider.Provider) (network, volume, conta
 	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
 		network = n
 	}
-	return network, res.Metadata.Name + "-data", res.Metadata.Name
+	container = naming.RuntimeObjectName(res)
+	return network, container + "-data", container
 }
 
 func (p *Provider) Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error) {

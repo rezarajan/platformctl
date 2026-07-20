@@ -13,6 +13,7 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/hostport"
+	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -41,7 +42,7 @@ func (p *Provider) SetProviderResource(env resource.Envelope) {
 	p.cfg, _ = provider.FromEnvelope(env)
 }
 
-func (p *Provider) name() string   { return p.providerRes.Metadata.Name }
+func (p *Provider) name() string   { return naming.RuntimeObjectName(p.providerRes) }
 func (p *Provider) dbName() string { return p.name() + "-db" }
 
 func (p *Provider) hostPort() int {

@@ -19,6 +19,7 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
+	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -46,7 +47,7 @@ func (p *Provider) SetProviderResource(env resource.Envelope) {
 	p.cfg, _ = provider.FromEnvelope(env)
 }
 
-func (p *Provider) name() string { return p.providerRes.Metadata.Name }
+func (p *Provider) name() string { return naming.RuntimeObjectName(p.providerRes) }
 
 func (p *Provider) network() string {
 	if n, ok := p.cfg.RuntimeConfig["network"].(string); ok && n != "" {
@@ -101,7 +102,7 @@ func (p *Provider) reconcileConnection(ctx context.Context, res resource.Envelop
 	if err != nil {
 		return st, err
 	}
-	name := res.Metadata.Name
+	name := naming.RuntimeObjectName(res)
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: p.network(), Labels: p.labels()}); err != nil {
 		return st, err
 	}
@@ -136,7 +137,7 @@ func (p *Provider) reconcileConnection(ctx context.Context, res resource.Envelop
 		"host":        hostAddr,
 		"target":      conn.Target,
 		endpoint.Key: endpoint.List{
-			{Name: "forward", Scheme: conn.Scheme, Host: hostAddr, Internal: fmt.Sprintf("%s:%d", host, port), Insecure: true},
+			{Name: "forward", Scheme: conn.Scheme, Host: hostAddr, Internal: fmt.Sprintf("%s:%d", host, port), Insecure: true, RuntimeName: name, ContainerPort: conn.Port, Audience: runtime.AudienceHost},
 		}.ToState(),
 	}
 	return st, nil
@@ -148,7 +149,7 @@ func (p *Provider) Destroy(ctx context.Context, res resource.Envelope, rt runtim
 		_ = rt.RemoveNetwork(ctx, p.network())
 		return nil
 	case "Connection":
-		return rt.Remove(ctx, res.Metadata.Name)
+		return rt.Remove(ctx, naming.RuntimeObjectName(res))
 	default:
 		return fmt.Errorf("proxy provider cannot destroy kind %s", res.Kind)
 	}
@@ -163,7 +164,7 @@ func (p *Provider) Probe(ctx context.Context, res resource.Envelope, rt runtime.
 		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
 		return st, nil
 	case "Connection":
-		ctr, found, err := rt.Inspect(ctx, res.Metadata.Name)
+		ctr, found, err := rt.Inspect(ctx, naming.RuntimeObjectName(res))
 		if err != nil {
 			return st, err
 		}

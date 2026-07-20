@@ -11,6 +11,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/adapters/state/localfile"
 	s3state "github.com/rezarajan/platformctl/internal/adapters/state/s3"
 	"github.com/rezarajan/platformctl/internal/cliutil"
+	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/secret"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
@@ -186,7 +187,7 @@ func (a *app) stateDoctor(ctx context.Context, runtimeType string) (doctorFindin
 				return findings, st, err
 			}
 		}
-		_, found, err := rt.Inspect(ctx, key.Name)
+		_, found, err := rt.Inspect(ctx, naming.RuntimeObjectName(*rs.LastApplied))
 		if err != nil {
 			return findings, st, err
 		}

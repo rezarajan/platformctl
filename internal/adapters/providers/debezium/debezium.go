@@ -25,6 +25,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
+	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/source"
@@ -66,7 +67,7 @@ func (p *Provider) SetSecrets(secrets map[string]map[string]string) { p.secrets 
 
 func (p *Provider) SetResourceSet(byKey map[resource.Key]resource.Envelope) { p.resources = byKey }
 
-func (p *Provider) containerName() string { return p.providerRes.Metadata.Name }
+func (p *Provider) containerName() string { return naming.RuntimeObjectName(p.providerRes) }
 
 func (p *Provider) connectPort() int {
 	configured := 0
@@ -255,7 +256,7 @@ func (p *Provider) desiredConnector(res resource.Envelope) (desiredConnector, er
 			if err != nil {
 				return d, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
 			}
-			dbHost, dbPort = conn.Endpoint(connEnv.Metadata.Name)
+			dbHost, dbPort = conn.Endpoint(naming.RuntimeObjectName(connEnv))
 			if conn.External {
 				if addr, ok := conn.ExternalAddress(); ok {
 					if host, port, ok := hostPort(addr); ok {
@@ -263,7 +264,7 @@ func (p *Provider) desiredConnector(res resource.Envelope) (desiredConnector, er
 					}
 				}
 			} else {
-				d.preflightConnectionName, d.preflightPort = connEnv.Metadata.Name, conn.Port
+				d.preflightConnectionName, d.preflightPort = naming.RuntimeObjectName(connEnv), conn.Port
 			}
 			if conn.SecretRef != nil {
 				connSecretRef = *conn.SecretRef
