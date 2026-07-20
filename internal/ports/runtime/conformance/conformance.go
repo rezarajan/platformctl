@@ -560,6 +560,51 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		_ = conn.Close()
 	})
 
+	// EntrypointFaithfulness_CmdAppendsNotReplaces backfills the K1 class
+	// (docs/planning/08 F6, docs/planning/09 Class 5): the Kubernetes
+	// adapter once mapped ContainerSpec.Cmd onto corev1.Container.Command
+	// (Docker's ENTRYPOINT-*replacing* field) instead of .Args
+	// (ENTRYPOINT-*appending*), silently skipping redpanda's image
+	// entrypoint script and failing with "unrecognised option '--node-id'"
+	// — found live against a real cluster, with no contract-level
+	// reproduction until now. postgres's official image is the fixture:
+	// its docker-entrypoint.sh performs initdb before exec-ing the given
+	// Cmd (["postgres", "-c", ...], the exact shape postgres.go's own
+	// provider sends); if Cmd replaced ENTRYPOINT instead of appending to
+	// it, the raw postgres binary would run against an uninitialized data
+	// directory and exit almost immediately, which WaitHealthy surfaces as
+	// a hard failure, not a timeout.
+	t.Run("EntrypointFaithfulness_CmdAppendsNotReplaces", func(t *testing.T) {
+		type commandRunner interface {
+			RunsContainerCommands() bool
+		}
+		cr, execCapable := rt.(commandRunner)
+		execCapable = execCapable && cr.RunsContainerCommands()
+		if !execCapable {
+			// The fake never runs a real image/ENTRYPOINT; there is nothing
+			// to prove faithful translation of on an adapter that doesn't
+			// execute anything.
+			return
+		}
+
+		name := namePrefix + "-entrypoint-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		spec := runtime.ContainerSpec{
+			Name:     name,
+			Image:    "postgres:16-alpine",
+			Cmd:      []string{"postgres", "-c", "wal_level=logical"},
+			Env:      map[string]string{"POSTGRES_PASSWORD": "conformance"},
+			Networks: []string{netSpec.Name},
+			Labels:   labels,
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer: %v", err)
+		}
+		if err := rt.WaitHealthy(ctx, name, 60*time.Second); err != nil {
+			t.Fatalf("container did not become healthy — an image with a real ENTRYPOINT (postgres's docker-entrypoint.sh runs initdb) did not complete initialization before Cmd ran, exactly the symptom of Cmd replacing ENTRYPOINT instead of appending to it (K1): %v", err)
+		}
+	})
+
 	t.Run("Remove_then_absent", func(t *testing.T) {
 		if err := rt.Remove(ctx, ctrSpec.Name); err != nil {
 			t.Fatalf("Remove: %v", err)
