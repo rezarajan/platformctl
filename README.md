@@ -254,6 +254,20 @@ dev shortcut. CI's Kubernetes integration job runs the full K8s test suite
 under that minimal role against a fresh `kind` cluster to prove it's actually
 sufficient.
 
+## 🗄 Database HA posture
+
+Managed `postgres`/`mysql` are deliberately **single-node**, positioned for
+dev, staging, and small production — hardened by backup/restore (planned,
+docs/planning/08 C6) and fast drift-heal, not by reimplementing replication.
+Patroni, Galera, and cloud RDS/Aurora are operationally deep enough that
+platformctl doesn't try to own that surface; instead, a production HA
+database integrates as an **`external: true` Source through the Connection
+seam** — already fully supported today, CDC included (see
+`examples/lakehouse/sources-and-datasets.yaml`'s `orders` Source). See
+[`docs/design/005-database-ha-posture.md`](docs/design/005-database-ha-posture.md)
+for the full decision and what would change if a replication-capable managed
+mode is ever added.
+
 ## 🧪 Development
 
 ```sh

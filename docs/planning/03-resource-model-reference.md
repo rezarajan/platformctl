@@ -349,6 +349,20 @@ spec:
     name: production-student-db     # a Connection (§8.2) — or, shorthand, a SecretReference — never inline creds
 ```
 
+### 5.1 HA posture (managed vs. external)
+
+Managed `postgres`/`mysql` Sources are explicitly **single-node**, positioned
+for dev, staging, and small production, hardened by backup/restore
+(docs/planning/08 C6) and drift-heal rather than by in-place replication.
+Production HA databases (Patroni, Galera, cloud RDS/Aurora) are not a
+managed capability — they integrate as the `external: true` Source shown
+above, through the Connection seam, with CDC already working against that
+path unchanged (`internal/adapters/providers/debezium` resolves the
+Source's `connectionRef`; see `examples/lakehouse/sources-and-datasets.yaml`'s
+`orders` Source for the shipped example). See
+`docs/design/005-database-ha-posture.md` for the full decision and what
+would change if a replication-capable managed mode is ever added.
+
 ## 6. Kind: `EventStream`
 
 ```yaml
