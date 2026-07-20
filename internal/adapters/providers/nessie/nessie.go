@@ -95,7 +95,12 @@ func (p *Provider) reachableAPIURL(ctx context.Context, rt runtime.ContainerRunt
 func (p *Provider) waitAPIReady(ctx context.Context, rt runtime.ContainerRuntime, path string, timeout time.Duration) error {
 	opts := runtime.ReachableOptions{Timeout: timeout, Interval: 2 * time.Second}
 	err := runtime.WithReachable(ctx, rt, p.containerName(), apiPort, opts, func(ctx context.Context, addr string) error {
-		if !httpOK(ctx, "http://"+addr+path) {
+		// path is relative to the /api/v2 base (matching reachableAPIURL's
+		// convention) — a regression here once polled "/config" directly
+		// instead of "/api/v2/config", a 404 that always failed the check
+		// and burned the full timeout every apply (found live testing the
+		// lakehouse example).
+		if !httpOK(ctx, "http://"+addr+"/api/v2"+path) {
 			return fmt.Errorf("endpoint (path %s) did not answer 200", path)
 		}
 		return nil
