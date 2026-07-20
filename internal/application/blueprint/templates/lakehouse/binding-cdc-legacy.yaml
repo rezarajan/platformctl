@@ -1,0 +1,20 @@
+# observers hands the lineage backend's endpoint to the debezium provider
+# (LineageAware); the connector is registered with Marquez's address wired
+# into its native OpenLineage configuration.
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: legacy-to-events
+  observers:
+    - name: lineage
+spec:
+  mode: cdc
+  sourceRef:
+    name: legacy
+  targetRef:
+    name: legacy-events
+  providerRef:
+    name: cdc
+  options:
+    tables: [records]
+    snapshotMode: initial

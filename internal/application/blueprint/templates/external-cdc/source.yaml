@@ -1,0 +1,15 @@
+# external: true — platformctl never creates or destroys this database, it
+# only configures a CDC connector against it (through the Connection
+# above). Point connectionRef.target at a real database to make this live.
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: source
+spec:
+  engine: postgres
+  external: true
+  connectionRef:
+    name: source-db
+  postgres:
+    database: sourcedb
+    schema: public

@@ -1,0 +1,17 @@
+# The Debezium Kafka Connect worker realizing Binding(mode: cdc) below.
+# Its secretRefs lists the external Connection's own credentials
+# (ext-db-creds) — the CDC provider resolves the source database's
+# address from the Source's Connection automatically; only credentials
+# need to be declared here.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: cdc
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape
+  configuration:
+    bootstrapServers: broker:29092
+  secretRefs: [ext-db-creds]

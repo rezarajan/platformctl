@@ -1,0 +1,15 @@
+# external: true — integrated through its Connection (connection.yaml):
+# platformctl never creates or destroys this database, but actively
+# configures a CDC connector against it (binding-cdc-legacy.yaml).
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: legacy
+spec:
+  engine: postgres
+  external: true
+  connectionRef:
+    name: legacy-db
+  postgres:
+    database: legacydb
+    schema: public

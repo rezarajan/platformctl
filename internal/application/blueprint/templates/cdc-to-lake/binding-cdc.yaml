@@ -1,0 +1,17 @@
+# Only tables listed under options.tables are captured; add more and
+# re-apply to widen capture without recreating any infrastructure.
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: db-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: app-db
+  targetRef:
+    name: app-events
+  providerRef:
+    name: cdc
+  options:
+    tables: [records]
+    snapshotMode: initial

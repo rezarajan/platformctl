@@ -159,51 +159,64 @@ git clone https://github.com/rezarajan/platformctl && cd platformctl
 just build        # → bin/platformctl
 ```
 
-Run the full CDC-to-object-storage acceptance scenario:
+Scaffold a platform instead of hand-writing one — `init` writes a manifest
+set that already validates as-is, a `.env` template naming every secret key
+it needs, and a README:
+
+```sh
+bin/platformctl init cdc-to-lake         # postgres → debezium → redpanda → s3sink → minio
+bin/platformctl validate cdc-to-lake     # green immediately, no edits
+```
+
+`init --list` enumerates every shipped blueprint (`-o json|yaml` for the
+machine-readable form); `cdc-to-lake`, `lakehouse` (adds a Nessie catalog,
+Marquez lineage, and an externally-hosted CDC source), `stream-basics`
+(just a broker and topics), and `external-cdc` (a Connection-fronted
+external database) cover the common starting shapes. Fill in `.env`, then:
 
 ```sh
 # one-time: the sink Connect image (stock images ship no S3 sink plugin)
-docker build -t datascape-s3sink-connect:local examples/cdc-attendance/s3sink-image/
+docker build -t datascape-s3sink-connect:local cdc-to-lake/s3sink-image/
 
-# credentials resolve from the environment — see examples/cdc-attendance/README.md
-export DATASCAPE_SECRET_POSTGRES_ADMIN_CREDS_USERNAME=admin
-export DATASCAPE_SECRET_POSTGRES_ADMIN_CREDS_PASSWORD=admin-pw
-export DATASCAPE_SECRET_POSTGRES_REPLICATION_CREDS_USERNAME=repl
-export DATASCAPE_SECRET_POSTGRES_REPLICATION_CREDS_PASSWORD=repl-pw
-export DATASCAPE_SECRET_MINIO_ROOT_CREDS_USERNAME=minioadmin
-export DATASCAPE_SECRET_MINIO_ROOT_CREDS_PASSWORD=minioadmin-pw
-
-bin/platformctl validate examples/cdc-attendance/
-bin/platformctl apply    examples/cdc-attendance/ --auto-approve
-bin/platformctl status   examples/cdc-attendance/
+bin/platformctl apply  cdc-to-lake --env-file cdc-to-lake/.env --auto-approve
+bin/platformctl status cdc-to-lake
 ```
 
-Insert a row, watch it land in the lake:
+Any secret left unset in `.env` is named explicitly by `apply`'s Preflight
+check before anything is touched — never an opaque mid-apply failure.
+Insert a row, watch it land in the lake (`platformctl inventory
+cdc-to-lake` shows the auto-assigned host ports and which `SecretReference`
+holds each credential):
 
 ```sh
-psql postgres://admin:admin-pw@localhost:15432/studentdb \
-  -c "CREATE TABLE students (id serial PRIMARY KEY, name text);
-      INSERT INTO students (name) VALUES ('alice'), ('bob');"
+psql postgres://admin:<db-admin-password>@localhost:<db-port>/appdb \
+  -c "CREATE TABLE records (id serial PRIMARY KEY, payload text);
+      INSERT INTO records (payload) VALUES ('alice'), ('bob');"
 
-mc alias set local http://localhost:19000 minioadmin minioadmin-pw
+mc alias set local http://localhost:<lake-port> <lake-user> <lake-password>
 mc ls --recursive local/raw-events/       # objects appear within ~30s
 ```
 
 Only tables declared on the CDC Binding (`options.tables`) are captured —
 add a table there and re-apply to widen the stream; the connector is
 reconfigured in place. See the
-[example README](examples/cdc-attendance/README.md#capturing-another-table).
+[cdc-to-lake blueprint's README](internal/application/blueprint/templates/cdc-to-lake/README.md)
+(written alongside the manifests by `init`) for the full walkthrough, or
+[examples/cdc-attendance/README.md](examples/cdc-attendance/README.md) for
+the hand-written, fixed-port version of the same pipeline this blueprint is
+derived from.
 
 Tear it all down (reverse dependency order, labeled objects only):
 
 ```sh
-bin/platformctl destroy examples/cdc-attendance/ --auto-approve
+bin/platformctl destroy cdc-to-lake --auto-approve
 ```
 
 ## 🖥 CLI surface
 
 | Command | What it does |
 |---|---|
+| `init <blueprint> [--dir]` | Scaffold a ready-to-apply manifest set + `.env` template + README from an embedded blueprint (`cdc-to-lake`, `lakehouse`, `stream-basics`, `external-cdc`). `--list` enumerates blueprints (`-o json\|yaml` for the machine-readable form). |
 | `validate <dir>` | Schema + graph (cycles) + Binding capability checks. No state, no runtime calls. |
 | `plan <dir>` | Deterministic diff of manifests vs. state. Exit `1` when changes are pending. |
 | `apply <dir>` | Reconcile in topological order; state persisted after every resource. |

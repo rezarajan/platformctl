@@ -1,0 +1,11 @@
+# Realizes Catalog(engine: nessie) below — the Iceberg REST catalog the
+# warehouse Dataset is cataloged under.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: catalog
+spec:
+  type: nessie
+  runtime:
+    type: docker
+    network: datascape

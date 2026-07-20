@@ -1,0 +1,10 @@
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: logs
+spec:
+  providerRef:
+    name: broker
+  partitions: 3
+  retention:
+    duration: 3d

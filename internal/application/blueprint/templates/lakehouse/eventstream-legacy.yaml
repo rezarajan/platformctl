@@ -1,0 +1,10 @@
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: legacy-events
+spec:
+  providerRef:
+    name: broker
+  partitions: 3
+  retention:
+    duration: 3d

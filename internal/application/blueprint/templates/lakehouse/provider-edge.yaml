@@ -1,0 +1,11 @@
+# Realizes managed Connections (connection.yaml): one forwarder container,
+# named after the Connection it realizes.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: edge
+spec:
+  type: proxy
+  runtime:
+    type: docker
+    network: datascape

@@ -1,0 +1,16 @@
+# The stable entrypoint to an external legacy database: in-network
+# consumers (the CDC connector) and host tools both address legacy-db at
+# this Connection's port; only spec.target knows where the database
+# actually lives. Credentials live in the SecretReference named by
+# secretRef; the forwarder is transport only.
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: legacy-db
+spec:
+  providerRef:
+    name: edge
+  port: 25998
+  target: external-legacy-db:5432
+  secretRef:
+    name: ext-legacy-creds

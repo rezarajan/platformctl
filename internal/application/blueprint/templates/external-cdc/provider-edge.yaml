@@ -1,0 +1,13 @@
+# Realizes the managed Connection below: one forwarder container, named
+# after the Connection, giving the external database a stable
+# platform-owned address (in-network and on the host) independent of
+# where it actually lives.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: edge
+spec:
+  type: proxy
+  runtime:
+    type: docker
+    network: datascape

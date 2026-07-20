@@ -1,0 +1,12 @@
+# A Marquez (OpenLineage) instance. metadata.observers entries naming this
+# Provider resolve to its endpoint and get forwarded to LineageAware
+# providers (debezium is one) — see binding-cdc.yaml/binding-cdc-legacy.yaml.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lineage
+spec:
+  type: openlineage
+  runtime:
+    type: docker
+    network: datascape

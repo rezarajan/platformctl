@@ -1,0 +1,17 @@
+# The stable entrypoint to the external database: in-network consumers
+# (the CDC connector) and host tools (psql) both address source-db at this
+# Connection's port; only spec.target knows where the database actually
+# lives — point it at your real database and nothing else changes.
+# Credentials live in the SecretReference named by secretRef; the
+# forwarder is transport only.
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: source-db
+spec:
+  providerRef:
+    name: edge
+  port: 25999
+  target: external-database-host:5432
+  secretRef:
+    name: ext-db-creds

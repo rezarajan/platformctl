@@ -1,0 +1,15 @@
+# The Iceberg warehouse bucket a compute engine (Spark, Trino) would
+# materialize tables into, cataloged by lakehouse-catalog. Not written to
+# by any Binding in this blueprint — it exists so the catalog has a
+# warehouse location and `platformctl inventory --for trino|spark` has
+# something to point at.
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: warehouse
+spec:
+  providerRef:
+    name: lake
+  bucket: warehouse
+  prefix: iceberg/
+  format: parquet

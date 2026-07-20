@@ -1,0 +1,14 @@
+# json works end-to-end with the schemaless CDC records this blueprint
+# produces; parquet needs schema-carrying records (a schema registry —
+# not part of this blueprint). jsonl/csv also work if you change the
+# sink Binding's connector semantics.
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: raw-lake
+spec:
+  providerRef:
+    name: lake
+  bucket: raw-events
+  prefix: events/
+  format: json

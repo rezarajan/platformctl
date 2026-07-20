@@ -1,0 +1,11 @@
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: app-db
+spec:
+  engine: postgres
+  providerRef:
+    name: db
+  postgres:
+    database: appdb
+    schema: public

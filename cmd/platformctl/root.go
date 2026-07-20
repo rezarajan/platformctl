@@ -130,6 +130,7 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 	root.PersistentFlags().DurationVar(&a.stateLockTTL, "state-lock-ttl", 0, "s3 backend: lock lease TTL (default 15m — must outlast the longest apply/destroy run)")
 
 	root.AddCommand(
+		newInitCmd(a),
 		newValidateCmd(a),
 		newPlanCmd(a),
 		newApplyCmd(a),

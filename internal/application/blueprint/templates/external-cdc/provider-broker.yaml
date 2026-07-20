@@ -1,0 +1,10 @@
+# Managed Redpanda broker — the change events land here.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: broker
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape

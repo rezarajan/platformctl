@@ -1,0 +1,13 @@
+# Managed MinIO — the object store the sink Binding lands objects in.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lake
+spec:
+  type: minio
+  runtime:
+    type: docker
+    network: datascape
+  configuration:
+    rootSecretRef: lake-root-creds
+  secretRefs: [lake-root-creds]

@@ -1,0 +1,19 @@
+# Managed Postgres — the database this blueprint captures changes from.
+# spec.configuration.image is omitted: the provider selects the default
+# image for spec.configuration.version. The host port is omitted too: the
+# provider auto-assigns a stable, collision-avoiding port from the resource
+# name (see `platformctl inventory` after apply for the chosen port).
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: db
+spec:
+  type: postgres
+  runtime:
+    type: docker
+    network: datascape
+  configuration:
+    version: "16"
+    superuserSecretRef: db-admin-creds
+    replicationSecretRef: db-replication-creds
+  secretRefs: [db-admin-creds, db-replication-creds]

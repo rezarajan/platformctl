@@ -215,6 +215,21 @@ var commandScenarios = map[string]commandScenario{
 			assertJSON(t, "import -o json", out)
 		},
 	},
+	"init": {
+		structured: true,
+		run: func(t *testing.T) {
+			// --list: enumerates blueprints.
+			runBothFormats(t, "init --list", "init", "--list")
+
+			// Writing a blueprint: files-written document.
+			dir := filepath.Join(t.TempDir(), "bp")
+			out, _, err := runSplit(t, "init", "stream-basics", "--dir", dir, "-o", "json")
+			if err != nil {
+				t.Fatalf("init stream-basics -o json: %v", err)
+			}
+			assertJSON(t, "init -o json", out)
+		},
+	},
 	"graph": {
 		structured: true,
 		run: func(t *testing.T) {

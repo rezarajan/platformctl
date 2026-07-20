@@ -1,0 +1,12 @@
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: events-to-lake
+spec:
+  mode: sink
+  sourceRef:
+    name: app-events
+  targetRef:
+    name: raw-lake
+  providerRef:
+    name: sink
