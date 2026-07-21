@@ -909,3 +909,132 @@ func TestResolveSchemaRegistryURLEmptyForJSONFormat(t *testing.T) {
 		t.Errorf("Request.SchemaRegistryURL = %q, want empty for an unset options.format", cdcProv.gotSchemaRegistryURL)
 	}
 }
+
+// TestExternalConnectionInNetworkReachability covers docs/planning/08 C10:
+// an external Connection consumed by an in-network Binding (here, a CDC
+// Binding whose sourceRef is the external Source declaring the
+// connectionRef) is additionally probed from inside that Binding's realizing
+// Provider's own network — distinctly from the pre-existing host-side check
+// — and reports the distinct condition reason
+// "ExternalEndpointUnreachableInNetwork" when that in-network probe fails,
+// never folding it into the host-side "ExternalEndpointUnreachable".
+//
+// The external Connection's declared host is a real "127.0.0.1:<port>" this
+// test process listens on directly — real enough for the pre-existing
+// host-side TCP probe to genuinely succeed in both subtests below — while
+// also being the literal name of a fake-managed container the fake runtime
+// (ADR 015's strict interpreter) resolves ProbeReachable's in-network dial
+// against; the two subtests differ only in whether that fake container
+// declares the probed port, exactly the under- vs over-declaration
+// distinction C10 exists to catch.
+func TestExternalConnectionInNetworkReachability(t *testing.T) {
+	newFixture := func(t *testing.T) (*Engine, *fakeruntime.Runtime, []resource.Envelope, int) {
+		t.Helper()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		port := ln.Addr().(*net.TCPAddr).Port
+
+		gates := featuregate.NewRegistry()
+		reg := registry.New(gates)
+		fakeRT := fakeruntime.New()
+		reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
+		reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+			return fakeRT, nil
+		})
+		if err := fakeRT.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "app-net"}); err != nil {
+			t.Fatalf("EnsureNetwork: %v", err)
+		}
+
+		envelopes := []resource.Envelope{
+			envelope("Connection", "db-conn", map[string]any{
+				"external": true,
+				"host":     "127.0.0.1",
+				"port":     port,
+			}),
+			envelope("Source", "prod-db", map[string]any{
+				"engine":        "postgres",
+				"external":      true,
+				"connectionRef": map[string]any{"name": "db-conn"},
+			}),
+			envelope("Provider", "connect", map[string]any{
+				"type":    "noop",
+				"runtime": map[string]any{"type": "fake", "network": "app-net"},
+			}),
+			envelope("Binding", "cdc", map[string]any{
+				"mode":        "cdc",
+				"sourceRef":   map[string]any{"name": "prod-db"},
+				"targetRef":   map[string]any{"name": "changes"}, // unresolved — nothing dereferences it here
+				"providerRef": map[string]any{"name": "connect"},
+			}),
+		}
+
+		eng := newTestEngine(t, reg)
+		sourceKey := envelopes[1].Key()
+		if err := eng.StateStore.Save(context.Background(), state.State{
+			Version:   state.CurrentVersion,
+			Resources: map[resource.Key]state.ResourceState{sourceKey: {SpecHash: "seed"}},
+		}); err != nil {
+			t.Fatalf("seed state: %v", err)
+		}
+		return eng, fakeRT, envelopes, port
+	}
+
+	probeSource := func(t *testing.T, eng *Engine, envelopes []resource.Envelope) status.Condition {
+		t.Helper()
+		results, err := eng.Probe(context.Background(), envelopes)
+		if err != nil {
+			t.Fatalf("Probe: %v", err)
+		}
+		if len(results) != 1 {
+			t.Fatalf("Probe results = %+v, want exactly the seeded Source", results)
+		}
+		c, ok := results[0].Status.Condition(status.Ready)
+		if !ok {
+			t.Fatalf("Probe result has no Ready condition: %+v", results[0].Status)
+		}
+		return c
+	}
+
+	t.Run("in_network_reachable", func(t *testing.T) {
+		eng, fakeRT, envelopes, port := newFixture(t)
+		if _, err := fakeRT.EnsureContainer(context.Background(), runtime.ContainerSpec{
+			Name:     "127.0.0.1",
+			Image:    "postgres:16",
+			Networks: []string{"app-net"},
+			Ports:    []runtime.PortBinding{{ContainerPort: port, Audience: runtime.AudienceInternal}},
+		}); err != nil {
+			t.Fatalf("EnsureContainer: %v", err)
+		}
+
+		c := probeSource(t, eng, envelopes)
+		if c.Status != status.True || c.Reason != "ExternalEndpointReachable" {
+			t.Fatalf("Ready condition = %+v, want True/ExternalEndpointReachable", c)
+		}
+	})
+
+	t.Run("in_network_unreachable_distinct_from_host_side", func(t *testing.T) {
+		eng, fakeRT, envelopes, port := newFixture(t)
+		// The fake-managed container attached to the consuming Binding's
+		// network exists, but never declares the probed port — the ADR 015
+		// strict interpreter's under-declaration refusal — even though the
+		// same host:port genuinely answers a real, host-side TCP dial
+		// (proven by the reachable subtest above sharing the exact same
+		// listener setup).
+		if _, err := fakeRT.EnsureContainer(context.Background(), runtime.ContainerSpec{
+			Name:     "127.0.0.1",
+			Image:    "postgres:16",
+			Networks: []string{"app-net"},
+		}); err != nil {
+			t.Fatalf("EnsureContainer: %v", err)
+		}
+		_ = port
+
+		c := probeSource(t, eng, envelopes)
+		if c.Status != status.False || c.Reason != "ExternalEndpointUnreachableInNetwork" {
+			t.Fatalf("Ready condition = %+v, want False/ExternalEndpointUnreachableInNetwork", c)
+		}
+	})
+}

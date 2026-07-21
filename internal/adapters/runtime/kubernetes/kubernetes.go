@@ -907,6 +907,132 @@ func (r *Runtime) execInPod(ctx context.Context, ns, podName, containerName stri
 	return outBuf.String(), errBuf.String(), nil
 }
 
+// probeImage is a minimal, pinned image (scripts/pinned-images.txt) used for
+// ProbeReachable's ephemeral in-network probe pod — the fallback when no
+// existing managed pod in the namespace can conclusively answer the dial
+// itself (docs/planning/08 C10).
+const probeImage = "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+
+// tcpDialScript is a portable (BusyBox ash or bash) probe: prefer `nc -z` (a
+// true, no-data connect-and-close scan) and fall back to the /dev/tcp
+// pseudo-device redirection trick for shells with no nc — host/port arrive
+// as $1/$2 (positional args, not string-interpolated) so a target's host
+// component can never be interpreted as shell syntax.
+const tcpDialScript = `nc -z -w3 "$1" "$2" 2>/dev/null || (exec 3<>/dev/tcp/$1/$2) 2>/dev/null`
+
+// ProbeReachable answers "can a pod in namespace network reach target right
+// now" from an in-network vantage point — never from this process
+// (docs/planning/08 C10, ADR 015's connectivity plane). network names the
+// Namespace (EnsureNetwork's own mapping — see the package doc). Two tiers,
+// mirroring the Docker adapter: first, exec a TCP dial inside an existing
+// managed, ready pod already in the namespace; if none exists, or the exec
+// attempt is inconclusive (that pod's own image happens to lack both nc and
+// a /dev/tcp-capable shell), an ephemeral probe pod — the pinned, known-good
+// busybox image — gives an authoritative answer instead.
+func (r *Runtime) ProbeReachable(ctx context.Context, network, target string) error {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return fmt.Errorf("ProbeReachable: invalid target %q: %w", target, err)
+	}
+	ns := network
+
+	if pod, ok := r.execProbeCandidate(ctx, ns); ok {
+		if derr := r.execTCPDial(ctx, ns, pod, host, port); derr == nil {
+			return nil // confirmed reachable by an existing in-network pod
+		}
+		// Inconclusive or genuinely unreachable — the ephemeral probe pod
+		// (below) gives the authoritative answer either way.
+	}
+	return r.ephemeralProbe(ctx, ns, host, port)
+}
+
+// execProbeCandidate finds the newest ready platformctl-managed pod in ns —
+// an existing in-network vantage point cheaper than scheduling a dedicated
+// probe pod.
+func (r *Runtime) execProbeCandidate(ctx context.Context, ns string) (*corev1.Pod, bool) {
+	pods, err := r.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: runtimeport.LabelManagedBy + "=" + runtimeport.ManagedByValue,
+	})
+	if err != nil {
+		return nil, false
+	}
+	pod := newestReadyPod(pods.Items)
+	if pod == nil {
+		return nil, false
+	}
+	return pod, true
+}
+
+// execTCPDial execs tcpDialScript inside pod's first container and reports
+// whether it exited zero (dial succeeded). Any exec-layer failure (the
+// pod's image has neither nc nor a /dev/tcp-capable shell, the exec API call
+// itself failed, ...) and a genuine connection failure both surface as a
+// non-nil error here — ProbeReachable's caller treats both the same way:
+// fall back to the ephemeral probe pod for an authoritative answer.
+func (r *Runtime) execTCPDial(ctx context.Context, ns string, pod *corev1.Pod, host, port string) error {
+	if len(pod.Spec.Containers) == 0 {
+		return fmt.Errorf("pod %q declares no containers to exec into", pod.Name)
+	}
+	containerName := pod.Spec.Containers[0].Name
+	_, stderr, err := r.execInPod(ctx, ns, pod.Name, containerName, []string{"sh", "-c", tcpDialScript, "sh", host, port})
+	if err != nil {
+		return fmt.Errorf("exec dial %s in pod %q: %w (stderr: %s)", net.JoinHostPort(host, port), pod.Name, err, strings.TrimSpace(stderr))
+	}
+	return nil
+}
+
+// ephemeralProbe schedules the pinned probe image as a one-shot Pod in ns,
+// dials host:port from inside it, and always deletes the Pod before
+// returning — its terminal phase is the answer.
+func (r *Runtime) ephemeralProbe(ctx context.Context, ns, host, port string) error {
+	name := fmt.Sprintf("datascape-probe-%d", time.Now().UnixNano())
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels:    withOwnership(map[string]string{runtimeport.LabelGeneration: "probe"}),
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{{
+				Name:    "probe",
+				Image:   probeImage,
+				Command: []string{"nc", "-z", "-w3", host, port},
+			}},
+		},
+	}
+	created, err := r.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("ProbeReachable: create probe pod: %w", err)
+	}
+	defer func() {
+		_ = r.clientset.CoreV1().Pods(ns).Delete(context.Background(), created.Name, metav1.DeleteOptions{})
+	}()
+
+	const pollTimeout = 30 * time.Second
+	deadline := time.Now().Add(pollTimeout)
+	for {
+		p, err := r.clientset.CoreV1().Pods(ns).Get(ctx, created.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("ProbeReachable: get probe pod: %w", err)
+		}
+		switch p.Status.Phase {
+		case corev1.PodSucceeded:
+			return nil
+		case corev1.PodFailed:
+			return fmt.Errorf("dial %s from in-network probe pod in %q: unreachable", net.JoinHostPort(host, port), ns)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("ProbeReachable: probe pod %q in %q did not complete within %s", created.Name, ns, pollTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
 // ensureService ensures one ClusterIP Service per addressable name: the
 // container's own name plus each declared alias (Docker's per-network
 // endpoint aliases translated to Kubernetes DNS).

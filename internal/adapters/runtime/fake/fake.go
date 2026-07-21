@@ -6,6 +6,7 @@ package fake
 import (
 	"context"
 	"fmt"
+	"net"
 	"reflect"
 	"sort"
 	"strconv"
@@ -404,6 +405,48 @@ func (r *Runtime) EnsureReachable(_ context.Context, name string, containerPort 
 		return "", nil, fmt.Errorf("container %q publishes no host binding for port %d", name, containerPort)
 	}
 	return addr, func() error { return nil }, nil
+}
+
+// ProbeReachable is the strict interpreter of C10's in-network reachability
+// contract (docs/planning/08 C10, ADR 015): reachable only when target names
+// a fake-managed container attached to network, on a port that container's
+// spec declares — either audience, since an in-network vantage point is not
+// limited to Audience: host the way EnsureReachable is. Any other target
+// (unknown host, wrong network, a port never declared) errors, so a provider
+// that under-declares a port a Binding will dial in-network fails here in
+// `go test ./...` before any live cluster does.
+func (r *Runtime) ProbeReachable(_ context.Context, network, target string) error {
+	host, portStr, err := net.SplitHostPort(target)
+	if err != nil {
+		return fmt.Errorf("ProbeReachable: invalid target %q: %w", target, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return fmt.Errorf("ProbeReachable: invalid target %q: port %q is not numeric", target, portStr)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.resolveRecord(host)
+	if !ok {
+		return fmt.Errorf("ProbeReachable: %q does not name a fake-managed container", host)
+	}
+	onNetwork := false
+	for _, n := range rec.spec.Networks {
+		if n == network {
+			onNetwork = true
+			break
+		}
+	}
+	if !onNetwork {
+		return fmt.Errorf("ProbeReachable: container %q is not attached to network %q", host, network)
+	}
+	for _, p := range rec.spec.Ports {
+		if p.ContainerPort == port {
+			return nil // declared — reachable from an in-network vantage point
+		}
+	}
+	return fmt.Errorf("ProbeReachable: container %q declares no port %d", host, port)
 }
 
 // validatePortAudiences enforces the F2 port-contract requirement: every

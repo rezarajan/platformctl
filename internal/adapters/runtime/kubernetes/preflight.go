@@ -43,6 +43,8 @@ var preflightChecks = []authorizationv1.ResourceAttributes{
 	{Verb: "delete", Resource: "secrets"},
 	{Verb: "get", Resource: "pods"},
 	{Verb: "list", Resource: "pods"},
+	{Verb: "create", Resource: "pods"}, // ProbeReachable's ephemeral probe pod fallback (docs/planning/08 C10)
+	{Verb: "delete", Resource: "pods"}, // ProbeReachable's ephemeral probe pod cleanup (docs/planning/08 C10)
 	{Verb: "get", Resource: "pods/log"},
 	{Verb: "create", Resource: "pods/exec"}, // ReadFile's live-path fallback (readFileViaExec)
 	{Verb: "create", Resource: "pods/portforward"},

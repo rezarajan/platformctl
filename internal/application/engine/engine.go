@@ -650,6 +650,25 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 					st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonExternalEndpointUnreachable}, now)
 					return st
 				}
+				// Host-reachable is not the whole truth (ADR 015, docs/planning/08
+				// C10): only a genuinely External connection's addr is a real
+				// address meaningful to dial from *inside* a network too (a
+				// managed connection's addr here is the forwarder's
+				// host-audience tunnel address, e.g. a Docker published port or
+				// a Kubernetes port-forward, and is not a useful in-network dial
+				// target). When a Binding will dial this External connection
+				// in-network (the CDC/sink/ingest connector shape), additionally
+				// prove it's reachable from there — a firewall or network policy
+				// can make the host and in-network answers diverge in either
+				// direction, so this is reported as a distinct condition reason,
+				// never folded into the host-side ExternalEndpointUnreachable.
+				if conn.External {
+					if inerr := e.probeInNetworkUnreachable(ctx, env, addr, byKey); inerr != nil {
+						st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonExternalEndpointUnreachableInNetwork, Message: inerr.Error()}, now)
+						st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonExternalEndpointUnreachableInNetwork}, now)
+						return st
+					}
+				}
 				st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonExternalEndpointReachable}, now)
 				st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 				return st
@@ -703,6 +722,94 @@ func (e *Engine) connectionDialAddress(ctx context.Context, connEnv resource.Env
 		return "", nil
 	}
 	return addr, closeAddr
+}
+
+// inNetworkConsumer names one network an External connection consumer
+// (a Binding's realizing Provider) would dial addr from — enough to resolve
+// a runtime.ContainerRuntime and call ProbeReachable against.
+type inNetworkConsumer struct {
+	runtimeType   string
+	runtimeConfig map[string]any
+	network       string
+}
+
+// inNetworkConsumers finds every network a Binding that names env as its
+// sourceRef/targetRef would dial env's external endpoint from — env being
+// whatever resource (a Source, most commonly) declares the connectionRef
+// externalConnectionStatus is checking (docs/planning/08 C10). A Binding's
+// realizing Provider is exactly what will make that connection (the
+// CDC/sink/ingest connector shape — e.g. debezium's desiredConnector dials
+// an external Source's Connection directly from inside its own
+// spec.runtime.network), so its declared network is the vantage point to
+// probe from. Deduplicated by (runtime type, network): several Bindings
+// commonly share one Provider/network.
+func (e *Engine) inNetworkConsumers(env resource.Envelope, byKey map[resource.Key]resource.Envelope) []inNetworkConsumer {
+	var out []inNetworkConsumer
+	seen := map[string]bool{}
+	for _, cand := range byKey {
+		if cand.Kind != "Binding" {
+			continue
+		}
+		ns := cand.Metadata.Namespace
+		matched := false
+		for _, field := range []string{"sourceRef", "targetRef"} {
+			ref := resource.RefFromSpec(cand.Spec, field)
+			if ref.Name == "" {
+				continue
+			}
+			if ref.Key(ns, env.Kind) == env.Key() {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		provRef := resource.RefFromSpec(cand.Spec, "providerRef")
+		provEnv, ok := byKey[provRef.Key(ns, "Provider")]
+		if !ok {
+			continue
+		}
+		p, err := provider.FromEnvelope(provEnv)
+		if err != nil {
+			continue
+		}
+		// spec.runtime.network, default "datascape" — the same convention
+		// every provider adapter's own network(cfg) helper applies (e.g.
+		// internal/adapters/providers/debezium.network); duplicated here
+		// rather than imported since only application/registry may import
+		// concrete provider packages (CLAUDE.md's layering invariant).
+		netName := "datascape"
+		if n, ok := p.RuntimeConfig["network"].(string); ok && n != "" {
+			netName = n
+		}
+		key := p.RuntimeType + "|" + netName
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, inNetworkConsumer{runtimeType: p.RuntimeType, runtimeConfig: p.RuntimeConfig, network: netName})
+	}
+	return out
+}
+
+// probeInNetworkUnreachable reports the first in-network consumer (if any)
+// that cannot reach addr from inside its own network, or nil when every
+// consumer can (including "no consumers at all" — nothing to check).
+func (e *Engine) probeInNetworkUnreachable(ctx context.Context, env resource.Envelope, addr string, byKey map[resource.Key]resource.Envelope) error {
+	for _, c := range e.inNetworkConsumers(env, byKey) {
+		rt, err := e.Registry.Runtime(c.runtimeType, c.runtimeConfig)
+		if err != nil {
+			continue // no runtime to check this consumer's network with — nothing more to say
+		}
+		pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		perr := rt.ProbeReachable(pctx, c.network, addr)
+		cancel()
+		if perr != nil {
+			return fmt.Errorf("unreachable from network %q: %w", c.network, perr)
+		}
+	}
+	return nil
 }
 
 // probeTCPReachable verifies an endpoint answers a TCP connection. A managed

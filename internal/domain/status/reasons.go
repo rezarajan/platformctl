@@ -38,7 +38,13 @@ const (
 	ReasonExternalConnectionUnresolvable = "ExternalConnectionUnresolvable"
 	ReasonExternalConnectionResolvable   = "ExternalConnectionResolvable"
 	ReasonExternalEndpointUnreachable    = "ExternalEndpointUnreachable"
-	ReasonExternalEndpointReachable      = "ExternalEndpointReachable"
+	// ReasonExternalEndpointUnreachableInNetwork is the in-network-audience
+	// counterpart of ExternalEndpointUnreachable (docs/planning/08 C10): the
+	// endpoint answers from the host but not from the network a consuming
+	// Binding will dial it from (or vice versa) — the two vantage points are
+	// probed and reported distinctly, never folded together.
+	ReasonExternalEndpointUnreachableInNetwork = "ExternalEndpointUnreachableInNetwork"
+	ReasonExternalEndpointReachable            = "ExternalEndpointReachable"
 )
 
 // --- Lineage (docs/planning/02-architecture.md §5.5) -----------------------

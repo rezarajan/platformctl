@@ -686,6 +686,144 @@ func dialable(ctx context.Context, addr string) bool {
 	return true
 }
 
+// probeImage is a minimal, pinned image (scripts/pinned-images.txt) used for
+// ProbeReachable's transient in-network probe container — the fallback when
+// no existing managed container on the target network can conclusively
+// answer the dial itself (docs/planning/08 C10).
+const probeImage = "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+
+// tcpDialScript is a portable (BusyBox ash or bash) probe: prefer `nc -z`
+// (a true, no-data connect-and-close scan) and fall back to the /dev/tcp
+// pseudo-device redirection trick for shells with no nc — host/port arrive
+// as $1/$2 (positional args, not string-interpolated) so a target's host
+// component can never be interpreted as shell syntax.
+const tcpDialScript = `nc -z -w3 "$1" "$2" 2>/dev/null || (exec 3<>/dev/tcp/$1/$2) 2>/dev/null`
+
+// ProbeReachable answers "can a container on network reach target right now"
+// from an in-network vantage point — never from this process (docs/planning/08
+// C10, ADR 015's connectivity plane). Two tiers: first, exec a TCP dial
+// inside an existing managed, running container already attached to network
+// (no extra container to create/tear down); if none exists, or the exec
+// attempt is inconclusive (the target container's own image happens to lack
+// both nc and a /dev/tcp-capable shell), a transient probe container — the
+// pinned, known-good busybox image — gives an authoritative answer instead.
+func (r *Runtime) ProbeReachable(ctx context.Context, netName, target string) error {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return fmt.Errorf("ProbeReachable: invalid target %q: %w", target, err)
+	}
+
+	if id, ok, err := r.execProbeCandidate(ctx, netName); err != nil {
+		return fmt.Errorf("ProbeReachable: find an in-network vantage point on %q: %w", netName, err)
+	} else if ok {
+		if derr := r.execTCPDial(ctx, id, host, port); derr == nil {
+			return nil // confirmed reachable by an existing in-network container
+		}
+		// Inconclusive or genuinely unreachable — the transient probe
+		// container (below) gives the authoritative answer either way.
+	}
+	return r.transientProbe(ctx, netName, host, port)
+}
+
+// execProbeCandidate finds a running, platformctl-managed container attached
+// to netName — an existing in-network vantage point cheaper than spinning up
+// a dedicated probe container.
+func (r *Runtime) execProbeCandidate(ctx context.Context, netName string) (string, bool, error) {
+	containers, err := r.cli.ContainerList(ctx, container.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("label", runtime.LabelManagedBy+"="+runtime.ManagedByValue),
+			filters.Arg("network", netName),
+			filters.Arg("status", "running"),
+		),
+	})
+	if err != nil {
+		return "", false, fmt.Errorf("list containers on network %q: %w", netName, err)
+	}
+	if len(containers) == 0 {
+		return "", false, nil
+	}
+	return containers[0].ID, true, nil
+}
+
+// execTCPDial execs tcpDialScript inside containerID and reports whether it
+// exited zero (dial succeeded). Any exec-layer failure (the container's
+// image has neither nc nor a /dev/tcp-capable shell, the exec API call
+// itself failed, ...) and a genuine connection failure both surface as a
+// non-nil error here — ProbeReachable's caller treats both the same way:
+// fall back to the transient probe container for an authoritative answer.
+func (r *Runtime) execTCPDial(ctx context.Context, containerID, host, port string) error {
+	created, err := r.cli.ContainerExecCreate(ctx, containerID, container.ExecOptions{
+		Cmd:          []string{"sh", "-c", tcpDialScript, "sh", host, port},
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return fmt.Errorf("create exec in container %q: %w", containerID, err)
+	}
+	if err := r.cli.ContainerExecStart(ctx, created.ID, container.ExecStartOptions{}); err != nil {
+		return fmt.Errorf("start exec in container %q: %w", containerID, err)
+	}
+	for {
+		inspect, err := r.cli.ContainerExecInspect(ctx, created.ID)
+		if err != nil {
+			return fmt.Errorf("inspect exec in container %q: %w", containerID, err)
+		}
+		if !inspect.Running {
+			if inspect.ExitCode != 0 {
+				return fmt.Errorf("dial %s from container %q: exit code %d", net.JoinHostPort(host, port), containerID, inspect.ExitCode)
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// transientProbe runs the pinned probe image on network, dials host:port
+// from inside it, and always removes the container before returning —
+// docker run's exit code is the answer.
+func (r *Runtime) transientProbe(ctx context.Context, netName, host, port string) error {
+	if err := r.ensureImage(ctx, probeImage, runtime.PullIfNotPresent, nil); err != nil {
+		return fmt.Errorf("ProbeReachable: pull probe image: %w", err)
+	}
+	name := fmt.Sprintf("datascape-probe-%d", time.Now().UnixNano())
+	cfg := &container.Config{
+		Image: probeImage,
+		Cmd:   []string{"nc", "-z", "-w3", host, port},
+		Labels: withOwnership(map[string]string{
+			runtime.LabelGeneration: "probe",
+		}),
+	}
+	netCfg := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{netName: {}}}
+	created, err := r.cli.ContainerCreate(ctx, cfg, &container.HostConfig{}, netCfg, nil, name)
+	if err != nil {
+		return fmt.Errorf("ProbeReachable: create probe container: %w", err)
+	}
+	defer func() {
+		_ = r.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+	}()
+	if err := r.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("ProbeReachable: start probe container: %w", err)
+	}
+	statusCh, errCh := r.cli.ContainerWait(ctx, created.ID, container.WaitConditionNotRunning)
+	select {
+	case werr := <-errCh:
+		if werr != nil {
+			return fmt.Errorf("ProbeReachable: wait for probe container: %w", werr)
+		}
+	case status := <-statusCh:
+		if status.StatusCode != 0 {
+			return fmt.Errorf("dial %s from in-network probe on %q: unreachable (exit code %d)", net.JoinHostPort(host, port), netName, status.StatusCode)
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
+}
+
 // Remove deletes the named container, or — if name is not a literal
 // container but the aggregate base name of a replica set — every member of
 // that set (docs/adr/004). Per-ordinal volumes are deliberately left in
