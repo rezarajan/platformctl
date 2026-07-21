@@ -746,6 +746,62 @@ entrypoints, is observable, and its data is recoverable. This is where
   database exporter, connect, minio targets on the lakehouse example;
   `inventory --for prometheus` output is valid scrape config (parsed by
   promtool in the test); Grafana reaches Prometheus.
+- **Merged 2026-07-21** with one recorded convergence caveat: scrape
+  targets come from *published* endpoint facts in state, and nothing
+  orders the prometheus Provider after the providers it scrapes (no
+  manifest ref, no graph edge) — on a fresh single apply it may reconcile
+  before some targets have published, reaching Ready with the
+  then-current subset and converging on the next apply (its probe
+  regenerates the config and reports the drift). Acceptable for
+  Alpha/disabled; the follow-up seam if two-apply convergence proves
+  annoying is an explicit `configuration.scrapeRefs` (graph-ordered, the
+  D8/D10 ref discipline) — recorded here so it isn't re-derived.
+- **Status (2026-07-21): core slice implemented** on branch
+  `worktree-agent-a9601d0ee08ea8bae`. Shipped: a `prometheus` provider
+  (`internal/adapters/providers/prometheus`, nessie-shaped: one
+  single-container instance, no dependent kind) reconciling a managed
+  Prometheus container whose scrape config is generated purely from
+  currently-published metrics endpoint facts, via a new engine-resolved
+  `reconciler.Request.MetricsTargets` field (mirrors the existing
+  `SchemaRegistryURL` D1 pattern — the engine scans state for every
+  Provider's published `"metrics"`-named endpoint and hands the provider
+  already-resolved job/target/path triples; the provider itself never
+  constructs an address, ADR 015). Metrics endpoint facts added to
+  `redpanda` (its admin API, previously unpublished at all — now also
+  exposes `/public_metrics`) and `s3`/`minio` (`/minio/v2/metrics/cluster`,
+  reusing the already-published API port; `MINIO_PROMETHEUS_AUTH_TYPE:
+  public` set so the endpoint scrapes with no bearer token). Config is
+  written via `ContainerSpec.Files` and regenerated + diffed on Probe
+  against Prometheus's own `/api/v1/status/config`, reporting drifted job
+  *names* only (the debezium `connectorConfigDrift` bar). Ready requires
+  `/-/ready` 200 **and** `/api/v1/targets`'s `activeTargets` count to match
+  the configured target count — found live, not by reasoning: Prometheus's
+  target-discovery sync lags `/-/ready` by a few seconds at startup even for
+  a purely static config, so `Reconcile`'s own convergence wait
+  (`waitReady`) blocks on both, not just `/-/ready`, so `apply` returning
+  success actually means Ready (ADR 015 F3). Per-target up-ness is
+  Prometheus's own concern, never part of this Ready gate.
+  `inventory --for prometheus` (`cmd/platformctl/toolconfig.go`) renders
+  the same scrape config (literally the same `prometheus.RenderScrapeConfig`
+  call) from host-published metrics endpoints, for a bring-your-own
+  Prometheus; a parse-based unit test (`gopkg.in/yaml.v3`, already a repo
+  dependency) covers it — promtool was out of this slice's scope. Gate
+  `MonitoringStackProvider` registered Alpha/disabled. Verified live:
+  `TestPrometheusMonitoringStackEndToEnd`
+  (`cmd/platformctl/prometheus_integration_test.go`) against real Docker —
+  apply (redpanda + EventStream + minio, then prometheus added on top) to
+  `up == 1` for both targets within a 30s deadline, idempotent re-apply
+  (unchanged container ID), clean destroy — green in ~15s per run, plus the
+  existing `TestRedpandaEndToEnd`/`TestSinkEndToEnd` suites re-run live to
+  confirm the shared redpanda/s3 provider changes (the new admin-API port,
+  the new metrics endpoint facts) introduced no regression. **Deferred**
+  (explicit, not silently missing): postgres/mysql sidecar exporter
+  containers (no native metrics endpoint to publish yet — `configuration`
+  keying for a sidecar shape is a larger change than this slice), a
+  standalone `grafana` provider, and live Kubernetes-runtime verification
+  (the provider is runtime-agnostic by construction — no Docker-specific
+  API used beyond the shared `providerkit`/`ContainerRuntime` port — but
+  untested against a real cluster).
 
 ### C10: In-network reachability probes
 

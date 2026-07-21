@@ -269,6 +269,21 @@ spec:
   configuration: {image: marquezproject/marquez:0.51.0}
 ```
 
+Also optional, not required for v1.0.0 (docs/planning/08 C9, gate `MonitoringStackProvider`, Alpha/disabled):
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: local-prometheus
+spec:
+  type: prometheus
+  runtime: {type: docker, network: datascape}
+  configuration:
+    image: prom/prometheus:v2.55.1
+    scrapeInterval: 15s               # optional; default "15s"
+```
+
 Field notes:
 - `spec.type` selects which `Provider` (reconciler) implementation and JSON Schema for
   `spec.configuration` apply.
@@ -307,6 +322,19 @@ Field notes:
   `Internal` address other containers on the shared network dial) and surfaced by `platformctl
   inventory` like every other endpoint. See §7.3 for how a `Binding`'s `spec.options.format`
   consumes it.
+- **`prometheus` monitoring provider** (docs/planning/08 C9, gate `MonitoringStackProvider`,
+  Alpha/disabled): reconciles a managed Prometheus container whose scrape config is *generated*
+  from every other Provider's published `"metrics"`-named endpoint fact in state (never
+  hand-authored, never constructed by the provider itself — ADR 015). `configuration.scrapeInterval`
+  optionally overrides the default `"15s"`. Metrics endpoint facts ship for `redpanda`
+  (`/public_metrics` on its admin API port) and `s3`/`minio` (`/minio/v2/metrics/cluster` on its API
+  port) — zero extra containers. Ready requires `/-/ready` to answer *and* every configured target to
+  appear in Prometheus's own `/api/v1/targets` (`activeTargets` count matches the configured target
+  count); per-target up-ness is Prometheus's own concern, not part of this Ready gate. `platformctl
+  inventory --for prometheus` renders the equivalent scrape config for a bring-your-own Prometheus,
+  from the same facts. **Deferred** (explicit, not silently missing): postgres/mysql sidecar exporter
+  containers (no native metrics endpoint to publish yet), a standalone `grafana` provider, and live
+  Kubernetes-runtime verification.
 
 ## 5. Kind: `Source`
 

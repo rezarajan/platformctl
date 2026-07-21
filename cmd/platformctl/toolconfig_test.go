@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
+	"github.com/rezarajan/platformctl/internal/adapters/providers/prometheus"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/ports/state"
 )
@@ -58,6 +61,7 @@ func toolTestState() ([]resource.Envelope, state.State, map[resource.Key]string)
 		rp.Key(): {Provider: map[string]any{
 			"endpoints": []any{
 				map[string]any{"name": "kafka", "scheme": "kafka", "host": "127.0.0.1:19092", "internal": "local-redpanda:9092", "insecure": true},
+				map[string]any{"name": "metrics", "scheme": "http", "host": "http://127.0.0.1:19399/public_metrics", "internal": "http://local-redpanda:9644/public_metrics", "insecure": true},
 			},
 		}},
 		src.Key(): {},
@@ -87,6 +91,7 @@ func TestToolConfigViews(t *testing.T) {
 		{"flink", []string{"CREATE CATALOG lakehouse WITH", "'uri'          = 'http://127.0.0.1:19120/iceberg'", "'ref'          = 'main'", "'s3.endpoint'            = 'http://127.0.0.1:19010'", "'properties.bootstrap.servers' = '127.0.0.1:19092'", `"minio-root"`}},
 		{"metabase", []string{"MB_DB_TYPE=postgres", "MB_DB_DBNAME=ordersdb", "MB_DB_PORT=15432", "MB_DB_HOST=127.0.0.1", `"pg-admin"`}},
 		{"superset", []string{"postgresql://DB_USER:DB_PASSWORD@127.0.0.1:15432/ordersdb", `"pg-admin"`}},
+		{"prometheus", []string{"job_name: local-redpanda", "127.0.0.1:19399", "metrics_path: /public_metrics"}},
 	}
 	for _, tc := range cases {
 		var buf bytes.Buffer
@@ -392,5 +397,57 @@ func TestToolConfigSingleInstanceOutputUnchanged(t *testing.T) {
 	}
 	if strings.Contains(out, "datascape-local-pg") {
 		t.Errorf("single-instance dbt output used a component-suffixed profile name:\n%s", out)
+	}
+}
+
+// TestPrometheusInventorySnippetIsValidYAML guards docs/planning/08 C9's
+// `inventory --for prometheus` accept criterion: the rendered snippet must
+// parse as valid YAML (gopkg.in/yaml.v3, already a repo dependency) and
+// decode into a scrape config carrying exactly the metrics endpoint facts
+// recorded in state — the note lines above it (rendered as "# ..." YAML
+// comments by note()) must not break the parse.
+func TestPrometheusInventorySnippetIsValidYAML(t *testing.T) {
+	envs, st, creds := toolTestState()
+	f := gatherToolFacts(envs, st, creds)
+
+	var buf bytes.Buffer
+	if err := renderToolConfig(&buf, "prometheus", f); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	var parsed struct {
+		Global struct {
+			ScrapeInterval string `yaml:"scrape_interval"`
+		} `yaml:"global"`
+		ScrapeConfigs []struct {
+			JobName       string `yaml:"job_name"`
+			MetricsPath   string `yaml:"metrics_path"`
+			StaticConfigs []struct {
+				Targets []string `yaml:"targets"`
+			} `yaml:"static_configs"`
+		} `yaml:"scrape_configs"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("inventory --for prometheus did not render valid YAML: %v\noutput:\n%s", err, out)
+	}
+	if len(parsed.ScrapeConfigs) != 1 {
+		t.Fatalf("scrape_configs = %+v, want exactly one job (the redpanda metrics fact)", parsed.ScrapeConfigs)
+	}
+	job := parsed.ScrapeConfigs[0]
+	if job.JobName != "local-redpanda" {
+		t.Errorf("job_name = %q, want %q", job.JobName, "local-redpanda")
+	}
+	if job.MetricsPath != "/public_metrics" {
+		t.Errorf("metrics_path = %q, want %q", job.MetricsPath, "/public_metrics")
+	}
+	if len(job.StaticConfigs) != 1 || len(job.StaticConfigs[0].Targets) != 1 || job.StaticConfigs[0].Targets[0] != "127.0.0.1:19399" {
+		t.Errorf("static_configs = %+v, want a single target 127.0.0.1:19399", job.StaticConfigs)
+	}
+
+	// Also round-trips through the same package the managed provider itself
+	// uses (ParseScrapeConfig), independent of the anonymous struct above.
+	if _, err := prometheus.ParseScrapeConfig([]byte(out)); err != nil {
+		t.Errorf("prometheus.ParseScrapeConfig rejected the rendered snippet: %v", err)
 	}
 }

@@ -910,6 +910,93 @@ func TestResolveSchemaRegistryURLEmptyForJSONFormat(t *testing.T) {
 	}
 }
 
+// fakeMetricsProvider stands in for redpanda/minio's own metrics endpoint
+// publishing (docs/planning/08 C9): its own Provider reconcile publishes a
+// "metrics"-named endpoint fact.
+type fakeMetricsProvider struct {
+	noop.Provider
+	internalAddr string
+}
+
+func (p *fakeMetricsProvider) Type() string { return "fakemetricssource" }
+
+func (p *fakeMetricsProvider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	st, err := p.Provider.Reconcile(ctx, req)
+	if err != nil || req.Resource.Kind != "Provider" {
+		return st, err
+	}
+	st.ProviderState = map[string]any{
+		endpoint.Key: endpoint.List{{Name: "metrics", Scheme: "http", Internal: p.internalAddr}}.ToState(),
+	}
+	return st, nil
+}
+
+// fakeMonitoringProvider stands in for prometheus: it records whatever
+// req.MetricsTargets the engine resolved for its own Provider reconcile.
+type fakeMonitoringProvider struct {
+	noop.Provider
+	gotTargets []reconciler.MetricsTarget
+}
+
+func (p *fakeMonitoringProvider) Type() string { return "fakemonitoring" }
+
+func (p *fakeMonitoringProvider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	if req.Resource.Kind == "Provider" {
+		p.gotTargets = req.MetricsTargets
+	}
+	return p.Provider.Reconcile(ctx, req)
+}
+
+// TestResolveMetricsTargetsFromPublishedEndpoints covers docs/planning/08
+// C9's engine wiring: two independent Provider resources (no ref between
+// either of them and the monitoring Provider — prometheus scrapes whatever
+// carries a metrics endpoint, not a declared dependency) are reconciled in
+// a first Apply; a second Apply reconciling the monitoring Provider sees
+// both already-published "metrics" endpoint facts in its
+// Request.MetricsTargets, read back from state (never constructed by
+// string convention) — same two-phase-apply shape as the schema-registry
+// test above, needed here because the metrics-publishing Providers have no
+// dependency edge to the monitoring Provider that would otherwise order a
+// single Apply's topological levels for us.
+func TestResolveMetricsTargetsFromPublishedEndpoints(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	rp := &fakeMetricsProvider{internalAddr: "http://redpanda:9644/public_metrics"}
+	minio := &fakeMetricsProvider{internalAddr: "http://minio:9000/minio/v2/metrics/cluster"}
+	mon := &fakeMonitoringProvider{}
+	reg.RegisterProvider("fakemetrics-rp", func() reconciler.Provider { return rp }, "")
+	reg.RegisterProvider("fakemetrics-minio", func() reconciler.Provider { return minio }, "")
+	reg.RegisterProvider("fakemonitoring", func() reconciler.Provider { return mon }, "")
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+
+	eng := newTestEngine(t, reg)
+	infra := []resource.Envelope{
+		envelope("Provider", "redpanda", map[string]any{"type": "fakemetrics-rp", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Provider", "minio", map[string]any{"type": "fakemetrics-minio", "runtime": map[string]any{"type": "fake"}}),
+	}
+	applyAll(t, eng, infra)
+
+	all := append(append([]resource.Envelope{}, infra...),
+		envelope("Provider", "prometheus", map[string]any{"type": "fakemonitoring", "runtime": map[string]any{"type": "fake"}}))
+	applyAll(t, eng, all)
+
+	if len(mon.gotTargets) != 2 {
+		t.Fatalf("MetricsTargets = %+v, want 2 entries", mon.gotTargets)
+	}
+	byJob := map[string]string{}
+	for _, tgt := range mon.gotTargets {
+		byJob[tgt.JobName] = tgt.Endpoint.Internal
+	}
+	if byJob["redpanda"] != "http://redpanda:9644/public_metrics" {
+		t.Errorf("redpanda target = %q, want %q", byJob["redpanda"], "http://redpanda:9644/public_metrics")
+	}
+	if byJob["minio"] != "http://minio:9000/minio/v2/metrics/cluster" {
+		t.Errorf("minio target = %q, want %q", byJob["minio"], "http://minio:9000/minio/v2/metrics/cluster")
+	}
+}
+
 // TestExternalConnectionInNetworkReachability covers docs/planning/08 C10:
 // an external Connection consumed by an in-network Binding (here, a CDC
 // Binding whose sourceRef is the external Source declaring the

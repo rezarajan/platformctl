@@ -1245,6 +1245,7 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 		Resources:             byKey,
 		SchemaRegistryURL:     e.resolveSchemaRegistryURL(env, byKey, st),
 		KafkaBootstrapServers: e.resolveKafkaBootstrapServers(provEnv, p, byKey),
+		MetricsTargets:        e.resolveMetricsTargets(env, st),
 	}, nil
 }
 
@@ -1266,6 +1267,38 @@ func (e *Engine) resolveKafkaBootstrapServers(provEnv resource.Envelope, p provi
 		envelopes = append(envelopes, v)
 	}
 	return compatibility.ResolveKafkaBootstrapAddress(provEnv, envelopes, e.Registry.Provider)
+}
+
+// resolveMetricsTargets resolves the prometheus provider's scrape-target
+// list (docs/planning/08 C9) by scanning state for every Provider
+// resource's published "metrics" endpoint fact — never constructed by the
+// provider itself (ADR 015), the same published-fact-only discipline
+// resolveSchemaRegistryURL/resolveLineageEndpoint already follow. Populated
+// only for a Provider-kind Resource (the only kind the prometheus provider
+// reconciles); nil for anything else, including Import (nil st), which
+// resolveSchemaRegistryURL treats the same way. st.Resources is shared,
+// mutated-in-place engine state — the same lock discipline as every other
+// access in this file.
+func (e *Engine) resolveMetricsTargets(env resource.Envelope, st *state.State) []reconciler.MetricsTarget {
+	if st == nil || env.Kind != "Provider" {
+		return nil
+	}
+	ns := resource.NormalizeNamespace(env.Metadata.Namespace)
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	var out []reconciler.MetricsTarget
+	for key, rs := range st.Resources {
+		if key.Kind != "Provider" || key.Namespace != ns {
+			continue
+		}
+		for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
+			if ep.Name == "metrics" && ep.Internal != "" {
+				out = append(out, reconciler.MetricsTarget{JobName: key.Name, Endpoint: ep})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].JobName < out[j].JobName })
+	return out
 }
 
 // resolveSchemaRegistryURL resolves the schema registry endpoint a Binding's

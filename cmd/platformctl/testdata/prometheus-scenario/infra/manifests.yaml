@@ -1,0 +1,53 @@
+# docs/planning/08 C9 integration scenario, infra tier: a redpanda broker (+
+# EventStream) and a minio store — each publishing a "metrics" endpoint fact
+# (docs/planning/08 C9) — applied first so their facts are already in state
+# by the time the monitoring tier (combined/manifests.yaml, same state file)
+# reconciles the prometheus Provider. Distinct names/ports from every other
+# scenario: kafkaPort 19396, minio port 19397 (prometheus itself is
+# combined/manifests.yaml's 19398).
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: prom-minio-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: prom-test-redpanda
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-prom-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19396
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: prom-test-events
+spec:
+  providerRef:
+    name: prom-test-redpanda
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: prom-test-minio
+spec:
+  type: minio
+  runtime:
+    type: docker
+    network: datascape-prom-net
+  configuration:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    port: 19397
+    rootSecretRef: prom-minio-root
+  secretRefs: [prom-minio-root]

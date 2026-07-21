@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/rezarajan/platformctl/internal/domain/backup"
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
@@ -82,6 +83,28 @@ type Request struct {
 	// the provider must then require an explicit value, same as before
 	// this field existed).
 	KafkaBootstrapServers string
+	// MetricsTargets is every currently-published Prometheus-compatible
+	// "metrics" endpoint fact in state (docs/planning/08 C9) — the
+	// prometheus provider's scrape-config-generation input. The engine
+	// resolves it by scanning state for every Provider resource's published
+	// endpoint list, filtering for Name == "metrics"; the prometheus
+	// provider itself never constructs a scrape target (ADR 015). Populated
+	// only when Resource.Kind == "Provider" (mirroring SchemaRegistryURL's
+	// Binding-only scoping above) — empty for every other provider, which
+	// simply never reads it.
+	MetricsTargets []MetricsTarget
+}
+
+// MetricsTarget names one already-published metrics endpoint fact: JobName
+// is the owning Provider resource's own name (the scrape job's stable
+// identity), Endpoint is the published fact itself — Internal carries the
+// full in-network scrape URL (scheme + host:port + metrics path, e.g.
+// "http://redpanda:9644/public_metrics"), since a metrics endpoint is
+// inherently path-scoped the same way nessie's iceberg-rest endpoint is
+// (see internal/domain/endpoint.Endpoint's doc comment on Internal).
+type MetricsTarget struct {
+	JobName  string
+	Endpoint endpoint.Endpoint
 }
 
 type Provider interface {

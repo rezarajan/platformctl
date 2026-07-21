@@ -42,6 +42,16 @@ func reachableAddr(ctx context.Context, rt runtime.ContainerRuntime, name string
 	return providerkit.ReachableAddr(ctx, rt, name, apiPort)
 }
 
+// metricsURL appends MinIO's cluster metrics path to an already-resolved
+// "scheme://host:port" base, or returns "" unchanged when base is empty
+// (no host binding published yet).
+func metricsURL(base string) string {
+	if base == "" {
+		return ""
+	}
+	return base + "/minio/v2/metrics/cluster"
+}
+
 // rootCredentials returns the MinIO root credentials: the SecretReference
 // named by configuration.rootSecretRef, or the first declared secretRef.
 func rootCredentials(cfg provider.Provider, secrets map[string]map[string]string, name string) (user, pass string, err error) {
@@ -121,6 +131,12 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 			Env: map[string]string{
 				"MINIO_ROOT_USER":          user,
 				"MINIO_ROOT_PASSWORD_FILE": rootPasswordPath,
+				// "public" makes /minio/v2/metrics/cluster scrapable with no
+				// bearer token — the metrics endpoint fact published below
+				// exists specifically so a Prometheus (managed or BYO,
+				// docs/planning/08 C9) can scrape it; MinIO's default ("jwt")
+				// would otherwise 403 every unauthenticated scrape.
+				"MINIO_PROMETHEUS_AUTH_TYPE": "public",
 			},
 			Files: []runtime.FileMount{{Path: rootPasswordPath, Content: []byte(pass)}},
 			Ports: []runtime.PortBinding{{HostPort: providerkit.HostPort(cfg, name, "port"), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
@@ -165,6 +181,23 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 				Scheme:        "http",
 				Host:          hostURL,
 				Internal:      name + ":" + strconv.Itoa(apiPort),
+				Insecure:      true,
+				RuntimeName:   name,
+				ContainerPort: apiPort,
+				Audience:      runtime.AudienceHost,
+				Network:       providerkit.Network(cfg),
+			},
+			// "metrics" is the /minio/v2/metrics/cluster fact
+			// (docs/planning/08 C9) — zero extra containers, the same
+			// apiPort already published above. Unlike "s3"'s bare
+			// "host:port" above, Internal/Host carry a full URL (scheme +
+			// path): the prometheus provider parses this directly as a
+			// scrape target (internal/adapters/providers/prometheus).
+			{
+				Name:          "metrics",
+				Scheme:        "http",
+				Host:          metricsURL(hostURL),
+				Internal:      metricsURL("http://" + name + ":" + strconv.Itoa(apiPort)),
 				Insecure:      true,
 				RuntimeName:   name,
 				ContainerPort: apiPort,

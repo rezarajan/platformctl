@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/url"
 	"sort"
 	"strings"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/prometheus"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/ports/state"
@@ -39,6 +41,18 @@ type catalogEndpoint struct {
 	branch    string
 }
 
+// metricsEndpoint is a Provider's observed "metrics" endpoint fact
+// (docs/planning/08 C9), split into a bare "host:port" dial target and the
+// technology's metrics path — the same shape prometheus.ScrapeTarget takes,
+// so renderPrometheus feeds it straight into the same renderer the managed
+// `prometheus` provider itself uses to generate its own scrape config
+// ("rendered from the same facts").
+type metricsEndpoint struct {
+	component resource.Key
+	host      string // host:port, no scheme
+	path      string
+}
+
 // toolFacts is everything the config views draw on, gathered once from
 // applied state: the exact endpoints and catalog facts a tool needs, plus
 // the SecretReference *names* holding credentials — values are never
@@ -54,6 +68,7 @@ type toolFacts struct {
 	kafka    []simpleEndpoint
 	postgres []dbEndpoint
 	mysql    []dbEndpoint
+	metrics  []metricsEndpoint
 }
 
 func gatherToolFacts(envelopes []resource.Envelope, st state.State, creds map[resource.Key]string) toolFacts {
@@ -96,6 +111,18 @@ func gatherToolFacts(envelopes []resource.Envelope, st state.State, creds map[re
 					dbIndex[e.Key()] = len(f.mysql)
 					dbFamily[e.Key()] = "mysql"
 					f.mysql = append(f.mysql, dbEndpoint{component: e.Key(), host: ep.Host, credsRef: creds[e.Key()]})
+				case "metrics":
+					// ep.Host carries a full URL (scheme + host:port + path,
+					// unlike every other endpoint name above's bare
+					// "host:port") — split it into prometheus.ScrapeTarget's
+					// shape.
+					if u, err := url.Parse(ep.Host); err == nil && u.Host != "" {
+						path := u.Path
+						if path == "" {
+							path = "/metrics"
+						}
+						f.metrics = append(f.metrics, metricsEndpoint{component: e.Key(), host: u.Host, path: path})
+					}
 				}
 			}
 		}
@@ -134,21 +161,18 @@ func gatherToolFacts(envelopes []resource.Envelope, st state.State, creds map[re
 
 // knownTools maps --for values to their renderers, so help text and
 // dispatch cannot drift apart.
-//
-// prometheus is intentionally not registered here: doc 08 E3 names it as
-// addable, but its dependency C9 (metrics-endpoint facts) has not landed —
-// toolFacts carries no metrics endpoint to render from yet.
 var knownTools = map[string]func(io.Writer, toolFacts){
-	"spark":    renderSpark,
-	"trino":    renderTrino,
-	"dbt":      renderDBT,
-	"psql":     renderPsql,
-	"s3":       renderS3,
-	"kafka":    renderKafka,
-	"dagster":  renderDagster,
-	"flink":    renderFlink,
-	"metabase": renderMetabase,
-	"superset": renderSuperset,
+	"spark":      renderSpark,
+	"trino":      renderTrino,
+	"dbt":        renderDBT,
+	"psql":       renderPsql,
+	"s3":         renderS3,
+	"kafka":      renderKafka,
+	"dagster":    renderDagster,
+	"flink":      renderFlink,
+	"metabase":   renderMetabase,
+	"superset":   renderSuperset,
+	"prometheus": renderPrometheus,
 }
 
 func toolNames() string {
@@ -323,6 +347,33 @@ func renderKafka(w io.Writer, f toolFacts) {
 	forEachSection(w, f.kafka, func(k simpleEndpoint) resource.Key { return k.component }, func(w io.Writer, k simpleEndpoint) {
 		fmt.Fprintf(w, "bootstrap.servers=%s\n", k.host)
 	})
+}
+
+// renderPrometheus renders a scrape_configs snippet for a bring-your-own
+// Prometheus (docs/planning/08 C9) — one job per Provider's published
+// "metrics" endpoint, from a host-published address (this Prometheus is
+// assumed to run outside the platform's own runtime network, the same
+// audience every other renderer in this file targets). It calls the exact
+// same prometheus.RenderScrapeConfig the managed `prometheus` provider
+// itself uses to generate its own in-network scrape config — "the same
+// facts" means literally the same renderer, not two hand-synced templates.
+func renderPrometheus(w io.Writer, f toolFacts) {
+	note(w, "prometheus.yml scrape_configs — bring-your-own Prometheus.",
+		"Targets are host-published addresses, reachable from wherever this Prometheus runs; the managed `prometheus` provider (gate MonitoringStackProvider) generates the in-network equivalent of this same config from the same facts.")
+	if len(f.metrics) == 0 {
+		note(w, "no metrics endpoints recorded — apply the platform first")
+		return
+	}
+	targets := make([]prometheus.ScrapeTarget, 0, len(f.metrics))
+	for _, m := range f.metrics {
+		targets = append(targets, prometheus.ScrapeTarget{Job: m.component.Name, Target: m.host, Path: m.path})
+	}
+	cfg, err := prometheus.RenderScrapeConfig(targets, "")
+	if err != nil {
+		note(w, fmt.Sprintf("error rendering scrape config: %v", err))
+		return
+	}
+	w.Write(cfg) //nolint:errcheck
 }
 
 func renderDagster(w io.Writer, f toolFacts) {
