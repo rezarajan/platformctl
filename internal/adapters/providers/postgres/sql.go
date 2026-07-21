@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -38,21 +39,16 @@ func connect(ctx context.Context, conn string) (*pgx.Conn, error) {
 	return c, nil
 }
 
-// waitReadyReachable ping-loops until the server accepts connections,
-// re-resolving a fresh EnsureReachable address on every attempt via
-// runtime.WithReachable (docs/planning/09 Class 2 / F1) rather than
-// retrying against one address resolved before the wait began — a
-// port-forward tunnel opened while the server is still starting can end up
-// silently dead for the rest of the wait window even once the server comes
-// up. buildConn turns a freshly-resolved "host:port" into a full connection
-// string for the credentials this call is checking.
+// waitReadyReachable ping-loops until the server accepts connections —
+// providerkit.WaitReachable owns the re-resolve-on-every-attempt rule
+// (docs/planning/09 Class 2 / F1: a port-forward tunnel opened while the
+// server is still starting can end up silently dead for the rest of the
+// wait window even once the server comes up); buildConn turns a
+// freshly-resolved "host:port" into a full connection string for the
+// credentials this call is checking.
 func waitReadyReachable(ctx context.Context, rt runtime.ContainerRuntime, name string, port int, buildConn func(addr string) string, timeout time.Duration) error {
-	return runtime.WithReachable(ctx, rt, name, port, runtime.ReachableOptions{Timeout: timeout}, func(ctx context.Context, addr string) error {
-		c, err := connect(ctx, buildConn(addr))
-		if err != nil {
-			return err
-		}
-		return c.Close(ctx)
+	return providerkit.WaitReachable(ctx, rt, name, port, timeout, func(ctx context.Context, addr string) error {
+		return ping(ctx, buildConn(addr))
 	})
 }
 

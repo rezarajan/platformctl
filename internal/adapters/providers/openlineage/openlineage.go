@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
-	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -38,26 +38,6 @@ func (p *Provider) Type() string { return "openlineage" }
 
 func dbName(name string) string { return name + "-db" }
 
-func hostPort(cfg provider.Provider, name string) int {
-	configured := 0
-	if v, ok := cfg.Configuration["apiPort"]; ok {
-		switch n := v.(type) {
-		case int:
-			configured = n
-		case float64:
-			configured = int(n)
-		}
-	}
-	return hostport.Resolve(configured, name)
-}
-
-func network(cfg provider.Provider) string {
-	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
-		return n
-	}
-	return "datascape"
-}
-
 // marquezInternalCred is what the Marquez image's baked-in dev
 // configuration (marquez.dev.yml) hardcodes for its database user, password,
 // and database name — only host/port are substitutable via env. The
@@ -71,11 +51,11 @@ const marquezInternalCred = "marquez"
 // (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may tear down
 // a port-forward tunnel opened just for this call).
 func reachableAPIURL(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
-	addr, closeAddr, err := rt.EnsureReachable(ctx, name, marquezAPIPort)
+	url, closeAddr, err := providerkit.ReachableURL(ctx, rt, name, marquezAPIPort)
 	if err != nil {
 		return "", nil, err
 	}
-	return "http://" + addr + "/api/v1/namespaces", closeAddr, nil
+	return url + "/api/v1/namespaces", closeAddr, nil
 }
 
 // waitAPIReady polls the API until it answers 200, via runtime.WithReachable
@@ -116,12 +96,12 @@ func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (statu
 	}
 	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
 
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: providerkit.Network(cfg), Labels: labels}); err != nil {
 		return st, err
 	}
 	// Marquez's metadata store: a dedicated Postgres, internal to the
 	// provider (not published to the host).
-	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: db + "-data", Labels: labels, Networks: []string{network(cfg)}}); err != nil {
+	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: db + "-data", Labels: labels, Networks: []string{providerkit.Network(cfg)}}); err != nil {
 		return st, err
 	}
 	_, err = rt.EnsureContainer(ctx, runtime.ContainerSpec{
@@ -132,7 +112,7 @@ func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (statu
 			"POSTGRES_PASSWORD": marquezInternalCred,
 			"POSTGRES_DB":       "marquez",
 		},
-		Networks: []string{network(cfg)},
+		Networks: []string{providerkit.Network(cfg)},
 		Volumes:  []runtime.VolumeMount{{VolumeName: db + "-data", MountPath: "/var/lib/postgresql/data"}},
 		// Audience: internal — no host publish (this DB is internal to the
 		// provider), but the port must still be declared: the Kubernetes
@@ -170,8 +150,8 @@ func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (statu
 			"POSTGRES_USER":      marquezInternalCred,
 			"POSTGRES_PASSWORD":  marquezInternalCred,
 		},
-		Networks: []string{network(cfg)},
-		Ports:    []runtime.PortBinding{{HostPort: hostPort(cfg, name), ContainerPort: marquezAPIPort, Audience: runtime.AudienceHost}},
+		Networks: []string{providerkit.Network(cfg)},
+		Ports:    []runtime.PortBinding{{HostPort: providerkit.HostPort(cfg, name, "apiPort"), ContainerPort: marquezAPIPort, Audience: runtime.AudienceHost}},
 		Labels:   labels,
 	})
 	if err != nil {
@@ -226,7 +206,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 	if err := rt.RemoveVolume(ctx, db+"-data"); err != nil {
 		return err
 	}
-	_ = rt.RemoveNetwork(ctx, network(cfg))
+	_ = rt.RemoveNetwork(ctx, providerkit.Network(cfg))
 	return nil
 }
 

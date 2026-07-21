@@ -17,6 +17,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
@@ -40,13 +41,6 @@ func (p *Provider) Type() string { return "proxy" }
 // forwards raw TCP; anything TCP-framed (postgres, mysql, http, kafka)
 // works through it.
 func (p *Provider) SupportedConnectionSchemes() []string { return []string{"tcp"} }
-
-func network(cfg provider.Provider) string {
-	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
-		return n
-	}
-	return "datascape"
-}
 
 func image(cfg provider.Provider) string {
 	if img, ok := cfg.Configuration["image"].(string); ok && img != "" {
@@ -77,13 +71,13 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	}
 	name := naming.RuntimeObjectName(req.Provider)
 	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
-	if err := req.Runtime.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
+	if err := req.Runtime.EnsureNetwork(ctx, runtime.NetworkSpec{Name: providerkit.Network(cfg), Labels: labels}); err != nil {
 		return st, err
 	}
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "EntrypointSurfaceReady"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
-	st.ProviderState = map[string]any{"network": network(cfg), "image": image(cfg)}
+	st.ProviderState = map[string]any{"network": providerkit.Network(cfg), "image": image(cfg)}
 	return st, nil
 }
 
@@ -104,7 +98,7 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 	name := naming.RuntimeObjectName(res)
 	providerName := naming.RuntimeObjectName(req.Provider)
 	providerLabels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", providerName, providerName)
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: providerLabels}); err != nil {
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: providerkit.Network(cfg), Labels: providerLabels}); err != nil {
 		return st, err
 	}
 	connLabels := runtime.ManagedLabels(res.Metadata.Namespace, res.Kind, name, name)
@@ -115,7 +109,7 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 			fmt.Sprintf("tcp-listen:%d,fork,reuseaddr", conn.Port),
 			"tcp-connect:" + conn.Target,
 		},
-		Networks: []string{network(cfg)},
+		Networks: []string{providerkit.Network(cfg)},
 		Ports:    []runtime.PortBinding{{HostPort: conn.Port, ContainerPort: conn.Port, Audience: runtime.AudienceHost}},
 		Labels:   connLabels,
 	})
@@ -151,7 +145,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 		if err != nil {
 			return err
 		}
-		_ = req.Runtime.RemoveNetwork(ctx, network(cfg))
+		_ = req.Runtime.RemoveNetwork(ctx, providerkit.Network(cfg))
 		return nil
 	case "Connection":
 		return req.Runtime.Remove(ctx, naming.RuntimeObjectName(req.Resource))

@@ -10,6 +10,7 @@ import (
 	// Also registers the "mysql" database/sql driver.
 	godriver "github.com/go-sql-driver/mysql"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -40,18 +41,12 @@ func open(conn string) (*sql.DB, error) {
 
 // waitReadyReachable ping-loops until the server accepts authenticated
 // connections — the images serve their health ping during an init phase
-// that still refuses real logins — re-resolving a fresh EnsureReachable
-// address on every attempt via runtime.WithReachable (docs/planning/09
-// Class 2 / F1) rather than retrying against one address resolved before
-// the wait began.
+// that still refuses real logins. providerkit.WaitReachable owns the
+// re-resolve-on-every-attempt rule (docs/planning/09 Class 2 / F1) rather
+// than retrying against one address resolved before the wait began.
 func waitReadyReachable(ctx context.Context, rt runtime.ContainerRuntime, name string, port int, buildConn func(addr string) string, timeout time.Duration) error {
-	return runtime.WithReachable(ctx, rt, name, port, runtime.ReachableOptions{Timeout: timeout}, func(ctx context.Context, addr string) error {
-		db, err := open(buildConn(addr))
-		if err != nil {
-			return err
-		}
-		defer db.Close()
-		return db.PingContext(ctx)
+	return providerkit.WaitReachable(ctx, rt, name, port, timeout, func(ctx context.Context, addr string) error {
+		return ping(ctx, buildConn(addr))
 	})
 }
 

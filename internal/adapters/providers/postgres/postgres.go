@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
-	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/source"
@@ -62,38 +62,6 @@ func New() *Provider { return &Provider{} }
 
 func (p *Provider) Type() string { return "postgres" }
 
-func hostPort(cfg provider.Provider, name string) int {
-	configured := 0
-	if v, ok := cfg.Configuration["port"]; ok {
-		switch n := v.(type) {
-		case int:
-			configured = n
-		case float64:
-			configured = int(n)
-		}
-	}
-	return hostport.Resolve(configured, name)
-}
-
-// reachableAddr returns an address this process can dial right now to reach
-// the instance's Postgres port, plus a close func that must always be
-// called (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may
-// tear down a port-forward tunnel opened just for this call). Unlike
-// redpanda's Kafka admin connection, Postgres's wire protocol has no
-// broker-style "reconnect to this other address" redirect, so — unlike
-// redpanda's advertised-address indirection — the address this resolves to
-// can be used directly for the whole call, no placeholder needed.
-func reachableAddr(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
-	return rt.EnsureReachable(ctx, name, 5432)
-}
-
-func network(cfg provider.Provider) string {
-	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
-		return n
-	}
-	return "datascape"
-}
-
 // networkIsolationPolicy resolves spec.runtime.networkPolicy
 // (docs/planning/08 B7) into runtime.NetworkSpec's opt-out field. Docker
 // ignores it (a network is always isolated there); empty keeps the
@@ -125,13 +93,9 @@ func storage(cfg provider.Provider, name string) (sizeBytes int64, class string,
 // superuser returns the bootstrap credentials: the SecretReference named by
 // configuration.superuserSecretRef, or the first declared secretRef.
 func superuser(cfg provider.Provider, secrets map[string]map[string]string, name string) (user, pass string, err error) {
-	refName, _ := cfg.Configuration["superuserSecretRef"].(string)
-	if refName == "" && len(cfg.SecretRefs) > 0 {
-		refName = cfg.SecretRefs[0]
-	}
-	creds, ok := secrets[refName]
-	if !ok {
-		return "", "", fmt.Errorf("Provider %q (type: postgres): no resolved credentials for secretRef %q", name, refName)
+	creds, refName, err := providerkit.ResolveCredential(cfg, secrets, "superuserSecretRef", name)
+	if err != nil {
+		return "", "", err
 	}
 	user, pass = creds["username"], creds["password"]
 	if user == "" || pass == "" {
@@ -167,53 +131,45 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	if err != nil {
 		return st, err
 	}
-	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
 	oldUser, oldPass, _ := liveSuperuser(ctx, rt, name)
 
 	sizeBytes, storageClass, err := storage(cfg, name)
 	if err != nil {
 		return st, err
 	}
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels, IsolationPolicy: networkIsolationPolicy(cfg)}); err != nil {
-		return st, err
-	}
-	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{
-		Name: name + "-data", Labels: labels, Networks: []string{network(cfg)},
-		SizeBytes: sizeBytes, StorageClass: storageClass,
-	}); err != nil {
-		return st, err
-	}
-	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
-		Name:  name,
-		Image: prof.Image,
-		Cmd:   []string{"postgres", "-c", "wal_level=logical"},
-		// The password rides a file mount, not env — env is readable by
-		// anyone with `docker inspect` access (docs/planning/07 Gate 1
-		// checkbox 4); the official image consumes *_FILE natively.
-		Env: map[string]string{
-			"POSTGRES_USER":          user,
-			"POSTGRES_PASSWORD_FILE": superuserPasswordPath,
+	network := providerkit.Network(cfg)
+	ctrState, err := providerkit.EnsureInstance(ctx, rt, providerkit.InstanceSpec{
+		Namespace:       req.Provider.Metadata.Namespace,
+		Name:            name,
+		Network:         network,
+		IsolationPolicy: networkIsolationPolicy(cfg),
+		Volume:          &providerkit.InstanceVolume{Name: name + "-data", MountPath: prof.DataMount, SizeBytes: sizeBytes, StorageClass: storageClass},
+		Container: runtime.ContainerSpec{
+			Image: prof.Image,
+			Cmd:   []string{"postgres", "-c", "wal_level=logical"},
+			// The password rides a file mount, not env — env is readable by
+			// anyone with `docker inspect` access (docs/planning/07 Gate 1
+			// checkbox 4); the official image consumes *_FILE natively.
+			Env: map[string]string{
+				"POSTGRES_USER":          user,
+				"POSTGRES_PASSWORD_FILE": superuserPasswordPath,
+			},
+			Files: []runtime.FileMount{{Path: superuserPasswordPath, Content: []byte(pass)}},
+			Ports: []runtime.PortBinding{{HostPort: providerkit.HostPort(cfg, name, "port"), ContainerPort: 5432, Audience: runtime.AudienceHost}},
+			HealthCheck: &runtime.HealthCheck{
+				// Force a TCP check: the plain unix-socket pg_isready answers
+				// during the image's initdb temp-server phase, before the real
+				// server listens on TCP — reporting healthy while connections
+				// from the host are still refused.
+				Test:     []string{"CMD-SHELL", "pg_isready -h 127.0.0.1 -U " + user},
+				Interval: 2 * time.Second,
+				Timeout:  5 * time.Second,
+				Retries:  30,
+			},
 		},
-		Files:    []runtime.FileMount{{Path: superuserPasswordPath, Content: []byte(pass)}},
-		Networks: []string{network(cfg)},
-		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: prof.DataMount}},
-		Ports:    []runtime.PortBinding{{HostPort: hostPort(cfg, name), ContainerPort: 5432, Audience: runtime.AudienceHost}},
-		HealthCheck: &runtime.HealthCheck{
-			// Force a TCP check: the plain unix-socket pg_isready answers
-			// during the image's initdb temp-server phase, before the real
-			// server listens on TCP — reporting healthy while connections
-			// from the host are still refused.
-			Test:     []string{"CMD-SHELL", "pg_isready -h 127.0.0.1 -U " + user},
-			Interval: 2 * time.Second,
-			Timeout:  5 * time.Second,
-			Retries:  30,
-		},
-		Labels: labels,
+		WaitTimeout: 120 * time.Second,
 	})
 	if err != nil {
-		return st, err
-	}
-	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
 		return st, err
 	}
 	if err := ensureSuperuser(ctx, rt, name, user, pass, oldUser, oldPass); err != nil {
@@ -261,27 +217,28 @@ func liveSuperuser(ctx context.Context, rt runtime.ContainerRuntime, name string
 	return user, pass, true
 }
 
+// ensureSuperuser runs providerkit's try-desired → try-previous-bootstrap →
+// rotate-live → retry state machine (docs/planning/08 G1) with postgres's
+// pgx-backed ping and CREATE/ALTER ROLE rotation as the callbacks.
 func ensureSuperuser(ctx context.Context, rt runtime.ContainerRuntime, name, desiredUser, desiredPass, previousUser, previousPass string) error {
-	buildDesired := func(addr string) string { return connStringAddr(addr, desiredUser, desiredPass, "postgres") }
-	if previousUser == "" || previousPass == "" || (previousUser == desiredUser && previousPass == desiredPass) {
-		return waitReadyReachable(ctx, rt, name, 5432, buildDesired, 60*time.Second)
-	}
-	if err := waitReadyReachable(ctx, rt, name, 5432, buildDesired, 5*time.Second); err == nil {
-		return nil
-	}
-	buildPrevious := func(addr string) string { return connStringAddr(addr, previousUser, previousPass, "postgres") }
-	if err := waitReadyReachable(ctx, rt, name, 5432, buildPrevious, 60*time.Second); err != nil {
-		return fmt.Errorf("postgres superuser credentials changed but neither the desired SecretReference nor the previous managed-container environment credentials can authenticate; manual recovery is required: %w", err)
-	}
-	addr, closeAddr, err := reachableAddr(ctx, rt, name)
-	if err != nil {
-		return err
-	}
-	defer closeAddr()
-	if err := ensureSuperuserCredentials(ctx, connStringAddr(addr, previousUser, previousPass, "postgres"), desiredUser, desiredPass); err != nil {
-		return err
-	}
-	return waitReadyReachable(ctx, rt, name, 5432, buildDesired, 30*time.Second)
+	return providerkit.CredentialRotation{
+		Runtime:               rt,
+		Name:                  name,
+		Port:                  5432,
+		NoPreviousOrUnchanged: previousUser == "" || previousPass == "" || (previousUser == desiredUser && previousPass == desiredPass),
+		PingDesired: func(ctx context.Context, addr string) error {
+			return ping(ctx, connStringAddr(addr, desiredUser, desiredPass, "postgres"))
+		},
+		PingPrevious: func(ctx context.Context, addr string) error {
+			return ping(ctx, connStringAddr(addr, previousUser, previousPass, "postgres"))
+		},
+		Rotate: func(ctx context.Context, addr string) error {
+			return ensureSuperuserCredentials(ctx, connStringAddr(addr, previousUser, previousPass, "postgres"), desiredUser, desiredPass)
+		},
+		Exhausted: func(err error) error {
+			return fmt.Errorf("postgres superuser credentials changed but neither the desired SecretReference nor the previous managed-container environment credentials can authenticate; manual recovery is required: %w", err)
+		},
+	}.Run(ctx)
 }
 
 // reconcileSource ensures the declared database exists, logical replication
@@ -323,7 +280,7 @@ func (p *Provider) reconcileSource(ctx context.Context, req reconciler.Request) 
 	}, 30*time.Second); err != nil {
 		return st, err
 	}
-	addr, closeAddr, err := reachableAddr(ctx, rt, name)
+	addr, closeAddr, err := providerkit.ReachableAddr(ctx, rt, name, 5432)
 	if err != nil {
 		return st, err
 	}
@@ -369,7 +326,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 		if err := rt.RemoveVolume(ctx, name+"-data"); err != nil {
 			return err
 		}
-		_ = rt.RemoveNetwork(ctx, network(cfg))
+		_ = rt.RemoveNetwork(ctx, providerkit.Network(cfg))
 		return nil
 	case "Source":
 		// deletionPolicy governs the data (docs/planning/07 §2.2): retain
@@ -396,7 +353,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 		if err != nil {
 			return err
 		}
-		addr, closeAddr, err := reachableAddr(ctx, rt, name)
+		addr, closeAddr, err := providerkit.ReachableAddr(ctx, rt, name, 5432)
 		if err != nil {
 			return err
 		}
@@ -440,7 +397,7 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		if err != nil {
 			return st, err
 		}
-		addr, closeAddr, err := reachableAddr(ctx, rt, name)
+		addr, closeAddr, err := providerkit.ReachableAddr(ctx, rt, name, 5432)
 		if err != nil {
 			return st, err
 		}

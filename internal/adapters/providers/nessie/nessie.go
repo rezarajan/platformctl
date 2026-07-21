@@ -15,9 +15,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/domain/catalog"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
-	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
@@ -46,38 +46,15 @@ func (p *Provider) SupportedCatalogEngines() []string { return []string{"nessie"
 
 func containerName(provEnv resource.Envelope) string { return naming.RuntimeObjectName(provEnv) }
 
-func hostPort(cfg provider.Provider, name string) int {
-	configured := 0
-	if v, ok := cfg.Configuration["port"]; ok {
-		switch n := v.(type) {
-		case int:
-			configured = n
-		case float64:
-			configured = int(n)
-		}
-	}
-	return hostport.Resolve(configured, name)
-}
-
-func network(cfg provider.Provider) string {
-	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
-		return n
-	}
-	return "datascape"
-}
-
-// reachableAPIURL returns an "http://host:port/api/v2" this process can
-// dial right now, plus a close func that must always be called
-// (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may tear down
-// a port-forward tunnel opened just for this call). Nessie's REST API is
-// stateless HTTP with no broker-style redirect, so the resolved address can
-// be used directly for one call.
+// reachableAPIURL is providerkit.ReachableURL with the "/api/v2" base
+// appended — Nessie's REST API is stateless HTTP with no broker-style
+// redirect, so the resolved address can be used directly for one call.
 func reachableAPIURL(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
-	addr, closeAddr, err := rt.EnsureReachable(ctx, name, apiPort)
+	url, closeAddr, err := providerkit.ReachableURL(ctx, rt, name, apiPort)
 	if err != nil {
 		return "", nil, err
 	}
-	return "http://" + addr + "/api/v2", closeAddr, nil
+	return url + "/api/v2", closeAddr, nil
 }
 
 // waitAPIReady polls path until it answers 200, via runtime.WithReachable
@@ -130,23 +107,19 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	if image == "" {
 		image = defaultImage
 	}
-	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
-		return st, err
-	}
 	// No in-container healthcheck: the distroless Quarkus image ships no
 	// shell/curl. Readiness is verified from the host against the REST API.
-	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
-		Name:     name,
-		Image:    image,
-		Networks: []string{network(cfg)},
-		Ports:    []runtime.PortBinding{{HostPort: hostPort(cfg, name), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
-		Labels:   labels,
+	ctrState, err := providerkit.EnsureInstance(ctx, rt, providerkit.InstanceSpec{
+		Namespace: req.Provider.Metadata.Namespace,
+		Name:      name,
+		Network:   providerkit.Network(cfg),
+		Container: runtime.ContainerSpec{
+			Image: image,
+			Ports: []runtime.PortBinding{{HostPort: providerkit.HostPort(cfg, name, "port"), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
+		},
+		WaitTimeout: 120 * time.Second,
 	})
 	if err != nil {
-		return st, err
-	}
-	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
 		return st, err
 	}
 	if err := waitAPIReady(ctx, rt, name, "/config", 120*time.Second); err != nil {
@@ -242,7 +215,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 		if err != nil {
 			return err
 		}
-		_ = rt.RemoveNetwork(ctx, network(cfg))
+		_ = rt.RemoveNetwork(ctx, providerkit.Network(cfg))
 		return nil
 	case "Catalog":
 		// Deleting branches would be data loss beyond the declared contract;
