@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 )
 
 const mariaConnectURL = "http://localhost:18184"
@@ -29,24 +27,13 @@ func TestMariaDBCDCEndToEnd(t *testing.T) {
 	t.Setenv("DATASCAPE_SECRET_MARIA_REPL_USERNAME", "datascape_repl")
 	t.Setenv("DATASCAPE_SECRET_MARIA_REPL_PASSWORD", "repl-secret-pw")
 
-	rt, err := dockerruntime.New(nil)
-	if err != nil {
-		t.Fatalf("connect to Docker: %v", err)
-	}
+	rt := requireDocker(t)
 	ctx := context.Background()
 
 	containers := []string{"datascape-maria-dbz", "datascape-maria-db", "datascape-maria-rp"}
-	cleanup := func() {
-		for _, c := range containers {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"datascape-maria-db-data", "datascape-maria-rp-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape-maria-net")
-	}
+	volumes := []string{"datascape-maria-db-data", "datascape-maria-rp-data"}
+	cleanup := registerDockerCleanup(t, rt, containers, volumes, "datascape-maria-net")
 	cleanup()
-	t.Cleanup(cleanup)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/mariadb-cdc-scenario"

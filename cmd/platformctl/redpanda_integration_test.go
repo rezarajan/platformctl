@@ -12,27 +12,17 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
-
-	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 )
 
 const rpKafkaAddr = "localhost:19192"
 
 // TestRedpandaEndToEnd covers the Phase 2 exit criteria.
 func TestRedpandaEndToEnd(t *testing.T) {
-	rt, err := dockerruntime.New(nil)
-	if err != nil {
-		t.Fatalf("connect to Docker: %v", err)
-	}
+	rt := requireDocker(t)
 	ctx := context.Background()
 
-	cleanup := func() {
-		_ = rt.Remove(ctx, "datascape-rp-test")
-		_ = rt.RemoveVolume(ctx, "datascape-rp-test-data")
-		_ = rt.RemoveNetwork(ctx, "datascape-rp-test-net")
-	}
+	cleanup := registerDockerCleanup(t, rt, []string{"datascape-rp-test"}, []string{"datascape-rp-test-data"}, "datascape-rp-test-net")
 	cleanup()
-	t.Cleanup(cleanup)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/redpanda-scenario"

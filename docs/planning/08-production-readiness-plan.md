@@ -1433,6 +1433,11 @@ renderer dispatch, the 96-line registry indirection, and `meta.json`
 - **Accept:** harness exists and ≥3 existing files migrated as the
   pattern-proof; doc 06 notes it as the convention for new integration
   tests.
+- **Done (2026-07-21, merged):** `requireDocker`/`registerDockerCleanup`
+  in `cmd/platformctl/integration_harness_test.go`; docker/redpanda/
+  mariadb suites migrated and re-verified live; remaining
+  close-to-the-shape suites (cdc, sink, avro_cdc, drift_config) are the
+  opportunistic follow-up pass.
 
 ---
 
