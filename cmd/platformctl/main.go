@@ -87,13 +87,15 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// Phase 6.
 	gates.Register("ParallelReconciliation", featuregate.Alpha, false)
 	gates.Register("VaultSecretBackend", featuregate.Alpha, false)
-	gates.Register("SharedStateBackend", featuregate.Alpha, false)    // docs/design/003-shared-state.md
+	gates.Register("SharedStateBackend", featuregate.Alpha, false)    // docs/adr/003-shared-state.md
 	gates.Register("KubernetesSecretBackend", featuregate.Beta, true) // docs/planning/08 B4; graduated with KubernetesRuntime at B9
 	// Phase 6.5: orchestrator-ready infrastructure.
-	gates.Register("MySQLProvider", featuregate.Alpha, true)
-	gates.Register("NessieProvider", featuregate.Alpha, true)
-	gates.Register("OpenLineageProvider", featuregate.Alpha, true)
-	gates.Register("ProxyProvider", featuregate.Alpha, true)
+	// Phase 6.5 providers: graduated Alpha -> Beta at docs/planning/08 Stage A
+	// close (their hardening period, per doc 08 §8's graduation intent).
+	gates.Register("MySQLProvider", featuregate.Beta, true)
+	gates.Register("NessieProvider", featuregate.Beta, true)
+	gates.Register("OpenLineageProvider", featuregate.Beta, true)
+	gates.Register("ProxyProvider", featuregate.Beta, true)
 	// Phase 7 / docs/planning/08 Stage B: second runtime adapter, proving
 	// the provider/runtime split for real
 	// (docs/planning/04-roadmap-and-feature-gates.md §10). Graduated to

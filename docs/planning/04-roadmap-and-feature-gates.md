@@ -15,14 +15,20 @@
 
 ## 2. Phase overview
 
-**Status (2026-07-17):** Phases 0–6.5 are complete and verified
-(`checkpoint.md` records the evidence per phase); their exit-criteria
-checklists below are retained as historical record. Phase 7 is in progress.
-Post-v1.0.0 production-readiness work — closing Phase 7, high availability,
-routing/TLS, monitoring, backup, and the remaining provider gaps — is planned
-as stage-gated, individually actionable tasks in
+**Status (2026-07-20):** Phases 0–6.5 are complete and verified
+(`docs/history/checkpoint.md` records the evidence per phase); their
+exit-criteria checklists below are retained as historical record. Phase 7 is
+**complete** — the Kubernetes runtime closed doc 08's Stage B and graduated
+to Beta (enabled by default); GA is targeted at Stage C close. Post-v1.0.0
+production-readiness work — high availability, routing/TLS, monitoring,
+backup, pipeline-completeness providers, DX/contribution readiness, and the
+segregation-readiness fixes — is planned as stage-gated, individually
+actionable tasks in
 [08-production-readiness-plan.md](08-production-readiness-plan.md) (Stages
-A–E), which supersedes per-phase detail for everything after Phase 6.5.
+A–F; A, B, and F are closed), which supersedes per-phase detail for
+everything after Phase 6.5. The full historical narrative, with the
+reasoning behind each stage and pivot, is
+[10-project-history-and-evolution.md](10-project-history-and-evolution.md).
 
 | Phase | Theme | Primary outcome |
 |---|---|---|
@@ -263,7 +269,7 @@ exercised.
 ## 9.5 Phase 6.5 — Orchestrator-ready infrastructure (post-v1.0.0, before Kubernetes)
 
 Added post-v1.0.0 by project-owner direction (see
-docs/design/002, the stage's design note): let the engine build the core
+docs/adr/002, the stage's design note): let the engine build the core
 infrastructure real orchestrators (Dagster and friends) run against, while
 users operate the orchestrator themselves. **Model first:** the stage
 extends the resource model with two provider-agnostic kinds before any
@@ -384,18 +390,23 @@ GA. Phase 7 closes with Stage B's exit criteria held (docs/planning/08 §4).
 | `PostgresProvider` | Phase 3 | Alpha | enabled | GA end of Phase 5 (v1.0.0) |
 | `DebeziumCDCProvider` | Phase 3 | Alpha | enabled | GA end of Phase 5 (v1.0.0) |
 | `CDCBinding` | Phase 3 | Alpha | enabled | GA end of Phase 5 (v1.0.0) |
-| `LineageObservability` | Phase 3 | Alpha | disabled | Beta in Phase 6, contingent on a real backend provider existing |
+| `LineageObservability` | Phase 3 | Beta (since Phase 6.5) | enabled | graduated: the openlineage (Marquez) provider shipped in Phase 6.5 and is exercised |
 | `ObjectStoreProvider` | Phase 4 | Alpha | enabled | GA end of Phase 5 (v1.0.0) |
 | `SinkBinding` | Phase 4 | Alpha | enabled | GA end of Phase 5 (v1.0.0) |
-| `ImportedResources` | Phase 5 | Alpha | disabled | Beta Phase 6 |
-| `ExternalResourceConfiguration` | Phase 5 | Alpha | disabled | Beta Phase 5, GA Phase 6 |
-| `DriftDetection` | Phase 5 | Alpha | disabled | Beta Phase 5 |
+| `ImportedResources` | Phase 5 | Beta (since Phase 6.5) | enabled | graduated per its Phase 6 intent |
+| `ExternalResourceConfiguration` | Phase 5 | Beta | enabled | GA (the Phase 6 target has not been taken — an explicit graduation decision is still pending) |
+| `DriftDetection` | Phase 5 | Beta | enabled | graduated Beta at Phase 5 close |
 | `ParallelReconciliation` | Phase 6 | Alpha | disabled | — |
 | `VaultSecretBackend` | Phase 6 | Alpha | disabled | — |
 | `KubernetesRuntime` | Phase 7 | Beta (08 Stage B/B9) | enabled | GA in Stage C |
 | `TerraformRuntimeAdapter` | Phase 8 | Alpha | disabled | — |
 | `OutOfProcessProviderPlugins` | Phase 8 | Alpha | disabled | — |
 | `SharedStateBackend` | 08 Stage A (A4) | Alpha | disabled | Beta once used by CI itself |
+| `MySQLProvider` | Phase 6.5 | Beta (since 08 Stage A close) | enabled | GA after real-use soak |
+| `NessieProvider` | Phase 6.5 | Beta (since 08 Stage A close) | enabled | GA after real-use soak |
+| `OpenLineageProvider` | Phase 6.5 | Beta (since 08 Stage A close) | enabled | GA after real-use soak |
+| `ProxyProvider` | Phase 6.5 | Beta (since 08 Stage A close) | enabled | GA after real-use soak |
+| `ContainerProvider` | Phase 0 | Alpha | disabled | none — test-only placeholder provider; retirement tracked in 08 E7 |
 | `KubernetesSecretBackend` | 08 Stage B (B4) | Beta (08 Stage B/B9) | enabled | GA with KubernetesRuntime |
 
 Gates planned by the production-readiness backlog (`HighAvailability`,
@@ -409,6 +420,12 @@ append each to this table in the commit that lands it.
 Gate mechanics: `--feature-gates=Name=true,Other=false` on the CLI, or a `featureGates:` block in
 a config file; `application/registry` consults the gate before constructing a provider/runtime,
 failing fast with a message naming the gate and its current default if disabled.
+
+Table semantics (clarified 2026-07-20): the Stage and Default columns state the
+**current** registration in `cmd/platformctl/main.go` (the K8s rows set this
+precedent by updating in place at B9); "Stage at introduction" survives in the
+Introduced column's phase reference. This table and `main.go`'s
+`gates.Register` calls must agree — that is the sync the review checks.
 
 ## 13. Versioning & release strategy
 
