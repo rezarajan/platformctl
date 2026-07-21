@@ -558,6 +558,20 @@ provider and predates the `json|avro|protobuf` enum introduced here — noted
 for a future cleanup pass, not corrected in place (additive-only doc
 policy).
 
+**Worker-image requirement (avro/protobuf):** the schema-carrying
+converters must be present in the Connect worker image. The stock Debezium
+image ships only Apicurio converter jars; Redpanda's built-in registry
+speaks the Confluent API, so the provider wires
+`io.confluent.connect.avro.AvroConverter` — the Provider's
+`configuration.image` must therefore include the Confluent Avro converter
+plugin (reference build:
+`cmd/platformctl/testdata/avro-connect-image/Dockerfile`, the same
+stock-image-lacks-the-plugin pattern as s3sink's required image). A
+`Binding` declaring `format: avro|protobuf` against a worker image without
+the jars fails at connector registration with Connect's
+"Class ... could not be found" error — this is an image-content property
+platformctl cannot verify at validate time.
+
 ## 8. Kind: `Dataset`
 
 ```yaml

@@ -47,6 +47,15 @@ func TestApplyConverterConfigAvro(t *testing.T) {
 	if _, ok := config["key.converter.schemas.enable"]; ok {
 		t.Error("schemas.enable should not be set for avro (implicit in the converter)")
 	}
+	// DNS-label resource names legally contain hyphens, which are illegal in
+	// Avro namespaces — without the adjustment modes the registry 422s every
+	// hyphenated topic prefix and the task FAILs after registration.
+	if config["schema.name.adjustment.mode"] != "avro" {
+		t.Errorf("schema.name.adjustment.mode = %q, want \"avro\"", config["schema.name.adjustment.mode"])
+	}
+	if config["field.name.adjustment.mode"] != "avro" {
+		t.Errorf("field.name.adjustment.mode = %q, want \"avro\"", config["field.name.adjustment.mode"])
+	}
 
 	if err := applyConverterConfig(map[string]string{}, "avro", "", ""); err == nil {
 		t.Error("want an error when format is avro but no registry URL resolved")

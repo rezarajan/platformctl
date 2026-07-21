@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,6 +53,14 @@ func TestAvroCDCEndToEnd(t *testing.T) {
 	t.Setenv("DATASCAPE_SECRET_AVRO_PG_ADMIN_PASSWORD", "admin-secret-pw")
 	t.Setenv("DATASCAPE_SECRET_AVRO_PG_REPL_USERNAME", "datascape_repl")
 	t.Setenv("DATASCAPE_SECRET_AVRO_PG_REPL_PASSWORD", "repl-secret-pw")
+
+	// The Connect worker image needs Confluent's Avro converter jars, which
+	// the stock Debezium image does not ship (Apicurio only) — build the
+	// testdata image first, the same pattern as sink_integration_test.go.
+	build := exec.Command("docker", "build", "-t", "datascape-avro-connect:test", "testdata/avro-connect-image")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build avro connect image: %v\n%s", err, out)
+	}
 
 	rt, err := dockerruntime.New(nil)
 	if err != nil {

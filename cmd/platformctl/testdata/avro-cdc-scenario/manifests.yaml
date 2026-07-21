@@ -64,7 +64,11 @@ spec:
     type: docker
     network: datascape-avro-net
   configuration:
-    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
+    # Built by avro_cdc_integration_test.go from testdata/avro-connect-image:
+    # the stock Debezium image lacks Confluent's AvroConverter (it ships
+    # Apicurio only); the registry-facing converter jars must be in the
+    # worker image, exactly like s3sink's plugin (see that testdata image).
+    image: datascape-avro-connect:test
     connectPort: 18283
     bootstrapServers: datascape-avro-rp:29092
     replicationSecretRef: avro-pg-repl

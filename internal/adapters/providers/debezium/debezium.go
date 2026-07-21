@@ -477,6 +477,16 @@ func applyConverterConfig(config map[string]string, format, converterOverride, r
 		config["value.converter"] = class
 		config["key.converter.schema.registry.url"] = registryURL
 		config["value.converter.schema.registry.url"] = registryURL
+		// Debezium derives Avro record namespaces from the topic prefix —
+		// which is this platform's EventStream name, a DNS label that may
+		// legally contain hyphens. Hyphens are illegal in Avro names, so
+		// without sanitization every hyphenated resource name makes the
+		// registry reject the schema (422 "Invalid namespace") and the
+		// task FAILs after registration. Debezium's own adjustment modes
+		// rewrite illegal characters to underscores; topic and subject
+		// names are unaffected (they permit hyphens).
+		config["schema.name.adjustment.mode"] = "avro"
+		config["field.name.adjustment.mode"] = "avro"
 	default:
 		return fmt.Errorf("options.format %q is not supported (must be one of: json, avro, protobuf)", format)
 	}
