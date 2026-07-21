@@ -5,6 +5,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"time"
@@ -227,6 +228,46 @@ type ContainerSpec struct {
 	Resources     *Resources
 	Security      *SecurityContext
 	LogConfig     *LogConfig
+	// Replicas is the desired size of this spec's replica set
+	// (docs/adr/004-replicas-and-identity.md). 0 and 1 are equivalent to
+	// today's single-container behavior, byte-for-byte — use ReplicaCount()
+	// rather than comparing this field directly. N > 1 requires the
+	// HighAvailability feature gate (enforced by application/registry's
+	// runtime decorator, checked on every EnsureContainer call) and fans
+	// out to N distinct runtime-managed units, addressed collectively by
+	// Name and individually by ordinal name (OrdinalName, "<Name>-0" ..
+	// "<Name>-(N-1)").
+	Replicas int
+	// StableIdentity, meaningful only when Replicas > 1, additionally gives
+	// each ordinal its own persistent volume set (K8s: StatefulSet +
+	// volumeClaimTemplates; Docker: one Docker volume per
+	// "<VolumeMount.VolumeName>-<ordinal>") and a stable per-ordinal
+	// hostname reachable independent of which other ordinals are up (K8s:
+	// headless Service; Docker: the ordinal's own container name, always
+	// resolvable). false means replicas are interchangeable pure-compute
+	// units with no per-ordinal storage or identity beyond the ordinal name
+	// itself (e.g. Trino workers, docs/adr/006-compute-engines.md) —
+	// Replicas > 1 alone is enough for horizontal scaling.
+	StableIdentity bool
+}
+
+// ReplicaCount normalizes Replicas: 0 (or any value <= 1) means exactly 1,
+// preserving today's single-container default for every ContainerSpec that
+// never set the field.
+func (s ContainerSpec) ReplicaCount() int {
+	if s.Replicas <= 0 {
+		return 1
+	}
+	return s.Replicas
+}
+
+// OrdinalName returns the stable, ordinal-suffixed name of replica i (0-based)
+// of a replica set called name: "<name>-<i>". Every adapter uses this exact
+// format, so an ordinal name is portable across runtimes and predictable to
+// callers (e.g. a provider assembling a seed list without calling into the
+// runtime first — docs/adr/004-replicas-and-identity.md).
+func OrdinalName(name string, i int) string {
+	return fmt.Sprintf("%s-%d", name, i)
 }
 
 type ContainerState struct {
@@ -246,6 +287,16 @@ type ContainerState struct {
 	// ClusterIP Services) report HostIP/HostPort zero-valued with only
 	// ContainerPort set.
 	Ports []PortBinding
+	// ReadyReplicas is the number of replicas currently observed ready, out
+	// of the ContainerSpec.Replicas requested (1 for a non-replicated
+	// container: ReadyReplicas is 1 when Healthy, 0 otherwise). Healthy
+	// reports "at least one replica ready" — it never flips false merely
+	// because ReadyReplicas < the desired count; a provider that cares
+	// about full-quorum health (e.g. comparing ReadyReplicas against an
+	// EventStream's declared replication factor) computes that itself
+	// (docs/adr/004-replicas-and-identity.md, "the provider decides
+	// meaning").
+	ReadyReplicas int
 }
 
 // HostAddr returns the observed host address ("ip:port") the given container
@@ -358,6 +409,15 @@ const (
 	LabelName       = "io.datascape.name"
 	LabelProject    = "io.datascape.project"
 	ManagedByValue  = "platformctl"
+	// LabelReplicaBase and LabelReplicaOrdinal (docs/adr/004) let an
+	// adapter with no native replica-set object (Docker: N separately-named
+	// containers) group them back into one logical set via a label query,
+	// mirroring the grouping Kubernetes gets for free from StatefulSet/
+	// Deployment ownership. LabelReplicaBase names the replica set's
+	// logical ContainerSpec.Name; LabelReplicaOrdinal is the 0-based index.
+	// Only set on a container that is part of a Replicas > 1 set.
+	LabelReplicaBase    = "io.datascape.replica-base"
+	LabelReplicaOrdinal = "io.datascape.replica-ordinal"
 )
 
 func ManagedLabels(namespace, kind, name, generation string) map[string]string {

@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,11 +16,26 @@ import (
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
+// containerRecord is a single runtime-managed unit: either an ordinary,
+// non-replicated container (replicaBase == "") or one ordinal member of a
+// Replicas > 1 set (docs/adr/004-replicas-and-identity.md). Keyed in
+// Runtime.containers by its own literal name — the base ContainerSpec.Name
+// for a non-replicated container, or the ordinal name ("<base>-<i>") for a
+// replica-set member — mirroring exactly how Docker has no separate
+// "replica set" object either: every managed unit is a real, individually
+// named entry, and a base name only resolves to something by aggregating
+// members that share the same replicaBase.
+type containerRecord struct {
+	spec        runtime.ContainerSpec
+	replicaBase string // "" unless this is one ordinal of a Replicas > 1 set
+	ordinal     int
+}
+
 type Runtime struct {
 	mu         sync.Mutex
 	networks   map[string]runtime.NetworkSpec
 	volumes    map[string]runtime.VolumeSpec
-	containers map[string]runtime.ContainerSpec
+	containers map[string]containerRecord
 	// volumeFiles simulates a real volume's persistence independent of
 	// container lifecycle: content written under a mounted volume's path
 	// survives even once a later EnsureContainer generation no longer
@@ -38,7 +55,7 @@ func New() *Runtime {
 	return &Runtime{
 		networks:    make(map[string]runtime.NetworkSpec),
 		volumes:     make(map[string]runtime.VolumeSpec),
-		containers:  make(map[string]runtime.ContainerSpec),
+		containers:  make(map[string]containerRecord),
 		volumeFiles: make(map[string]map[string][]byte),
 	}
 }
@@ -71,14 +88,142 @@ func (r *Runtime) EnsureContainer(_ context.Context, spec runtime.ContainerSpec)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.persistVolumeFiles(spec)
-	if existing, ok := r.containers[spec.Name]; ok && containerSpecEqual(existing, spec) {
-		return r.stateOf(existing), nil
+	n := spec.ReplicaCount()
+	if n <= 1 {
+		// Shape-transition guard (docs/adr/004): collapsing an existing
+		// replica set to a single container in place is refused, exactly as
+		// the Docker and Kubernetes adapters refuse it, so unit tests catch
+		// the transition before an integration run does.
+		memberCount := 0
+		for _, rec := range r.containers {
+			if rec.replicaBase == spec.Name {
+				memberCount++
+			}
+		}
+		if memberCount > 0 {
+			return runtime.ContainerState{}, fmt.Errorf("container %q exists as a %d-member replica set; refusing to convert it to a single container in place — remove it first (destroy and recreate) if collapsing this set to one replica", spec.Name, memberCount)
+		}
+		r.ensureOneLocked(spec, "", 0)
+		return r.stateOf(spec), nil
 	}
-	r.containers[spec.Name] = spec
+	return r.ensureReplicaSetLocked(spec, n), nil
+}
+
+// ensureOneLocked ensures a single runtime-managed unit (spec.Name is
+// whatever the caller wants stored under — the base name for a
+// non-replicated container, or an ordinal name for a replica-set member).
+// Caller must hold r.mu.
+func (r *Runtime) ensureOneLocked(spec runtime.ContainerSpec, replicaBase string, ordinal int) {
+	r.persistVolumeFiles(spec)
+	if existing, ok := r.containers[spec.Name]; ok && existing.replicaBase == replicaBase && containerSpecEqual(existing.spec, spec) {
+		return // matches — no-op
+	}
+	r.containers[spec.Name] = containerRecord{spec: spec, replicaBase: replicaBase, ordinal: ordinal}
 	r.MutationCount++
 	r.nextID++
-	return r.stateOf(spec), nil
+}
+
+// ensureReplicaSetLocked fans spec out to n ordinal members
+// ("<spec.Name>-0".."<spec.Name>-(n-1)"), removing any stale ordinal left
+// over from a previous, larger generation (scale-down), and returns the
+// aggregate ContainerState. Caller must hold r.mu.
+func (r *Runtime) ensureReplicaSetLocked(spec runtime.ContainerSpec, n int) runtime.ContainerState {
+	for name, rec := range r.containers {
+		if rec.replicaBase == spec.Name && rec.ordinal >= n {
+			delete(r.containers, name)
+			r.MutationCount++
+		}
+	}
+	for i := 0; i < n; i++ {
+		ordSpec := ordinalContainerSpec(spec, i)
+		if spec.StableIdentity {
+			// The runtime owns the entire per-ordinal volume lifecycle for
+			// a StableIdentity set (docs/adr/004) — a caller must not
+			// call EnsureVolume itself for these derived names.
+			for _, vm := range ordSpec.Volumes {
+				if _, ok := r.volumes[vm.VolumeName]; !ok {
+					r.volumes[vm.VolumeName] = runtime.VolumeSpec{Name: vm.VolumeName, Labels: spec.Labels, Networks: spec.Networks}
+					r.MutationCount++
+				}
+			}
+		}
+		r.ensureOneLocked(ordSpec, spec.Name, i)
+	}
+	return r.aggregateStateLocked(spec.Name)
+}
+
+// ordinalContainerSpec derives ordinal i's own ContainerSpec from the
+// replica set's base spec: ordinal-suffixed Name, the base name added as a
+// shared alias (the fake's analog of Docker's round-robin network alias —
+// docs/adr/004), and, when StableIdentity, ordinal-suffixed volume
+// names so each replica's storage is isolated.
+func ordinalContainerSpec(spec runtime.ContainerSpec, i int) runtime.ContainerSpec {
+	out := spec
+	out.Name = runtime.OrdinalName(spec.Name, i)
+	out.Aliases = append(append([]string{}, spec.Aliases...), spec.Name)
+	// Replicas is set-level state, not a property of any one ordinal: kept in
+	// the per-ordinal spec it would make a 2 -> 3 scale-up look like a spec
+	// change on ordinals 0 and 1 (containerSpecEqual is a deep compare),
+	// mirroring the Docker adapter's identical hash-stability rule.
+	out.Replicas = 0
+	if spec.StableIdentity && len(spec.Volumes) > 0 {
+		vols := make([]runtime.VolumeMount, len(spec.Volumes))
+		for j, vm := range spec.Volumes {
+			vols[j] = runtime.VolumeMount{VolumeName: runtime.OrdinalName(vm.VolumeName, i), MountPath: vm.MountPath}
+		}
+		out.Volumes = vols
+	}
+	labels := make(map[string]string, len(spec.Labels)+2)
+	for k, v := range spec.Labels {
+		labels[k] = v
+	}
+	labels[runtime.LabelReplicaBase] = spec.Name
+	labels[runtime.LabelReplicaOrdinal] = strconv.Itoa(i)
+	out.Labels = labels
+	return out
+}
+
+// aggregateStateLocked builds the collective ContainerState for every
+// current member of the replica set named base. Caller must hold r.mu.
+func (r *Runtime) aggregateStateLocked(base string) runtime.ContainerState {
+	var members []containerRecord
+	for _, rec := range r.containers {
+		if rec.replicaBase == base {
+			members = append(members, rec)
+		}
+	}
+	sort.Slice(members, func(i, j int) bool { return members[i].ordinal < members[j].ordinal })
+	st := runtime.ContainerState{Name: base, ID: fmt.Sprintf("fake-%s", base)}
+	if len(members) > 0 {
+		first := members[0].spec
+		st.Image = first.Image
+		st.Labels = first.Labels
+		st.Env = first.Env
+		st.Ports = observedPorts(first.Ports)
+	}
+	// Every fake container is immediately healthy once created (see
+	// WaitHealthy), so ReadyReplicas is simply the current member count.
+	st.ReadyReplicas = len(members)
+	st.Running = len(members) > 0
+	st.Healthy = len(members) > 0
+	return st
+}
+
+// resolveRecord finds the record a bare name argument to ReadFile/Logs/
+// EnsureReachable refers to: the literal member/single container if one
+// exists, else ordinal 0 of the replica set based named name — the
+// aggregate best-effort default documented in docs/adr/004 ("Known
+// limitations": these three methods resolve an aggregate name to ordinal 0
+// rather than supporting a genuinely collective operation). Caller must
+// hold r.mu.
+func (r *Runtime) resolveRecord(name string) (containerRecord, bool) {
+	if rec, ok := r.containers[name]; ok {
+		return rec, true
+	}
+	if rec, ok := r.containers[runtime.OrdinalName(name, 0)]; ok && rec.replicaBase == name {
+		return rec, true
+	}
+	return containerRecord{}, false
 }
 
 // persistVolumeFiles records this generation's FileMount content against
@@ -102,20 +247,40 @@ func (r *Runtime) persistVolumeFiles(spec runtime.ContainerSpec) {
 func (r *Runtime) WaitHealthy(_ context.Context, name string, _ time.Duration) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.containers[name]; !ok {
-		return fmt.Errorf("container %q not found", name)
+	if _, ok := r.containers[name]; ok {
+		return nil // fake containers are immediately healthy
 	}
-	return nil // fake containers are immediately healthy
+	for _, rec := range r.containers {
+		if rec.replicaBase == name {
+			return nil // at least one member exists — aggregate Healthy rule
+		}
+	}
+	return fmt.Errorf("container %q not found", name)
 }
 
 func (r *Runtime) Inspect(_ context.Context, name string) (runtime.ContainerState, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	spec, ok := r.containers[name]
-	if !ok {
+	if rec, ok := r.containers[name]; ok {
+		st := r.stateOf(rec.spec)
+		if rec.replicaBase != "" {
+			// An individual replica-set member is not itself the aggregate;
+			// ReadyReplicas only has a meaning at the set level.
+			st.ReadyReplicas = 0
+		}
+		return st, true, nil
+	}
+	found := false
+	for _, rec := range r.containers {
+		if rec.replicaBase == name {
+			found = true
+			break
+		}
+	}
+	if !found {
 		return runtime.ContainerState{}, false, nil
 	}
-	return r.stateOf(spec), true, nil
+	return r.aggregateStateLocked(name), true, nil
 }
 
 func (r *Runtime) Remove(_ context.Context, name string) error {
@@ -123,6 +288,17 @@ func (r *Runtime) Remove(_ context.Context, name string) error {
 	defer r.mu.Unlock()
 	if _, ok := r.containers[name]; ok {
 		delete(r.containers, name)
+		r.MutationCount++
+		return nil
+	}
+	removedAny := false
+	for cname, rec := range r.containers {
+		if rec.replicaBase == name {
+			delete(r.containers, cname)
+			removedAny = true
+		}
+	}
+	if removedAny {
 		r.MutationCount++
 	}
 	return nil
@@ -141,10 +317,10 @@ func (r *Runtime) RemoveNetwork(_ context.Context, name string) error {
 	// Destroy, and the network must outlive every member but the last rather
 	// than be torn down (with its members) by the first. Pinned by the
 	// conformance suite's RemoveNetwork_refuses_while_container_attached.
-	for cname, spec := range r.containers {
-		for _, n := range spec.Networks {
+	for _, rec := range r.containers {
+		for _, n := range rec.spec.Networks {
 			if n == name {
-				return fmt.Errorf("network %q still has container %q attached; refusing to remove it", name, cname)
+				return fmt.Errorf("network %q still has container %q attached; refusing to remove it", name, rec.spec.Name)
 			}
 		}
 	}
@@ -167,7 +343,7 @@ func (r *Runtime) RemoveVolume(_ context.Context, name string) error {
 func (r *Runtime) Logs(_ context.Context, name string, _ int) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.containers[name]; !ok {
+	if _, ok := r.resolveRecord(name); !ok {
 		return "", fmt.Errorf("container %q not found", name)
 	}
 	return "", nil // fake containers produce no logs
@@ -176,10 +352,11 @@ func (r *Runtime) Logs(_ context.Context, name string, _ int) (string, error) {
 func (r *Runtime) ReadFile(_ context.Context, name, path string) ([]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	spec, ok := r.containers[name]
+	rec, ok := r.resolveRecord(name)
 	if !ok {
 		return nil, fmt.Errorf("container %q not found", name)
 	}
+	spec := rec.spec
 	for _, f := range spec.Files {
 		if f.Path == path {
 			return f.Content, nil
@@ -204,13 +381,16 @@ func (r *Runtime) ReadFile(_ context.Context, name, path string) ([]byte, error)
 // K10). This is deliberately stricter than Kubernetes' port-forward access
 // mode, which can reach any pod port regardless of audience; the fake exists
 // to catch under-declaration in `go test ./...` before a cluster ever does.
+// Against the aggregate name of a replica set, resolves to ordinal 0 (a
+// documented best-effort default — docs/adr/004 "Known limitations").
 func (r *Runtime) EnsureReachable(_ context.Context, name string, containerPort int) (string, func() error, error) {
 	r.mu.Lock()
-	spec, ok := r.containers[name]
+	rec, ok := r.resolveRecord(name)
 	r.mu.Unlock()
 	if !ok {
 		return "", nil, fmt.Errorf("container %q not found", name)
 	}
+	spec := rec.spec
 	for _, p := range spec.Ports {
 		if p.ContainerPort != containerPort {
 			continue
@@ -245,9 +425,9 @@ func (r *Runtime) ListManaged(_ context.Context) ([]runtime.ContainerState, erro
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out []runtime.ContainerState
-	for _, spec := range r.containers {
-		if spec.Labels[runtime.LabelManagedBy] == runtime.ManagedByValue {
-			out = append(out, r.stateOf(spec))
+	for _, rec := range r.containers {
+		if rec.spec.Labels[runtime.LabelManagedBy] == runtime.ManagedByValue {
+			out = append(out, r.stateOf(rec.spec))
 		}
 	}
 	return out, nil
@@ -279,14 +459,15 @@ func (r *Runtime) ListManagedVolumes(_ context.Context) ([]runtime.ManagedVolume
 
 func (r *Runtime) stateOf(spec runtime.ContainerSpec) runtime.ContainerState {
 	return runtime.ContainerState{
-		Name:    spec.Name,
-		ID:      fmt.Sprintf("fake-%s", spec.Name),
-		Image:   spec.Image,
-		Running: true,
-		Healthy: true,
-		Labels:  spec.Labels,
-		Env:     spec.Env,
-		Ports:   observedPorts(spec.Ports),
+		Name:          spec.Name,
+		ID:            fmt.Sprintf("fake-%s", spec.Name),
+		Image:         spec.Image,
+		Running:       true,
+		Healthy:       true,
+		Labels:        spec.Labels,
+		Env:           spec.Env,
+		Ports:         observedPorts(spec.Ports),
+		ReadyReplicas: 1,
 	}
 }
 
@@ -330,9 +511,10 @@ func specEqual(a, b map[string]string) bool {
 
 // containerSpecEqual compares every field of ContainerSpec (command, ports,
 // volumes, health checks, restart policy, resources, security context, log
-// config — not just name/image/labels/env/networks), so the fake stays
-// honest about the NFR-2 idempotency contract: a second EnsureContainer call
-// only counts as a no-op when nothing meaningful actually changed.
+// config, replicas/stable identity — not just name/image/labels/env/
+// networks), so the fake stays honest about the NFR-2 idempotency contract:
+// a second EnsureContainer call only counts as a no-op when nothing
+// meaningful actually changed.
 func containerSpecEqual(a, b runtime.ContainerSpec) bool {
 	return reflect.DeepEqual(a, b)
 }

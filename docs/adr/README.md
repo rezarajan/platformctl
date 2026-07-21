@@ -29,7 +29,7 @@ pattern of recording a redirected first cut).
 | [001](001-bindings-are-directed-edges.md) | Bindings are directed edges | accepted, shipped pre-v1.0.0 | `AllowedKindPairs` is a relation; asset kinds are role-neutral |
 | [002](002-soak-orchestrator-infrastructure.md) | Orchestrator-ready infrastructure | accepted (first cut superseded by its own addendum) | Phase 6.5 scope; Catalog/Connection remodel; "soak" retired |
 | [003](003-shared-state.md) | Shared/remote state backend | accepted, shipped (08 A4) | S3-compatible store + conditional-PUT lease locking |
-| 004 | Replicas and stable identity | **on C1's unmerged branch** (`worktree-agent-ac3b0d7e379217021`) | `ContainerSpec.Replicas`/`StableIdentity`; ordinal naming; StatefulSet mapping |
+| [004](004-replicas-and-identity.md) | Replicas and stable identity | accepted, shipped (08 C1) | `ContainerSpec.Replicas`/`StableIdentity`; ordinal naming; StatefulSet mapping |
 | [005](005-database-ha-posture.md) | Database HA posture | accepted, decision-only | managed DBs stay single-node; production HA enters via `external: true` + Connection |
 | [006](006-compute-engines.md) | Compute-engine infrastructure | accepted | Trino provider first (D10); Flink deferred; engine infra in scope, jobs never |
 | 007 | Backup/restore mechanism | **reserved** — required by C6's review before its branch merges | job-container pipeline design, Location resolution, protect interplay |

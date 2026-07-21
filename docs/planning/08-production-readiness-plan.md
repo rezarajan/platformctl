@@ -558,6 +558,13 @@ entrypoints, is observable, and its data is recoverable. This is where
   live-Kubernetes conformance leg has not been re-run since the fixes, and
   the doc 04 §12 gate-table row will conflict with the 2026-07-20 table
   restructure on merge (trivial resolution).
+- **Merged to main 2026-07-21** after the full
+  `internal/adapters/runtime/kubernetes` integration suite (including the
+  new replica and shape-transition conformance subtests) ran green against
+  a live minikube cluster (302s). Design note 004 landed at
+  `docs/adr/004-replicas-and-identity.md` per the ADR migration; the
+  `HighAvailability` gate row was re-added in the current table format.
+  C1 is done; the C2→C3/C4 chain is unblocked (§10 step 2).
 
 ### C2: Redpanda multi-broker clusters and replicated topics
 

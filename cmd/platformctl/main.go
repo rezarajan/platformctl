@@ -106,6 +106,11 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// and the full cdc-attendance/lakehouse example scenarios (B8) all
 	// verified against a real cluster.
 	gates.Register("KubernetesRuntime", featuregate.Beta, true)
+	// docs/planning/08 Stage C (C1): ContainerSpec.Replicas > 1 requires this
+	// gate, enforced by application/registry's runtime decorator
+	// (docs/adr/004-replicas-and-identity.md) since no provider yet
+	// surfaces a schema field that sets Replicas.
+	gates.Register("HighAvailability", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")

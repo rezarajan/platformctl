@@ -298,7 +298,11 @@ func (r *Runtime) RemoveNetwork(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("list deployments in namespace %q: %w", name, err)
 	}
-	if n := len(deployments.Items); n > 0 {
+	statefulSets, err := r.clientset.AppsV1().StatefulSets(name).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list statefulsets in namespace %q: %w", name, err)
+	}
+	if n := len(deployments.Items) + len(statefulSets.Items); n > 0 {
 		return fmt.Errorf("namespace %q still has %d active workload(s); refusing to remove it", name, n)
 	}
 	if err := r.clientset.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
@@ -437,7 +441,20 @@ func (r *Runtime) managedNamespaces(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+// EnsureContainer dispatches to the StatefulSet path (Replicas > 1 and
+// StableIdentity — C2/C4's shape) or the Deployment path (every other case,
+// including a plain Replicas > 1 with StableIdentity: false — D10's shape),
+// per docs/adr/004-replicas-and-identity.md. Replicas <= 1 reproduces
+// this adapter's original single-replica Deployment behavior byte-for-byte.
 func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.ContainerSpec) (runtimeport.ContainerState, error) {
+	n := spec.ReplicaCount()
+	if n > 1 && spec.StableIdentity {
+		return r.ensureStatefulSet(ctx, spec, int32(n))
+	}
+	return r.ensureDeployment(ctx, spec, int32(n))
+}
+
+func (r *Runtime) ensureDeployment(ctx context.Context, spec runtimeport.ContainerSpec, replicas int32) (runtimeport.ContainerState, error) {
 	ns, err := targetNamespace(spec.Networks)
 	if err != nil {
 		return runtimeport.ContainerState{}, err
@@ -458,11 +475,25 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.Containe
 
 	deploymentNotFound := apierrors.IsNotFound(err)
 
-	deployment, err := buildDeployment(ns, spec, desiredHash)
+	// Shape-transition guard (docs/adr/004): a StatefulSet by this name
+	// means the container was last applied with StableIdentity and Replicas >
+	// 1. Taking the Deployment path anyway would leave the old StatefulSet
+	// serving the same app=<name> selector — refuse instead, mirroring
+	// ensureHeadlessService's refusal in the opposite direction.
+	if _, serr := r.clientset.AppsV1().StatefulSets(ns).Get(ctx, spec.Name, metav1.GetOptions{}); serr == nil {
+		return runtimeport.ContainerState{}, fmt.Errorf("statefulset %q exists for this container; refusing to convert it to a Deployment in place — remove it first (destroy and recreate) if switching this container off StableIdentity or below 2 replicas", spec.Name)
+	} else if !apierrors.IsNotFound(serr) {
+		return runtimeport.ContainerState{}, fmt.Errorf("get statefulset %q: %w", spec.Name, serr)
+	}
+
+	deployment, err := buildDeployment(ns, spec, desiredHash, replicas)
 	if err != nil {
 		return runtimeport.ContainerState{}, err
 	}
 	if err := r.ensureService(ctx, ns, spec); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
+	if err := r.ensurePodDisruptionBudget(ctx, ns, spec, replicas); err != nil {
 		return runtimeport.ContainerState{}, err
 	}
 	if err := r.ensureExternalIngressPolicy(ctx, ns, spec); err != nil {
@@ -502,6 +533,174 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.Containe
 		return runtimeport.ContainerState{}, fmt.Errorf("update deployment %q: %w", spec.Name, err)
 	}
 	return r.enrichedState(ctx, ns, updated), nil
+}
+
+// ensureStatefulSet is ensureDeployment's StableIdentity counterpart
+// (docs/adr/004-replicas-and-identity.md): a headless Service instead of
+// a ClusterIP one, and a StatefulSet instead of a Deployment so
+// VolumeClaimTemplates and native ordinal pod naming apply. Selector and
+// VolumeClaimTemplates are immutable once a StatefulSet is created —
+// updates only ever touch the latest object's Labels/Annotations/Replicas/
+// Template, never resending a freshly-built value for those two fields
+// (Kubernetes' API-server defaulting can make an independently-rebuilt
+// VolumeClaimTemplates value differ byte-for-byte from what's stored even
+// when semantically unchanged, which the immutability check rejects).
+func (r *Runtime) ensureStatefulSet(ctx context.Context, spec runtimeport.ContainerSpec, replicas int32) (runtimeport.ContainerState, error) {
+	ns, err := targetNamespace(spec.Networks)
+	if err != nil {
+		return runtimeport.ContainerState{}, err
+	}
+	desiredHash := specHash(spec)
+
+	existing, err := r.clientset.AppsV1().StatefulSets(ns).Get(ctx, spec.Name, metav1.GetOptions{})
+	if err == nil {
+		if existing.Labels[runtimeport.LabelManagedBy] != runtimeport.ManagedByValue {
+			return runtimeport.ContainerState{}, fmt.Errorf("statefulset %q exists but is not managed by platformctl; refusing to replace it", spec.Name)
+		}
+		if existing.Annotations[specHashAnnotation] == desiredHash {
+			return stateFromStatefulSet(existing), nil // matches — no-op
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return runtimeport.ContainerState{}, fmt.Errorf("get statefulset %q: %w", spec.Name, err)
+	}
+
+	statefulSetNotFound := apierrors.IsNotFound(err)
+
+	// Shape-transition guard, the inverse of ensureDeployment's: a Deployment
+	// by this name means the container was last applied without StableIdentity
+	// (or with a single replica). Creating a StatefulSet alongside it would
+	// leave both serving the same app=<name> selector — refuse instead.
+	// ensureHeadlessService refuses the ClusterIP Service half of this
+	// transition, but a portless Deployment has no Service, so the guard must
+	// live here too.
+	if _, derr := r.clientset.AppsV1().Deployments(ns).Get(ctx, spec.Name, metav1.GetOptions{}); derr == nil {
+		return runtimeport.ContainerState{}, fmt.Errorf("deployment %q exists for this container; refusing to convert it to a StatefulSet in place — remove it first (destroy and recreate) if switching this container to StableIdentity", spec.Name)
+	} else if !apierrors.IsNotFound(derr) {
+		return runtimeport.ContainerState{}, fmt.Errorf("get deployment %q: %w", spec.Name, derr)
+	}
+
+	sts, err := buildStatefulSet(ns, spec, desiredHash, replicas)
+	if err != nil {
+		return runtimeport.ContainerState{}, err
+	}
+	if err := r.ensureHeadlessService(ctx, ns, spec); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
+	if err := r.ensureAliasServices(ctx, ns, spec); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
+	if err := r.ensurePodDisruptionBudget(ctx, ns, spec, replicas); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
+	if err := r.ensureExternalIngressPolicy(ctx, ns, spec); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
+	if err := r.ensureFilesSecret(ctx, ns, spec); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
+	if err := r.ensureImagePullSecret(ctx, ns, spec); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
+
+	if statefulSetNotFound {
+		created, err := r.clientset.AppsV1().StatefulSets(ns).Create(ctx, sts, metav1.CreateOptions{})
+		if err != nil {
+			return runtimeport.ContainerState{}, fmt.Errorf("create statefulset %q: %w", spec.Name, err)
+		}
+		return stateFromStatefulSet(created), nil
+	}
+	var updated *appsv1.StatefulSet
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest, getErr := r.clientset.AppsV1().StatefulSets(ns).Get(ctx, spec.Name, metav1.GetOptions{})
+		if getErr != nil {
+			return getErr
+		}
+		latest.Labels = sts.Labels
+		latest.Annotations = sts.Annotations
+		latest.Spec.Replicas = sts.Spec.Replicas
+		latest.Spec.Template = sts.Spec.Template
+		// Selector, ServiceName and VolumeClaimTemplates are immutable on an
+		// existing StatefulSet — left as fetched in latest, never resent.
+		var updateErr error
+		updated, updateErr = r.clientset.AppsV1().StatefulSets(ns).Update(ctx, latest, metav1.UpdateOptions{})
+		return updateErr
+	})
+	if err != nil {
+		return runtimeport.ContainerState{}, fmt.Errorf("update statefulset %q: %w", spec.Name, err)
+	}
+	return stateFromStatefulSet(updated), nil
+}
+
+// ensurePodDisruptionBudget reconciles the maxUnavailable:1 PDB applied
+// whenever replicas > 1, deleting it when replicas drops back to <= 1 (a
+// scale-down complement, mirroring ensureFilesSecret's create/update/
+// delete-on-absence shape).
+func (r *Runtime) ensurePodDisruptionBudget(ctx context.Context, ns string, spec runtimeport.ContainerSpec, replicas int32) error {
+	name := pdbName(spec.Name)
+	if replicas <= 1 {
+		if err := r.clientset.PolicyV1().PodDisruptionBudgets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete poddisruptionbudget %q: %w", name, err)
+		}
+		return nil
+	}
+	desired := buildPodDisruptionBudget(ns, spec)
+	existing, err := r.clientset.PolicyV1().PodDisruptionBudgets(ns).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		if _, err := r.clientset.PolicyV1().PodDisruptionBudgets(ns).Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create poddisruptionbudget %q: %w", name, err)
+		}
+		return nil
+	case err != nil:
+		return fmt.Errorf("get poddisruptionbudget %q: %w", name, err)
+	default:
+		desired.ResourceVersion = existing.ResourceVersion
+		if _, err := r.clientset.PolicyV1().PodDisruptionBudgets(ns).Update(ctx, desired, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update poddisruptionbudget %q: %w", name, err)
+		}
+		return nil
+	}
+}
+
+// ensureHeadlessService reconciles the governing Service a StatefulSet's
+// ServiceName requires. Refuses to convert an existing non-headless Service
+// of the same name (a container switching StableIdentity: false -> true)
+// rather than silently changing its addressing semantics out from under
+// whatever already depends on the old ClusterIP address.
+func (r *Runtime) ensureHeadlessService(ctx context.Context, ns string, spec runtimeport.ContainerSpec) error {
+	desired := buildHeadlessService(ns, spec)
+	existing, err := r.clientset.CoreV1().Services(ns).Get(ctx, spec.Name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		if _, err := r.clientset.CoreV1().Services(ns).Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create headless service %q: %w", spec.Name, err)
+		}
+		return nil
+	case err != nil:
+		return fmt.Errorf("get service %q: %w", spec.Name, err)
+	case existing.Spec.ClusterIP != corev1.ClusterIPNone:
+		return fmt.Errorf("service %q exists but is not headless (ClusterIP %q); refusing to convert it — remove it first if switching this container to StableIdentity", spec.Name, existing.Spec.ClusterIP)
+	default:
+		desired.ResourceVersion = existing.ResourceVersion
+		desired.Spec.ClusterIP = existing.Spec.ClusterIP // immutable once set
+		if _, err := r.clientset.CoreV1().Services(ns).Update(ctx, desired, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update headless service %q: %w", spec.Name, err)
+		}
+		return nil
+	}
+}
+
+// ensureAliasServices ensures a normal ClusterIP Service per declared alias
+// (never for spec.Name itself, which is the headless governing Service for
+// a StableIdentity set) — aliases remain "any of them" addresses even for a
+// stable-identity set, matching the Deployment path's alias handling.
+func (r *Runtime) ensureAliasServices(ctx context.Context, ns string, spec runtimeport.ContainerSpec) error {
+	for _, alias := range spec.Aliases {
+		if err := r.ensureOneService(ctx, ns, alias, spec); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureService creates or updates the ClusterIP Service backing a
@@ -601,7 +800,10 @@ func (r *Runtime) ReadFile(ctx context.Context, name, path string) ([]byte, erro
 // readFileViaExec execs `cat <path>` in the deployment's current running
 // pod and returns stdout — the live-filesystem fallback ReadFile uses for
 // paths that aren't a FileMount, e.g. content a container's own process
-// wrote into a mounted volume.
+// wrote into a mounted volume. When name is not a Deployment, it may be the
+// literal name of a StatefulSet ordinal's own Pod (docs/adr/004-replicas-
+// and-identity.md) — the aggregate base name of a StableIdentity set is
+// deliberately not supported here; callers must address a specific ordinal.
 func (r *Runtime) readFileViaExec(ctx context.Context, name, path string) ([]byte, error) {
 	ns, d, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {
 		return r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
@@ -609,21 +811,39 @@ func (r *Runtime) readFileViaExec(ctx context.Context, name, path string) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	if d == nil {
-		return nil, fmt.Errorf("no deployment %q found to read %q from", name, path)
+	if d != nil {
+		// buildDeployment always names the (single) container after the
+		// Deployment itself — see its ObjectMeta.Name/container.Name — so
+		// name doubles as both the pod-selector value and the container to
+		// exec into.
+		return r.readFileFromSelector(ctx, ns, name, name, path)
 	}
-	pods, err := r.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: "app=" + name})
+	podNS, pod, stsName, err := r.findOrdinalPod(ctx, name)
 	if err != nil {
-		return nil, fmt.Errorf("list pods for %q: %w", name, err)
+		return nil, err
+	}
+	if pod == nil {
+		return nil, fmt.Errorf("no deployment or replica pod named %q found to read %q from", name, path)
+	}
+	stdout, stderr, err := r.execInPod(ctx, podNS, pod.Name, stsName, []string{"cat", path})
+	if err != nil {
+		return nil, fmt.Errorf("read %q from pod %q: %w (stderr: %s)", path, pod.Name, err, strings.TrimSpace(stderr))
+	}
+	return []byte(stdout), nil
+}
+
+// readFileFromSelector execs `cat <path>` in the newest ready pod matching
+// app=selectorName — the Deployment-path lookup shared by ReadFile.
+func (r *Runtime) readFileFromSelector(ctx context.Context, ns, selectorName, containerName, path string) ([]byte, error) {
+	pods, err := r.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: "app=" + selectorName})
+	if err != nil {
+		return nil, fmt.Errorf("list pods for %q: %w", selectorName, err)
 	}
 	pod := newestReadyPod(pods.Items)
 	if pod == nil {
-		return nil, fmt.Errorf("no ready pod for %q to read %q from", name, path)
+		return nil, fmt.Errorf("no ready pod for %q to read %q from", selectorName, path)
 	}
-	// buildDeployment always names the (single) container after the
-	// Deployment itself — see its ObjectMeta.Name/container.Name — so name
-	// doubles as both the pod-selector value and the container to exec into.
-	stdout, stderr, err := r.execInPod(ctx, ns, pod.Name, name, []string{"cat", path})
+	stdout, stderr, err := r.execInPod(ctx, ns, pod.Name, containerName, []string{"cat", path})
 	if err != nil {
 		return nil, fmt.Errorf("read %q from pod %q: %w (stderr: %s)", path, pod.Name, err, strings.TrimSpace(stderr))
 	}
@@ -827,6 +1047,12 @@ func (r *Runtime) firstNodeAddr(ctx context.Context) (string, error) {
 //     close is a no-op (the Service itself is the standing tunnel).
 //   - port-forward (default): opens an ephemeral client-go port-forward
 //     tunnel to the container's current pod; close tears it down.
+//
+// When name is not a Deployment, it may be the literal name of a
+// StatefulSet ordinal's own Pod (docs/adr/004-replicas-and-identity.md):
+// only the port-forward access mode is supported for one specific ordinal in
+// this iteration — node-port/load-balancer addressing of a single replica
+// is a documented "Known limitations" follow-up, not implemented here.
 func (r *Runtime) EnsureReachable(ctx context.Context, name string, containerPort int) (string, func() error, error) {
 	ns, d, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {
 		return r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
@@ -834,19 +1060,25 @@ func (r *Runtime) EnsureReachable(ctx context.Context, name string, containerPor
 	if err != nil {
 		return "", nil, err
 	}
-	if d == nil {
+	if d != nil {
+		accessMode := d.Annotations[accessModeAnnotation]
+		switch accessMode {
+		case runtimeport.AccessInCluster:
+			return "", nil, fmt.Errorf("container %q uses access mode %q; no CLI-side (outside-the-cluster) admin connection is possible — run admin operations from a pod inside the cluster instead", name, runtimeport.AccessInCluster)
+		case runtimeport.AccessNodePort, runtimeport.AccessLoadBalancer:
+			return r.serviceReachableAddr(ctx, ns, name, containerPort, accessMode)
+		default:
+			return r.portForwardReachableAddrBySelector(ctx, ns, name, containerPort)
+		}
+	}
+	podNS, pod, _, err := r.findOrdinalPod(ctx, name)
+	if err != nil {
+		return "", nil, err
+	}
+	if pod == nil {
 		return "", nil, fmt.Errorf("deployment %q not found", name)
 	}
-	accessMode := d.Annotations[accessModeAnnotation]
-
-	switch accessMode {
-	case runtimeport.AccessInCluster:
-		return "", nil, fmt.Errorf("container %q uses access mode %q; no CLI-side (outside-the-cluster) admin connection is possible — run admin operations from a pod inside the cluster instead", name, runtimeport.AccessInCluster)
-	case runtimeport.AccessNodePort, runtimeport.AccessLoadBalancer:
-		return r.serviceReachableAddr(ctx, ns, name, containerPort, accessMode)
-	default:
-		return r.portForwardReachableAddr(ctx, ns, name, containerPort)
-	}
+	return r.portForwardToPod(ctx, podNS, pod, containerPort)
 }
 
 // serviceReachableAddr resolves the node-port/load-balancer address and
@@ -896,19 +1128,24 @@ func dialable(addr string) bool {
 	return true
 }
 
-// portForwardReachableAddr opens an ephemeral client-go port-forward tunnel
-// to the container's current pod on an OS-assigned local port, mirroring
-// `kubectl port-forward :containerPort`.
-func (r *Runtime) portForwardReachableAddr(ctx context.Context, ns, name string, containerPort int) (string, func() error, error) {
-	pods, err := r.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: "app=" + name})
+// portForwardReachableAddrBySelector resolves the newest ready pod matching
+// app=selectorName, then opens a tunnel to it — the Deployment-path lookup
+// EnsureReachable's default (port-forward) access mode uses.
+func (r *Runtime) portForwardReachableAddrBySelector(ctx context.Context, ns, selectorName string, containerPort int) (string, func() error, error) {
+	pods, err := r.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: "app=" + selectorName})
 	if err != nil {
-		return "", nil, fmt.Errorf("list pods for %q: %w", name, err)
+		return "", nil, fmt.Errorf("list pods for %q: %w", selectorName, err)
 	}
 	pod := newestReadyPod(pods.Items)
 	if pod == nil {
-		return "", nil, fmt.Errorf("no ready pod for %q to port-forward to", name)
+		return "", nil, fmt.Errorf("no ready pod for %q to port-forward to", selectorName)
 	}
+	return r.portForwardToPod(ctx, ns, pod, containerPort)
+}
 
+// portForwardToPod opens an ephemeral client-go port-forward tunnel to pod
+// on an OS-assigned local port, mirroring `kubectl port-forward :containerPort`.
+func (r *Runtime) portForwardToPod(ctx context.Context, ns string, pod *corev1.Pod, containerPort int) (string, func() error, error) {
 	transport, upgrader, err := spdy.RoundTripperFor(r.restConfig)
 	if err != nil {
 		return "", nil, fmt.Errorf("build port-forward transport: %w", err)
@@ -968,23 +1205,50 @@ func (r *Runtime) portForwardReachableAddr(ctx context.Context, ns, name string,
 	return addr, closeFn, nil
 }
 
+// replicaSetReadiness resolves name against the Deployment path, then the
+// StatefulSet path (docs/adr/004-replicas-and-identity.md), reporting
+// which namespace it lives in, whether either was found, and whether it is
+// currently ready ("at least one replica" — the same rule stateFromDeployment/
+// stateFromStatefulSet already apply). Shared by WaitHealthy and any other
+// method that only needs a yes/no readiness signal rather than the full
+// ContainerState.
+func (r *Runtime) replicaSetReadiness(ctx context.Context, name string) (ns string, found, ready bool, err error) {
+	dns, d, derr := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {
+		return r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+	})
+	if derr != nil {
+		return "", false, false, fmt.Errorf("get deployment %q: %w", name, derr)
+	}
+	if d != nil {
+		return dns, true, d.Status.ReadyReplicas > 0, nil
+	}
+	sns, sts, serr := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.StatefulSet, error) {
+		return r.clientset.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
+	})
+	if serr != nil {
+		return "", false, false, fmt.Errorf("get statefulset %q: %w", name, serr)
+	}
+	if sts != nil {
+		return sns, true, sts.Status.ReadyReplicas > 0, nil
+	}
+	return "", false, false, nil
+}
+
 func (r *Runtime) WaitHealthy(ctx context.Context, name string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		ns, d, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {
-			return r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
-		})
+		ns, found, ready, err := r.replicaSetReadiness(ctx, name)
 		if err != nil {
-			return fmt.Errorf("get deployment %q: %w", name, err)
+			return err
 		}
-		if d == nil {
-			return fmt.Errorf("deployment %q not found", name)
+		if !found {
+			return fmt.Errorf("container %q not found", name)
 		}
-		if d.Status.ReadyReplicas > 0 {
+		if ready {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("deployment %q did not become healthy within %s%s", name, timeout, r.tailLogs(ctx, ns, name))
+			return fmt.Errorf("container %q did not become healthy within %s%s", name, timeout, r.tailLogs(ctx, ns, name))
 		}
 		select {
 		case <-ctx.Done():
@@ -994,6 +1258,12 @@ func (r *Runtime) WaitHealthy(ctx context.Context, name string, timeout time.Dur
 	}
 }
 
+// Inspect resolves name against the Deployment path, then the StatefulSet
+// path, then — since neither top-level object is ever literally named an
+// ordinal ("<base>-<i>" is a Pod name StatefulSet assigns natively, never a
+// StatefulSet's own name) — a direct Pod lookup, so an ordinal name resolves
+// to that specific replica's own state (docs/adr/004's "ordinal hostname
+// resolution" conformance subtest).
 func (r *Runtime) Inspect(ctx context.Context, name string) (runtimeport.ContainerState, bool, error) {
 	ns, d, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {
 		return r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
@@ -1001,12 +1271,92 @@ func (r *Runtime) Inspect(ctx context.Context, name string) (runtimeport.Contain
 	if err != nil {
 		return runtimeport.ContainerState{}, false, err
 	}
-	if d == nil {
+	if d != nil {
+		return r.enrichedState(ctx, ns, d), true, nil
+	}
+	_, sts, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.StatefulSet, error) {
+		return r.clientset.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
+	})
+	if err != nil {
+		return runtimeport.ContainerState{}, false, err
+	}
+	if sts != nil {
+		return stateFromStatefulSet(sts), true, nil
+	}
+	_, pod, stsName, err := r.findOrdinalPod(ctx, name)
+	if err != nil {
+		return runtimeport.ContainerState{}, false, err
+	}
+	if pod == nil {
 		return runtimeport.ContainerState{}, false, nil
 	}
-	return r.enrichedState(ctx, ns, d), true, nil
+	return stateFromPod(pod, stsName), true, nil
 }
 
+// findOrdinalPod looks up a Pod literally named name (StatefulSet pods are
+// named "<StatefulSet name>-<ordinal>" by Kubernetes itself — no adapter
+// code manufactures this) across every managed namespace, and returns the
+// name of the StatefulSet that owns it (read from the Pod's own
+// OwnerReferences, never parsed out of the name string) so callers can
+// address the pod's container, which is always named after the StatefulSet,
+// not the pod.
+func (r *Runtime) findOrdinalPod(ctx context.Context, name string) (ns string, pod *corev1.Pod, statefulSetName string, err error) {
+	ns, pod, err = findAcrossNamespaces(ctx, r, func(ns string) (*corev1.Pod, error) {
+		return r.clientset.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+	})
+	if err != nil || pod == nil {
+		return "", nil, "", err
+	}
+	for _, owner := range pod.OwnerReferences {
+		if owner.Kind == "StatefulSet" {
+			return ns, pod, owner.Name, nil
+		}
+	}
+	return "", nil, "", fmt.Errorf("pod %q exists but is not owned by a StatefulSet; not a valid ordinal replica address", name)
+}
+
+// stateFromPod builds a single ordinal replica's own ContainerState — never
+// the aggregate ReadyReplicas count, which only has a meaning at the
+// replica-set level (Inspect against the StatefulSet's own name, above).
+func stateFromPod(pod *corev1.Pod, containerName string) runtimeport.ContainerState {
+	st := runtimeport.ContainerState{
+		Name:    pod.Name,
+		ID:      string(pod.UID),
+		Labels:  pod.Labels,
+		Running: pod.Status.Phase == corev1.PodRunning,
+	}
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			st.Healthy = true
+		}
+	}
+	for _, c := range pod.Spec.Containers {
+		if c.Name != containerName {
+			continue
+		}
+		st.Image = c.Image
+		env := make(map[string]string, len(c.Env))
+		for _, e := range c.Env {
+			env[e.Name] = e.Value
+		}
+		st.Env = env
+		for _, p := range c.Ports {
+			proto := "tcp"
+			if p.Protocol == corev1.ProtocolUDP {
+				proto = "udp"
+			}
+			st.Ports = append(st.Ports, runtimeport.PortBinding{ContainerPort: int(p.ContainerPort), Protocol: proto})
+		}
+	}
+	return st
+}
+
+// Remove tears down the Deployment path, then the StatefulSet path
+// (docs/adr/004-replicas-and-identity.md) — whichever object exists for
+// name. Per-ordinal PersistentVolumeClaims from a StatefulSet's
+// VolumeClaimTemplates are deliberately left in place, matching the
+// Deployment path's existing behavior of never touching volumes as a side
+// effect of Remove.
 func (r *Runtime) Remove(ctx context.Context, name string) error {
 	ns, d, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {
 		return r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
@@ -1014,9 +1364,22 @@ func (r *Runtime) Remove(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if d == nil {
+	if d != nil {
+		return r.removeDeployment(ctx, ns, name, d)
+	}
+	nsSts, sts, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.StatefulSet, error) {
+		return r.clientset.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
+	})
+	if err != nil {
+		return err
+	}
+	if sts == nil {
 		return nil
 	}
+	return r.removeStatefulSet(ctx, nsSts, name, sts)
+}
+
+func (r *Runtime) removeDeployment(ctx context.Context, ns, name string, d *appsv1.Deployment) error {
 	if d.Labels[runtimeport.LabelManagedBy] != runtimeport.ManagedByValue {
 		return fmt.Errorf("deployment %q is not managed by platformctl; refusing to remove it", name)
 	}
@@ -1024,8 +1387,50 @@ func (r *Runtime) Remove(ctx context.Context, name string) error {
 	if err := r.clientset.AppsV1().Deployments(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete deployment %q: %w", name, err)
 	}
+	if err := r.removeCommonContainerObjects(ctx, ns, name); err != nil {
+		return err
+	}
+	// Foreground propagation means the Deployment stays visible (with a
+	// deletionTimestamp) until its ReplicaSet/Pods are actually gone.
+	// Docker's ContainerRemove(Force: true) is synchronous — callers
+	// (engine, conformance suite) expect Remove to mean "gone" when it
+	// returns, so wait for that here rather than leaking the async gap.
+	return r.waitObjectGone(ctx, func() error {
+		_, err := r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+		return err
+	}, "deployment", name)
+}
+
+func (r *Runtime) removeStatefulSet(ctx context.Context, ns, name string, sts *appsv1.StatefulSet) error {
+	if sts.Labels[runtimeport.LabelManagedBy] != runtimeport.ManagedByValue {
+		return fmt.Errorf("statefulset %q is not managed by platformctl; refusing to remove it", name)
+	}
+	propagation := metav1.DeletePropagationForeground
+	if err := r.clientset.AppsV1().StatefulSets(ns).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete statefulset %q: %w", name, err)
+	}
+	// The headless governing Service is also named `name`, so it is covered
+	// by removeCommonContainerObjects' app=<name> Service query, alongside
+	// any alias Services.
+	if err := r.removeCommonContainerObjects(ctx, ns, name); err != nil {
+		return err
+	}
+	if err := r.clientset.PolicyV1().PodDisruptionBudgets(ns).Delete(ctx, pdbName(name), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete poddisruptionbudget for %q: %w", name, err)
+	}
+	return r.waitObjectGone(ctx, func() error {
+		_, err := r.clientset.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
+		return err
+	}, "statefulset", name)
+}
+
+// removeCommonContainerObjects deletes the Service(s), files Secret, and
+// external-ingress NetworkPolicy hole shared by both the Deployment and
+// StatefulSet teardown paths.
+func (r *Runtime) removeCommonContainerObjects(ctx context.Context, ns, name string) error {
 	// Delete every Service addressing this container — its own name plus
-	// alias Services, all labeled app=<name> by ensureService.
+	// alias Services, all labeled app=<name> by ensureService/
+	// ensureHeadlessService/ensureAliasServices.
 	svcs, err := r.clientset.CoreV1().Services(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: "app=" + name + "," + runtimeport.LabelManagedBy + "=" + runtimeport.ManagedByValue,
 	})
@@ -1046,23 +1451,25 @@ func (r *Runtime) Remove(ctx context.Context, name string) error {
 	if err := r.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, externalIngressPolicyName(name), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete external-ingress policy for %q: %w", name, err)
 	}
-	// Foreground propagation means the Deployment stays visible (with a
-	// deletionTimestamp) until its ReplicaSet/Pods are actually gone.
-	// Docker's ContainerRemove(Force: true) is synchronous — callers
-	// (engine, conformance suite) expect Remove to mean "gone" when it
-	// returns, so wait for that here rather than leaking the async gap.
+	return nil
+}
+
+// waitObjectGone polls getErr until it reports NotFound, matching Docker's
+// synchronous ContainerRemove semantics: callers expect Remove to mean
+// "gone" when it returns, not "deletion requested."
+func (r *Runtime) waitObjectGone(ctx context.Context, getErr func() error, kind, name string) error {
 	const removeTimeout = 45 * time.Second // > TerminationGracePeriodSeconds + API/GC overhead
 	deadline := time.Now().Add(removeTimeout)
 	for {
-		_, err := r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+		err := getErr()
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("waiting for deployment %q removal: %w", name, err)
+			return fmt.Errorf("waiting for %s %q removal: %w", kind, name, err)
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("deployment %q did not finish terminating within %s", name, removeTimeout)
+			return fmt.Errorf("%s %q did not finish terminating within %s", kind, name, removeTimeout)
 		}
 		select {
 		case <-ctx.Done():
@@ -1072,6 +1479,11 @@ func (r *Runtime) Remove(ctx context.Context, name string) error {
 	}
 }
 
+// ListManaged reports one ContainerState per managed Deployment plus one per
+// managed StatefulSet (docs/adr/004-replicas-and-identity.md) — the
+// aggregate view of a replica set, not its individual ordinal Pods, matching
+// the same "one entry per top-level managed object" contract ListManaged has
+// always had.
 func (r *Runtime) ListManaged(ctx context.Context) ([]runtimeport.ContainerState, error) {
 	namespaces, err := r.managedNamespaces(ctx)
 	if err != nil {
@@ -1087,6 +1499,15 @@ func (r *Runtime) ListManaged(ctx context.Context) ([]runtimeport.ContainerState
 		}
 		for i := range list.Items {
 			out = append(out, r.enrichedState(ctx, ns, &list.Items[i]))
+		}
+		stsList, err := r.clientset.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: runtimeport.LabelManagedBy + "=" + runtimeport.ManagedByValue,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list statefulsets in namespace %q: %w", ns, err)
+		}
+		for i := range stsList.Items {
+			out = append(out, stateFromStatefulSet(&stsList.Items[i]))
 		}
 	}
 	return out, nil
@@ -1137,6 +1558,11 @@ func (r *Runtime) ListManagedVolumes(ctx context.Context) ([]runtimeport.Managed
 // for why the conformance suite checks for it.
 func (r *Runtime) RunsContainerCommands() bool { return true }
 
+// Logs returns the target's log tail. When name is a Deployment, this is the
+// newest ready pod matching it; when name is instead the literal name of a
+// StatefulSet ordinal's own Pod (docs/adr/004-replicas-and-identity.md),
+// its logs directly — the aggregate base name of a StableIdentity set is
+// deliberately not supported here, matching ReadFile/EnsureReachable.
 func (r *Runtime) Logs(ctx context.Context, name string, tail int) (string, error) {
 	ns, d, err := findAcrossNamespaces(ctx, r, func(ns string) (*appsv1.Deployment, error) {
 		return r.clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
@@ -1144,17 +1570,24 @@ func (r *Runtime) Logs(ctx context.Context, name string, tail int) (string, erro
 	if err != nil {
 		return "", err
 	}
-	if d == nil {
-		return "", fmt.Errorf("deployment %q not found", name)
+	if d != nil {
+		return r.podLogsFromSelector(ctx, ns, name, tail)
 	}
-	return r.podLogs(ctx, ns, name, tail)
+	podNS, pod, _, err := r.findOrdinalPod(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	if pod == nil {
+		return "", fmt.Errorf("no deployment or replica pod named %q found", name)
+	}
+	return r.singlePodLogs(ctx, podNS, pod.Name, tail)
 }
 
 // tailLogs mirrors the Docker adapter's failure-message helper: best-effort,
 // swallows errors, formatted for inclusion in a "did not become healthy"
 // error.
 func (r *Runtime) tailLogs(ctx context.Context, ns, name string) string {
-	out, err := r.podLogs(ctx, ns, name, 10)
+	out, err := r.podLogsFromSelector(ctx, ns, name, 10)
 	if err != nil || out == "" {
 		return ""
 	}
@@ -1164,28 +1597,35 @@ func (r *Runtime) tailLogs(ctx context.Context, ns, name string) string {
 	return "; last log lines:\n" + out
 }
 
-func (r *Runtime) podLogs(ctx context.Context, ns, name string, tail int) (string, error) {
-	if tail <= 0 {
-		tail = 200
-	}
+// podLogsFromSelector returns the newest matching pod's logs — the
+// Deployment-path lookup shared by Logs and tailLogs.
+func (r *Runtime) podLogsFromSelector(ctx context.Context, ns, selectorName string, tail int) (string, error) {
 	pods, err := r.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=" + name,
+		LabelSelector: "app=" + selectorName,
 	})
 	if err != nil {
-		return "", fmt.Errorf("list pods for %q: %w", name, err)
+		return "", fmt.Errorf("list pods for %q: %w", selectorName, err)
 	}
 	if len(pods.Items) == 0 {
 		return "", nil
 	}
+	return r.singlePodLogs(ctx, ns, pods.Items[0].Name, tail)
+}
+
+// singlePodLogs fetches one exact pod's log tail.
+func (r *Runtime) singlePodLogs(ctx context.Context, ns, podName string, tail int) (string, error) {
+	if tail <= 0 {
+		tail = 200
+	}
 	tailInt64 := int64(tail)
-	rc, err := r.clientset.CoreV1().Pods(ns).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{TailLines: &tailInt64}).Stream(ctx)
+	rc, err := r.clientset.CoreV1().Pods(ns).GetLogs(podName, &corev1.PodLogOptions{TailLines: &tailInt64}).Stream(ctx)
 	if err != nil {
-		return "", fmt.Errorf("read logs for pod %q: %w", pods.Items[0].Name, err)
+		return "", fmt.Errorf("read logs for pod %q: %w", podName, err)
 	}
 	defer rc.Close()
 	var buf bytes.Buffer
 	if _, err := buf.ReadFrom(rc); err != nil {
-		return "", fmt.Errorf("read logs for pod %q: %w", pods.Items[0].Name, err)
+		return "", fmt.Errorf("read logs for pod %q: %w", podName, err)
 	}
 	return strings.TrimSpace(buf.String()), nil
 }
