@@ -19,7 +19,7 @@ import (
 )
 
 // stateStore constructs the configured StateStore backend
-// (docs/design/003-shared-state.md): "local" (default, the existing
+// (docs/adr/003-shared-state.md): "local" (default, the existing
 // single-file behavior) or "s3" (gated SharedStateBackend). Credentials for
 // the s3 backend resolve through the env SecretStore directly — state
 // operations (gc, state doctor/repair) have no manifest to resolve a
@@ -353,7 +353,7 @@ func newStateCmd(a *app) *cobra.Command {
 		Use:   "unlock",
 		Short: "Force-release the state lock (escape hatch for a holder process that died)",
 		Long: "Removes the lock unconditionally, regardless of holder or lease expiry — the\n" +
-			"documented recovery path (docs/design/003-shared-state.md) when a platformctl\n" +
+			"documented recovery path (docs/adr/003-shared-state.md) when a platformctl\n" +
 			"process died mid-apply/destroy/repair and left the lock held. Only run this after\n" +
 			"confirming no other platformctl process is actually still running against this\n" +
 			"state.",

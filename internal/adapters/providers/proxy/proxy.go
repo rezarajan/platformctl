@@ -7,7 +7,7 @@
 // spec.target knows where the system actually lives. Credentials never pass
 // through here; spec.secretRef names them, the proxy is transport only.
 // Implements ConnectionCapableProvider (scheme: tcp). Tunnel chaining for
-// VPC reach is deliberately deferred — see docs/design/002.
+// VPC reach is deliberately deferred — see docs/adr/002.
 package proxy
 
 import (

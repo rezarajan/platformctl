@@ -1,7 +1,7 @@
 // Package s3 implements StateStore against S3-compatible object storage
 // (MinIO tested) for teams that need one shared source of truth across
 // operators/CI rather than a single local file. See
-// docs/design/003-shared-state.md for the design and locking protocol.
+// docs/adr/003-shared-state.md for the design and locking protocol.
 package s3
 
 import (
@@ -20,7 +20,7 @@ import (
 )
 
 // DefaultLeaseTTL is used when Config.LeaseTTL is zero. It must outlast the
-// longest apply/destroy run in practice (docs/design/003's documented
+// longest apply/destroy run in practice (docs/adr/003's documented
 // simplification: no lease renewal/heartbeat).
 const DefaultLeaseTTL = 15 * time.Minute
 
@@ -153,7 +153,7 @@ func (s *Store) Save(ctx context.Context, st state.State) error {
 }
 
 // lease is the lock object's content — a fixed-TTL claim, not a
-// continuously-renewed one (docs/design/003's documented simplification).
+// continuously-renewed one (docs/adr/003's documented simplification).
 type lease struct {
 	Holder     string    `json:"holder"`
 	AcquiredAt time.Time `json:"acquiredAt"`
@@ -162,7 +162,7 @@ type lease struct {
 
 // Lock acquires the lease via a create-only-if-absent conditional PUT
 // (MinIO's SetMatchETagExcept("*") extension — the reason this backend
-// targets MinIO specifically, see docs/design/003). An existing, unexpired
+// targets MinIO specifically, see docs/adr/003). An existing, unexpired
 // lease fails fast naming its holder; an expired one is reclaimed via a
 // conditional PUT matched to its own ETag, so two clients racing to reclaim
 // the same expired lease can't both succeed.

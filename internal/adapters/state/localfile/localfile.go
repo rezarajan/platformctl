@@ -138,7 +138,7 @@ func (s *Store) RawVersion(_ context.Context) (int, error) {
 }
 
 // ForceUnlock removes the lock file unconditionally — the `platformctl
-// state unlock` escape hatch (docs/design/003), for a holder process that
+// state unlock` escape hatch (docs/adr/003), for a holder process that
 // died without releasing its flock. A no-op if no lock file exists.
 func (s *Store) ForceUnlock(_ context.Context) error {
 	if err := os.Remove(s.Path + ".lock"); err != nil && !errors.Is(err, os.ErrNotExist) {

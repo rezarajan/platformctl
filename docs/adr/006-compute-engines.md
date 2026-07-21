@@ -69,7 +69,7 @@ against it, just not now.**
 - A `trino` provider realizes a coordinator + N worker containers via
   **C1's replica primitive** (`ContainerSpec.Replicas` /
   `StableIdentity` — docs/planning/08 §5 C1, design note
-  `docs/design/004-replicas-and-identity.md` once written). Trino workers
+  `docs/adr/004-replicas-and-identity.md` once written). Trino workers
   need no per-replica storage (`StableIdentity: false` is the right
   default — pure compute, no ordinal volumes), so this is C1's simpler
   case, a reasonable second adapter of the primitive after C2
@@ -135,7 +135,7 @@ profile and should default off until reviewed).
   not required (warehouseRef makes catalog-to-Dataset wiring first-class,
   but `spec.nessie` already carries warehouse config today per D8's
   context, so the Trino provider can read either shape).
-- **Context:** design note `docs/design/006-compute-engines.md` decided
+- **Context:** design note `docs/adr/006-compute-engines.md` decided
   Trino first: read path completes the lakehouse story, catalog
   auto-configuration is the strongest inventory UX win, and Trino's
   stateless-of-its-own-data shape avoids the storage questions a stateful

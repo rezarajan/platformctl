@@ -88,7 +88,7 @@ func ensureTestBucket(t *testing.T, endpoint, bucket string) {
 }
 
 // TestConformance runs the same suite localfile passes, against a real
-// MinIO instance — docs/design/003's own accept criterion.
+// MinIO instance — docs/adr/003's own accept criterion.
 func TestConformance(t *testing.T) {
 	endpoint := startTestMinio(t)
 	bucket := "datascape-state-conformance"
@@ -117,7 +117,7 @@ func TestConformance(t *testing.T) {
 }
 
 // TestLockReclaimsAfterExpiry proves the expired-lease reclaim path
-// specifically (docs/design/003): a lease that has expired must be
+// specifically (docs/adr/003): a lease that has expired must be
 // reclaimable by a different holder, not just by the original one.
 func TestLockReclaimsAfterExpiry(t *testing.T) {
 	endpoint := startTestMinio(t)

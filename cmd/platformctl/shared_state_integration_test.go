@@ -55,7 +55,7 @@ func startSharedStateMinio(t *testing.T) string {
 	return endpoint
 }
 
-// TestSharedStateBackendEndToEnd covers docs/planning/08 A4 / docs/design/003:
+// TestSharedStateBackendEndToEnd covers docs/planning/08 A4 / docs/adr/003:
 // apply/status/destroy against a real S3 (MinIO) state backend through the
 // actual CLI — not just the adapter's own conformance suite — with the
 // SharedStateBackend gate off (refused) and on (works), credentials

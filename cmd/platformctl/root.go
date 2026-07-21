@@ -44,7 +44,7 @@ type app struct {
 	envFile      string
 	wire         wiringFunc
 
-	// Shared/remote state backend (docs/design/003, gated
+	// Shared/remote state backend (docs/adr/003, gated
 	// SharedStateBackend). stateFile above remains the "local" backend's
 	// path; these are only consulted when stateBackend != "local".
 	stateBackend   string
@@ -120,7 +120,7 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 	root.PersistentFlags().StringVar(&a.featureGates, "feature-gates", "", "comma-separated Name=true|false overrides")
 	root.PersistentFlags().StringVarP(&a.output, "output", "o", "table", "output format: table|json|yaml")
 	root.PersistentFlags().StringVar(&a.envFile, "env-file", "", "load KEY=VALUE lines from a file into the environment before resolving secrets (shell environment wins on conflict)")
-	root.PersistentFlags().StringVar(&a.stateBackend, "state-backend", "local", "state backend: local|s3 (s3 requires the SharedStateBackend gate, see docs/design/003-shared-state.md)")
+	root.PersistentFlags().StringVar(&a.stateBackend, "state-backend", "local", "state backend: local|s3 (s3 requires the SharedStateBackend gate, see docs/adr/003-shared-state.md)")
 	root.PersistentFlags().StringVar(&a.stateBucket, "state-bucket", "", "s3 backend: bucket holding state.json and the lock object")
 	root.PersistentFlags().StringVar(&a.statePrefix, "state-prefix", "", "s3 backend: object key prefix (e.g. \"team-a/\")")
 	root.PersistentFlags().StringVar(&a.stateEndpoint, "state-endpoint", "", "s3 backend: endpoint host:port (MinIO or S3-compatible; empty = AWS S3 default)")
