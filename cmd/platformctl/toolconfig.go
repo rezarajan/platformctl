@@ -134,13 +134,21 @@ func gatherToolFacts(envelopes []resource.Envelope, st state.State, creds map[re
 
 // knownTools maps --for values to their renderers, so help text and
 // dispatch cannot drift apart.
+//
+// prometheus is intentionally not registered here: doc 08 E3 names it as
+// addable, but its dependency C9 (metrics-endpoint facts) has not landed —
+// toolFacts carries no metrics endpoint to render from yet.
 var knownTools = map[string]func(io.Writer, toolFacts){
-	"spark": renderSpark,
-	"trino": renderTrino,
-	"dbt":   renderDBT,
-	"psql":  renderPsql,
-	"s3":    renderS3,
-	"kafka": renderKafka,
+	"spark":    renderSpark,
+	"trino":    renderTrino,
+	"dbt":      renderDBT,
+	"psql":     renderPsql,
+	"s3":       renderS3,
+	"kafka":    renderKafka,
+	"dagster":  renderDagster,
+	"flink":    renderFlink,
+	"metabase": renderMetabase,
+	"superset": renderSuperset,
 }
 
 func toolNames() string {
@@ -317,9 +325,124 @@ func renderKafka(w io.Writer, f toolFacts) {
 	})
 }
 
+func renderDagster(w io.Writer, f toolFacts) {
+	note(w, "dagster resources — postgres/S3/Kafka resource config for Definitions(resources=...).",
+		"Credentials come from the named SecretReference's env keys; never inline them.")
+	if len(f.postgres) == 0 && len(f.s3) == 0 && len(f.kafka) == 0 {
+		note(w, "no postgres, s3, or kafka endpoints recorded — apply the platform first")
+		return
+	}
+	fmt.Fprintln(w, "from dagster import EnvVar")
+	if len(f.s3) > 0 {
+		fmt.Fprintln(w, "from dagster_aws.s3 import S3Resource")
+	}
+	fmt.Fprintln(w)
+	forEachSection(w, f.postgres, func(p dbEndpoint) resource.Key { return p.component }, func(w io.Writer, p dbEndpoint) {
+		name := "postgres_resource"
+		if len(f.postgres) > 1 {
+			name = "postgres_" + pythonIdent(p.component.Name) + "_resource"
+		}
+		host, port, _ := strings.Cut(p.host, ":")
+		fmt.Fprintf(w, "%s = {\n    \"host\": %q,\n    \"port\": %s,\n    \"database\": %q,\n    \"user\": EnvVar(\"DB_USER\"),\n    \"password\": EnvVar(\"DB_PASSWORD\"),\n}\n",
+			name, host, port, orPlaceholder(p.db, "<database>"))
+		if p.credsRef != "" {
+			note(w, fmt.Sprintf("DB_USER/DB_PASSWORD: the %q SecretReference (username/password keys)", p.credsRef))
+		}
+	})
+	forEachSection(w, f.s3, func(s simpleEndpoint) resource.Key { return s.component }, func(w io.Writer, s simpleEndpoint) {
+		name := "s3_resource"
+		if len(f.s3) > 1 {
+			name = "s3_" + pythonIdent(s.component.Name) + "_resource"
+		}
+		fmt.Fprintf(w, "%s = S3Resource(\n    endpoint_url=%q,\n    aws_access_key_id=EnvVar(\"AWS_ACCESS_KEY_ID\"),\n    aws_secret_access_key=EnvVar(\"AWS_SECRET_ACCESS_KEY\"),\n)\n", name, s.host)
+		if s.credsRef != "" {
+			note(w, fmt.Sprintf("AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY: the %q SecretReference (username/password keys)", s.credsRef))
+		}
+	})
+	forEachSection(w, f.kafka, func(k simpleEndpoint) resource.Key { return k.component }, func(w io.Writer, k simpleEndpoint) {
+		name := "kafka_resource"
+		if len(f.kafka) > 1 {
+			name = "kafka_" + pythonIdent(k.component.Name) + "_resource"
+		}
+		fmt.Fprintf(w, "%s = {\n    \"bootstrap_servers\": %q,\n}\n", name, k.host)
+	})
+}
+
+func renderFlink(w io.Writer, f toolFacts) {
+	note(w, "Flink SQL — Iceberg REST catalog + Kafka connector properties.",
+		"Credentials come from the named SecretReference's env keys; never inline them.")
+	if len(f.catalogs) == 0 && len(f.s3) == 0 && len(f.kafka) == 0 {
+		note(w, "no catalog, s3, or kafka endpoints recorded — apply the platform first")
+		return
+	}
+	forEachSection(w, f.catalogs, func(c catalogEndpoint) resource.Key { return c.component }, func(w io.Writer, c catalogEndpoint) {
+		name := "lakehouse"
+		if len(f.catalogs) > 1 {
+			name = "lakehouse_" + pythonIdent(c.component.Name)
+		}
+		fmt.Fprintf(w, "CREATE CATALOG %s WITH (\n  'type'         = 'iceberg',\n  'catalog-type' = 'rest',\n  'uri'          = '%s'", name, c.host)
+		if c.branch != "" {
+			fmt.Fprintf(w, ",\n  'ref'          = '%s'", c.branch)
+		}
+		fmt.Fprintln(w, "\n);")
+	})
+	forEachSection(w, f.s3, func(s simpleEndpoint) resource.Key { return s.component }, func(w io.Writer, s simpleEndpoint) {
+		note(w, "add to the catalog's WITH (...) clause above:")
+		fmt.Fprintf(w, "  's3.endpoint'            = '%s',\n  's3.path-style-access'   = 'true'\n", s.host)
+		if s.credsRef != "" {
+			note(w, fmt.Sprintf("s3.access-key-id/s3.secret-access-key: the %q SecretReference", s.credsRef))
+		}
+	})
+	forEachSection(w, f.kafka, func(k simpleEndpoint) resource.Key { return k.component }, func(w io.Writer, k simpleEndpoint) {
+		note(w, "Kafka connector properties, for a CREATE TABLE ... WITH (...) clause:")
+		fmt.Fprintf(w, "  'connector'                     = 'kafka',\n  'properties.bootstrap.servers' = '%s',\n  'format'                        = 'json'\n", k.host)
+	})
+}
+
+func renderMetabase(w io.Writer, f toolFacts) {
+	note(w, "Metabase — external application database env vars (docker-compose .env).",
+		"Credentials come from the named SecretReference's env keys; never inline them.")
+	if len(f.postgres) == 0 {
+		note(w, "no postgres endpoint recorded — apply the platform first")
+		return
+	}
+	forEachSection(w, f.postgres, func(p dbEndpoint) resource.Key { return p.component }, func(w io.Writer, p dbEndpoint) {
+		host, port, _ := strings.Cut(p.host, ":")
+		fmt.Fprintln(w, "MB_DB_TYPE=postgres")
+		fmt.Fprintf(w, "MB_DB_DBNAME=%s\n", orPlaceholder(p.db, "<database>"))
+		fmt.Fprintf(w, "MB_DB_PORT=%s\n", port)
+		fmt.Fprintf(w, "MB_DB_HOST=%s\n", host)
+		if p.credsRef != "" {
+			note(w, fmt.Sprintf("MB_DB_USER/MB_DB_PASS: the %q SecretReference (username/password keys)", p.credsRef))
+		}
+	})
+}
+
+func renderSuperset(w io.Writer, f toolFacts) {
+	note(w, "Superset — Settings > Database Connections > + Database, SQLAlchemy URI.",
+		"Credentials come from the named SecretReference's env keys; never inline them.")
+	if len(f.postgres) == 0 {
+		note(w, "no postgres endpoint recorded — apply the platform first")
+		return
+	}
+	forEachSection(w, f.postgres, func(p dbEndpoint) resource.Key { return p.component }, func(w io.Writer, p dbEndpoint) {
+		fmt.Fprintf(w, "postgresql://DB_USER:DB_PASSWORD@%s/%s\n", p.host, orPlaceholder(p.db, "<database>"))
+		if p.credsRef != "" {
+			note(w, fmt.Sprintf("DB_USER/DB_PASSWORD placeholders: the %q SecretReference (username/password keys)", p.credsRef))
+		}
+	})
+}
+
 func orPlaceholder(s, placeholder string) string {
 	if s == "" {
 		return placeholder
 	}
 	return s
+}
+
+// pythonIdent makes a resource name safe to splice into a Python (or SQL
+// bare-word) identifier — component names may contain hyphens, which are
+// legal in resource.Key.Name but not in an identifier.
+func pythonIdent(s string) string {
+	return strings.ReplaceAll(s, "-", "_")
 }

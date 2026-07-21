@@ -1062,6 +1062,9 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
 - **Accept:** golden-file test per renderer; `--for` list output enumerates
   all; each snippet syntactically valid for its tool (parse where a parser
   is cheap, golden otherwise).
+- **Done (2026-07-21, merged):** dagster/flink/metabase/superset landed
+  (`knownTools` map, golden/parse tests). `prometheus` remains with C9 —
+  there is no metrics-endpoint fact to render until it lands.
 
 ### E4: Condition and error catalog — `platformctl explain`
 

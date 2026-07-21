@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -25,6 +28,11 @@ func toolTestState() ([]resource.Envelope, state.State, map[resource.Key]string)
 	pg.Metadata.Name = "local-pg"
 	pg.Spec = map[string]any{"type": "postgres", "runtime": map[string]any{"type": "docker"}, "secretRefs": []any{"pg-admin"}}
 
+	rp := resource.Envelope{}
+	rp.Kind = "Provider"
+	rp.Metadata.Name = "local-redpanda"
+	rp.Spec = map[string]any{"type": "redpanda", "runtime": map[string]any{"type": "docker"}}
+
 	src := resource.Envelope{}
 	src.Kind = "Source"
 	src.Metadata.Name = "orders"
@@ -47,10 +55,15 @@ func toolTestState() ([]resource.Envelope, state.State, map[resource.Key]string)
 				map[string]any{"name": "postgres", "scheme": "postgres", "host": "127.0.0.1:15432", "internal": "local-pg:5432", "insecure": true},
 			},
 		}},
+		rp.Key(): {Provider: map[string]any{
+			"endpoints": []any{
+				map[string]any{"name": "kafka", "scheme": "kafka", "host": "127.0.0.1:19092", "internal": "local-redpanda:9092", "insecure": true},
+			},
+		}},
 		src.Key(): {},
 	}}
 	creds := map[resource.Key]string{minio.Key(): "minio-root", pg.Key(): "pg-admin"}
-	return []resource.Envelope{cat, minio, pg, src}, st, creds
+	return []resource.Envelope{cat, minio, pg, rp, src}, st, creds
 }
 
 // TestToolConfigViews guards docs/planning/07 §2.3: inventory --for renders
@@ -69,6 +82,11 @@ func TestToolConfigViews(t *testing.T) {
 		{"dbt", []string{"type: postgres", "host: 127.0.0.1", "port: 15432", "dbname: ordersdb", `"pg-admin"`}},
 		{"psql", []string{"psql -h 127.0.0.1 -p 15432", "ordersdb"}},
 		{"s3", []string{"--endpoint-url http://127.0.0.1:19010", `"minio-root"`}},
+		{"kafka", []string{"bootstrap.servers=127.0.0.1:19092"}},
+		{"dagster", []string{`"host": "127.0.0.1"`, `"port": 15432`, `"database": "ordersdb"`, "EnvVar(\"DB_USER\")", `endpoint_url="http://127.0.0.1:19010"`, `"bootstrap_servers": "127.0.0.1:19092"`, `"pg-admin"`, `"minio-root"`}},
+		{"flink", []string{"CREATE CATALOG lakehouse WITH", "'uri'          = 'http://127.0.0.1:19120/iceberg'", "'ref'          = 'main'", "'s3.endpoint'            = 'http://127.0.0.1:19010'", "'properties.bootstrap.servers' = '127.0.0.1:19092'", `"minio-root"`}},
+		{"metabase", []string{"MB_DB_TYPE=postgres", "MB_DB_DBNAME=ordersdb", "MB_DB_PORT=15432", "MB_DB_HOST=127.0.0.1", `"pg-admin"`}},
+		{"superset", []string{"postgresql://DB_USER:DB_PASSWORD@127.0.0.1:15432/ordersdb", `"pg-admin"`}},
 	}
 	for _, tc := range cases {
 		var buf bytes.Buffer
@@ -180,6 +198,176 @@ func TestToolConfigMultipleDatabases(t *testing.T) {
 	}
 	if billingIdx > billingPortIdx {
 		t.Errorf("billing-pg header appeared after its own port:\n%s", out)
+	}
+}
+
+// TestRenderDagsterGolden is an exact-string test: dagster's resource
+// config is Python, which has no stdlib-cheap parser in Go, so the E3
+// accept criterion ("parse where a parser is stdlib-cheap, golden
+// otherwise") is met with a golden comparison instead.
+func TestRenderDagsterGolden(t *testing.T) {
+	envs, st, creds := toolTestState()
+	f := gatherToolFacts(envs, st, creds)
+
+	var buf bytes.Buffer
+	if err := renderToolConfig(&buf, "dagster", f); err != nil {
+		t.Fatal(err)
+	}
+
+	want := `# dagster resources — postgres/S3/Kafka resource config for Definitions(resources=...).
+# Credentials come from the named SecretReference's env keys; never inline them.
+from dagster import EnvVar
+from dagster_aws.s3 import S3Resource
+
+postgres_resource = {
+    "host": "127.0.0.1",
+    "port": 15432,
+    "database": "ordersdb",
+    "user": EnvVar("DB_USER"),
+    "password": EnvVar("DB_PASSWORD"),
+}
+# DB_USER/DB_PASSWORD: the "pg-admin" SecretReference (username/password keys)
+s3_resource = S3Resource(
+    endpoint_url="http://127.0.0.1:19010",
+    aws_access_key_id=EnvVar("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=EnvVar("AWS_SECRET_ACCESS_KEY"),
+)
+# AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY: the "minio-root" SecretReference (username/password keys)
+kafka_resource = {
+    "bootstrap_servers": "127.0.0.1:19092",
+}
+`
+	if buf.String() != want {
+		t.Errorf("dagster output mismatch:\n--- got ---\n%s\n--- want ---\n%s", buf.String(), want)
+	}
+}
+
+// TestRenderFlinkParses guards flink's SQL catalog + connector properties
+// with a regexp — cheap enough (stdlib) to be a real parse rather than a
+// substring check, per the E3 accept criterion.
+func TestRenderFlinkParses(t *testing.T) {
+	envs, st, creds := toolTestState()
+	f := gatherToolFacts(envs, st, creds)
+
+	var buf bytes.Buffer
+	if err := renderToolConfig(&buf, "flink", f); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "CREATE CATALOG lakehouse WITH (") || !strings.Contains(out, "\n);") {
+		t.Fatalf("flink output is not a CREATE CATALOG statement:\n%s", out)
+	}
+
+	props := map[string]string{}
+	re := regexp.MustCompile(`'([\w.-]+)'\s*=\s*'([^']*)'`)
+	for _, m := range re.FindAllStringSubmatch(out, -1) {
+		props[m[1]] = m[2]
+	}
+
+	want := map[string]string{
+		"type":                         "iceberg",
+		"catalog-type":                 "rest",
+		"uri":                          "http://127.0.0.1:19120/iceberg",
+		"ref":                          "main",
+		"s3.endpoint":                  "http://127.0.0.1:19010",
+		"s3.path-style-access":         "true",
+		"connector":                    "kafka",
+		"properties.bootstrap.servers": "127.0.0.1:19092",
+		"format":                       "json",
+	}
+	for k, v := range want {
+		if got := props[k]; got != v {
+			t.Errorf("flink property %q = %q, want %q\nfull output:\n%s", k, got, v, out)
+		}
+	}
+}
+
+// TestRenderMetabaseParses parses metabase's KEY=VALUE env-var output with
+// bufio.Scanner (stdlib-cheap), per the E3 accept criterion.
+func TestRenderMetabaseParses(t *testing.T) {
+	envs, st, creds := toolTestState()
+	f := gatherToolFacts(envs, st, creds)
+
+	var buf bytes.Buffer
+	if err := renderToolConfig(&buf, "metabase", f); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	env := map[string]string{}
+	sc := bufio.NewScanner(strings.NewReader(out))
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			t.Fatalf("metabase output line is not KEY=VALUE: %q\nfull output:\n%s", line, out)
+		}
+		env[key] = val
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{
+		"MB_DB_TYPE":   "postgres",
+		"MB_DB_DBNAME": "ordersdb",
+		"MB_DB_PORT":   "15432",
+		"MB_DB_HOST":   "127.0.0.1",
+	}
+	for k, v := range want {
+		if got := env[k]; got != v {
+			t.Errorf("metabase env %q = %q, want %q\nfull output:\n%s", k, got, v, out)
+		}
+	}
+}
+
+// TestRenderSupersetParses parses superset's SQLAlchemy URI with
+// net/url.Parse (stdlib-cheap), per the E3 accept criterion, and asserts no
+// secret value is embedded — only the DB_USER/DB_PASSWORD placeholder
+// tokens named in the note beneath it.
+func TestRenderSupersetParses(t *testing.T) {
+	envs, st, creds := toolTestState()
+	f := gatherToolFacts(envs, st, creds)
+
+	var buf bytes.Buffer
+	if err := renderToolConfig(&buf, "superset", f); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+
+	var uriLine string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "postgresql://") {
+			uriLine = line
+			break
+		}
+	}
+	if uriLine == "" {
+		t.Fatalf("superset output has no SQLAlchemy URI line:\n%s", out)
+	}
+
+	u, err := url.Parse(uriLine)
+	if err != nil {
+		t.Fatalf("superset URI does not parse: %v\nline: %q", err, uriLine)
+	}
+	if u.Scheme != "postgresql" {
+		t.Errorf("superset URI scheme = %q, want postgresql", u.Scheme)
+	}
+	if u.Host != "127.0.0.1:15432" {
+		t.Errorf("superset URI host = %q, want 127.0.0.1:15432", u.Host)
+	}
+	if u.Path != "/ordersdb" {
+		t.Errorf("superset URI path = %q, want /ordersdb", u.Path)
+	}
+	if u.User.Username() != "DB_USER" {
+		t.Errorf("superset URI user = %q, want placeholder DB_USER", u.User.Username())
+	}
+	if pw, _ := u.User.Password(); pw != "DB_PASSWORD" {
+		t.Errorf("superset URI password = %q, want placeholder DB_PASSWORD", pw)
 	}
 }
 
