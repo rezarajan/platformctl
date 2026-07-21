@@ -64,9 +64,9 @@ cluster, to prove it's actually sufficient — not just documented as such.
 | `services` | get, create, update, delete, list | `EnsureContainer`'s Service (DNS/addressing) + `EnsureReachable`'s `node-port`/`load-balancer` modes |
 | `persistentvolumeclaims` | get, create, update, delete, list | `EnsureVolume`/`RemoveVolume` |
 | `secrets` | get, create, update, delete | `ContainerSpec.Files`/`ImagePullAuth`, and the `KubernetesSecretBackend` SecretStore adapter |
-| `pods` | get, list | Finding a Deployment's live pod (logs, exec, port-forward) |
+| `pods` | get, list, create, delete | Finding a Deployment's live pod (logs, exec, port-forward); create/delete for `ProbeReachable`'s ephemeral probe pod fallback (docs/planning/08 C10) |
 | `pods/log` | get | `Logs` |
-| `pods/exec` | create | `ReadFile`'s live-path fallback |
+| `pods/exec` | create | `ReadFile`'s live-path fallback, `ProbeReachable`'s exec-dial fast path |
 | `pods/portforward` | create | `EnsureReachable`'s `port-forward` access mode (the default) |
 | `networkpolicies.networking.k8s.io` | get, create, update, delete | `EnsureNetwork`'s default-deny + allow-same-namespace pair (opt out with `networkPolicy: none`) |
 | `selfsubjectaccessreviews.authorization.k8s.io` | create | The `validate`/`plan`-time preflight check itself |

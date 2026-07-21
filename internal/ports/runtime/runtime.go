@@ -397,6 +397,38 @@ type ContainerRuntime interface {
 	// address, in-cluster refuses with an error naming the mode
 	// (docs/planning/08 B1).
 	EnsureReachable(ctx context.Context, name string, containerPort int) (addr string, close func() error, err error)
+
+	// ProbeReachable answers "can a container on network reach target
+	// (host:port) right now" — from a vantage point *inside* network, not
+	// from this process (docs/planning/08 C10). EnsureReachable/WithReachable
+	// answer a different, host-audience question: "can this CLI process
+	// dial in" — a managed forwarder, firewall, or network policy can make
+	// those two answers diverge (an endpoint dialable from the host can be
+	// unreachable from inside the network a dependent container actually
+	// runs in, and vice versa), so a caller must not treat one as a proxy
+	// for the other.
+	//
+	// Contract: dial target as a plain TCP connection from a vantage point
+	// attached to the named network — an existing managed container/pod
+	// already on it, or a transient probe unit created and torn down for
+	// this call alone. A nil error means that TCP connect succeeded from
+	// in-network. Implementations must never fall back to a host-side (or
+	// any other out-of-network) dial to answer this — doing so would silently
+	// report the wrong audience's truth, exactly the host/in-network
+	// conflation this method exists to remove (ADR 015).
+	//
+	// Docker: exec's a dial inside an existing managed container attached to
+	// network when one is available and conclusively answers; otherwise runs
+	// a transient probe container (pinned image, scripts/pinned-images.txt)
+	// on network and reads its exit status. Kubernetes: the same two-tier
+	// strategy against an existing managed pod / an ephemeral pod in the
+	// namespace named by network. Fake: the strict interpreter (ADR 015) —
+	// reachable only when target names a fake-managed container attached to
+	// network on a port that container's spec declares (either audience, since
+	// an in-network vantage point isn't limited to Audience: host the way
+	// EnsureReachable is); any other target (wrong network, undeclared port,
+	// unknown host) errors.
+	ProbeReachable(ctx context.Context, network, target string) error
 }
 
 // Datascape ownership labels — applied to every created object so

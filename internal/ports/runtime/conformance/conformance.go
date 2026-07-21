@@ -995,6 +995,71 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		}
 	})
 
+	// ProbeReachable_InNetwork_reachable_and_undeclared_errors proves the C10
+	// contract (docs/planning/08 C10, ADR 015): a target actually reachable
+	// from an in-network vantage point reports nil, and an undeclared/
+	// unreachable target errors — on every adapter, without ever falling
+	// back to a host-side dial (which this container deliberately has no
+	// host-reachable binding for, Audience: internal, so a host-side
+	// fallback would either dial nothing or answer the wrong audience's
+	// question).
+	t.Run("ProbeReachable_InNetwork_reachable_and_undeclared_errors", func(t *testing.T) {
+		probeNet := namePrefix + "-probe-net"
+		name := namePrefix + "-probe-ctr"
+		t.Cleanup(func() {
+			_ = rt.Remove(ctx, name)
+			_ = rt.RemoveNetwork(ctx, probeNet)
+		})
+		if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: probeNet, Labels: labels}); err != nil {
+			t.Fatalf("EnsureNetwork: %v", err)
+		}
+
+		type commandRunner interface{ RunsContainerCommands() bool }
+		cr, execCapable := rt.(commandRunner)
+		execCapable = execCapable && cr.RunsContainerCommands()
+
+		spec := runtime.ContainerSpec{
+			Name:     name,
+			Image:    "alpine:3.20",
+			Cmd:      []string{"sleep", "300"},
+			Networks: []string{probeNet},
+			// Audience: internal — no host binding exists for this port at
+			// all, so a ProbeReachable that quietly fell back to a host-side
+			// dial would find nothing to dial and either error for the wrong
+			// reason or (worse, against a more permissive future adapter)
+			// report the host audience's answer instead of the network's.
+			Ports:  []runtime.PortBinding{{ContainerPort: 8080, Audience: runtime.AudienceInternal}},
+			Labels: labels,
+		}
+		if execCapable {
+			// A real listener a real dial can succeed against — busybox nc,
+			// re-listening forever so both the reachable and (if it ever
+			// raced) a repeat probe still find it up.
+			spec.Cmd = []string{"sh", "-c", "while true; do nc -l -p 8080; done"}
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer: %v", err)
+		}
+		if err := rt.WaitHealthy(ctx, name, 30*time.Second); err != nil {
+			t.Fatalf("WaitHealthy: %v", err)
+		}
+
+		target := fmt.Sprintf("%s:%d", name, 8080)
+		if err := rt.ProbeReachable(ctx, probeNet, target); err != nil {
+			t.Fatalf("ProbeReachable(%q, %q) = %v, want reachable", probeNet, target, err)
+		}
+
+		undeclared := fmt.Sprintf("%s:%d", name, 8081)
+		if err := rt.ProbeReachable(ctx, probeNet, undeclared); err == nil {
+			t.Fatalf("ProbeReachable(%q, %q) succeeded against an undeclared port; want error", probeNet, undeclared)
+		}
+
+		unknownHost := fmt.Sprintf("%s-does-not-exist:8080", namePrefix)
+		if err := rt.ProbeReachable(ctx, probeNet, unknownHost); err == nil {
+			t.Fatalf("ProbeReachable(%q, %q) succeeded against an unknown host; want error", probeNet, unknownHost)
+		}
+	})
+
 	t.Run("RemoveNetwork_refuses_while_container_attached", func(t *testing.T) {
 		// ctrSpec is still attached to netSpec here — Remove_then_absent
 		// (below) is what finally tears it down. Removing a network out from

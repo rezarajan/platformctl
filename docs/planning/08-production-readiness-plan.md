@@ -750,6 +750,26 @@ entrypoints, is observable, and its data is recoverable. This is where
 - **Accept:** conformance subtest on all three adapters; integration:
   a Connection reachable from the host but firewalled from the network
   reports the in-network condition specifically.
+- **Status (2026-07-21): implemented** on branch
+  `worktree-agent-a43c800e89e71c432`. `ProbeReachable` added to
+  `ContainerRuntime`; Docker execs into an existing managed container on the
+  network when one exists, else runs a transient probe container (pinned
+  `busybox:1.36`, added to `scripts/pinned-images.txt`); Kubernetes mirrors
+  it with exec-into-existing-pod / an ephemeral probe pod in the namespace
+  (RBAC: `pods` gained `create`/`delete`, kept in sync with
+  `preflight.go`); the fake is the strict interpreter (reachable only for a
+  declared port on a fake-managed container on that network). Engine wires
+  it into `externalConnectionStatus` for a genuinely External Connection
+  (its address is real enough to dial in-network; a managed Connection's
+  resolved address is a host-audience tunnel and is not), reporting
+  `ExternalEndpointUnreachableInNetwork` distinctly from the host-side
+  reason. Verified live: the Docker and Kubernetes (minikube)
+  conformance legs both green, including the new
+  `ProbeReachable_InNetwork_reachable_and_undeclared_errors` subtest. The
+  engine-condition case is covered by a unit test against the strict fake
+  (`TestExternalConnectionInNetworkReachability`, both conditions); no live
+  rig of "reachable from host, firewalled in-network" was attempted — noted
+  as deferred to the merge gate.
 
 ---
 

@@ -35,7 +35,7 @@ rules:
     verbs: ["get", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "create", "delete"] # create/delete: ProbeReachable's ephemeral probe pod fallback (docs/planning/08 C10)
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
