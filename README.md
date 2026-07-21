@@ -223,7 +223,7 @@ bin/platformctl destroy cdc-to-lake --auto-approve
 | `status <dir>` | Per-resource `Ready`/`DRIFT`/conditions/lifecycle from recorded state. |
 | `drift <dir>` | Probe live infrastructure, record observed conditions into state, report drift. Exit `1` when drift is found; run `apply` to heal it. |
 | `graph <dir> [--format tree\|dot\|mermaid\|json]` | Render the platform architecture — data-flow pipelines + technology layer, not the raw dependency DAG. `-o json\|yaml` overrides `--format` with a structured node/edge document. |
-| `inventory <dir>` (aka `services`, `endpoints`) | List applied components' endpoints + which SecretReference holds their credentials. `--for spark\|trino\|dbt\|psql\|s3\|kafka` renders a paste-ready config snippet from the recorded endpoints instead. |
+| `inventory <dir>` (aka `services`, `endpoints`) | List applied components' endpoints + which SecretReference holds their credentials. `--for spark\|trino\|dbt\|psql\|s3\|kafka\|dagster\|flink\|metabase\|superset` renders a paste-ready config snippet from the recorded endpoints instead. |
 | `import <Kind>/<name> --from <name>` | Adopt a pre-existing backing object into state as Imported (probe, never create). Gated by `ImportedResources`. |
 | `docs build\|serve` | Generate/serve the resource reference from `schemas/`. |
 | `destroy <dir>` | Reverse-order teardown. `--include-external` additionally requires `--yes-i-understand-this-is-destructive`. |
