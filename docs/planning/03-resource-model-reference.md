@@ -278,6 +278,33 @@ spec:
     brokers: 3          # requires --feature-gates=HighAvailability=true
 ```
 
+A `debezium` or `s3sink` Provider additionally accepts `configuration.workers` (integer ≥ 1,
+docs/planning/08 C3): declaring it fans the Connect worker out to N ordinals
+(`ContainerSpec.Replicas` + `StableIdentity: false` — Connect is natively distributed
+(`group.id` + internal topics) and holds no per-worker durable state, so unlike redpanda's
+`brokers` no per-ordinal storage/hostname identity is needed; on Docker the ordinals join the
+shared network under an additional network alias carrying the collective name, mirroring a
+Kubernetes Deployment's ClusterIP round robin). `workers > 1` requires the `HighAvailability`
+gate, enforced at validate (the same `checkHighAvailabilityGate` mechanism as `brokers`, naming
+whichever field triggered it). Connector REST calls (register, status, restart, delete) try each
+currently-reachable worker in turn (`internal/adapters/kafkaconnect`'s multi-address failover) —
+killing one of several workers does not interrupt a Binding realized by this Provider; Probe
+reports per-ordinal presence as drift (`ConnectWorkerMissing(<ordinals>)`) when the count doesn't
+match. Omitting `workers` keeps the pre-C3 single-container shape byte-for-byte:
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: postgres-cdc
+spec:
+  type: debezium
+  runtime: {type: docker, network: datascape}
+  configuration:
+    image: debezium/connect:2.7
+    workers: 2          # requires --feature-gates=HighAvailability=true
+```
+
 Optional, not required for v1.0.0:
 
 ```yaml
@@ -653,6 +680,49 @@ and `AvroData`, but not the `AvroConverter` class itself — the reference
 builds (`cmd/platformctl/testdata/s3sink-image/Dockerfile`,
 `examples/cdc-attendance/s3sink-image/Dockerfile`) add the version-pinned
 Confluent Avro converter plugin alongside the S3 connector.
+
+### 7.4 `spec.options.deadLetter` — dead-letter queues (docs/planning/08 D6)
+
+Any sink-mode `Binding` may declare, alongside its mode-specific options:
+
+```yaml
+spec:
+  options:
+    deadLetter:
+      stream: attendance-events-dlq   # an EventStream name; must exist in the manifest set
+      tolerance: all                  # all|none — default "all" when omitted
+```
+
+`stream` names an `EventStream` — an EventStream's resource name *is* its Kafka topic name (the
+same convention `redpanda`'s topic reconcile uses), so no separate topic field exists. `tolerance`
+is Kafka Connect's own `errors.tolerance` value verbatim (`all`/`none`); omitting it defaults to
+`all`, the only value that makes declaring a DLQ meaningful on its own (`none` still fails the
+task on error, but still routes a copy to the DLQ topic — an advanced, rare combination, still
+reachable by setting `tolerance: none` explicitly). `deadLetter` is refused at validate on any
+`Binding` whose `mode` is not `sink`, and `deadLetter.stream` must resolve to an `EventStream` in
+the manifest set — an unresolvable name fails at `validate` with the same error family as an
+unresolvable `sourceRef`/`targetRef`.
+
+**Ordering note:** `deadLetter.stream` is *not* a dependency-graph edge (unlike
+`sourceRef`/`targetRef`/`providerRef`/`connectionRef`) — `internal/domain/graph.Build`'s edge
+fields are a fixed, generic, top-level list shared by every Kind, and `deadLetter.stream` is
+nested inside `spec.options`, sink-mode-scoped, and provider-consumed. `compatibility.Check` only
+verifies the named `EventStream` *exists* in the manifest set; it does not guarantee that
+EventStream reconciles before the sink Binding referencing it. This is safe in practice: Kafka
+Connect's own framework creates the DLQ topic itself (via the worker's internal AdminClient) the
+first time a poison record needs it, using `errors.deadletterqueue.topic.replication.factor` (the
+`s3sink` provider resolves this from the named EventStream's own `spec.replication` when already
+resolved in the engine's resource set, else defaults to `1`); the platform-managed EventStream's
+own partition/retention configuration "wins" once it reconciles, in the same or a later apply.
+
+**Provider translation:** `s3sink` (the only shipped sink provider as of v1.x — see §7.2)
+translates a declared `deadLetter` into the Aiven S3 sink connector's error-handling config:
+`errors.tolerance` (pass-through), `errors.deadletterqueue.topic.name` (= `stream`),
+`errors.deadletterqueue.topic.replication.factor` (see above), and
+`errors.deadletterqueue.context.headers.enable: true` (the landed DLQ record carries the original
+topic/partition/offset/exception as headers, the only way to diagnose a poison record after the
+fact). `debezium` never sees `deadLetter` — it is CDC-only (`Source`→`EventStream`), and
+`deadLetter` is refused outside `mode: sink` at validate.
 
 ## 8. Kind: `Dataset`
 

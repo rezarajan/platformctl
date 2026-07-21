@@ -1,144 +1,285 @@
-# C2 — Redpanda multi-broker clusters and replicated topics: progress
+# TASK_PROGRESS — C3 (distributed Kafka Connect workers) + D6 (dead-letter queues)
 
-**STATUS: COMPLETE.** All steps done, full verification green on both
-runtimes; squashed into the single task commit (subject
-`feat(redpanda): multi-broker clusters and replicated topics (C2)`).
-This file is the doc-08 §2.1 step-0 checkpoint artifact for the task.
+Supersedes the C2 checkpoint previously at this path (C2 is done, merged to
+main as `ff16dae`/`3acabcb`-equivalent history — verified via
+`git merge main --no-edit` = "Already up to date" at session start).
 
-Task: docs/planning/08 §5 C2. Branch: this worktree. Resume from here + `git log`.
+Resume protocol: read this file + `git log --oneline -20` first. Steps marked
+`[done]` are committed (WIP commits are fine per doc 08 §2.1 step 0). Continue
+from the first `[next]`/`[in-progress]` step.
 
-## Step plan and status
+## Design decisions (read before touching code)
 
-1. **[done] Merge main (pre-work)** — fast-forwarded to db88965 (G3/G5 splits)
-   at session start. NOTE: main has since moved again (D2 merged, touches
-   `internal/application/engine/engine.go` resolveSchemaRegistryURL +
-   `internal/application/compatibility/compatibility.go`); a second
-   `git merge main --no-edit` is REQUIRED before final verification —
-   resolve keeping both D2's and C2's compatibility changes (C2 added the
-   `EventStream` case in `checkResourceCapabilities` + the
-   `streamReplicationStub` tests).
-2. **[done] ADR 017** — `docs/adr/017-redpanda-multibroker-and-replica-state.md`
-   (+ index row in docs/adr/README.md). Key decisions:
-   - `brokers` declared (any N>=1) opts into ordinal-set shape
-     (`Replicas: N, StableIdentity: true`); unset keeps legacy single
-     container byte-for-byte. 1→3 = same-shape in-place scale; legacy→brokers
-     = shape transition, refused by C1 guards (destroy/recreate).
-   - Port amendment (§a.2): StableIdentity selects the set shape at
-     ReplicaCount()==1 too. Conformance pin
-     `ReplicaSet_ShapeTransition_Refused` amended (collapse target is now
-     StableIdentity:false), new pins `ReplicaSet_StableIdentitySingleOrdinal`,
-     `ReplicaSet_SingleToSetRefused`, `ReplicaSet_OrdinalInNetworkDNS`,
-     `ReplicaSet_EntrypointReplaces_OnSet` (all in
-     internal/ports/runtime/conformance/{replicas,entrypoint}.go).
-   - 3→1 scale-down refused at reconcile (no destructive-flag plumbing —
-     recorded §a.5). Observed-ordinal probe, not state.
-   - State (question b): NO per-ordinal state entries; aggregate
-     ResourceState + additive providerState (brokers, comma internalAddr,
-     per-ordinal `kafka-<i>` endpoint facts). No state version bump.
-   - Gate at validate: `checkHighAvailabilityGate` in cmd/platformctl/root.go
-     (loadAndValidate), NOT inside SpecValidator (no gate access — recorded
-     §a.8 as the deviation from doc 08's literal wording; closes ADR 004's
-     deferred accept line).
-3. **[done] Runtime/adapters** — dispatch `StableIdentity` → set path at any
-   count: docker.go, fake.go, kubernetes/container.go; mirror single→set
-   guards (docker/fake); k8s statefulset.go now maps Entrypoint→Command
-   (live-caught bug, pinned); k8s container.go `ensureOrdinalServices`
-   (per-ordinal ClusterIP Service, selector statefulset.io/pod-name,
-   PublishNotReadyAddresses — makes short ordinal DNS real on K8s, ADR 004's
-   claim; live-caught).
-4. **[done] Domain/schema/docs** — eventstream.Replication (+
-   ReplicationFactor()), schemas/v1alpha1/{eventstream,provider}.json,
-   docs/planning/03 additive blocks (Provider brokers para + EventStream
-   replication comment incl. odd-factor note), docs/reference regenerated
-   (`go run ./cmd/platformctl docs build --out docs/reference`) — MUST
-   re-regen after the last eventstream.json edit (odd-factor sentence) —
-   [next].
-5. **[done] Provider** — redpanda.go: brokersDeclared, clusterCmdScript
-   (bash -c, HOSTNAME-derived node-id, ordinal-0 seed), reconcileBrokerSet
-   (scale-down refusal, EnsureContainer StableIdentity, waitClusterFormed,
-   brokerSetProviderState), probeBrokerSet (BrokerMissing/BrokerNotJoined),
-   topicDial/clusterDial, Destroy via ListManagedVolumes prefix match,
-   KafkaBootstrapAddress comma list, ValidateStreamReplication (> brokers +
-   even-factor refusal), ValidateSpec (brokers int>=1, port-pin +
-   schemaRegistry refusals). kafka.go: adminClient dial-MAP + seeds,
-   ensureTopic RF + INVALID_REPLICATION_FACTOR bounded retry, probeTopic RF,
-   countJoinedBrokers. reasons.go: BrokerMissing, BrokerNotJoined,
-   ReplicationFactorMismatch.
-6. **[done] Capability + compatibility** — reconciler.StreamReplicationValidator;
-   compatibility.go EventStream case; stub tests in compatibility_test.go.
-7. **[done] Gate at validate** — checkHighAvailabilityGate + call in
-   loadAndValidate; tests cmd/platformctl/ha_gate_test.go (4 tests, green).
-8. **Verification so far (all green unless noted):**
-   - gofmt/build/vet/`go test ./...` green (before the odd-factor edit —
-     re-run pending).
-   - Docker conformance (integration) green ×3 runs incl. all new pins (15s).
-   - K8s conformance green ×2 under minimal-RBAC kubeconfig (320s, 365s) —
-     kubeconfig at scratchpad/platformctl.kubeconfig (mint per
-     deploy/kubernetes/rbac/README.md; minikube CA at
-     ~/.minikube/ca.crt, token via `kubectl create token platformctl -n
-     platformctl-system`).
-   - **Docker HA e2e GREEN**: cmd/platformctl/redpanda_ha_integration_test.go
-     `TestRedpandaHAEndToEnd` (16.5s): 3-broker Ready, RF-3 via admin API,
-     produce/consume before/during/after out-of-band broker kill,
-     BrokerMissing drift naming ordinal, re-apply heal, idempotent re-apply
-     "no changes", clean destroy (containers+volumes+network).
-   - **K8s HA e2e GREEN at brokers:3/replication:3** (69s, minimal-RBAC
-     kubeconfig; minikube fits 3 brokers): STS cluster Ready, RF-3 verified
-     via admin API over per-ordinal port-forwards, produce/consume
-     before/during/after out-of-band pod delete (StatefulSet controller
-     heals — documented per-runtime difference), idempotent re-apply "no
-     changes", clean destroy. Three live-caught bugs were fixed en route:
-     (i) statefulset.go dropped Entrypoint→Command; (ii) ordinal short-name
-     DNS needs per-ordinal Services; (iii) redpanda refuses EVEN replication
-     factors ("must be odd") → validate refusal added; K8s scenario must be
-     brokers:3/replication:3 (2/2 can NEVER work) — manifest+test consts
-     still say 2 → [next].
-9. **[done] a–c**: scenario at 3/3, docs regenerated, unit suite green,
-   K8s e2e green (see above).
-   **[status of d–e]**
-   d. [done, commit dba1d7c] main (D2) merged clean; both compatibility
-      features verified present; unit suite green post-merge.
-   e. [DONE — GREEN] Full integration sweep: run 3 (clean env, fresh 6h
-      token) EXIT=0, all 39 packages ok — cmd/platformctl 898s (whole
-      acceptance/chaos/lakehouse/CDC/sink suite incl. both new HA e2e
-      tests), runtime/kubernetes 390s (conformance incl. new pins, minimal
-      RBAC), runtime/docker re-run uncached green (20s). gofmt clean,
-      go vet (both tag sets) clean. Runs 1–2's three failures were
-      environmental (load flake / expired token / daemon contention) and do
-      not reproduce: full log at scratchpad/sweep-full.log. Historical
-      detail of run 1–2 triage below.
-      [superseded triage] Full integration sweep. Run 1 (concurrent-load): all
-      packages green EXCEPT k8s TestVolumeSizingAndStorageClass (passes
-      standalone — load flake) and cmd/platformctl verdict truncated. Run 2
-      (cmd only, later): 3 fast (~1.4s) failures — K8s example test (token
-      expired mid-suite: 4h TTL) and both sink tests (docker build of
-      s3sink image failed transiently; builds fine standalone). Token
-      re-minted (6h). Run 3 (authoritative, clean env, full ./...) writing
-      complete log to scratchpad/sweep-full.log — check `EXIT=` line and
-      non-ok package lines; if only environmental flakes recur, rerun the
-      affected tests individually to prove them green before judging.
-   OLD-d. `git merge main --no-edit` (D2) — resolve compatibility.go keeping both.
-   e. Full sweep: gofmt/build/vet, `go test ./...`,
-      `just test-integration` with KUBECONFIG=minted (never ambient admin).
-   f. doc-08 C2 status note (additive insertion after C2 Accept block) —
-      include: gate-at-validate closure note, K8s leg sizing/status, the
-      three live catches; do NOT tick stage exit criteria.
-   g. Final commit, subject:
-      `feat(redpanda): multi-broker clusters and replicated topics (C2)`
-      body: what was verified + deviations (SpecValidator-gate wording §a.8;
-      1→3 semantics per ADR 017 §a.1) + note C1's deferred gate-at-validate
-      accept line closed. Trailer: Co-Authored-By: Claude Fable 5
-      <noreply@anthropic.com>. If GPG times out: leave staged, write
-      COMMIT_MSG.txt, report.
+### C3
+- `spec.configuration.workers: N` on debezium/s3sink Provider -> realized as
+  `ContainerSpec{Replicas: N, StableIdentity: false}` (ADR 004's D10-shaped
+  branch -- "no stable identity, Connect rebalances" per doc 08 C3). This is
+  the FIRST real consumer of the `StableIdentity: false, Replicas > 1` path
+  (D10/Trino hasn't shipped yet) -- reuses `providerkit.EnsureInstance`
+  unmodified (it passes `Container.Replicas`/`StableIdentity` through
+  untouched; Connect workers are stateless, no `Volume`).
+- Undeclared `workers` (absent from configuration) keeps the pre-C3
+  single-container path byte-for-byte -- same opt-in-by-declaration pattern
+  as ADR 017 Sec a.1 (mirrored, not reused code, since redpanda's opt-in is
+  StableIdentity:true-shaped and this is the false-shaped sibling).
+- `internal/adapters/kafkaconnect`: every REST function's signature changes
+  from `baseURL string` to `baseURLs []string` -- tries each in order,
+  returns first success, joins errors if all fail (`tryEach` helper). This
+  is the "REST calls try each live worker" failover doc 08 names literally.
+- Address resolution: provider-side `workerURLs(ctx, rt, name, workers)`
+  helper (debezium.go and s3sink.go each get their own copy -- small,
+  provider-specific http port constant, not worth a providerkit extraction
+  per G1's "more parameters than lines saved" bar) mirrors redpanda's
+  `clusterDial`: workers<=1 -> single bare-name `EnsureReachable` (today's
+  exact `reachableURL`, wrapped in a 1-element slice); workers>1 -> iterate
+  ordinals 0..N-1, `EnsureReachable` each, skip failures, error only if zero
+  reachable. Resolved once per Reconcile/Probe/Destroy call (fresh per call,
+  same granularity as redpanda's topicDial/clusterDial -- NOT re-resolved
+  inside kafkaconnect's own internal 90s retry loops, which stay
+  pre-existing hand-rolled retries, now cycling the given address list each
+  iteration instead of a single URL). This satisfies ADR 015's "per-attempt
+  re-resolution stays inside runtime.WithReachable" instruction: the
+  re-resolve primitive is the provider-layer EnsureReachable call at the top
+  of each Reconcile/Probe/Destroy, not a new bespoke loop inside
+  kafkaconnect (which has no runtime.ContainerRuntime access and shouldn't
+  gain one -- narrow package scope, ADR 008).
+- Probe (Provider kind, workers>1): per-ordinal `Inspect` (found && Running)
+  -- mirrors `redpanda.probeBrokerSet`'s presence check (no group-membership
+  equivalent exists in the Kafka Connect REST API to check further). Missing
+  ordinals -> drift reason `ConnectWorkerMissing(<ordinals>)` (new status
+  reason, mirrors `ReasonBrokerMissing`).
+- Gate: `checkHighAvailabilityGate` in cmd/platformctl/root.go extended to
+  scan both `configuration.brokers` (existing) and `configuration.workers`
+  (new) on any Provider, naming whichever field triggered it in the error
+  message (doc 08 C3 explicit instruction -- "make the message name the
+  field that triggered it").
+- Schema: `options: additionalProperties: true` already permits
+  `configuration.workers` with no schema-file change; Go `ValidateSpec` on
+  both providers gains the integer->=1 check (mirrors redpanda's `brokers`
+  check). Doc 03 gets an additive `workers` paragraph mirroring the
+  `brokers` one.
 
-## Gotchas for a resuming session
+### D6
+- `Binding.spec.options.deadLetter: {stream, tolerance}` parsed in
+  `internal/domain/binding` (`Binding.DeadLetter *DeadLetter`), not left as
+  a raw map read at each call site -- mirrors how `SourceRef`/`TargetRef`
+  etc. are typed accessors. Structural validation (mode must be sink,
+  stream required, tolerance in {all,none}, default "all") lives in
+  `binding.validate()` so every `FromEnvelope` caller gets it for free.
+- Existence check (`deadLetter.stream` must resolve to an EventStream
+  in-graph) lives in `internal/application/compatibility.Check` -- NOT a new
+  `graph.Build` edge. `graph.Build`'s `refFields` are a fixed, generic,
+  top-level list (providerRef/sourceRef/targetRef/connectionRef/secretRef)
+  shared uniformly by every Kind; `deadLetter.stream` is nested inside
+  `spec.options`, mode-scoped (sink Bindings only), and provider-consumed --
+  adding a special case to the generic graph walker for one nested field of
+  one Kind/mode is exactly the "engine-block introspection the plan
+  deliberately avoids" per this task's own instruction. Chosen instead: a
+  compatibility-level existence check only (same error-message family as
+  the existing sourceRef/targetRef "does not resolve" checks).
+  **Ordering consequence, documented here and at the check's call site**:
+  no dependency edge means `graph.TopologicalLevels` does not guarantee the
+  DLQ EventStream reconciles before the sink Binding -- under
+  ParallelReconciliation they may land in the same level. This is safe in
+  practice because Kafka Connect's own framework creates the DLQ topic
+  itself (via the worker's internal AdminClient) if missing, using
+  `errors.deadletterqueue.topic.replication.factor` -- s3sink sets this from
+  the resolved DLQ EventStream's own `spec.replication` when the engine
+  happens to have it in `req.Resources` (always true -- Resources is the
+  full validated set regardless of reconcile order), else "1". The
+  platform-managed EventStream's own partition/retention config "wins" once
+  it reconciles (same apply or a later one); until then Connect's
+  auto-created topic (1 partition, the given RF) serves. This is a known,
+  documented limitation, not a silent gap.
+- s3sink `desiredConnectorConfig`: when `b.DeadLetter != nil`, adds
+  `errors.tolerance`, `errors.deadletterqueue.topic.name` (=
+  `b.DeadLetter.Stream` -- an EventStream's name IS its Kafka topic name,
+  the same convention `redpanda.reconcileTopic` already uses),
+  `errors.deadletterqueue.topic.replication.factor`,
+  `errors.deadletterqueue.context.headers.enable: "true"` (diagnostic
+  value, DLQ records carry the original topic/partition/offset/exception).
+  Zero behavior change when `deadLetter` is unset (existing keys untouched).
+  `connectorConfigDrift` covers the new keys for free (diffs the whole map).
+- debezium is CDC-only (Source->EventStream); `deadLetter` is a sink-mode
+  concept per doc 08 D6 and `binding.validate()` refuses it on any other
+  mode, so debezium never sees it.
 
-- Work ONLY in this worktree; run tests here (cwd resets here).
-- docs/planning guard hook: pure insertions only (never touch an existing
-  line, incl. lines added earlier in this same uncommitted diff).
-- K8s test runs MUST use KUBECONFIG=scratchpad/platformctl.kubeconfig
-  (doc 06 §8 rule 4 — never ambient admin); token may expire (4h) — re-mint.
-- The engine's spec-hash no-op means adapter-template fixes don't propagate
-  to an existing STS: delete the namespace before re-testing.
-- runDrift in chaos_integration_test.go has no --feature-gates; HA test uses
-  its own runDriftGated.
+## Steps
+
+0. [done] TASK_PROGRESS.md created (this file; supersedes the stale C2
+   checkpoint that lived at this path).
+1. [done] Read CLAUDE.md, doc 08 Sec2.1/C3/D6, ADR 004/015/017/009,
+   reconciler.go, redpanda.go+kafka.go (opt-in pattern reference),
+   debezium.go, s3sink.go, kafkaconnect/connect.go, binding.go,
+   compatibility.go, graph.go, root.go gates, providerkit, status reasons,
+   doc 03 Sec4/Sec7, existing integration test patterns
+   (redpanda_ha_integration_test.go, sink_integration_test.go).
+2. [done] internal/adapters/kafkaconnect: multi-address failover
+   (`baseURLs []string`, `tryEach` helper); unit tests with httptest
+   multi-server failover. Also added `providerkit.ReachableURLs` (shared
+   by debezium+s3sink, byte-identical port 8083 usage — G1's bar for a
+   providerkit extraction).
+3. [done] status reasons: add `ReasonConnectWorkerMissing`.
+4. [done] debezium.go: `workers` config (`workersDeclared`), `reconcileWorker`
+   Replicas/StableIdentity:false path (Container.Replicas: workers), providerState
+   echoes `workers` when declared, `workerURLs` helper (wraps
+   providerkit.ReachableURLs), `probeWorkerSet` (per-ordinal presence,
+   ConnectWorkerMissing(...) reason), ValidateSpec workers int>=1 check,
+   wired new kafkaconnect `[]string` signature through
+   reconcileConnector/ConfigureLineage/Destroy(Binding)/Probe/
+   connectorConfigDrift. Unit tests added (TestReconcileWorkerWorkersReplicaSet,
+   TestReconcileWorkerWorkersUndeclaredIsSingleContainer, TestValidateSpecWorkers).
+   VERIFIED: gofmt/go vet/go test ./internal/adapters/providers/debezium/...
+   all green in the WORKTREE checkout (note: earlier in this session `cd
+   /home/cascadura/git/platformctl && ...` accidentally targeted the
+   *main* checkout, not this worktree — Bash's default cwd IS already the
+   worktree; do not `cd` to the absolute main-checkout path when verifying).
+   Committed c87cf8d.
+5. [done] s3sink.go: same `workers` treatment (workersDeclared/workerURLs,
+   Replicas field, providerState echo, ValidateSpec check, ProbeConnectWorkerSet
+   wired) + `applyDeadLetterConfig` (errors.tolerance/deadletterqueue.topic.name/
+   .replication.factor resolved from the named EventStream in req.Resources
+   when present else "1"/.context.headers.enable) called from
+   desiredConnectorConfig when b.DeadLetter != nil. Wired new kafkaconnect
+   `[]string` signature everywhere. Unit tests added (workers ×3,
+   DeadLetter translation ×3). VERIFIED in worktree: gofmt/go vet/
+   `go test ./internal/adapters/providers/s3sink/...` green. Committed 777347c.
+6. [done] binding.go: `DeadLetter{Stream, Tolerance}` struct, parsed from
+   `spec.options.deadLetter` in FromEnvelope (tolerance defaults "all"),
+   validated in `validate()` (mode must be sink, stream required, tolerance
+   ∈ {all,none}). Unit tests in binding_test.go (new file). VERIFIED:
+   `go test ./internal/domain/binding/...` green. Also ran full
+   `go build ./... && go test ./...` — ALL GREEN across the whole repo at
+   this point (recorded here since it's a good checkpoint). Committed 777347c.
+7. [done] compatibility.go: `checkDeadLetterQueue` (structural existence
+   check only, no graph edge — ordering story documented in the function's
+   own doc comment + here). Wired into Check() for every Binding, right
+   after checkSchemaFormat. Unit tests: TestDeadLetterQueueExistingStreamAccepted,
+   TestDeadLetterQueueMissingStreamRejected (the literal D6 Accept item),
+   TestDeadLetterQueueOnCDCBindingRejected. Committed f0b3a69.
+8. [done] root.go: `replicaFieldsGuardedByHighAvailability = []string{"brokers",
+   "workers"}`, checkHighAvailabilityGate scans all of them, error names
+   whichever field triggered it (`spec.configuration.%s: %d`). Unit tests
+   in ha_gate_test.go (TestValidateRefusesWorkersWithoutHighAvailabilityGate,
+   TestValidateAcceptsWorkersWithHighAvailabilityGate). Committed f0b3a69.
+9. [done] doc 03: additive `workers` paragraph+example after the redpanda
+   `brokers` block (§4), additive `### 7.4 spec.options.deadLetter` section
+   before §8 (full ordering-story note included). schemas/v1alpha1/{binding,
+   provider}.json description strings updated (workers, deadLetter) —
+   these ARE schema-file edits (description text only, no shape change,
+   since `configuration`/`options` are already free-form maps), so
+   `docs/reference/*` needed regen: ran
+   `go run ./cmd/platformctl docs build --out docs/reference`,
+   TestGeneratedReferenceInSync green after. Both doc-guard-hook edits to
+   docs/planning/03 succeeded on the first (additive-only) attempt — no
+   retry needed. Committed 69819e0.
+   VERIFIED at this point: `gofmt -l .` empty, `go build ./...`,
+   `go vet ./...`, `go test ./...` all green across the WHOLE repo.
+10. [done] Unit tests already added per-step above (debezium_test.go,
+    s3sink_test.go, binding_test.go, compatibility_test.go, ha_gate_test.go,
+    providerkit_test.go, connect_test.go).
+11. [done] gofmt/build/vet/go test ./... green (see step 9's verification
+    note; re-confirmed again after step 9's commit).
+11.5 [done] CORRECTNESS FIX found while designing the integration test (not
+    caught by unit tests since the fake runtime doesn't simulate real
+    Docker port collisions): `workers > 1` combined with a pinned
+    `connectPort` would give every ordinal the IDENTICAL deterministically-
+    derived HostPort (ordinalContainerSpec copies ContainerSpec.Ports
+    verbatim across ordinals), so ordinal 1's container create would fail
+    with a real port-already-allocated error on live Docker — exactly
+    ADR 004's documented "fixed HostPort cannot combine with Replicas > 1"
+    limitation, which redpanda's brokers path already closes (ADR 017
+    §a.4) but C3 had not yet. Fixed: `connectPorts(cfg, name, workers)` in
+    both debezium.go/s3sink.go leaves HostPort unset (0, Docker/K8s
+    auto-assign per ordinal) when workers > 1, exactly mirroring
+    `redpanda.reconcileBrokerSet`; `ValidateSpec` now refuses a
+    `connectPort` pin combined with `workers` (mirrors ADR017 §a.4's
+    refusal for kafkaPort/adminPort/schemaRegistryPort + brokers). Unit
+    tests added (TestValidateSpecWorkersRefusesConnectPortPin ×2).
+    Committed c1d3b8e. This is exactly the kind of live-Docker-only defect
+    doc 08's conformance-ratchet policy (ADR 015 F6) exists to catch —
+    recorded here since it was caught by *designing* the integration test,
+    before ever running it live.
+12. [in-progress] Integration test: testdata/connect-ha-dlq-scenario + a combined
+    test file covering both Accept lists — debezium workers:2 CDC kill-test
+    (kill one ordinal out-of-band, `status`/probe without `apply` still
+    reports the CDC Binding RUNNING); s3sink + DLQ EventStream poison-record
+    test (produce a poison record directly to the source EventStream's own
+    topic — bypasses CDC entirely, simpler infra — verify it lands in the
+    DLQ topic, connector stays RUNNING, a subsequent valid record still
+    lands in S3/MinIO). Docker confirmed available at session start
+    (`docker info`/`docker ps` both worked; other agents' containers
+    visible — shared daemon, queuing expected per doc 06 §10).
+    Wrote cmd/platformctl/testdata/connect-ha-dlq-scenario/manifests.yaml
+    (redpanda single-broker kafkaPort:19693, postgres port:15745, debezium
+    workers:2 NO connectPort pin, minio port:19501, s3sink connectPort:18685
+    + deadLetter Binding option) and
+    cmd/platformctl/connect_ha_dlq_integration_test.go
+    (TestConnectWorkersHAAndDeadLetterQueue). Added the `connect-ha-dlq`
+    suite row to scripts/test-impact.sh (G7 completeness guard).
+
+    RUN 1 (80.44s): everything through the poison-record/heal cycle
+    PASSED; the final `destroy` call FAILED — DeleteConnector against the
+    CDC Binding's connector got "every Kafka Connect worker address failed
+    (2 tried)": one worker answered HTTP 500 with body "IO Error trying to
+    forward REST request: java.net.ConnectException: Connection refused"
+    (Connect's own internal REST-forwarding between distributed-mode
+    workers, one candidate trying to reach the other), the other "read:
+    connection reset by peer". A REAL live-caught defect (not an artifact
+    of the test), squarely doc 08's conformance-ratchet territory (ADR 015
+    F6): `DeleteConnector`'s single-pass `tryEach` had no retry-through-
+    transient the way `PutConnectorConfig` already did.
+    FIX (commit 66fab13): extracted `retryTransient` (shared bounded
+    retry-on-transient-error loop) out of PutConnectorConfig; widened
+    `isTransientPutError` -> `isTransientConnectError` to also recognize
+    "connection reset by peer"/"broken pipe"/"EOF" alongside the existing
+    HTTP 409/"connection attempt failed"/"Connection refused" set (the 500
+    body case already matched via the "Connection refused" substring);
+    wrapped `DeleteConnector` in the same primitive (30s budget, shorter
+    than Put's 90s — destroy shouldn't hang as long on a truly broken
+    worker). Unit tests added: TestIsTransientConnectErrorRecognizesForwardingFailure
+    (pins the exact live-caught message shapes), TestRetryTransientRetriesThenSucceeds,
+    TestRetryTransientReturnsNonTransientImmediately, TestDeleteConnectorFailsOverOnForwardingError.
+    Full repo gofmt/build/vet/`go test ./...` green after. Committed 66fab13.
+    RUN 2 with the fix: **PASS, 58.54s** — full sequence green: apply
+    (2 debezium ordinals up, sink connector RUNNING), pre-poison valid
+    record landed in MinIO, out-of-band kill of datascape-chdlq-dbz-1,
+    `drift` (no apply) reported CDC Binding Ready=True via the survivor +
+    Provider drift ConnectWorkerMissing(datascape-chdlq-dbz-1), healing
+    apply restored the ordinal, poison record landed in the DLQ topic,
+    sink connector stayed RUNNING, post-poison valid record landed in
+    MinIO, live connector config carries errors.tolerance=all +
+    errors.deadletterqueue.topic.name=chdlq-attendance-events-dlq, destroy
+    fully clean (all 14 resources ok, zero leftover chdlq containers).
+    The F6 ratchet pin for the live-caught bug is
+    TestIsTransientConnectErrorRecognizesForwardingFailure (kafkaconnect
+    unit level — the bug class IS expressible at the client level, so the
+    pin lands there, in the same commit as the fix: 66fab13).
+13. [done] scripts/test-impact.sh --base main — ALL GREEN, exit 0:
+    9 selected, 9 ran, 0 deduped, 0 failed. Environment hygiene done
+    first (no leftover datascape-* containers except other agents' live
+    trino set — untouched; pinned images cached in digest form). K8s leg
+    not selected by the impact map (this diff touches no k8s-adapter
+    scope — doc 06 §10 rule 6), correctly skipped.
+14. [done] doc 08 C3/D6 Done notes appended (additive, guard hook
+    accepted); WIP commits squashed (`git reset --soft` to the C2 merge
+    base) into the single final commit
+    "feat(connect): distributed workers (C3) + dead-letter queues (D6)".
+
+## Verification log
+
+- gofmt -l . : empty. go build ./... : OK. go vet ./... (default + -tags
+  integration): OK. go test ./... : all packages green (re-run at every
+  increment; final run post-doc-sync).
+- TestGeneratedReferenceInSync: green after docs/reference regen.
+- connect-ha-dlq standalone run 1: FAIL at destroy (live-caught
+  DeleteConnector transient-forwarding bug — fixed in commit 66fab13);
+  run 2: PASS 58.54s; run 3 (under the ledger wrapper, in the sweep
+  below): PASS 54.75s.
+- scripts/test-impact.sh --base main (branch gate, flock-serialized,
+  2026-07-21): redpanda 78.1s ok; cdc 173.0s ok; sink 128.6s ok;
+  connect-ha-dlq 54.8s ok; acceptance 64.4s ok; lakehouse 173.2s ok;
+  backup 72.9s ok; prometheus 14.4s ok; blueprints 62.7s ok.
+  impact: 9 selected, 9 ran, 0 deduped, 0 failed (base: main), exit 0.
+  Evidence recorded in the shared ledger — the merge gate can cite these
+  scope-hashes instead of re-running.

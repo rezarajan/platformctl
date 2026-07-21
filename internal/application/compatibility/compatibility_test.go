@@ -932,3 +932,75 @@ func TestCheckEventStreamReplicationWithinBrokers(t *testing.T) {
 		t.Errorf("Check rejected replication 1 against a capability-less provider: %v", err)
 	}
 }
+
+// sinkManifestsWithDeadLetter is sinkManifests("json") with
+// spec.options.deadLetter declared on the sink Binding, plus (when
+// includeDLQStream) a second EventStream realizing the named DLQ topic —
+// docs/planning/08 D6.
+func sinkManifestsWithDeadLetter(dlqStream string, includeDLQStream bool) []resource.Envelope {
+	manifests := sinkManifests("json")
+	for i, e := range manifests {
+		if e.Kind == "Binding" {
+			spec := make(map[string]any, len(e.Spec)+1)
+			for k, v := range e.Spec {
+				spec[k] = v
+			}
+			spec["options"] = map[string]any{
+				"deadLetter": map[string]any{"stream": dlqStream},
+			}
+			manifests[i].Spec = spec
+		}
+	}
+	if includeDLQStream {
+		manifests = append(manifests, envelope("EventStream", dlqStream, map[string]any{
+			"providerRef": map[string]any{"name": "s3-sink"},
+		}))
+	}
+	return manifests
+}
+
+// TestDeadLetterQueueExistingStreamAccepted covers docs/planning/08 D6: a
+// deadLetter.stream naming an EventStream present in the manifest set
+// validates cleanly.
+func TestDeadLetterQueueExistingStreamAccepted(t *testing.T) {
+	err := Check(sinkManifestsWithDeadLetter("dlq-events", true), resolver(sinkStub{stubProvider{"s3sink"}}))
+	if err != nil {
+		t.Fatalf("valid deadLetter.stream rejected: %v", err)
+	}
+}
+
+// TestDeadLetterQueueMissingStreamRejected covers the D6 Accept item
+// verbatim: "validate rejects a deadLetter naming a missing EventStream."
+func TestDeadLetterQueueMissingStreamRejected(t *testing.T) {
+	err := Check(sinkManifestsWithDeadLetter("dlq-events", false), resolver(sinkStub{stubProvider{"s3sink"}}))
+	if err == nil {
+		t.Fatal("Check accepted a deadLetter.stream naming a missing EventStream")
+	}
+	for _, want := range []string{"attendance-events-to-lake", "dlq-events", "does not resolve to an EventStream"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing %q: %v", want, err)
+		}
+	}
+}
+
+// TestDeadLetterQueueOnCDCBindingRejected: deadLetter is a sink-mode
+// concept (docs/planning/08 D6); binding.FromEnvelope refuses it on any
+// other mode, and Check surfaces that refusal at validate.
+func TestDeadLetterQueueOnCDCBindingRejected(t *testing.T) {
+	manifests := cdcManifests("postgres")
+	for i, e := range manifests {
+		if e.Kind == "Binding" {
+			spec := make(map[string]any, len(e.Spec)+1)
+			for k, v := range e.Spec {
+				spec[k] = v
+			}
+			spec["options"] = map[string]any{
+				"deadLetter": map[string]any{"stream": "attendance-events"},
+			}
+			manifests[i].Spec = spec
+		}
+	}
+	if err := Check(manifests, resolver(cdcStub{stubProvider{"debezium"}})); err == nil {
+		t.Fatal("Check accepted options.deadLetter on a cdc-mode Binding")
+	}
+}

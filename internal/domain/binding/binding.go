@@ -41,12 +41,30 @@ var AllowedKindPairs = map[Mode][]KindPair{
 	},
 }
 
+// DeadLetter is spec.options.deadLetter (docs/planning/08 D6): a sink-mode
+// Binding's opt-in dead-letter queue. Stream names an EventStream — an
+// EventStream's resource name IS its Kafka topic name (the same convention
+// redpanda.reconcileTopic uses), so no separate topic field is needed.
+// Tolerance mirrors Kafka Connect's own errors.tolerance values verbatim
+// (all|none) so provider translation (s3sink) is a direct pass-through.
+type DeadLetter struct {
+	Stream    string
+	Tolerance string
+}
+
 type Binding struct {
 	Mode        Mode
 	SourceRef   string
 	TargetRef   string
 	ProviderRef string
 	Options     map[string]any
+	// DeadLetter is non-nil only when spec.options.deadLetter was declared;
+	// Tolerance defaults to "all" when the sub-field is omitted (the only
+	// tolerance value that makes declaring a DLQ meaningful — "none" still
+	// fails the task on error, just also routes a copy to the DLQ topic per
+	// Kafka Connect's own semantics, an advanced/rare combination that
+	// remains expressible by setting it explicitly).
+	DeadLetter *DeadLetter
 }
 
 func FromEnvelope(e resource.Envelope) (Binding, error) {
@@ -58,6 +76,15 @@ func FromEnvelope(e resource.Envelope) (Binding, error) {
 	b.ProviderRef = refName(e.Spec, "providerRef")
 	if opts, ok := e.Spec["options"].(map[string]any); ok {
 		b.Options = opts
+		if raw, ok := opts["deadLetter"].(map[string]any); ok {
+			dl := &DeadLetter{}
+			dl.Stream, _ = raw["stream"].(string)
+			dl.Tolerance, _ = raw["tolerance"].(string)
+			if dl.Tolerance == "" {
+				dl.Tolerance = "all"
+			}
+			b.DeadLetter = dl
+		}
 	}
 	return b, b.validate(e.Metadata.Name)
 }
@@ -78,6 +105,17 @@ func (b Binding) validate(name string) error {
 	}
 	if b.ProviderRef == "" {
 		return fmt.Errorf("Binding %q: spec.providerRef is required", name)
+	}
+	if b.DeadLetter != nil {
+		if b.Mode != ModeSink {
+			return fmt.Errorf("Binding %q: spec.options.deadLetter is only valid for mode \"sink\", got %q", name, b.Mode)
+		}
+		if b.DeadLetter.Stream == "" {
+			return fmt.Errorf("Binding %q: spec.options.deadLetter.stream is required", name)
+		}
+		if b.DeadLetter.Tolerance != "all" && b.DeadLetter.Tolerance != "none" {
+			return fmt.Errorf("Binding %q: spec.options.deadLetter.tolerance must be \"all\" or \"none\", got %q", name, b.DeadLetter.Tolerance)
+		}
 	}
 	return nil
 }

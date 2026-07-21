@@ -260,11 +260,22 @@ func (a *app) checkSchemaRegistryGate(envelopes []resource.Envelope) error {
 	return nil
 }
 
+// replicaFieldsGuardedByHighAvailability lists every
+// spec.configuration.<field> that opts a Provider into ADR 004's
+// Replicas > 1 shape and therefore requires the HighAvailability gate:
+// redpanda's brokers (docs/adr/017 §a.8) and debezium/s3sink's workers
+// (docs/planning/08 C3). A single list, scanned uniformly, is what lets
+// checkHighAvailabilityGate name whichever field actually triggered it in
+// the error instead of hardcoding one field's name (doc 08 C3's explicit
+// instruction, since brokers was the only field when §a.8 first wrote this
+// check).
+var replicaFieldsGuardedByHighAvailability = []string{"brokers", "workers"}
+
 // checkHighAvailabilityGate covers docs/adr/017 §a.8, closing docs/adr/004's
 // deferred gate-at-validate accept line (C2): HighAvailability is
-// Alpha/disabled, so a manifest declaring a multi-replica shape —
-// spec.configuration.brokers > 1 today; D10's workers later — must fail
-// fast at validate with the gate's standard disabled message, exactly like
+// Alpha/disabled, so a manifest declaring a multi-replica shape — any field
+// in replicaFieldsGuardedByHighAvailability, declared > 1 — must fail fast
+// at validate with the gate's standard disabled message, exactly like
 // checkSchemaRegistryGate. A provider's SpecValidator cannot host this
 // check (it has no feature-gate access by design — widening its signature
 // would break every implementor, the F5 lesson); the registry's
@@ -275,16 +286,18 @@ func (a *app) checkHighAvailabilityGate(envelopes []resource.Envelope) error {
 			continue
 		}
 		cfg, _ := e.Spec["configuration"].(map[string]any)
-		n := 0
-		switch v := cfg["brokers"].(type) {
-		case int:
-			n = v
-		case float64:
-			n = int(v)
-		}
-		if n > 1 {
-			if err := a.gates.Require("HighAvailability"); err != nil {
-				return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("%s declares spec.configuration.brokers: %d: %w", e.Key(), n, err))
+		for _, field := range replicaFieldsGuardedByHighAvailability {
+			n := 0
+			switch v := cfg[field].(type) {
+			case int:
+				n = v
+			case float64:
+				n = int(v)
+			}
+			if n > 1 {
+				if err := a.gates.Require("HighAvailability"); err != nil {
+					return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("%s declares spec.configuration.%s: %d: %w", e.Key(), field, n, err))
+				}
 			}
 		}
 	}

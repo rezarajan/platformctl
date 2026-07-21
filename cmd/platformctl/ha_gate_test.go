@@ -90,6 +90,53 @@ spec:
 	}
 }
 
+const haWorkersManifest = `
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: dbz-ha-gate-test
+spec:
+  type: debezium
+  runtime:
+    type: fake
+  configuration:
+    bootstrapServers: broker:29092
+    workers: 2
+`
+
+// TestValidateRefusesWorkersWithoutHighAvailabilityGate covers
+// docs/planning/08 C3: a Connect-worker Provider (debezium/s3sink)
+// declaring configuration.workers > 1 fails `validate` with the
+// HighAvailability gate's standard disabled message, never at apply — the
+// same mechanism as brokers, generalized by checkHighAvailabilityGate to
+// name whichever field triggered it.
+func TestValidateRefusesWorkersWithoutHighAvailabilityGate(t *testing.T) {
+	dir := writeHAManifest(t, haWorkersManifest)
+	_, err, code := run(t, "validate", dir)
+	if err == nil {
+		t.Fatal("validate accepted workers: 2 with the HighAvailability gate disabled")
+	}
+	if code == 0 {
+		t.Fatalf("validate exit code = %d, want non-zero", code)
+	}
+	if !strings.Contains(err.Error(), "HighAvailability") {
+		t.Errorf("error does not name the gate: %v", err)
+	}
+	if !strings.Contains(err.Error(), "workers") {
+		t.Errorf("error does not name the declaring field (workers, not brokers): %v", err)
+	}
+}
+
+// TestValidateAcceptsWorkersWithHighAvailabilityGate: the same manifest
+// validates once the gate is enabled.
+func TestValidateAcceptsWorkersWithHighAvailabilityGate(t *testing.T) {
+	dir := writeHAManifest(t, haWorkersManifest)
+	out, err, code := run(t, "validate", dir, "--feature-gates", "HighAvailability=true")
+	if err != nil || code != 0 {
+		t.Fatalf("validate failed (code %d): %v\n%s", code, err, out)
+	}
+}
+
 // TestValidateRefusesHostPortPinWithBrokers covers docs/adr/017 §a.4's
 // validate-time closure of docs/adr/004's known limitation: a fixed host
 // port cannot be combined with a replicated set.

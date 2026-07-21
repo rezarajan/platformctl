@@ -1,0 +1,184 @@
+# C3 (distributed Kafka Connect workers) + D6 (dead-letter queues)
+# integration scenario (docs/planning/08 C3/D6). Distinct names and host
+# ports from every other scenario so this test never collides: Postgres
+# 15745, MinIO 19501, sink Connect 18685, Kafka 19693. The debezium worker
+# declares workers: 2 (no connectPort pin — each ordinal's host port is
+# auto-assigned, docs/adr/004's known limitation, closed at validate for
+# workers the same way docs/adr/017 §a.4 closes it for redpanda's brokers).
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: chdlq-pg-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: chdlq-pg-repl
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: chdlq-minio-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chdlq-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-chdlq-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19693
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chdlq-pg
+spec:
+  type: postgres
+  runtime:
+    type: docker
+    network: datascape-chdlq-net
+  configuration:
+    version: "16"
+    port: 15745
+    superuserSecretRef: chdlq-pg-admin
+    replicationSecretRef: chdlq-pg-repl
+  secretRefs: [chdlq-pg-admin, chdlq-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chdlq-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape-chdlq-net
+  configuration:
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
+    bootstrapServers: datascape-chdlq-rp:29092
+    replicationSecretRef: chdlq-pg-repl
+    workers: 2               # requires --feature-gates=HighAvailability=true
+  secretRefs: [chdlq-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chdlq-minio
+spec:
+  type: minio
+  runtime:
+    type: docker
+    network: datascape-chdlq-net
+  configuration:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    port: 19501
+    rootSecretRef: chdlq-minio-root
+  secretRefs: [chdlq-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chdlq-s3
+spec:
+  type: s3sink
+  runtime:
+    type: docker
+    network: datascape-chdlq-net
+  configuration:
+    image: datascape-s3sink-connect:test
+    connectPort: 18685
+    bootstrapServers: datascape-chdlq-rp:29092
+    credentialsSecretRef: chdlq-minio-root
+  secretRefs: [chdlq-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: chdlq-students
+spec:
+  engine: postgres
+  providerRef:
+    name: datascape-chdlq-pg
+  postgres:
+    database: attendance
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: chdlq-attendance-events
+spec:
+  providerRef:
+    name: datascape-chdlq-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: chdlq-attendance-events-dlq
+spec:
+  providerRef:
+    name: datascape-chdlq-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: chdlq-attendance-raw
+spec:
+  providerRef:
+    name: datascape-chdlq-minio
+  bucket: raw-events
+  prefix: attendance/
+  format: json
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: chdlq-students-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: chdlq-students
+  targetRef:
+    name: chdlq-attendance-events
+  providerRef:
+    name: datascape-chdlq-dbz
+  options:
+    tables: [students]
+    snapshotMode: initial
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: chdlq-events-to-lake
+spec:
+  mode: sink
+  sourceRef:
+    name: chdlq-attendance-events
+  targetRef:
+    name: chdlq-attendance-raw
+  providerRef:
+    name: datascape-chdlq-s3
+  options:
+    deadLetter:
+      stream: chdlq-attendance-events-dlq
+      tolerance: all

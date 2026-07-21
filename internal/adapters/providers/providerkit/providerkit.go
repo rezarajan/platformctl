@@ -18,9 +18,13 @@ package providerkit
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
+	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -72,4 +76,85 @@ func ReachableURL(ctx context.Context, rt runtime.ContainerRuntime, name string,
 		return "", nil, err
 	}
 	return "http://" + addr, closeAddr, nil
+}
+
+// ReachableURLs is ReachableURL's counterpart for a spec that may have opted
+// into ADR 004's `Replicas > 1, StableIdentity: false` replica-set shape —
+// interchangeable pure-compute members with no per-ordinal storage or
+// identity beyond the ordinal name itself (docs/planning/08 C3, the first
+// real consumer: debezium/s3sink's spec.configuration.workers). members <= 1
+// (the field undeclared, or declared as 1) keeps today's exact single-address
+// ReachableURL path, wrapped in a one-element slice, byte-for-byte; members >
+// 1 iterates ordinals 0..N-1 via EnsureReachable and returns every one that
+// currently resolves, skipping (not failing on) any that don't — a dead
+// member just isn't offered as a failover candidate to the caller, the same
+// "proceed against the survivors" rule redpanda's clusterDial uses for its
+// own multi-broker dial map (docs/adr/017 §a.4). Erroring only when zero
+// members are reachable at all. The returned close func must always be
+// called and closes every opened tunnel.
+func ReachableURLs(ctx context.Context, rt runtime.ContainerRuntime, name string, port, members int) ([]string, func() error, error) {
+	if members <= 1 {
+		url, closeURL, err := ReachableURL(ctx, rt, name, port)
+		if err != nil {
+			return nil, nil, err
+		}
+		return []string{url}, closeURL, nil
+	}
+	urls := make([]string, 0, members)
+	closers := make([]func() error, 0, members)
+	for i := 0; i < members; i++ {
+		url, closeURL, err := ReachableURL(ctx, rt, runtime.OrdinalName(name, i), port)
+		if err != nil {
+			continue
+		}
+		urls = append(urls, url)
+		closers = append(closers, closeURL)
+	}
+	if len(urls) == 0 {
+		return nil, nil, fmt.Errorf("no member of %q (%d ordinals) is currently reachable", name, members)
+	}
+	return urls, func() error {
+		for _, c := range closers {
+			_ = c()
+		}
+		return nil
+	}, nil
+}
+
+// ProbeConnectWorkerSet is the Provider-kind probe for a declared
+// spec.configuration.workers > 1 Kafka Connect worker set (docs/planning/08
+// C3), shared verbatim by debezium and s3sink — both reconcile a Connect
+// worker via the identical `Replicas: N, StableIdentity: false` shape and
+// already share the ReasonConnectWorkerMissing/ReasonConnectWorkerHealthy
+// reason constants (internal/domain/status's "Shared Kafka Connect
+// connector lifecycle" block), so this is genuinely byte-identical across
+// both callers (docs/planning/08 G1's bar for a providerkit extraction).
+// Mirrors redpanda.probeBrokerSet's presence check: every ordinal must be
+// present and running. There is no Kafka Connect REST equivalent of "list
+// group members" to check further (unlike redpanda's admin-API broker
+// list), so per-ordinal container presence is the whole signal — a live
+// worker's own group membership is Connect's problem to self-heal via its
+// rebalance protocol, not something this probe verifies.
+func ProbeConnectWorkerSet(ctx context.Context, rt runtime.ContainerRuntime, name string, n int, now time.Time) (status.Status, error) {
+	st := status.Status{}
+	var missing []string
+	for i := 0; i < n; i++ {
+		ord := runtime.OrdinalName(name, i)
+		ordState, found, err := rt.Inspect(ctx, ord)
+		if err != nil {
+			return st, err
+		}
+		if !found || !ordState.Running {
+			missing = append(missing, ord)
+		}
+	}
+	if len(missing) > 0 {
+		reason := fmt.Sprintf("%s(%s)", status.ReasonConnectWorkerMissing, strings.Join(missing, ","))
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: reason}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: reason}, now)
+		return st, nil
+	}
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonConnectWorkerHealthy}, now)
+	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
+	return st, nil
 }
