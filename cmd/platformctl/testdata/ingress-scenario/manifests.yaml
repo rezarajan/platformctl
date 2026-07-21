@@ -1,0 +1,55 @@
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: ing-test-minio-root
+spec: {backend: env, keys: [username, password]}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: ing-test-nessie
+spec:
+  type: nessie
+  runtime: {type: docker, network: datascape-ingress-net}
+  configuration: {port: 19620}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: ing-test-minio
+spec:
+  type: minio
+  runtime: {type: docker, network: datascape-ingress-net}
+  configuration: {port: 19621, rootSecretRef: ing-test-minio-root}
+  secretRefs: [ing-test-minio-root]
+---
+# The shared HTTP entrypoint (docs/planning/08 C7, docs/adr/018): one Caddy
+# container, routes reconciled per-Connection without restarting it.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: ing-test-edge
+spec:
+  type: ingress
+  runtime: {type: docker, network: datascape-ingress-net}
+  configuration: {port: 19622, adminPort: 19623, domain: localhost}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: nessie
+spec:
+  providerRef: {name: ing-test-edge}
+  scheme: http
+  port: 80
+  target: ing-test-nessie:19120
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: minio
+spec:
+  providerRef: {name: ing-test-edge}
+  scheme: http
+  port: 80
+  target: ing-test-minio:9000

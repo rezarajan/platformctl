@@ -114,6 +114,43 @@ func (g *haGuardRuntime) EnsureContainer(ctx context.Context, spec runtime.Conta
 	return g.ContainerRuntime.EnsureContainer(ctx, spec)
 }
 
+// EnsureIngress/GetIngress/RemoveIngress make haGuardRuntime itself satisfy
+// runtime.IngressCapableRuntime, delegating to the embedded runtime when it
+// implements the capability. Without these three explicit methods, a
+// provider's own `req.Runtime.(runtime.IngressCapableRuntime)` type
+// assertion (docs/adr/018 "Layering") would always fail for every runtime
+// obtained through this registry — including a real Kubernetes adapter that
+// genuinely implements it — because embedding the runtime.ContainerRuntime
+// *interface* (not the concrete adapter type) only promotes that interface's
+// own declared method set, never a concrete implementation's extra methods.
+// Found live (2026-07-21) against a real cluster: the fake-clientset unit
+// tests call the Kubernetes adapter's EnsureIngress directly and never
+// exercise this wrapper, so only an end-to-end apply through the registry
+// caught it (docs/planning/08 F6 conformance ratchet).
+func (g *haGuardRuntime) EnsureIngress(ctx context.Context, spec runtime.IngressSpec) (runtime.IngressState, error) {
+	ic, ok := g.ContainerRuntime.(runtime.IngressCapableRuntime)
+	if !ok {
+		return runtime.IngressState{}, fmt.Errorf("ingress provider: runtime does not implement IngressCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return ic.EnsureIngress(ctx, spec)
+}
+
+func (g *haGuardRuntime) GetIngress(ctx context.Context, namespace, name string) (runtime.IngressState, bool, error) {
+	ic, ok := g.ContainerRuntime.(runtime.IngressCapableRuntime)
+	if !ok {
+		return runtime.IngressState{}, false, fmt.Errorf("ingress provider: runtime does not implement IngressCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return ic.GetIngress(ctx, namespace, name)
+}
+
+func (g *haGuardRuntime) RemoveIngress(ctx context.Context, namespace, name string) error {
+	ic, ok := g.ContainerRuntime.(runtime.IngressCapableRuntime)
+	if !ok {
+		return fmt.Errorf("ingress provider: runtime does not implement IngressCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return ic.RemoveIngress(ctx, namespace, name)
+}
+
 func joinKeys[V any](m map[string]V) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

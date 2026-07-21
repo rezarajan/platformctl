@@ -64,6 +64,13 @@ var preflightChecks = []authorizationv1.ResourceAttributes{
 	{Verb: "get", Group: "networking.k8s.io", Resource: "networkpolicies"},
 	{Verb: "create", Group: "networking.k8s.io", Resource: "networkpolicies"},
 	{Verb: "delete", Group: "networking.k8s.io", Resource: "networkpolicies"},
+	// Ingresses: the ingress provider's Kubernetes realization of a managed
+	// HTTP Connection (docs/planning/08 C7, docs/adr/018).
+	{Verb: "get", Group: "networking.k8s.io", Resource: "ingresses"},
+	{Verb: "create", Group: "networking.k8s.io", Resource: "ingresses"},
+	{Verb: "update", Group: "networking.k8s.io", Resource: "ingresses"},
+	{Verb: "delete", Group: "networking.k8s.io", Resource: "ingresses"},
+	{Verb: "list", Group: "networking.k8s.io", Resource: "ingresses"},
 }
 
 // Preflight checks that the cluster config.New would build is reachable and

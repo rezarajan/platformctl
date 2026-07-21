@@ -60,6 +60,12 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "create", "update", "delete"]
+  # Ingresses: the ingress provider's Kubernetes realization of a managed
+  # HTTP Connection (docs/planning/08 C7, docs/adr/018) —
+  # runtime.IngressCapableRuntime's EnsureIngress/GetIngress/RemoveIngress.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "create", "update", "delete", "list"]
   # Preflight's own permission check (docs/planning/08 B6). Most clusters
   # already grant this to every authenticated principal via the built-in
   # system:basic-user ClusterRole bound to system:authenticated; listed

@@ -15,7 +15,7 @@ Generated from `schemas/` by `platformctl docs build` — do not edit by hand.
 
 ## Provider types
 
-Provider implementation to construct. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections), prometheus (managed monitoring stack, gate MonitoringStackProvider, docs/planning/08 C9) — plus noop/container for testing. Open-ended: unknown types fail at registry construction, not schema validation. Technology providers realize the provider-agnostic kinds; the model speaks Catalog/Connection, never a technology's name.
+Provider implementation to construct. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections, scheme tcp), prometheus (managed monitoring stack, gate MonitoringStackProvider, docs/planning/08 C9), ingress (realizes managed Connections, scheme http — HTTP hostname routing; gate IngressProvider, docs/planning/08 C7, docs/adr/018) — plus noop/container for testing. Open-ended: unknown types fail at registry construction, not schema validation. Technology providers realize the provider-agnostic kinds; the model speaks Catalog/Connection, never a technology's name.
 
 - `redpanda`
 - `postgres`
@@ -29,5 +29,6 @@ Provider implementation to construct. Shipped: redpanda, postgres, mysql, mariad
 - `openlineage`
 - `proxy`
 - `prometheus`
+- `ingress`
 - `noop`
 - `container`

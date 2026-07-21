@@ -55,6 +55,7 @@ lakehouse|internal/adapters/providers/nessie internal/adapters/providers/openlin
 chaos|internal/application/engine internal/application/plan internal/adapters/runtime/docker|go test -tags integration -count=1 -run 'TestChaos' -timeout 2400s ./cmd/platformctl/
 backup|internal/adapters/providers/dbjob internal/adapters/providers/postgres internal/adapters/providers/mysql internal/adapters/providers/s3 internal/application/engine/backup.go internal/domain/backup cmd/platformctl/backup.go|go test -tags integration -count=1 -run 'TestBackupRestore' -timeout 1800s ./cmd/platformctl/
 prometheus|internal/adapters/providers/prometheus internal/adapters/providers/redpanda internal/adapters/providers/s3 SHARED_CORE|go test -tags integration -count=1 -run 'TestPrometheusMonitoringStackEndToEnd' -timeout 1200s ./cmd/platformctl/
+ingress|internal/adapters/providers/ingress internal/adapters/providers/nessie internal/adapters/runtime/kubernetes deploy/kubernetes/rbac SHARED_CORE|go test -tags integration -count=1 -run 'TestIngress' -timeout 1200s ./cmd/platformctl/
 state-s3|internal/adapters/state internal/ports/state|go test -tags integration -count=1 -timeout 1200s ./internal/adapters/state/... ./cmd/platformctl/ -run 'TestSharedState'
 blueprints|internal/application/blueprint SHARED_CORE|go test -tags integration -count=1 -run 'TestBlueprint' -timeout 1800s ./cmd/platformctl/
 gc-state-ops|cmd/platformctl/gc.go cmd/platformctl/state.go internal/ports/state|go test -tags integration -count=1 -run 'TestGC|TestState' -timeout 1200s ./cmd/platformctl/

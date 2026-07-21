@@ -778,6 +778,42 @@ Field notes:
   provider) is deliberately deferred; the seam is the `Connection` kind
   itself — additive when a tunnel-typed provider lands.
 
+### 8.2.1 HTTP routing (the `ingress` provider, docs/planning/08 C7, docs/adr/018)
+
+A second `ConnectionCapableProvider` realization on the same `Connection`
+shape, declaring `scheme: http` (the `proxy` provider above declares `tcp`;
+a Connection picks whichever scheme its `providerRef` supports):
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: nessie
+spec:
+  providerRef:
+    name: edge-http                  # must declare "http" in SupportedConnectionSchemes()
+  scheme: http
+  port: 80                           # required by the base Connection schema; not separately used by ingress (routing is by Host header, not by port)
+  target: nessie:19120               # host:port the entrypoint forwards to, passed through as-is
+```
+
+- Docker: one shared Caddy container per `Provider(type: ingress)`, routing
+  `Host(<connection-name>.<domain>)` to `spec.target`. `domain` is
+  `Provider.spec.configuration.domain` (default `"localhost"` — see
+  docs/adr/018 Decision 4). Reachable at
+  `http://<connection-name>.<domain>:<published-http-port>`, surfaced by
+  `platformctl inventory`.
+- Kubernetes: one `networking.k8s.io/v1 Ingress` object per Connection,
+  routing the same `Host(...)` rule to `spec.target`'s host as an existing
+  Service name (`spec.target`'s host segment must name a Service already in
+  the same namespace — e.g. another Provider's own runtime object name) and
+  its port. No shared container; the cluster's own ingress controller does
+  the proxying.
+- TLS is out of scope for this scheme: `SupportedConnectionSchemes()`
+  returns only `"http"`, not `"https"` — a Connection declaring
+  `scheme: https` fails the standard capability error until docs/planning/08
+  C8 adds `Connection.spec.tls` to this same provider.
+
 ## 9. Lineage / observability schema
 
 ```yaml

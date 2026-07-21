@@ -1,0 +1,32 @@
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: ingk8s-nessie
+spec:
+  type: nessie
+  runtime:
+    type: kubernetes
+    network: datascape-ingk8s-test-ns
+---
+# One networking.k8s.io/v1 Ingress object per Connection on Kubernetes — no
+# shared container (docs/planning/08 C7, docs/adr/018 Decision 2).
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: ingk8s-edge
+spec:
+  type: ingress
+  runtime:
+    type: kubernetes
+    network: datascape-ingk8s-test-ns
+  configuration: {domain: localhost}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: nessie
+spec:
+  providerRef: {name: ingk8s-edge}
+  scheme: http
+  port: 80
+  target: ingk8s-nessie:19120
