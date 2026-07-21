@@ -24,6 +24,18 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "create", "update", "delete", "list"]
+  # StatefulSets: the StableIdentity replica-set shape and the
+  # shape-transition guard's existence checks (docs/planning/08 C1,
+  # docs/adr/004) — every EnsureContainer/Inspect/ListManaged/Remove call
+  # consults both workload shapes.
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "create", "update", "delete", "list"]
+  # PodDisruptionBudgets: applied automatically whenever Replicas > 1
+  # (docs/adr/004), removed with the workload.
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "create", "update", "delete", "list"]

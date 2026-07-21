@@ -391,6 +391,14 @@ integration suite all missed:
    pattern) reaching Ready with unmodified providers is the acceptance bar.
    A synthetic conformance suite proves the *port contract*; only real
    providers against real infrastructure prove the *translation*.
+4. **Kubernetes verification must run under the minimal RBAC kubeconfig**
+   (mint a token-scoped kubeconfig for the `platformctl` ServiceAccount,
+   exactly as CI's K8s job does), never ambient admin credentials — a
+   change that adds a Kubernetes API call passes admin-credential runs
+   while violating the B5 posture, and the role +
+   `preflight.go`'s check list + `deploy/kubernetes/rbac/README.md` must
+   all gain the new verb in the same commit (lesson: C1's StatefulSet
+   shape-guard reads, caught only by CI's minimal-RBAC leg, 2026-07-21).
 
 ## 9. Shared integration-test harness (docs/planning/08 G6)
 

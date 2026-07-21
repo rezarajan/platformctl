@@ -27,6 +27,19 @@ var preflightChecks = []authorizationv1.ResourceAttributes{
 	{Verb: "update", Group: "apps", Resource: "deployments"},
 	{Verb: "delete", Group: "apps", Resource: "deployments"},
 	{Verb: "list", Group: "apps", Resource: "deployments"},
+	// StatefulSets and PodDisruptionBudgets: the StableIdentity replica-set
+	// shape and the shape-transition guard (docs/planning/08 C1,
+	// docs/adr/004) — EnsureContainer/Inspect/ListManaged/Remove consult
+	// both workload shapes on every call.
+	{Verb: "get", Group: "apps", Resource: "statefulsets"},
+	{Verb: "create", Group: "apps", Resource: "statefulsets"},
+	{Verb: "update", Group: "apps", Resource: "statefulsets"},
+	{Verb: "delete", Group: "apps", Resource: "statefulsets"},
+	{Verb: "list", Group: "apps", Resource: "statefulsets"},
+	{Verb: "get", Group: "policy", Resource: "poddisruptionbudgets"},
+	{Verb: "create", Group: "policy", Resource: "poddisruptionbudgets"},
+	{Verb: "update", Group: "policy", Resource: "poddisruptionbudgets"},
+	{Verb: "delete", Group: "policy", Resource: "poddisruptionbudgets"},
 	{Verb: "get", Resource: "services"},
 	{Verb: "create", Resource: "services"},
 	{Verb: "update", Resource: "services"},

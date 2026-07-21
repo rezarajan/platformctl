@@ -61,6 +61,8 @@ cluster, to prove it's actually sufficient — not just documented as such.
 | `namespaces` | get, create, delete, list | `EnsureNetwork`/`RemoveNetwork` (a Provider's `runtime.network` maps to a Namespace) |
 | `nodes` | list | `EnsureReachable`'s `node-port` access mode (resolves a node address) |
 | `deployments.apps` | get, create, update, delete, list | `EnsureContainer`/`Remove`/`Inspect`/`ListManaged` (a container maps to a Deployment) |
+| `statefulsets.apps` | get, create, update, delete, list | StableIdentity replica sets and the shape-transition guard (docs/adr/004): every `EnsureContainer`/`Inspect`/`ListManaged`/`Remove` consults both workload shapes |
+| `poddisruptionbudgets.policy` | get, create, update, delete | applied automatically whenever `Replicas > 1` (docs/adr/004) |
 | `services` | get, create, update, delete, list | `EnsureContainer`'s Service (DNS/addressing) + `EnsureReachable`'s `node-port`/`load-balancer` modes |
 | `persistentvolumeclaims` | get, create, update, delete, list | `EnsureVolume`/`RemoveVolume` |
 | `secrets` | get, create, update, delete | `ContainerSpec.Files`/`ImagePullAuth`, and the `KubernetesSecretBackend` SecretStore adapter |
