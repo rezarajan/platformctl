@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 )
 
 const phase1Gates = "DockerRuntime=true,ContainerProvider=true"
@@ -18,10 +16,7 @@ const phase1Gates = "DockerRuntime=true,ContainerProvider=true"
 // waits for health, reports Ready — and destroy removes exactly what was
 // created, verified by diffing the daemon's managed-object list before/after.
 func TestDockerProviderEndToEnd(t *testing.T) {
-	rt, err := dockerruntime.New(nil)
-	if err != nil {
-		t.Fatalf("connect to Docker: %v", err)
-	}
+	rt := requireDocker(t)
 	ctx := context.Background()
 
 	managedNames := func() map[string]bool {
@@ -40,12 +35,8 @@ func TestDockerProviderEndToEnd(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/docker-scenario"
 
-	t.Cleanup(func() {
-		// Belt-and-braces cleanup if the test fails mid-way.
-		_ = rt.Remove(ctx, "datascape-phase1-probe")
-		_ = rt.RemoveVolume(ctx, "datascape-phase1-probe-data")
-		_ = rt.RemoveNetwork(ctx, "datascape-phase1")
-	})
+	// Belt-and-braces cleanup if the test fails mid-way.
+	registerDockerCleanup(t, rt, []string{"datascape-phase1-probe"}, []string{"datascape-phase1-probe-data"}, "datascape-phase1")
 
 	out, err, code := run(t, "apply", manifests, "--state-file", stateFile,
 		"--auto-approve", "--feature-gates", phase1Gates)

@@ -391,3 +391,18 @@ integration suite all missed:
    pattern) reaching Ready with unmodified providers is the acceptance bar.
    A synthetic conformance suite proves the *port contract*; only real
    providers against real infrastructure prove the *translation*.
+
+## 9. Shared integration-test harness (docs/planning/08 G6)
+
+`cmd/platformctl/integration_harness_test.go` (same package, `//go:build
+integration`) holds the setup/cleanup shapes that recur across
+`cmd/platformctl/*_integration_test.go`'s Docker-backed suites:
+`requireDocker(t)` (connect to the Docker daemon, `t.Fatalf` on error) and
+`registerDockerCleanup(t, rt, containers, volumes, network)` (best-effort
+removal in containers → volumes → network order, registered via
+`t.Cleanup`, with the func also returned for suites that additionally run
+it once up front). New Docker-backed integration tests should use these
+instead of re-implementing them. Migration of existing suites is
+opportunistic, never a big-bang rewrite — bespoke setups (Kubernetes
+cluster guards, chaos's mid-apply kill, shared-state's raw MinIO container)
+stay local to their file.
