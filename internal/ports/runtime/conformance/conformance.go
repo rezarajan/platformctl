@@ -22,6 +22,30 @@ type MutationCounter interface {
 	Mutations() int
 }
 
+// waitReadyReplicas polls Inspect until the aggregate ReadyReplicas reaches
+// want, in the same deadline-poll style the adapters' own WaitHealthy loops
+// use. WaitHealthy deliberately returns at "at least one replica ready"
+// (docs/design/004's provider-decides rule), so asserting ReadyReplicas == N
+// immediately after it races the remaining replicas on a real cluster — every
+// full-set assertion must converge through here instead.
+func waitReadyReplicas(ctx context.Context, t *testing.T, rt runtime.ContainerRuntime, name string, want int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		st, found, err := rt.Inspect(ctx, name)
+		if err != nil {
+			t.Fatalf("Inspect(%q) while waiting for %d ready replicas: %v", name, want, err)
+		}
+		if found && st.ReadyReplicas == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ReadyReplicas for %q = %d (found=%v), want %d — did not converge within %s", name, st.ReadyReplicas, found, want, timeout)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 // Run executes the conformance suite against the given runtime. namePrefix
 // isolates this run's objects (important against a real Docker daemon).
 func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
@@ -105,6 +129,15 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 	t.Run("WaitHealthy", func(t *testing.T) {
 		if err := rt.WaitHealthy(ctx, ctrSpec.Name, 30*time.Second); err != nil {
 			t.Fatalf("WaitHealthy: %v", err)
+		}
+		// The port contract: a non-replicated container reports ReadyReplicas
+		// 1 when Healthy, 0 otherwise — never left unset by an adapter.
+		st, found, err := rt.Inspect(ctx, ctrSpec.Name)
+		if err != nil || !found {
+			t.Fatalf("Inspect after WaitHealthy: found=%v err=%v", found, err)
+		}
+		if st.Healthy && st.ReadyReplicas != 1 {
+			t.Errorf("healthy single container reports ReadyReplicas = %d, want 1", st.ReadyReplicas)
 		}
 	})
 
@@ -690,12 +723,12 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		if err := rt.WaitHealthy(ctx, name, 30*time.Second); err != nil {
 			t.Fatalf("WaitHealthy after scale to 2: %v", err)
 		}
+		// WaitHealthy returns at 1-of-N ready; converge to the full count
+		// rather than asserting it immediately (racy on a real cluster).
+		waitReadyReplicas(ctx, t, rt, name, 2, 60*time.Second)
 		st, found, err := rt.Inspect(ctx, name)
 		if err != nil || !found {
 			t.Fatalf("Inspect after scale to 2: found=%v err=%v", found, err)
-		}
-		if st.ReadyReplicas != 2 {
-			t.Errorf("ReadyReplicas after scale to 2 = %d, want 2", st.ReadyReplicas)
 		}
 		if !st.Healthy {
 			t.Errorf("aggregate Healthy = false with 2/2 replicas ready")
@@ -713,6 +746,22 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 			t.Errorf("second EnsureContainer with identical Replicas: 2 spec mutated state (NFR-2 violation)")
 		}
 
+		// Capture ordinal 0's identity before scaling: a scale-up must only
+		// add new ordinals, never recreate existing ones (Replicas is
+		// set-level state and must not leak into per-ordinal spec hashes).
+		// Adapters whose ordinals are literal named units (Docker, fake)
+		// resolve the ordinal name here; Kubernetes' Deployment path has no
+		// deterministically-named ordinal to inspect, so the identity half of
+		// the check is skipped there and covered by the mutation counter on
+		// the fake instead.
+		ordName := runtime.OrdinalName(name, 0)
+		var ord0IDBefore string
+		if ordSt, ordFound, err := rt.Inspect(ctx, ordName); err != nil {
+			t.Fatalf("Inspect(%q) before scale-up: %v", ordName, err)
+		} else if ordFound {
+			ord0IDBefore = ordSt.ID
+		}
+
 		scaled := spec
 		scaled.Replicas = 3
 		if hasCounter {
@@ -724,15 +773,21 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		if hasCounter && mc.Mutations() == before {
 			t.Errorf("scaling Replicas 2 -> 3 was not detected as a spec change")
 		}
+		if hasCounter && mc.Mutations() != before+1 {
+			t.Errorf("scaling Replicas 2 -> 3 caused %d mutations, want exactly 1 (the new ordinal) — existing ordinals must not be recreated on scale-up", mc.Mutations()-before)
+		}
 		if err := rt.WaitHealthy(ctx, name, 30*time.Second); err != nil {
 			t.Fatalf("WaitHealthy after scale to 3: %v", err)
 		}
-		st, found, err = rt.Inspect(ctx, name)
-		if err != nil || !found {
-			t.Fatalf("Inspect after scale to 3: found=%v err=%v", found, err)
-		}
-		if st.ReadyReplicas != 3 {
-			t.Errorf("ReadyReplicas after scale to 3 = %d, want 3", st.ReadyReplicas)
+		waitReadyReplicas(ctx, t, rt, name, 3, 60*time.Second)
+		if ord0IDBefore != "" {
+			ordSt, ordFound, err := rt.Inspect(ctx, ordName)
+			if err != nil || !ordFound {
+				t.Fatalf("Inspect(%q) after scale-up: found=%v err=%v", ordName, ordFound, err)
+			}
+			if ordSt.ID != ord0IDBefore {
+				t.Errorf("scale-up 2 -> 3 recreated existing ordinal %q (ID %q -> %q); existing ordinals must be untouched", ordName, ord0IDBefore, ordSt.ID)
+			}
 		}
 	})
 
@@ -760,6 +815,9 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		if err := rt.WaitHealthy(ctx, name, 30*time.Second); err != nil {
 			t.Fatalf("WaitHealthy: %v", err)
 		}
+		// WaitHealthy returns at 1-of-N ready; converge to the full count
+		// before inspecting individual ordinals (racy on a real cluster).
+		waitReadyReplicas(ctx, t, rt, name, 2, 60*time.Second)
 
 		var ordinalIDs []string
 		for i := 0; i < 2; i++ {
@@ -787,9 +845,6 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		if aggregate.Name != name {
 			t.Errorf("aggregate Inspect Name = %q, want %q", aggregate.Name, name)
 		}
-		if aggregate.ReadyReplicas != 2 {
-			t.Errorf("aggregate ReadyReplicas = %d, want 2", aggregate.ReadyReplicas)
-		}
 	})
 
 	// ReplicaSet_PerOrdinalVolumePersistence proves StableIdentity's other
@@ -805,8 +860,14 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		volBase := namePrefix + "-stateful-vol"
 		t.Cleanup(func() {
 			_ = rt.Remove(ctx, name)
-			_ = rt.RemoveVolume(ctx, runtime.OrdinalName(volBase, 0))
-			_ = rt.RemoveVolume(ctx, runtime.OrdinalName(volBase, 1))
+			for i := 0; i < 2; i++ {
+				// Docker/fake name per-ordinal volumes "<claim>-<i>" ...
+				_ = rt.RemoveVolume(ctx, runtime.OrdinalName(volBase, i))
+				// ... while Kubernetes StatefulSet VolumeClaimTemplates name
+				// the per-ordinal PVCs "<claim>-<setName>-<i>" — best-effort
+				// delete those too so integration runs don't leak claims.
+				_ = rt.RemoveVolume(ctx, runtime.OrdinalName(volBase+"-"+name, i))
+			}
 		})
 
 		type commandRunner interface {
@@ -876,6 +937,9 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		if err := rt.WaitHealthy(ctx, name, 30*time.Second); err != nil {
 			t.Fatalf("generation 2 did not become healthy: %v", err)
 		}
+		// WaitHealthy returns at 1-of-N ready; both ordinals must be back up
+		// before reading each one's marker (racy on a real cluster).
+		waitReadyReplicas(ctx, t, rt, name, 2, 60*time.Second)
 
 		for i := 0; i < 2; i++ {
 			ordName := runtime.OrdinalName(name, i)
@@ -887,6 +951,47 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 			if string(got) != want {
 				t.Errorf("ordinal %d content after update = %q, want %q (per-ordinal volume did not persist, or ordinals are not isolated)", i, got, want)
 			}
+		}
+	})
+
+	// ReplicaSet_ShapeTransition_Refused pins the consistent posture for
+	// unsupported shape transitions (docs/design/004, Known limitations):
+	// collapsing an existing multi-replica set to a single container in place
+	// is refused with an error naming the remedy (destroy and recreate), on
+	// every adapter — rather than silently leaving stale ordinals (Docker) or
+	// a stale StatefulSet (Kubernetes) serving the shared name.
+	t.Run("ReplicaSet_ShapeTransition_Refused", func(t *testing.T) {
+		name := namePrefix + "-shape-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		spec := runtime.ContainerSpec{
+			Name:           name,
+			Image:          "alpine:3.20",
+			Cmd:            []string{"sleep", "300"},
+			Networks:       []string{netSpec.Name},
+			Labels:         labels,
+			Replicas:       2,
+			StableIdentity: true,
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer (StableIdentity, Replicas: 2): %v", err)
+		}
+		if err := rt.WaitHealthy(ctx, name, 30*time.Second); err != nil {
+			t.Fatalf("WaitHealthy: %v", err)
+		}
+
+		collapsed := spec
+		collapsed.Replicas = 1
+		if _, err := rt.EnsureContainer(ctx, collapsed); err == nil {
+			t.Fatal("EnsureContainer converted a multi-replica set to a single container in place; the transition must be refused (remedy: destroy and recreate)")
+		}
+		// The refused call must have changed nothing: the set is still there
+		// and still aggregates as before.
+		st, found, err := rt.Inspect(ctx, name)
+		if err != nil || !found {
+			t.Fatalf("Inspect after refused shape transition: found=%v err=%v", found, err)
+		}
+		if !st.Healthy {
+			t.Errorf("replica set unhealthy after a refused shape transition")
 		}
 	})
 

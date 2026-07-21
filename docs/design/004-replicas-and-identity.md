@@ -292,6 +292,41 @@ explicitly as a non-blocking follow-up below so it isn't lost.
   (a `Size`/`StorageClass` pair on `VolumeMount` itself) and deferred until
   a concrete provider (C2/C4) actually needs it, rather than speculatively
   widened here.
+- **A fixed host-audience `HostPort` cannot be combined with
+  `Replicas > 1` on Docker** — every ordinal inherits the same published
+  host port, so ordinal 1's create fails with the daemon's raw
+  port-already-allocated error. Replicated sets should leave host ports
+  auto-allocated (or internal-audience); a validate-time refusal is C2's
+  concern once a provider can actually declare a replicated spec.
+- **Collective-name addressing on Docker is health-unaware** — a real
+  hazard, not just an implementation detail: Docker's embedded DNS
+  round-robins the shared alias across *every* container carrying it,
+  including members that are still starting or currently unhealthy,
+  whereas the Kubernetes Deployment path's ClusterIP Service only
+  load-balances across pods whose readiness probe passes. Combined with
+  `WaitHealthy`'s deliberate at-least-one-ready return, a Docker client
+  that dials the collective `Name` immediately after `WaitHealthy` can be
+  handed a replica that is not ready yet. Callers needing a
+  guaranteed-live endpoint should retry at the connection level
+  (`runtime.WithReachable` already absorbs this class) or address a
+  specific ordinal name; the port does not paper over the difference.
+- **Cross-adapter observable-surface asymmetries** for a `Replicas > 1`
+  set — each individually harmless, all worth knowing before building
+  tooling on top: (i) `ListManaged` reports N per-ordinal entries on
+  Docker and the fake (each member is a real, individually named managed
+  unit) but one aggregate entry per set on Kubernetes (the
+  Deployment/StatefulSet is the managed object); (ii) per-ordinal storage
+  names differ — Docker volumes are `"<VolumeName>-<i>"` while Kubernetes
+  StatefulSet PVCs are `"<VolumeName>-<Name>-<i>"` (StatefulSet claim
+  naming), so storage cleanup/GC must be adapter-aware (the conformance
+  suite's per-ordinal-volume cleanup deletes both name shapes
+  best-effort); (iii) the aggregate `ContainerState.ID` is ordinal 0's
+  own container ID on Docker/the fake but the StatefulSet's/Deployment's
+  own UID on Kubernetes — never treat it as a stable cross-runtime
+  identity; (iv) scale-down mechanics differ — Docker force-removes stale
+  ordinals synchronously inside `EnsureContainer`, while Kubernetes'
+  controllers terminate pods gracefully and asynchronously after the
+  replica-count update returns.
 
 ## Why this doesn't box anything out
 

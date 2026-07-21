@@ -475,6 +475,17 @@ func (r *Runtime) ensureDeployment(ctx context.Context, spec runtimeport.Contain
 
 	deploymentNotFound := apierrors.IsNotFound(err)
 
+	// Shape-transition guard (docs/design/004): a StatefulSet by this name
+	// means the container was last applied with StableIdentity and Replicas >
+	// 1. Taking the Deployment path anyway would leave the old StatefulSet
+	// serving the same app=<name> selector — refuse instead, mirroring
+	// ensureHeadlessService's refusal in the opposite direction.
+	if _, serr := r.clientset.AppsV1().StatefulSets(ns).Get(ctx, spec.Name, metav1.GetOptions{}); serr == nil {
+		return runtimeport.ContainerState{}, fmt.Errorf("statefulset %q exists for this container; refusing to convert it to a Deployment in place — remove it first (destroy and recreate) if switching this container off StableIdentity or below 2 replicas", spec.Name)
+	} else if !apierrors.IsNotFound(serr) {
+		return runtimeport.ContainerState{}, fmt.Errorf("get statefulset %q: %w", spec.Name, serr)
+	}
+
 	deployment, err := buildDeployment(ns, spec, desiredHash, replicas)
 	if err != nil {
 		return runtimeport.ContainerState{}, err
@@ -554,6 +565,19 @@ func (r *Runtime) ensureStatefulSet(ctx context.Context, spec runtimeport.Contai
 	}
 
 	statefulSetNotFound := apierrors.IsNotFound(err)
+
+	// Shape-transition guard, the inverse of ensureDeployment's: a Deployment
+	// by this name means the container was last applied without StableIdentity
+	// (or with a single replica). Creating a StatefulSet alongside it would
+	// leave both serving the same app=<name> selector — refuse instead.
+	// ensureHeadlessService refuses the ClusterIP Service half of this
+	// transition, but a portless Deployment has no Service, so the guard must
+	// live here too.
+	if _, derr := r.clientset.AppsV1().Deployments(ns).Get(ctx, spec.Name, metav1.GetOptions{}); derr == nil {
+		return runtimeport.ContainerState{}, fmt.Errorf("deployment %q exists for this container; refusing to convert it to a StatefulSet in place — remove it first (destroy and recreate) if switching this container to StableIdentity", spec.Name)
+	} else if !apierrors.IsNotFound(derr) {
+		return runtimeport.ContainerState{}, fmt.Errorf("get deployment %q: %w", spec.Name, derr)
+	}
 
 	sts, err := buildStatefulSet(ns, spec, desiredHash, replicas)
 	if err != nil {

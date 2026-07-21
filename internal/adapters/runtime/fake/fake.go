@@ -90,6 +90,19 @@ func (r *Runtime) EnsureContainer(_ context.Context, spec runtime.ContainerSpec)
 	defer r.mu.Unlock()
 	n := spec.ReplicaCount()
 	if n <= 1 {
+		// Shape-transition guard (docs/design/004): collapsing an existing
+		// replica set to a single container in place is refused, exactly as
+		// the Docker and Kubernetes adapters refuse it, so unit tests catch
+		// the transition before an integration run does.
+		memberCount := 0
+		for _, rec := range r.containers {
+			if rec.replicaBase == spec.Name {
+				memberCount++
+			}
+		}
+		if memberCount > 0 {
+			return runtime.ContainerState{}, fmt.Errorf("container %q exists as a %d-member replica set; refusing to convert it to a single container in place — remove it first (destroy and recreate) if collapsing this set to one replica", spec.Name, memberCount)
+		}
 		r.ensureOneLocked(spec, "", 0)
 		return r.stateOf(spec), nil
 	}
@@ -148,6 +161,11 @@ func ordinalContainerSpec(spec runtime.ContainerSpec, i int) runtime.ContainerSp
 	out := spec
 	out.Name = runtime.OrdinalName(spec.Name, i)
 	out.Aliases = append(append([]string{}, spec.Aliases...), spec.Name)
+	// Replicas is set-level state, not a property of any one ordinal: kept in
+	// the per-ordinal spec it would make a 2 -> 3 scale-up look like a spec
+	// change on ordinals 0 and 1 (containerSpecEqual is a deep compare),
+	// mirroring the Docker adapter's identical hash-stability rule.
+	out.Replicas = 0
 	if spec.StableIdentity && len(spec.Volumes) > 0 {
 		vols := make([]runtime.VolumeMount, len(spec.Volumes))
 		for j, vm := range spec.Volumes {

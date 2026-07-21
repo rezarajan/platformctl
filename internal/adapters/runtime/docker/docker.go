@@ -109,6 +109,17 @@ const specGenLabel = "io.datascape.spec-hash"
 func (r *Runtime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpec) (runtime.ContainerState, error) {
 	n := spec.ReplicaCount()
 	if n <= 1 {
+		// Shape-transition guard (docs/design/004): collapsing an existing
+		// replica set to a single container in place would leave the stale
+		// ordinals running and still serving the shared alias — refuse,
+		// matching the Kubernetes adapter's StatefulSet/Deployment refusal.
+		members, err := r.listReplicaMembers(ctx, spec.Name)
+		if err != nil {
+			return runtime.ContainerState{}, err
+		}
+		if len(members) > 0 {
+			return runtime.ContainerState{}, fmt.Errorf("container %q exists as a %d-member replica set; refusing to convert it to a single container in place — remove it first (destroy and recreate) if collapsing this set to one replica", spec.Name, len(members))
+		}
 		return r.ensureOneContainer(ctx, spec)
 	}
 	return r.ensureReplicaSet(ctx, spec, n)
@@ -150,6 +161,10 @@ func (r *Runtime) ordinalContainerSpec(ctx context.Context, spec runtime.Contain
 	out := spec
 	out.Name = runtime.OrdinalName(spec.Name, i)
 	out.Aliases = append(append([]string{}, spec.Aliases...), spec.Name)
+	// Replicas is set-level state, not a property of any one ordinal: leaving
+	// it in the per-ordinal spec would fold the set size into every member's
+	// spec hash, making a 2 -> 3 scale-up needlessly recreate ordinals 0 and 1.
+	out.Replicas = 0
 
 	labels := make(map[string]string, len(spec.Labels)+2)
 	for k, v := range spec.Labels {
@@ -820,6 +835,16 @@ func stateFromInspect(info container.InspectResponse) runtime.ContainerState {
 			st.Healthy = info.State.Health.Status == container.Healthy
 		} else {
 			st.Healthy = info.State.Running
+		}
+	}
+	// Per the port contract, a non-replicated container reports ReadyReplicas
+	// 1 when Healthy, 0 otherwise. An individual replica-set member reports 0:
+	// ReadyReplicas only has a meaning at the set level, where
+	// aggregateContainerStates recomputes it from the members' Healthy flags —
+	// matching the fake and Kubernetes (stateFromPod) adapters.
+	if st.Healthy {
+		if info.Config == nil || info.Config.Labels[runtime.LabelReplicaBase] == "" {
+			st.ReadyReplicas = 1
 		}
 	}
 	st.Ports = portsFromInspect(info)
