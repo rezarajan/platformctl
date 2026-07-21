@@ -28,7 +28,7 @@ func TestManifestNeverEmbedsPlaintextCredentials(t *testing.T) {
 		Namespace:    "default",
 		ProviderType: "postgres",
 		Format:       "postgres/pg_dump-plain",
-		Destination:  RefOf(loc, "orders-20260101T000000Z.sql"),
+		Destination:  RefOf(loc, "orders/orders-20260101T000000Z.sql"),
 	}
 
 	jsonBytes, err := json.Marshal(m)

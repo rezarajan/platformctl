@@ -33,7 +33,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/domain/backup"
@@ -155,29 +154,90 @@ func RunPipeline(ctx context.Context, rt runtime.ContainerRuntime, spec Pipeline
 		return fmt.Errorf("job %q: start consumer: %w", spec.JobName, err)
 	}
 
-	var wg sync.WaitGroup
-	waitErrs := make([]error, 2)
-	wg.Add(2)
-	go func() { defer wg.Done(); waitErrs[0] = waitExited(ctx, rt, producerName, timeout) }()
-	go func() { defer wg.Done(); waitErrs[1] = waitExited(ctx, rt, consumerName, timeout) }()
-	wg.Wait()
-	if waitErrs[0] != nil || waitErrs[1] != nil {
-		return fmt.Errorf("job %q: %w", spec.JobName, joinNonNil(waitErrs[0], waitErrs[1], diagnostics(ctx, rt, producerName, consumerName)))
-	}
-
-	producerExit, perr := readExitCode(ctx, rt, producerName, "producer-exit")
-	consumerExit, cerr := readExitCode(ctx, rt, consumerName, "consumer-exit")
-	if perr != nil || producerExit != "0" || cerr != nil || consumerExit != "0" {
-		return fmt.Errorf("job %q failed (producer exit=%q err=%v, consumer exit=%q err=%v)%s",
-			spec.JobName, producerExit, perr, consumerExit, cerr, diagnostics(ctx, rt, producerName, consumerName))
-	}
-	return nil
+	return waitPipeline(ctx, rt, spec.JobName, producerName, consumerName, timeout)
 }
 
 const (
 	redirectTo   = true  // producer: shellCmd's stdout -> pipe
 	redirectFrom = false // consumer: shellCmd's stdin <- pipe
 )
+
+// sideOutcome is what waitPipeline learns about one side once its container
+// has stopped running: its recorded shell exit code, plus any error reading
+// it back.
+type sideOutcome struct {
+	done bool
+	code string
+	err  error
+}
+
+// waitPipeline polls both sides and returns the moment either one is known
+// to have failed — rather than always waiting for both, up to timeout, the
+// way a pair of independent goroutines blocked on WaitGroup.Wait would
+// (docs/planning/08 C6 review finding 4): an instantly-exiting side (e.g.
+// the K1 entrypoint bug) otherwise leaves its peer blocked on the FIFO,
+// which nothing but the read/write end closing (or the container being
+// removed) can unstick, for the rest of DefaultTimeout. The moment a failure
+// is known, this best-effort-removes the still-running peer so its blocked
+// read/write unblocks (as an error) instead of idling out the clock, and
+// returns promptly with a log tail from both sides.
+func waitPipeline(ctx context.Context, rt runtime.ContainerRuntime, jobName, producerName, consumerName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var producer, consumer sideOutcome
+	for {
+		if !producer.done {
+			producer = pollSide(ctx, rt, producerName, "producer-exit")
+		}
+		if !consumer.done {
+			consumer = pollSide(ctx, rt, consumerName, "consumer-exit")
+		}
+		if producer.err != nil {
+			return fmt.Errorf("job %q: producer: %w", jobName, producer.err)
+		}
+		if consumer.err != nil {
+			return fmt.Errorf("job %q: consumer: %w", jobName, consumer.err)
+		}
+		if producer.done && producer.code != "0" {
+			_ = rt.Remove(context.WithoutCancel(ctx), consumerName) // unstick the peer's blocked FIFO end
+			return fmt.Errorf("job %q: producer failed (exit=%q)%s", jobName, producer.code, diagnostics(ctx, rt, producerName, consumerName))
+		}
+		if consumer.done && consumer.code != "0" {
+			_ = rt.Remove(context.WithoutCancel(ctx), producerName)
+			return fmt.Errorf("job %q: consumer failed (exit=%q)%s", jobName, consumer.code, diagnostics(ctx, rt, producerName, consumerName))
+		}
+		if producer.done && consumer.done {
+			return nil // both exited zero
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("job %q: did not finish within %s%s", jobName, timeout, diagnostics(ctx, rt, producerName, consumerName))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// pollSide inspects one side once: not-yet-done (still running), done with
+// an exit code (possibly non-zero — the caller decides what that means), or
+// an error (the container vanished, or inspect itself failed).
+func pollSide(ctx context.Context, rt runtime.ContainerRuntime, name, exitFile string) sideOutcome {
+	st, found, err := rt.Inspect(ctx, name)
+	switch {
+	case err != nil:
+		return sideOutcome{err: fmt.Errorf("inspect %q: %w", name, err)}
+	case !found:
+		return sideOutcome{err: fmt.Errorf("container %q disappeared before completing", name)}
+	case st.Running:
+		return sideOutcome{}
+	}
+	code, err := readExitCode(ctx, rt, name, exitFile)
+	if err != nil {
+		return sideOutcome{err: fmt.Errorf("read exit code for %q: %w", name, err)}
+	}
+	return sideOutcome{done: true, code: code}
+}
 
 func sideSpec(name, volName string, labels map[string]string, side Side, toPipe bool) runtime.ContainerSpec {
 	redirect := "> " + PipePath
@@ -190,38 +250,25 @@ func sideSpec(name, volName string, labels map[string]string, side Side, toPipe 
 	}
 	script := fmt.Sprintf("mkfifo %s 2>/dev/null; (%s) %s; echo $? > %s", PipePath, side.ShellCmd, redirect, exitFile)
 	return runtime.ContainerSpec{
-		Name:     name,
-		Image:    side.Image,
-		Cmd:      []string{"sh", "-c", script},
-		Env:      side.Env,
-		Files:    side.Files,
-		Networks: side.Networks,
-		Volumes:  []runtime.VolumeMount{{VolumeName: volName, MountPath: WorkDir}},
-		Labels:   labels,
-	}
-}
-
-func waitExited(ctx context.Context, rt runtime.ContainerRuntime, name string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		st, found, err := rt.Inspect(ctx, name)
-		if err != nil {
-			return fmt.Errorf("inspect %q: %w", name, err)
-		}
-		if found && !st.Running {
-			return nil
-		}
-		if !found {
-			return fmt.Errorf("container %q disappeared before completing", name)
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("container %q did not finish within %s", name, timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(pollInterval):
-		}
+		Name:  name,
+		Image: side.Image,
+		// Entrypoint replaces the image's own ENTRYPOINT so the script runs
+		// under a shell regardless of it — Cmd alone (appended after
+		// whatever the image declares) is not enough: minio/mc's image
+		// ENTRYPOINT is ["mc"], so a bare Cmd here once ran as
+		// "mc sh -c ...", which mc rejects as an unknown subcommand and
+		// exits immediately (docs/planning/08 C6 review finding 1;
+		// docs/adr/007-backup-restore.md). Postgres/mysql's official images
+		// happen to tolerate this via their entrypoint scripts' "exec an
+		// unrecognized command as-is" fallback, but relying on that per
+		// image is exactly the kind of coincidence this makes unnecessary.
+		Entrypoint: []string{"sh", "-c"},
+		Cmd:        []string{script},
+		Env:        side.Env,
+		Files:      side.Files,
+		Networks:   side.Networks,
+		Volumes:    []runtime.VolumeMount{{VolumeName: volName, MountPath: WorkDir}},
+		Labels:     labels,
 	}
 }
 
@@ -240,17 +287,4 @@ func diagnostics(ctx context.Context, rt runtime.ContainerRuntime, producerName,
 	pLogs, _ := rt.Logs(ctx, producerName, 40)
 	cLogs, _ := rt.Logs(ctx, consumerName, 40)
 	return fmt.Sprintf("\nproducer logs:\n%s\nconsumer logs:\n%s", pLogs, cLogs)
-}
-
-func joinNonNil(a, b error, suffix string) error {
-	switch {
-	case a != nil && b != nil:
-		return fmt.Errorf("producer: %v; consumer: %v%s", a, b, suffix)
-	case a != nil:
-		return fmt.Errorf("producer: %v%s", a, suffix)
-	case b != nil:
-		return fmt.Errorf("consumer: %v%s", b, suffix)
-	default:
-		return fmt.Errorf("%s", suffix)
-	}
 }

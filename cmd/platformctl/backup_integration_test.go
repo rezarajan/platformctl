@@ -39,7 +39,7 @@ func TestBackupRestorePostgresRoundTrip(t *testing.T) {
 	t.Setenv("DATASCAPE_SECRET_BKP_MINIO_ROOT_USERNAME", "bkpminio")
 	t.Setenv("DATASCAPE_SECRET_BKP_MINIO_ROOT_PASSWORD", "bkp-minio-pw")
 
-	_, stateFile, combined, dbOnly := setupBackupScenario(t)
+	_, storeStateFile, dbStateFile, combined, dbOnly := setupBackupScenario(t)
 	ctx := context.Background()
 
 	// Seed rows.
@@ -57,7 +57,7 @@ func TestBackupRestorePostgresRoundTrip(t *testing.T) {
 
 	// Backup.
 	out, err, code := run(t, "backup", "Source/bkp-pg-src", combined, "--to", "Dataset/bkp-store",
-		"--state-file", stateFile, "--feature-gates=BackupRestore=true", "-o", "json")
+		"--state-file", storeStateFile, "--feature-gates=BackupRestore=true", "-o", "json")
 	if err != nil || code != 0 {
 		t.Fatalf("backup failed (code %d): %v\n%s", code, err, out)
 	}
@@ -72,11 +72,13 @@ func TestBackupRestorePostgresRoundTrip(t *testing.T) {
 		t.Fatalf("backup -o json output embeds a plaintext credential:\n%s", out)
 	}
 
-	// Destroy just the db tier, then apply it fresh (empty database).
-	if out, err, code := run(t, "destroy", dbOnly, "--state-file", stateFile, "--auto-approve"); err != nil || code != 0 {
+	// Destroy just the db tier, then apply it fresh (empty database) —
+	// against the db tier's own state file, never the store's (see
+	// setupBackupScenario).
+	if out, err, code := run(t, "destroy", dbOnly, "--state-file", dbStateFile, "--auto-approve"); err != nil || code != 0 {
 		t.Fatalf("destroy db tier failed (code %d): %v\n%s", code, err, out)
 	}
-	if out, err, code := run(t, "apply", dbOnly, "--state-file", stateFile, "--auto-approve"); err != nil || code != 0 {
+	if out, err, code := run(t, "apply", dbOnly, "--state-file", dbStateFile, "--auto-approve"); err != nil || code != 0 {
 		t.Fatalf("re-apply db tier failed (code %d): %v\n%s", code, err, out)
 	}
 
@@ -96,7 +98,7 @@ func TestBackupRestorePostgresRoundTrip(t *testing.T) {
 	// Restore.
 	out, err, code = run(t, "restore", "Source/bkp-pg-src", combined, "--from", "Dataset/bkp-store",
 		"--object", strings.TrimPrefix(manifest.Destination.Key, "dumps/"),
-		"--state-file", stateFile, "--feature-gates=BackupRestore=true",
+		"--state-file", storeStateFile, "--feature-gates=BackupRestore=true",
 		"--yes-i-understand-this-overwrites-existing-data", "-o", "json")
 	if err != nil || code != 0 {
 		t.Fatalf("restore failed (code %d): %v\n%s", code, err, out)
@@ -132,7 +134,7 @@ func TestBackupRestoreMySQLRoundTrip(t *testing.T) {
 	t.Setenv("DATASCAPE_SECRET_BKP_MINIO_ROOT_USERNAME", "bkpminio")
 	t.Setenv("DATASCAPE_SECRET_BKP_MINIO_ROOT_PASSWORD", "bkp-minio-pw")
 
-	_, stateFile, combined, dbOnly := setupBackupScenario(t)
+	_, storeStateFile, dbStateFile, combined, dbOnly := setupBackupScenario(t)
 
 	dsn := func() string {
 		cfg := godriver.NewConfig()
@@ -153,7 +155,7 @@ func TestBackupRestoreMySQLRoundTrip(t *testing.T) {
 	_ = db.Close()
 
 	out, err, code := run(t, "backup", "Source/bkp-mysql-src", combined, "--to", "Dataset/bkp-store",
-		"--state-file", stateFile, "--feature-gates=BackupRestore=true", "-o", "json")
+		"--state-file", storeStateFile, "--feature-gates=BackupRestore=true", "-o", "json")
 	if err != nil || code != 0 {
 		t.Fatalf("backup failed (code %d): %v\n%s", code, err, out)
 	}
@@ -162,10 +164,10 @@ func TestBackupRestoreMySQLRoundTrip(t *testing.T) {
 		t.Fatalf("parse backup manifest: %v\n%s", err, out)
 	}
 
-	if out, err, code := run(t, "destroy", dbOnly, "--state-file", stateFile, "--auto-approve"); err != nil || code != 0 {
+	if out, err, code := run(t, "destroy", dbOnly, "--state-file", dbStateFile, "--auto-approve"); err != nil || code != 0 {
 		t.Fatalf("destroy db tier failed (code %d): %v\n%s", code, err, out)
 	}
-	if out, err, code := run(t, "apply", dbOnly, "--state-file", stateFile, "--auto-approve"); err != nil || code != 0 {
+	if out, err, code := run(t, "apply", dbOnly, "--state-file", dbStateFile, "--auto-approve"); err != nil || code != 0 {
 		t.Fatalf("re-apply db tier failed (code %d): %v\n%s", code, err, out)
 	}
 
@@ -184,7 +186,7 @@ func TestBackupRestoreMySQLRoundTrip(t *testing.T) {
 
 	out, err, code = run(t, "restore", "Source/bkp-mysql-src", combined, "--from", "Dataset/bkp-store",
 		"--object", strings.TrimPrefix(manifest.Destination.Key, "dumps/"),
-		"--state-file", stateFile, "--feature-gates=BackupRestore=true",
+		"--state-file", storeStateFile, "--feature-gates=BackupRestore=true",
 		"--yes-i-understand-this-overwrites-existing-data", "-o", "json")
 	if err != nil || code != 0 {
 		t.Fatalf("restore failed (code %d): %v\n%s", code, err, out)
@@ -225,7 +227,7 @@ func TestBackupRestoreS3DatasetRoundTrip(t *testing.T) {
 	t.Setenv("DATASCAPE_SECRET_BKP_MINIO_ROOT_USERNAME", "bkpminio")
 	t.Setenv("DATASCAPE_SECRET_BKP_MINIO_ROOT_PASSWORD", "bkp-minio-pw")
 
-	_, stateFile, combined, _ := setupBackupScenario(t)
+	_, storeStateFile, _, combined, _ := setupBackupScenario(t)
 
 	// Seed an object into the bkp-store Dataset directly via the minio-go
 	// client against the instance's published host port.
@@ -235,7 +237,7 @@ func TestBackupRestoreS3DatasetRoundTrip(t *testing.T) {
 	putTestObject(t, ctx, cl, "bkp-store", "dumps/warehouse/part-0001.parquet", "hello-from-warehouse")
 
 	out, err, code := run(t, "backup", "Dataset/bkp-store", combined, "--to", "Dataset/bkp-store-mirror",
-		"--state-file", stateFile, "--feature-gates=BackupRestore=true", "-o", "json")
+		"--state-file", storeStateFile, "--feature-gates=BackupRestore=true", "-o", "json")
 	if err != nil || code != 0 {
 		t.Fatalf("s3 backup failed (code %d): %v\n%s", code, err, out)
 	}
@@ -246,7 +248,7 @@ func TestBackupRestoreS3DatasetRoundTrip(t *testing.T) {
 	}
 
 	out, err, code = run(t, "restore", "Dataset/bkp-store", combined, "--from", "Dataset/bkp-store-mirror",
-		"--state-file", stateFile, "--feature-gates=BackupRestore=true",
+		"--state-file", storeStateFile, "--feature-gates=BackupRestore=true",
 		"--yes-i-understand-this-overwrites-existing-data", "-o", "json")
 	if err != nil || code != 0 {
 		t.Fatalf("s3 restore failed (code %d): %v\n%s", code, err, out)
@@ -258,12 +260,30 @@ func TestBackupRestoreS3DatasetRoundTrip(t *testing.T) {
 	}
 }
 
-// setupBackupScenario applies the durable backup store (once) and the
-// database tier (fresh), and returns the shared Docker runtime, the shared
-// state file, and the two manifest paths every subtest needs: combined
-// (secrets + store + db, for backup/restore) and dbOnly (secrets + db, for
+// setupBackupScenario applies the durable backup store (once, into its own
+// state file) and the database tier (fresh, into a separate state file), and
+// returns the shared Docker runtime, the store's state file (what backup/
+// restore commands use — it is the only state that ever carries bkp-minio's
+// persisted endpoint fact), the db tier's state file (what the destroy/apply
+// cycle uses), and the two manifest paths every subtest needs: combined
+// (secrets + store + db, for backup/restore's Kind/name selectors, which
+// must resolve both the Source/Dataset being acted on and the Dataset
+// destination/source from one manifest) and dbOnly (secrets + db, for
 // destroy/apply cycles that must never touch the store).
-func setupBackupScenario(t *testing.T) (rt *dockerruntime.Runtime, stateFile, combined, dbOnly string) {
+//
+// Two state files, not one: `apply` is authoritative over its *entire*
+// state file — any resource present in state but absent from the manifest
+// being applied is planned for deletion (internal/application/plan's
+// computeApplyDeletes). db-only/db.yaml is deliberately scoped to exclude
+// store.yaml's resources so destroy/apply can cycle the database tier
+// without touching the durable backup store — but that scoping only holds
+// if the store's resources are never present in the *same* state file
+// db-only's apply is authoritative over. A single shared state file (this
+// scenario's original shape) meant `apply dbOnly` planned — and executed —
+// a delete of bkp-minio/bkp-store/bkp-store-mirror on every restore cycle
+// (found live: the s3 Dataset round trip alone hid this, since it never
+// exercises the db-only destroy/apply cycle at all).
+func setupBackupScenario(t *testing.T) (rt *dockerruntime.Runtime, storeStateFile, dbStateFile, combined, dbOnly string) {
 	t.Helper()
 	rtc, err := dockerruntime.New(nil)
 	if err != nil {
@@ -282,14 +302,19 @@ func setupBackupScenario(t *testing.T) (rt *dockerruntime.Runtime, stateFile, co
 	cleanup()
 	t.Cleanup(cleanup)
 
-	stateFile = filepath.Join(t.TempDir(), "state.json")
+	storeStateFile = filepath.Join(t.TempDir(), "store-state.json")
+	dbStateFile = filepath.Join(t.TempDir(), "db-state.json")
+	storeOnly := "testdata/backup-restore-scenario/store-only"
 	combined = "testdata/backup-restore-scenario"
 	dbOnly = "testdata/backup-restore-scenario/db-only"
 
-	if out, err, code := run(t, "apply", combined, "--state-file", stateFile, "--auto-approve"); err != nil || code != 0 {
-		t.Fatalf("initial apply failed (code %d): %v\n%s", code, err, out)
+	if out, err, code := run(t, "apply", storeOnly, "--state-file", storeStateFile, "--auto-approve"); err != nil || code != 0 {
+		t.Fatalf("initial store apply failed (code %d): %v\n%s", code, err, out)
 	}
-	return rtc, stateFile, combined, dbOnly
+	if out, err, code := run(t, "apply", dbOnly, "--state-file", dbStateFile, "--auto-approve"); err != nil || code != 0 {
+		t.Fatalf("initial db apply failed (code %d): %v\n%s", code, err, out)
+	}
+	return rtc, storeStateFile, dbStateFile, combined, dbOnly
 }
 
 func newMinioTestClient(t *testing.T, addr, user, pass string) *minio.Client {

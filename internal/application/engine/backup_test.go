@@ -14,10 +14,13 @@ import (
 	"github.com/rezarajan/platformctl/internal/application/featuregate"
 	"github.com/rezarajan/platformctl/internal/application/registry"
 	"github.com/rezarajan/platformctl/internal/domain/backup"
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
+	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/clock"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/ports/state"
 )
 
 // fakeBackupProvider is a local BackupCapableProvider double (CLAUDE.md's
@@ -59,7 +62,12 @@ func newBackupTestEngine(t *testing.T, prov reconciler.Provider, providerType st
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	reg.RegisterProvider(providerType, func() reconciler.Provider { return prov }, "")
-	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+	// Registered under the "docker" type name (backed by the in-memory fake,
+	// same as every other engine unit test) rather than "fake": Backup/
+	// Restore refuse any runtime type other than "docker" (docs/adr/007-
+	// backup-restore.md's Docker-only limitation), and these tests exercise
+	// the engine's dispatch/safety logic, not that specific refusal.
+	reg.RegisterRuntime("docker", func(_ map[string]any) (runtime.ContainerRuntime, error) {
 		return fakeruntime.New(), nil
 	})
 	eng := &Engine{
@@ -70,7 +78,7 @@ func newBackupTestEngine(t *testing.T, prov reconciler.Provider, providerType st
 	envelopes := []resource.Envelope{
 		envelope("Provider", "db", map[string]any{
 			"type":    providerType,
-			"runtime": map[string]any{"type": "fake"},
+			"runtime": map[string]any{"type": "docker"},
 		}),
 		envelope("Source", "orders", map[string]any{
 			"providerRef": map[string]any{"name": "db"},
@@ -112,6 +120,46 @@ func TestBackupRefusesForNonCapableProvider(t *testing.T) {
 	}
 }
 
+// TestBackupRefusesForNonDockerRuntime covers docs/adr/007-backup-restore.md's
+// Docker-only limitation (C6 review finding 5c): the job-container-plus-FIFO
+// mechanism dbjob relies on has no Kubernetes equivalent, so the engine must
+// refuse before ever calling into the provider.
+func TestBackupRefusesForNonDockerRuntime(t *testing.T) {
+	prov := &fakeBackupProvider{}
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	reg.RegisterProvider("fakebackup", func() reconciler.Provider { return prov }, "")
+	reg.RegisterRuntime("kubernetes", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+	eng := &Engine{
+		Registry:   reg,
+		StateStore: localfile.New(filepath.Join(t.TempDir(), "state.json")),
+		Clock:      &clock.Fake{T: time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)},
+	}
+	envelopes := []resource.Envelope{
+		envelope("Provider", "db", map[string]any{
+			"type":    "fakebackup",
+			"runtime": map[string]any{"type": "kubernetes"},
+		}),
+		envelope("Source", "orders", map[string]any{
+			"providerRef": map[string]any{"name": "db"},
+			"engine":      "postgres",
+		}),
+	}
+	key := resource.Key{Namespace: "default", Kind: "Source", Name: "orders"}
+	_, err := eng.Backup(context.Background(), envelopes, key, backup.Location{})
+	if err == nil {
+		t.Fatal("Backup: expected an error for a non-docker runtime, got nil")
+	}
+	if !strings.Contains(err.Error(), "docker") {
+		t.Fatalf("error should name the docker-only limitation, got: %v", err)
+	}
+	if prov.backupCalls != 0 {
+		t.Fatalf("provider.Backup was called %d time(s); the engine must refuse before any provider call", prov.backupCalls)
+	}
+}
+
 func TestRestoreRefusesWithoutAllowOverwrite(t *testing.T) {
 	prov := &fakeBackupProvider{}
 	eng, envelopes := newBackupTestEngine(t, prov, "fakebackup")
@@ -145,6 +193,30 @@ func TestRestoreCallsProviderWhenAllowed(t *testing.T) {
 	}
 }
 
+// TestRestoreRefusesForProtectedResource covers docs/adr/007-backup-restore
+// .md's safe default (C6 review finding 5a): metadata.protect: true refuses
+// restore even with --yes-i-understand-this-overwrites-existing-data
+// (AllowOverwrite) set — protect is not something a single flag can waive.
+func TestRestoreRefusesForProtectedResource(t *testing.T) {
+	prov := &fakeBackupProvider{}
+	eng, envelopes := newBackupTestEngine(t, prov, "fakebackup")
+	eng.AllowOverwrite = true
+	for i := range envelopes {
+		if envelopes[i].Kind == "Source" {
+			envelopes[i].Metadata.Protect = true
+		}
+	}
+
+	key := resource.Key{Namespace: "default", Kind: "Source", Name: "orders"}
+	err := eng.Restore(context.Background(), envelopes, key, backup.Location{Bucket: "backups", Prefix: "orders/dump.sql"})
+	if err == nil {
+		t.Fatal("Restore: expected a refusal error for a protect: true target even with AllowOverwrite, got nil")
+	}
+	if prov.restoreCalls != 0 {
+		t.Fatalf("provider.Restore was called %d time(s); protect: true must refuse before any provider call", prov.restoreCalls)
+	}
+}
+
 func newLocationTestEngine(t *testing.T) *Engine {
 	t.Helper()
 	gates := featuregate.NewRegistry()
@@ -161,10 +233,37 @@ func newLocationTestEngine(t *testing.T) *Engine {
 	}
 }
 
+// seedObjectStoreEndpointFact writes providerKey's persisted state as if
+// apply had already reconciled it, publishing the "s3" endpoint fact
+// resolveDatasetLocation now reads (docs/planning/08 F4) — a manifest
+// envelope never carries a status block (manifest.Load refuses one if
+// hand-authored), so this is the only way a Provider's own published
+// address facts reach a later, separate CLI invocation like backup/restore.
+func seedObjectStoreEndpointFact(t *testing.T, eng *Engine, providerKey resource.Key, ep endpoint.Endpoint) {
+	t.Helper()
+	ctx := context.Background()
+	st, err := eng.StateStore.Load(ctx)
+	if err != nil {
+		t.Fatalf("StateStore.Load: %v", err)
+	}
+	if st.Resources == nil {
+		st.Resources = map[resource.Key]state.ResourceState{}
+	}
+	st.Resources[providerKey] = state.ResourceState{
+		Status: status.Status{ProviderState: map[string]any{
+			endpoint.Key: endpoint.List{ep}.ToState(),
+		}},
+	}
+	if err := eng.StateStore.Save(ctx, st); err != nil {
+		t.Fatalf("StateStore.Save: %v", err)
+	}
+}
+
 // TestResolveDatasetLocation covers --to/--from's Dataset form: a Dataset's
-// own s3/minio Provider supplies the endpoint (its internal DNS name and
-// fixed API port, matching s3.go's own convention) and credentials (its
-// rootSecretRef, resolved exactly like any other capability call).
+// own s3/minio Provider supplies the endpoint (from its own persisted
+// endpoint fact, published on a prior apply — never re-derived by convention
+// here, docs/planning/08 F4) and credentials (its rootSecretRef, resolved
+// exactly like any other capability call).
 func TestResolveDatasetLocation(t *testing.T) {
 	t.Setenv("DATASCAPE_SECRET_STORE_ROOT_USERNAME", "admin")
 	t.Setenv("DATASCAPE_SECRET_STORE_ROOT_PASSWORD", "s3cr3t")
@@ -184,6 +283,10 @@ func TestResolveDatasetLocation(t *testing.T) {
 			"format":      "parquet",
 		}),
 	}
+	seedObjectStoreEndpointFact(t, eng, resource.Key{Namespace: "default", Kind: "Provider", Name: "minio-a"}, endpoint.Endpoint{
+		Name: "s3", Scheme: "http", Internal: "minio-a:9000", Insecure: true,
+		RuntimeName: "minio-a", ContainerPort: 9000, Audience: runtime.AudienceHost, Network: "custom-net",
+	})
 	loc, err := eng.ResolveObjectStoreLocation(context.Background(), envelopes, "Dataset/warehouse", "", "orders.sql", "default")
 	if err != nil {
 		t.Fatalf("ResolveObjectStoreLocation: %v", err)
@@ -200,9 +303,12 @@ func TestResolveDatasetLocation(t *testing.T) {
 	if loc.Network != "custom-net" {
 		t.Errorf("Network = %q, want custom-net", loc.Network)
 	}
+	if loc.RuntimeName != "minio-a" || loc.ContainerPort != 9000 {
+		t.Errorf("RuntimeName/ContainerPort = %q/%d, want minio-a/9000", loc.RuntimeName, loc.ContainerPort)
+	}
 }
 
-func TestResolveDatasetLocationRejectsNonS3Provider(t *testing.T) {
+func TestResolveDatasetLocationRejectsProviderWithNoEndpointFact(t *testing.T) {
 	eng := newLocationTestEngine(t)
 	eng.Registry.RegisterProvider("postgres", func() reconciler.Provider { return noop.New() }, "")
 	envelopes := []resource.Envelope{
@@ -215,7 +321,7 @@ func TestResolveDatasetLocationRejectsNonS3Provider(t *testing.T) {
 	}
 	_, err := eng.ResolveObjectStoreLocation(context.Background(), envelopes, "Dataset/not-really", "", "", "default")
 	if err == nil {
-		t.Fatal("expected an error resolving a Dataset backed by a non-s3 Provider")
+		t.Fatal("expected an error resolving a Dataset backed by a Provider that never published an s3 endpoint fact")
 	}
 }
 

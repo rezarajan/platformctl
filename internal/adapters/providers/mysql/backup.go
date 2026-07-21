@@ -152,7 +152,7 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 	// Unlike Backup's dest.Prefix (a directory-like prefix Backup appends a
 	// generated filename under), src.Prefix for Restore names the exact
 	// object to read back — the CLI/engine resolves --from plus --object
-	// into this before calling Restore (docs/design/007).
+	// into this before calling Restore (docs/adr/007-backup-restore.md).
 	objectKey := strings.TrimPrefix(src.Prefix, "/")
 	if objectKey == "" {
 		return fmt.Errorf("Source %q: restore source must name a specific backup object, not a bare bucket", req.Resource.Metadata.Name)

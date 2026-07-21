@@ -82,8 +82,19 @@ func (p *Provider) Backup(ctx context.Context, req reconciler.Request, dest back
 				"PGDATABASE": dbName,
 				"PGPASSFILE": pgpassPath,
 			},
-			Files:    []runtime.FileMount{{Path: pgpassPath, Content: []byte(fmt.Sprintf("%s:5432:%s:%s:%s", escapePgpass(dbHost), escapePgpass(dbName), escapePgpass(suUser), escapePgpass(suPass))), Mode: 0o600}},
-			ShellCmd: "pg_dump -h \"$PGHOST\" -p \"$PGPORT\" -U \"$PGUSER\" -d \"$PGDATABASE\" -F p",
+			Files: []runtime.FileMount{{Path: pgpassPath, Content: []byte(fmt.Sprintf("%s:5432:%s:%s:%s", escapePgpass(dbHost), escapePgpass(dbName), escapePgpass(suUser), escapePgpass(suPass))), Mode: 0o600}},
+			// --no-publications: a publication (e.g. "dbz_publication",
+			// Debezium's default) is provider-managed infrastructure —
+			// reconcileDatabase's own ensurePublication (postgres/sql.go)
+			// idempotently recreates it on a fresh database, same as any
+			// other reconciled object. Without this flag, pg_dump's plain
+			// SQL dump embeds a CREATE PUBLICATION statement for it too,
+			// which then collides ("publication ... already exists") with
+			// the one the Source's own reconcile already created on the
+			// freshly re-applied database, aborting the restore partway
+			// through (found live: restore replayed the table data
+			// successfully, then failed on this line, per ON_ERROR_STOP=1).
+			ShellCmd: "pg_dump -h \"$PGHOST\" -p \"$PGPORT\" -U \"$PGUSER\" -d \"$PGDATABASE\" -F p --no-publications",
 		},
 		Consumer: dbjob.Side{
 			Image:    dbjob.MCImage,
@@ -140,7 +151,7 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 	// Unlike Backup's dest.Prefix (a directory-like prefix Backup appends a
 	// generated filename under), src.Prefix for Restore names the exact
 	// object to read back — the CLI/engine resolves --from plus --object
-	// into this before calling Restore (docs/design/007).
+	// into this before calling Restore (docs/adr/007-backup-restore.md).
 	objectKey := strings.TrimPrefix(src.Prefix, "/")
 	if objectKey == "" {
 		return fmt.Errorf("Source %q: restore source must name a specific backup object, not a bare bucket", req.Resource.Metadata.Name)

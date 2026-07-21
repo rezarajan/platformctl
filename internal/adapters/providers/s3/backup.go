@@ -14,21 +14,42 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
+	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
-// remoteClient builds an S3 client for an arbitrary backup.Location — unlike
-// newClient (locked to plain HTTP for this provider's own reachableAddr),
-// dest/src may be a real TLS-terminated endpoint (AWS S3, a secured MinIO).
-func remoteClient(loc backup.Location) (*minio.Client, error) {
+// remoteClient builds an S3 client for an arbitrary backup.Location, dialing
+// from *this process* (not a job container on the shared network — this
+// provider's own Backup/Restore run in-process, unlike postgres/mysql's
+// dbjob mechanism). loc.Endpoint is only valid from inside the runtime's own
+// network; a Location resolved from an in-platform Dataset instead carries
+// RuntimeName/ContainerPort (docs/planning/08 F4) and this resolves a
+// currently-dialable address from them via ContainerRuntime.EnsureReachable
+// — the exact pattern this provider's own admin calls use (s3.go's
+// reachableAddr) — rather than dialing Endpoint directly, which is what
+// caused "no such host" against a real runtime (C6 review finding 2;
+// docs/adr/007-backup-restore.md). A raw-URL Location (RuntimeName empty:
+// real AWS S3, or any other externally routable endpoint) dials Endpoint as
+// before — it needs no runtime resolution. The returned close func must
+// always be called, even when it's a no-op.
+func remoteClient(ctx context.Context, rt runtime.ContainerRuntime, loc backup.Location) (*minio.Client, func() error, error) {
 	ep := strings.TrimPrefix(strings.TrimPrefix(loc.Endpoint, "https://"), "http://")
+	closeAddr := func() error { return nil }
+	if loc.RuntimeName != "" {
+		addr, cf, err := rt.EnsureReachable(ctx, loc.RuntimeName, loc.ContainerPort)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve a reachable address for %q port %d: %w", loc.RuntimeName, loc.ContainerPort, err)
+		}
+		ep, closeAddr = addr, cf
+	}
 	cl, err := minio.New(ep, &minio.Options{
 		Creds:  credentials.NewStaticV4(loc.AccessKey, loc.SecretKey, ""),
 		Secure: !loc.Insecure,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("s3 client for %q: %w", loc.Endpoint, err)
+		_ = closeAddr()
+		return nil, nil, fmt.Errorf("s3 client for %q: %w", ep, err)
 	}
-	return cl, nil
+	return cl, closeAddr, nil
 }
 
 func joinKey(prefix, suffix string) string {
@@ -118,10 +139,11 @@ func (p *Provider) Backup(ctx context.Context, req reconciler.Request, dest back
 	if err != nil {
 		return backup.Manifest{}, err
 	}
-	destClient, err := remoteClient(dest)
+	destClient, closeDest, err := remoteClient(ctx, req.Runtime, dest)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
+	defer closeDest()
 	if err := ensureRemoteBucket(ctx, destClient, dest.Bucket); err != nil {
 		return backup.Manifest{}, err
 	}
@@ -171,10 +193,11 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 	if err != nil {
 		return err
 	}
-	srcClient, err := remoteClient(src)
+	srcClient, closeSrc, err := remoteClient(ctx, req.Runtime, src)
 	if err != nil {
 		return err
 	}
+	defer closeSrc()
 	if _, err := syncObjects(ctx, srcClient, src.Bucket, src.Prefix, destClient, ds.Bucket, ds.Prefix); err != nil {
 		return fmt.Errorf("Dataset %q: s3 restore: %w", req.Resource.Metadata.Name, err)
 	}

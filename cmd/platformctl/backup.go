@@ -13,7 +13,7 @@ import (
 // newBackupCmd implements docs/planning/08 C6: stream a data-bearing
 // resource's contents to an object-store destination via its provider's
 // reconciler.BackupCapableProvider. Gated (Alpha, disabled by default) —
-// see docs/design/007-backup-restore.md for the seam this is built on.
+// see docs/adr/007-backup-restore.md for the seam this is built on.
 func newBackupCmd(a *app) *cobra.Command {
 	var to, credentialsSecretRef, namespace string
 	cmd := &cobra.Command{

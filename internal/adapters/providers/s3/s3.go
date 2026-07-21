@@ -182,7 +182,27 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 		"hostEndpoint": hostAddr,
 		"internalUrl":  "http://" + name + ":" + strconv.Itoa(apiPort),
 		endpoint.Key: endpoint.List{
-			{Name: "s3", Scheme: "http", Host: hostURL, Internal: "http://" + name + ":" + strconv.Itoa(apiPort), Insecure: true},
+			// RuntimeName/ContainerPort/Audience/Network are the F4 facts a
+			// caller resolving a backup.Location from this Dataset's
+			// providerRef needs to reach this store both from inside the
+			// runtime (Internal, joining Network) and from the CLI host
+			// itself (via ContainerRuntime.EnsureReachable on RuntimeName/
+			// ContainerPort — docs/planning/08 F4, C6 review findings 2/3;
+			// docs/adr/007-backup-restore.md). Internal is a bare
+			// "host:port" (no scheme), matching every other provider's
+			// convention (see the package doc on endpoint.Endpoint.Internal)
+			// — a consumer composing a URL prepends Scheme itself.
+			{
+				Name:          "s3",
+				Scheme:        "http",
+				Host:          hostURL,
+				Internal:      name + ":" + strconv.Itoa(apiPort),
+				Insecure:      true,
+				RuntimeName:   name,
+				ContainerPort: apiPort,
+				Audience:      runtime.AudienceHost,
+				Network:       network(cfg),
+			},
 		}.ToState(),
 	}
 	return st, nil

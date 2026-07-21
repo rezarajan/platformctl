@@ -37,16 +37,21 @@ func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash stri
 		Image:           spec.Image,
 		ImagePullPolicy: pullPolicy,
 		// ContainerSpec.Cmd is Docker's Config.Cmd — appended after the
-		// image's own ENTRYPOINT, never replacing it (the Docker adapter
-		// only ever sets Cmd, never Entrypoint). Kubernetes' "command"
+		// image's own ENTRYPOINT, never replacing it. Kubernetes' "command"
 		// field maps to Docker's ENTRYPOINT and "args" maps to Docker's
 		// CMD, so this must be Args, not Command — using Command here
 		// would silently bypass any entrypoint script the image relies on
 		// (found by running the redpanda provider, unmodified, against a
 		// real cluster: its image's /entrypoint.sh got skipped entirely).
-		Args:  spec.Cmd,
-		Env:   envVars(spec.Env),
-		Ports: containerPorts(spec.Ports),
+		Args: spec.Cmd,
+		// ContainerSpec.Entrypoint (nil unless a caller explicitly sets it,
+		// e.g. dbjob — docs/planning/08 C6 review finding 1) is the mirror
+		// image of Cmd/Args: it maps to Kubernetes' "command", which
+		// replaces the image's ENTRYPOINT the same way Docker's
+		// Config.Entrypoint does.
+		Command: spec.Entrypoint,
+		Env:     envVars(spec.Env),
+		Ports:   containerPorts(spec.Ports),
 	}
 
 	probe := healthProbe(spec.HealthCheck)

@@ -13,7 +13,10 @@
 // Backup/Restore call, exactly like reconciler.Request.Secrets.
 package backup
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Location is an object-store destination (Backup) or source (Restore): a
 // bucket/prefix at an S3-API-compatible endpoint, plus already-resolved
@@ -41,6 +44,20 @@ type Location struct {
 	// empty when Endpoint is externally routable (a raw URL destination),
 	// meaning no extra network join is needed.
 	Network string
+	// RuntimeName/ContainerPort are the F4 runtime facts (docs/planning/08
+	// F4; docs/adr/007-backup-restore.md) behind Endpoint, for a caller
+	// dialing from *outside* the runtime (this CLI process, not a job
+	// container on the shared network): the exact (runtime object name,
+	// container port) the realizing provider passed to
+	// ContainerRuntime.EnsureContainer, letting that caller resolve a
+	// currently-dialable address via ContainerRuntime.EnsureReachable /
+	// runtime.WithReachable instead of dialing Endpoint directly — Endpoint
+	// is only valid from inside the runtime's own network (a job container
+	// that joined Network), never from the CLI host itself. Empty for a raw
+	// URL Location (external S3, real AWS, ...), whose Endpoint is already
+	// externally routable and needs no runtime resolution.
+	RuntimeName   string
+	ContainerPort int
 	// AccessKey/SecretKey are resolved credentials, held only for the
 	// duration of the call — never serialized into a Manifest, state, or
 	// log line.
@@ -61,9 +78,26 @@ type Ref struct {
 	Prefix string `json:"prefix,omitempty" yaml:"prefix,omitempty"`
 }
 
-// RefOf strips a Location down to its credential-free Ref.
+// RefOf strips a Location down to its credential-free Ref. key is the exact
+// object a Backup/Restore call landed on or read from (its full key,
+// including any prefix) or "" for a whole-prefix sync (s3's own Backup,
+// which never lands at one object). Prefix is derived from key's directory
+// portion, not simply copied from loc.Prefix — a restore's src.Prefix
+// already *is* the full key by the time it reaches here (Restore needs the
+// exact object to read, not a directory), so reusing loc.Prefix verbatim
+// made a Ref's Key and Prefix carry the same value, redundantly (C6 review
+// finding 5b). key == "" leaves Prefix as loc.Prefix unchanged (the s3
+// bucket-sync case, where Prefix legitimately means "the tree that was
+// synced," not "this key's directory").
 func RefOf(loc Location, key string) Ref {
-	return Ref{Endpoint: loc.Endpoint, Bucket: loc.Bucket, Key: key, Prefix: loc.Prefix}
+	prefix := loc.Prefix
+	if key != "" {
+		prefix = ""
+		if idx := strings.LastIndex(key, "/"); idx >= 0 {
+			prefix = key[:idx]
+		}
+	}
+	return Ref{Endpoint: loc.Endpoint, Bucket: loc.Bucket, Key: key, Prefix: prefix}
 }
 
 // Manifest is what a successful Backup call returns: where the data landed
