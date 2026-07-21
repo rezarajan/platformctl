@@ -805,6 +805,15 @@ note first (per doc 06 §3).
   convention) is fixed in `2a05bd4` (scoped to avro/protobuf). Merge
   pending owner decision + one live `TestAvroCDCEndToEnd` integration run;
   same doc 04 §12 merge-conflict note as C1.
+- **Merged to main 2026-07-21.** The live run first failed twice, fixed in
+  `6ec290a`: (a) the stock Debezium image ships no Confluent Avro
+  converter — a version-pinned testdata image now adds the plugin (the
+  s3sink pattern), documented as §7.3's worker-image requirement in
+  doc 03; (b) DNS-label topic prefixes contain hyphens, illegal in Avro
+  namespaces — the provider now sets
+  `schema.name.adjustment.mode`/`field.name.adjustment.mode: avro` for
+  schema-carrying formats. `TestAvroCDCEndToEnd` green against real
+  Docker (33.5s). D2 (Parquet) is unblocked (§10 step 3).
 
 ### D2: Parquet sink format end-to-end
 

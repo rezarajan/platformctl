@@ -154,6 +154,18 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 			}
 		}
 
+		// Schema-carrying options.format (docs/planning/08 D1): checked
+		// against the EventStream endpoint's own realizing Provider, not
+		// b.ProviderRef — registry availability (configuration.schemaRegistry:
+		// enabled) is a fact of the stream backend a CDC/sink connector
+		// writes into or reads from, not a capability of the connector
+		// itself. Purely a manifest-declared, forward-looking check (no live
+		// infra touched) — the same "validate before apply schedules
+		// anything" contract as every other capability check here.
+		if err := checkSchemaFormat(bindingName, srcEnv, tgtEnv, b, idx, resolve); err != nil {
+			return err
+		}
+
 		// Provider-specific option-block validation (the Binding half of the
 		// SpecValidator DX contract): apply-time-only option errors are
 		// validate-time regressions.
@@ -162,6 +174,60 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 				return fmt.Errorf("Binding %q: %w", bindingName, err)
 			}
 		}
+	}
+	return nil
+}
+
+// checkSchemaFormat validates a Binding's spec.options.format (docs/planning/08
+// D1) against the EventStream endpoint's own realizing Provider — whichever
+// of srcEnv/tgtEnv resolved to Kind EventStream, role-neutral per
+// docs/planning/03 §7.1. Only the schema-carrying formats this task
+// introduced (avro, protobuf) are checked here: any other value — unset,
+// json, or a sink-payload format like parquet (docs/planning/03 §7's sink
+// example) — is not a schema-registry concern and is left to the realizing
+// provider's own ValidateBindingOptions, exactly as before D1. This keeps
+// the SchemaRegistrySupport gate boundary clean: gate off ⇒ zero behavior
+// change for manifests that don't use avro/protobuf (doc 02 §11's
+// Alpha/disabled convention).
+func checkSchemaFormat(bindingName string, srcEnv, tgtEnv resource.Envelope, b binding.Binding, idx manifestIndex, resolve ProviderResolver) error {
+	format, _ := b.Options["format"].(string)
+	if format != "avro" && format != "protobuf" {
+		return nil
+	}
+
+	var esEnv resource.Envelope
+	switch {
+	case srcEnv.Kind == "EventStream":
+		esEnv = srcEnv
+	case tgtEnv.Kind == "EventStream":
+		esEnv = tgtEnv
+	default:
+		// No EventStream endpoint on this Binding at all (shouldn't happen
+		// for any mode this version implements — every allowed pairing has
+		// one) — nothing to check the format against.
+		return nil
+	}
+
+	esProvEnv, ok := idx.resolveKind(esEnv, resource.RefFromSpec(esEnv.Spec, "providerRef"), "Provider")
+	if !ok || esProvEnv.Kind != "Provider" {
+		return fmt.Errorf("Binding %q: EventStream %q providerRef does not resolve to a Provider in namespace %q", bindingName, esEnv.Metadata.Name, resource.RefNamespace(esEnv.Spec, "providerRef", esEnv.Metadata.Namespace))
+	}
+	esProv, err := provider.FromEnvelope(esProvEnv)
+	if err != nil {
+		return err
+	}
+	esImpl, err := resolve(esProv.Type)
+	if err != nil {
+		return fmt.Errorf("Binding %q: %w", bindingName, err)
+	}
+
+	supported := []string{"json"}
+	if schemaCapable, ok := esImpl.(reconciler.SchemaRegistryCapableProvider); ok {
+		supported = schemaCapable.SupportedSchemaFormats(esProv)
+	}
+	if !contains(supported, format) {
+		return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support format %q (supported: %s)",
+			bindingName, esProvEnv.Metadata.Name, esProv.Type, format, joinSorted(supported))
 	}
 	return nil
 }

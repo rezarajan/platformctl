@@ -81,19 +81,31 @@ func (l List) ToState() []map[string]any {
 // Key is the well-known providerState key the list is stored under.
 const Key = "endpoints"
 
-// FromState parses providerState["endpoints"] (an []any of maps after a JSON
-// round-trip) back into a List. Unknown shapes yield an empty list.
+// FromState parses providerState["endpoints"] back into a List. It accepts
+// two shapes: an []any of map[string]any (the form a real cross-process
+// StateStore.Save/Load round-trip always produces — JSON has no concept of
+// a typed Go slice) and a []map[string]any directly (ToState()'s own return
+// type, read back within the same process before any (de)serialization —
+// e.g. the engine resolving a just-reconciled sibling resource's published
+// endpoint later in the same Apply call, docs/planning/08 D1). Unknown
+// shapes yield an empty list.
 func FromState(v any) List {
-	raw, ok := v.([]any)
-	if !ok {
+	var raw []map[string]any
+	switch typed := v.(type) {
+	case []map[string]any:
+		raw = typed
+	case []any:
+		raw = make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			if m, ok := item.(map[string]any); ok {
+				raw = append(raw, m)
+			}
+		}
+	default:
 		return nil
 	}
 	out := make(List, 0, len(raw))
-	for _, item := range raw {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
+	for _, m := range raw {
 		e := Endpoint{}
 		e.Name, _ = m["name"].(string)
 		e.Scheme, _ = m["scheme"].(string)

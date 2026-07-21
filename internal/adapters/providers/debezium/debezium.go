@@ -298,20 +298,21 @@ func buildDesiredConnector(req reconciler.Request) (desiredConnector, error) {
 	connectorName := res.Metadata.Name
 
 	config := map[string]string{
-		"connector.class":                connectorClass,
-		"database.hostname":              dbHost,
-		"database.port":                  strconv.Itoa(dbPort),
-		"database.user":                  creds["username"],
-		"database.password":              creds["password"],
-		"topic.prefix":                   topicPrefix,
-		"key.converter":                  "org.apache.kafka.connect.json.JsonConverter",
-		"value.converter":                "org.apache.kafka.connect.json.JsonConverter",
-		"key.converter.schemas.enable":   "false",
-		"value.converter.schemas.enable": "false",
+		"connector.class":   connectorClass,
+		"database.hostname": dbHost,
+		"database.port":     strconv.Itoa(dbPort),
+		"database.user":     creds["username"],
+		"database.password": creds["password"],
+		"topic.prefix":      topicPrefix,
 		// Redpanda does not auto-create topics by default; let Connect create
 		// per-table CDC topics itself (single-node replication).
 		"topic.creation.default.replication.factor": "1",
 		"topic.creation.default.partitions":         "1",
+	}
+	format, _ := b.Options["format"].(string)
+	converterOverride, _ := b.Options["converter"].(string)
+	if err := applyConverterConfig(config, format, converterOverride, req.SchemaRegistryURL); err != nil {
+		return d, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
 	}
 	if src.Engine == "postgres" {
 		config["database.dbname"] = dbName
@@ -440,6 +441,69 @@ func (p *Provider) ConfigureLineage(ctx context.Context, req reconciler.Request,
 	}
 	applyLineage(current, ep)
 	return kafkaconnect.PutConnectorConfig(ctx, url, d.name, current)
+}
+
+// applyConverterConfig sets the key/value converter config for a Binding's
+// spec.options.format (docs/planning/08 D1): json (default) needs no
+// registry; avro/protobuf require registryURL, resolved by the engine from
+// the EventStream's own realizing Provider — compatibility.Check already
+// refused an avro/protobuf format against a registry-less provider chain at
+// validate time, so an empty registryURL reaching here means the upstream
+// Provider hasn't reconciled yet in this run (defensive, not expected to
+// trigger given dependency-graph ordering). converterOverride is an advanced
+// escape hatch: an explicit converter class wins over the format-derived
+// default for both key and value converters (e.g. a non-Confluent-compatible
+// Avro/Protobuf converter implementation).
+func applyConverterConfig(config map[string]string, format, converterOverride, registryURL string) error {
+	switch format {
+	case "", "json":
+		class := "org.apache.kafka.connect.json.JsonConverter"
+		if converterOverride != "" {
+			class = converterOverride
+		}
+		config["key.converter"] = class
+		config["value.converter"] = class
+		config["key.converter.schemas.enable"] = "false"
+		config["value.converter.schemas.enable"] = "false"
+	case "avro", "protobuf":
+		if registryURL == "" {
+			return fmt.Errorf("options.format %q requires a schema registry endpoint, but none was resolved from the EventStream's Provider (has it been applied since configuration.schemaRegistry: enabled was set?)", format)
+		}
+		class := defaultConverterClass(format)
+		if converterOverride != "" {
+			class = converterOverride
+		}
+		config["key.converter"] = class
+		config["value.converter"] = class
+		config["key.converter.schema.registry.url"] = registryURL
+		config["value.converter.schema.registry.url"] = registryURL
+		// Debezium derives Avro record namespaces from the topic prefix —
+		// which is this platform's EventStream name, a DNS label that may
+		// legally contain hyphens. Hyphens are illegal in Avro names, so
+		// without sanitization every hyphenated resource name makes the
+		// registry reject the schema (422 "Invalid namespace") and the
+		// task FAILs after registration. Debezium's own adjustment modes
+		// rewrite illegal characters to underscores; topic and subject
+		// names are unaffected (they permit hyphens).
+		config["schema.name.adjustment.mode"] = "avro"
+		config["field.name.adjustment.mode"] = "avro"
+	default:
+		return fmt.Errorf("options.format %q is not supported (must be one of: json, avro, protobuf)", format)
+	}
+	return nil
+}
+
+// defaultConverterClass maps a schema-carrying format to the Confluent
+// Connect converter class Redpanda's built-in registry is compatible with.
+func defaultConverterClass(format string) string {
+	switch format {
+	case "avro":
+		return "io.confluent.connect.avro.AvroConverter"
+	case "protobuf":
+		return "io.confluent.connect.protobuf.ProtobufConverter"
+	default:
+		return "org.apache.kafka.connect.json.JsonConverter"
+	}
 }
 
 func applyLineage(config map[string]string, ep lineage.LineageEndpoint) {
@@ -683,6 +747,23 @@ func (p *Provider) ValidateBindingOptions(_ string, options map[string]any) erro
 			}
 		default:
 			return fmt.Errorf("options.databasePort must be an integer, got %T", v)
+		}
+	}
+	// format/converter (docs/planning/08 D1): shape only — whether avro/
+	// protobuf actually has a registry to talk to is a compatibility.Check
+	// concern (it needs the EventStream's Provider resolved), not this
+	// provider's own option-shape validation.
+	if v, ok := options["format"]; ok {
+		format, _ := v.(string)
+		switch format {
+		case "json", "avro", "protobuf":
+		default:
+			return fmt.Errorf("options.format %q is not supported (must be one of: json, avro, protobuf)", format)
+		}
+	}
+	if v, ok := options["converter"]; ok {
+		if s, _ := v.(string); s == "" {
+			return fmt.Errorf("options.converter must be a non-empty string when set")
 		}
 	}
 	return nil

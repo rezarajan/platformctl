@@ -230,6 +230,34 @@ func (a *app) checkExternalGate(envelopes []resource.Envelope) error {
 	return nil
 }
 
+// checkSchemaRegistryGate covers docs/planning/08 D1: SchemaRegistrySupport
+// is Alpha/disabled by default, so a manifest set using either half of the
+// feature — a Provider enabling the built-in registry, or a Binding
+// declaring a schema-carrying options.format — must fail fast at validate
+// with the gate's standard disabled message, exactly like checkExternalGate
+// does for spec.external.
+func (a *app) checkSchemaRegistryGate(envelopes []resource.Envelope) error {
+	for _, e := range envelopes {
+		switch e.Kind {
+		case "Provider":
+			cfg, _ := e.Spec["configuration"].(map[string]any)
+			if v, _ := cfg["schemaRegistry"].(string); v == "enabled" {
+				if err := a.gates.Require("SchemaRegistrySupport"); err != nil {
+					return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("%s declares spec.configuration.schemaRegistry: enabled: %w", e.Key(), err))
+				}
+			}
+		case "Binding":
+			opts, _ := e.Spec["options"].(map[string]any)
+			if format, _ := opts["format"].(string); format == "avro" || format == "protobuf" {
+				if err := a.gates.Require("SchemaRegistrySupport"); err != nil {
+					return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("%s declares spec.options.format %q: %w", e.Key(), format, err))
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // kubernetesPreflight covers docs/planning/08 B6: for every distinct
 // kubernetes runtime config a manifest set declares, check the
 // KubernetesRuntime gate and a fast cluster connectivity/permission probe
@@ -286,6 +314,9 @@ func (a *app) loadAndValidate(path string) ([]resource.Envelope, *graph.Graph, e
 		return nil, nil, cliutil.Exit(cliutil.ExitValidation, err)
 	}
 	if err := a.checkExternalGate(envelopes); err != nil {
+		return nil, nil, err
+	}
+	if err := a.checkSchemaRegistryGate(envelopes); err != nil {
 		return nil, nil, err
 	}
 	if err := a.kubernetesPreflight(envelopes); err != nil {

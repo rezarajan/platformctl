@@ -111,6 +111,10 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// (docs/adr/004-replicas-and-identity.md) since no provider yet
 	// surfaces a schema field that sets Replicas.
 	gates.Register("HighAvailability", featuregate.Alpha, false)
+	// docs/planning/08 D1: Redpanda's built-in Confluent-compatible schema
+	// registry (Provider.spec.configuration.schemaRegistry: enabled) and a
+	// Binding's schema-carrying spec.options.format (avro, protobuf).
+	gates.Register("SchemaRegistrySupport", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")

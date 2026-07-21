@@ -409,6 +409,7 @@ GA. Phase 7 closes with Stage B's exit criteria held (docs/planning/08 §4).
 | `ContainerProvider` | Phase 0 | Alpha | disabled | none — test-only placeholder provider; retirement tracked in 08 E7 |
 | `KubernetesSecretBackend` | 08 Stage B (B4) | Beta (08 Stage B/B9) | enabled | GA with KubernetesRuntime |
 | `HighAvailability` | 08 Stage C (C1) | Alpha | disabled | Beta after C2/C3 soak (guards Replicas > 1; validate-time enforcement arrives with C2 per docs/adr/004) |
+| `SchemaRegistrySupport` | 08 Stage D (D1) | Alpha | disabled | Beta with D2 (Parquet) landing |
 
 Gates planned by the production-readiness backlog (`HighAvailability`,
 `IngressProvider`, `TLSTermination`, `MonitoringStackProvider`,

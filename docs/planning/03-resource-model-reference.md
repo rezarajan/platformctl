@@ -298,6 +298,15 @@ Field notes:
   RBAC posture.
 - `spec.runtime` fields beyond `type` are runtime-specific and validated by the runtime adapter's
   own schema fragment.
+- **`redpanda`'s built-in schema registry** (docs/planning/08 D1, gate `SchemaRegistrySupport`,
+  Alpha/disabled): `configuration.schemaRegistry: enabled | disabled` (default disabled) turns on
+  Redpanda's Confluent-compatible registry (pandaproxy's sibling listener, port 8081) alongside the
+  broker; `configuration.schemaRegistryPort` optionally pins its host-side port (0/omitted =
+  auto-allocated, same convention as every other host port). The endpoint is published as
+  `providerState.endpoints["schema-registry"]` (an observed `Host` binding plus the deterministic
+  `Internal` address other containers on the shared network dial) and surfaced by `platformctl
+  inventory` like every other endpoint. See §7.3 for how a `Binding`'s `spec.options.format`
+  consumes it.
 
 ## 5. Kind: `Source`
 
@@ -473,6 +482,99 @@ once `apply` starts touching real infrastructure. Example:
 error: Binding "student-db-to-events": Provider "postgres-cdc" (type: debezium)
 does not support source engine "sqlite" (supported: postgres, mysql, mongodb)
 ```
+
+### 7.3 `spec.options.format`/`converter` — schema-carrying serialization (docs/planning/08 D1)
+
+Gate: `SchemaRegistrySupport` (Alpha, disabled by default).
+
+Any `Binding` may declare, alongside its mode-specific options:
+
+```yaml
+spec:
+  options:
+    format: avro          # json (default) | avro | protobuf
+    converter: ""          # optional: an explicit converter class override,
+                           # advanced escape hatch — wins over the
+                           # format-derived default for both key and value
+                           # converters (e.g. a non-Confluent-compatible
+                           # Avro/Protobuf converter implementation).
+```
+
+`json` (the default when `format` is unset) needs no schema registry — the
+pre-D1 behavior (schemaless JSON converters) is unchanged. `avro` and
+`protobuf` are schema-carrying: they require a Confluent-compatible schema
+registry reachable from the realizing connector, resolved automatically
+from the **EventStream endpoint's own realizing Provider** — never
+user-typed for the managed case. Today the only registry-capable provider
+is `redpanda`'s built-in one:
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: kafka-cluster
+spec:
+  type: redpanda
+  runtime: {type: docker, network: datascape}
+  configuration:
+    schemaRegistry: enabled    # enabled | disabled (default disabled) —
+                               # enables/exposes the built-in Confluent-
+                               # compatible registry (pandaproxy's sibling
+                               # listener). Endpoint published as
+                               # providerState.endpoints["schema-registry"]
+                               # and surfaced by `platformctl inventory`.
+    schemaRegistryPort: 0      # optional host-port pin; 0 = auto-allocate
+                               # (deterministic, distinct from the Kafka
+                               # host port)
+```
+
+A new capability interface backs the check:
+
+| `mode` / pairing | Capability interface | Declares | Checked against |
+|---|---|---|---|
+| any, when `options.format` is schema-carrying | `SchemaRegistryCapableProvider` | `SupportedSchemaFormats(cfg provider.Provider) []string` | the EventStream endpoint's own realizing Provider (not necessarily the Binding's `providerRef`) |
+
+Unlike the other capability methods, `SupportedSchemaFormats` takes the
+resolved Provider's own config (mirroring `VersionedProvider.VersionCatalog`)
+because the answer is configuration-dependent
+(`configuration.schemaRegistry: enabled`), not a static fact of the provider
+type. A `Binding` declaring `avro`/`protobuf` against a provider chain with
+no registry endpoint fails at `validate` with the standard capability-error
+shape, naming the EventStream's Provider — the resource whose configuration
+actually decides registry availability:
+
+```
+error: Binding "student-db-to-events": Provider "kafka-cluster" (type: redpanda)
+does not support format "avro" (supported: json)
+```
+
+Today only `debezium` (cdc mode) wires the resolved registry URL into real
+connector config (Avro/Protobuf key/value converters,
+`*.converter.schema.registry.url`); a sink-mode Binding may declare
+`options.format` too (the compatibility check is mode-agnostic), but no
+shipped sink provider consumes it yet (D2, Parquet sink format end-to-end,
+is the follow-up task) — `Dataset.spec.format` remains the field governing
+a sink Binding's *object-store output* format (json/parquet/csv/jsonl),
+a separate concept from this section's stream-serialization format. The
+illustrative sink example near the top of §7 shows `options: {format:
+parquet}` predating this section; that shape is not read by any shipped
+provider and predates the `json|avro|protobuf` enum introduced here — noted
+for a future cleanup pass, not corrected in place (additive-only doc
+policy).
+
+**Worker-image requirement (avro/protobuf):** the schema-carrying
+converters must be present in the Connect worker image. The stock Debezium
+image ships only Apicurio converter jars; Redpanda's built-in registry
+speaks the Confluent API, so the provider wires
+`io.confluent.connect.avro.AvroConverter` — the Provider's
+`configuration.image` must therefore include the Confluent Avro converter
+plugin (reference build:
+`cmd/platformctl/testdata/avro-connect-image/Dockerfile`, the same
+stock-image-lacks-the-plugin pattern as s3sink's required image). A
+`Binding` declaring `format: avro|protobuf` against a worker image without
+the jars fails at connector registration with Connect's
+"Class ... could not be found" error — this is an image-content property
+platformctl cannot verify at validate time.
 
 ## 8. Kind: `Dataset`
 

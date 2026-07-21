@@ -780,3 +780,132 @@ func TestConnectionDialAddressUsesPublishedFactNotResourceName(t *testing.T) {
 		t.Fatal("test setup invalid: resource name and runtime object name must differ")
 	}
 }
+
+// fakeSchemaRegistryProvider stands in for redpanda: on reconciling its own
+// Provider resource, it publishes a "schema-registry" endpoint fact exactly
+// like the real adapter does (docs/planning/08 D1) — no naming/port
+// convention re-derived by this test, the same providerState round-trip a
+// real StateStore.Save/Load performs.
+type fakeSchemaRegistryProvider struct {
+	noop.Provider
+	internalAddr string
+}
+
+func (p *fakeSchemaRegistryProvider) Type() string { return "fakestream" }
+
+func (p *fakeSchemaRegistryProvider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	st, err := p.Provider.Reconcile(ctx, req)
+	if err != nil || req.Resource.Kind != "Provider" {
+		return st, err
+	}
+	st.ProviderState = map[string]any{
+		endpoint.Key: endpoint.List{{Name: "schema-registry", Scheme: "http", Internal: p.internalAddr}}.ToState(),
+	}
+	return st, nil
+}
+
+// fakeCDCProvider stands in for debezium: it records whatever
+// req.SchemaRegistryURL the engine resolved for its own Binding reconcile,
+// so the test can assert on it without depending on debezium's own
+// connector-config wiring.
+type fakeCDCProvider struct {
+	noop.Provider
+	gotSchemaRegistryURL string
+	bindingReconciled    bool
+}
+
+func (p *fakeCDCProvider) Type() string { return "fakecdc" }
+
+func (p *fakeCDCProvider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	if req.Resource.Kind == "Binding" {
+		p.gotSchemaRegistryURL = req.SchemaRegistryURL
+		p.bindingReconciled = true
+	}
+	return p.Provider.Reconcile(ctx, req)
+}
+
+// TestResolveSchemaRegistryURLFromEventStreamProvider proves the D1 wiring
+// end to end through a real Apply(): the EventStream's own Provider
+// (fakestream) is reconciled first by dependency-graph ordering and
+// publishes its "schema-registry" endpoint into state; when the dependent
+// Binding (options.format: avro) is then reconciled in the *same* Apply
+// call, its Request.SchemaRegistryURL carries exactly that published
+// endpoint's Internal address — read back from st.Resources (mutated
+// in-place across the run), never constructed by string convention.
+func TestResolveSchemaRegistryURLFromEventStreamProvider(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	streamProv := &fakeSchemaRegistryProvider{internalAddr: "http://stream-broker:8081"}
+	cdcProv := &fakeCDCProvider{}
+	reg.RegisterProvider("fakestream", func() reconciler.Provider { return streamProv }, "")
+	reg.RegisterProvider("fakecdc", func() reconciler.Provider { return cdcProv }, "")
+	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+
+	eng := newTestEngine(t, reg)
+	envelopes := []resource.Envelope{
+		envelope("Provider", "stream-broker", map[string]any{"type": "fakestream", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Provider", "cdc-worker", map[string]any{"type": "fakecdc", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Provider", "db", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Source", "orders-db", map[string]any{"engine": "postgres", "providerRef": map[string]any{"name": "db"}}),
+		envelope("EventStream", "orders-events", map[string]any{"providerRef": map[string]any{"name": "stream-broker"}}),
+		envelope("Binding", "orders-cdc", map[string]any{
+			"mode":        "cdc",
+			"sourceRef":   map[string]any{"name": "orders-db"},
+			"targetRef":   map[string]any{"name": "orders-events"},
+			"providerRef": map[string]any{"name": "cdc-worker"},
+			"options":     map[string]any{"format": "avro"},
+		}),
+	}
+
+	applyAll(t, eng, envelopes)
+
+	if !cdcProv.bindingReconciled {
+		t.Fatal("test setup invalid: the Binding was never reconciled")
+	}
+	if cdcProv.gotSchemaRegistryURL != "http://stream-broker:8081" {
+		t.Errorf("Request.SchemaRegistryURL = %q, want %q", cdcProv.gotSchemaRegistryURL, "http://stream-broker:8081")
+	}
+}
+
+// TestResolveSchemaRegistryURLEmptyForJSONFormat: the common (unset/json)
+// case never resolves a registry URL at all, even when the upstream
+// Provider happens to publish one.
+func TestResolveSchemaRegistryURLEmptyForJSONFormat(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	streamProv := &fakeSchemaRegistryProvider{internalAddr: "http://stream-broker:8081"}
+	cdcProv := &fakeCDCProvider{}
+	reg.RegisterProvider("fakestream", func() reconciler.Provider { return streamProv }, "")
+	reg.RegisterProvider("fakecdc", func() reconciler.Provider { return cdcProv }, "")
+	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+
+	eng := newTestEngine(t, reg)
+	envelopes := []resource.Envelope{
+		envelope("Provider", "stream-broker", map[string]any{"type": "fakestream", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Provider", "cdc-worker", map[string]any{"type": "fakecdc", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Provider", "db", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Source", "orders-db", map[string]any{"engine": "postgres", "providerRef": map[string]any{"name": "db"}}),
+		envelope("EventStream", "orders-events", map[string]any{"providerRef": map[string]any{"name": "stream-broker"}}),
+		envelope("Binding", "orders-cdc", map[string]any{
+			"mode":        "cdc",
+			"sourceRef":   map[string]any{"name": "orders-db"},
+			"targetRef":   map[string]any{"name": "orders-events"},
+			"providerRef": map[string]any{"name": "cdc-worker"},
+		}),
+	}
+
+	applyAll(t, eng, envelopes)
+
+	if !cdcProv.bindingReconciled {
+		t.Fatal("test setup invalid: the Binding was never reconciled")
+	}
+	if cdcProv.gotSchemaRegistryURL != "" {
+		t.Errorf("Request.SchemaRegistryURL = %q, want empty for an unset options.format", cdcProv.gotSchemaRegistryURL)
+	}
+}

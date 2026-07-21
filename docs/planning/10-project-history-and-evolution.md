@@ -313,7 +313,12 @@ Two post-Stage-F fixes are the ratchet's first exemplars (both
   before merge rather than on a cluster. Merge decisions rest with the
   project owner; all three branches will conflict trivially in doc 04
   §12's gate table (restructured 2026-07-20) and touch `main.go`/
-  `reconciler.go` in ways that need sequenced rebases.
+  `reconciler.go` in ways that need sequenced rebases. *(Closure,
+  2026-07-21: C1 merged after its full Kubernetes integration suite ran
+  green on live minikube; D1 merged after its live Avro run surfaced and
+  fixed two more real defects — a missing-converter image requirement and
+  hyphenated-DNS-label names being illegal in Avro namespaces; C6's
+  rework proceeded on its branch.)*
 - Everything else in Stages C/D/E remains open in doc 08; §10 there is the
   sequencing. The headline remaining work: the HA scenarios built on C1,
   ingress/TLS/monitoring, Parquet on D1's registry, and the
