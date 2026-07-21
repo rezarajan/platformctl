@@ -181,10 +181,17 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 // checkSchemaFormat validates a Binding's spec.options.format (docs/planning/08
 // D1) against the EventStream endpoint's own realizing Provider — whichever
 // of srcEnv/tgtEnv resolved to Kind EventStream, role-neutral per
-// docs/planning/03 §7.1. Unset/"json" needs no registry and is always fine.
+// docs/planning/03 §7.1. Only the schema-carrying formats this task
+// introduced (avro, protobuf) are checked here: any other value — unset,
+// json, or a sink-payload format like parquet (docs/planning/03 §7's sink
+// example) — is not a schema-registry concern and is left to the realizing
+// provider's own ValidateBindingOptions, exactly as before D1. This keeps
+// the SchemaRegistrySupport gate boundary clean: gate off ⇒ zero behavior
+// change for manifests that don't use avro/protobuf (doc 02 §11's
+// Alpha/disabled convention).
 func checkSchemaFormat(bindingName string, srcEnv, tgtEnv resource.Envelope, b binding.Binding, idx manifestIndex, resolve ProviderResolver) error {
 	format, _ := b.Options["format"].(string)
-	if format == "" || format == "json" {
+	if format != "avro" && format != "protobuf" {
 		return nil
 	}
 
