@@ -17,6 +17,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/adapters/providers/openlineage"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/placeholder"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/postgres"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/prometheus"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/proxy"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/redpanda"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/s3"
@@ -119,6 +120,11 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// Alpha/disabled until restore drills have soaked in CI (§8 graduation
 	// intent).
 	gates.Register("BackupRestore", featuregate.Alpha, false)
+	// docs/planning/08 C9: the prometheus provider (managed monitoring
+	// stack). Alpha/disabled — core slice only (postgres/mysql sidecar
+	// exporters and a standalone grafana provider are explicit deferrals,
+	// see the C9 status note).
+	gates.Register("MonitoringStackProvider", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
@@ -138,6 +144,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	reg.RegisterProvider("nessie", func() reconciler.Provider { return nessie.New() }, "NessieProvider")
 	reg.RegisterProvider("openlineage", func() reconciler.Provider { return openlineage.New() }, "OpenLineageProvider")
 	reg.RegisterProvider("proxy", func() reconciler.Provider { return proxy.New() }, "ProxyProvider")
+	reg.RegisterProvider("prometheus", func() reconciler.Provider { return prometheus.New() }, "MonitoringStackProvider")
 	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
 		return fakeruntime.New(), nil
 	})

@@ -17,3 +17,4 @@ ghcr.io/projectnessie/nessie:0.108.1
 marquezproject/marquez:0.51.1
 alpine/socat:1.8.0.3
 busybox:1.36
+prom/prometheus:v2.55.1

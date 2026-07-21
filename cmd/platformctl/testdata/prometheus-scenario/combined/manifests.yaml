@@ -1,0 +1,71 @@
+# docs/planning/08 C9 integration scenario, combined (full) manifest set:
+# infra/manifests.yaml's redpanda+EventStream+minio, plus the prometheus
+# Provider added on top — applied against the SAME state file as infra/ so
+# apply's authoritative-delete semantics never see infra as "missing" from
+# this manifest set. By the time this apply's engine reconciles the
+# prometheus Provider (first time, a Create action), redpanda's and minio's
+# "metrics" endpoint facts are already published in state from the prior
+# infra/ apply (docs/planning/08 C9: the engine resolves
+# Request.MetricsTargets from currently-published state, never ordering-
+# dependent within a single apply). Requires --feature-gates=
+# MonitoringStackProvider=true.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: prom-minio-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: prom-test-redpanda
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-prom-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19396
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: prom-test-events
+spec:
+  providerRef:
+    name: prom-test-redpanda
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: prom-test-minio
+spec:
+  type: minio
+  runtime:
+    type: docker
+    network: datascape-prom-net
+  configuration:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    port: 19397
+    rootSecretRef: prom-minio-root
+  secretRefs: [prom-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: prom-test-prometheus
+spec:
+  type: prometheus
+  runtime:
+    type: docker
+    network: datascape-prom-net
+  configuration:
+    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
+    port: 19398
+    scrapeInterval: "2s"

@@ -411,6 +411,7 @@ GA. Phase 7 closes with Stage B's exit criteria held (docs/planning/08 §4).
 | `HighAvailability` | 08 Stage C (C1) | Alpha | disabled | Beta after C2/C3 soak (guards Replicas > 1; validate-time enforcement arrives with C2 per docs/adr/004) |
 | `SchemaRegistrySupport` | 08 Stage D (D1) | Alpha | disabled | Beta with D2 (Parquet) landing |
 | `BackupRestore` | 08 Stage C (C6) | Alpha | disabled | Beta after restore drills in CI |
+| `MonitoringStackProvider` | 08 Stage C (C9) | Alpha | disabled | Beta after real-use soak (core slice only — see 08 C9's status note for explicit deferrals) |
 
 Gates planned by the production-readiness backlog (`HighAvailability`,
 `IngressProvider`, `TLSTermination`, `MonitoringStackProvider`,

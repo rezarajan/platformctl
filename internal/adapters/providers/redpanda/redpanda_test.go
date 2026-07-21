@@ -145,8 +145,9 @@ func TestSchemaRegistryInternalAddr(t *testing.T) {
 }
 
 // TestReconcileBrokerRegistryDisabled is a regression guard: the pre-D1
-// behavior (no schema-registry port, one "kafka" endpoint only) is
-// unchanged when the field is unset.
+// behavior (no schema-registry port) is unchanged when the field is unset —
+// "kafka" and the always-on admin-API "metrics" endpoint (docs/planning/08
+// C9) are the only two endpoints published.
 func TestReconcileBrokerRegistryDisabled(t *testing.T) {
 	rt := fakeruntime.New()
 	env := providerEnvelope("local-redpanda", map[string]any{})
@@ -156,8 +157,15 @@ func TestReconcileBrokerRegistryDisabled(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	eps := endpointsFrom(st.ProviderState)
-	if len(eps) != 1 || eps[0].Name != "kafka" {
-		t.Fatalf("endpoints = %+v, want exactly one \"kafka\" endpoint", eps)
+	if len(eps) != 2 {
+		t.Fatalf("endpoints = %+v, want exactly two (\"kafka\", \"metrics\")", eps)
+	}
+	names := map[string]bool{}
+	for _, ep := range eps {
+		names[ep.Name] = true
+	}
+	if !names["kafka"] || !names["metrics"] {
+		t.Fatalf("endpoints = %+v, want \"kafka\" and \"metrics\"", eps)
 	}
 	ctrState, found, err := rt.Inspect(context.Background(), "local-redpanda")
 	if err != nil || !found {

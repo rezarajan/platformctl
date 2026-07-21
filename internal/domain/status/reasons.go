@@ -164,3 +164,19 @@ const (
 	ReasonBucketMissing      = "BucketMissing"
 	ReasonPrefixUnlistable   = "PrefixUnlistable"
 )
+
+// --- prometheus (managed monitoring stack; docs/planning/08 C9) ------------
+// The base container reuses ReasonInstanceHealthy/ReasonInstanceUnhealthy
+// above (the shared single-container-instance shape). These two are
+// prometheus-specific probe outcomes once the container itself is healthy.
+const (
+	// ReasonScrapeTargetsIncomplete: Ready requires /api/v1/targets'
+	// activeTargets count to match the number of configured scrape
+	// targets — per-target up-ness is Prometheus's own concern, not
+	// Ready-blocking (docs/planning/08 C9).
+	ReasonScrapeTargetsIncomplete = "ScrapeTargetsIncomplete"
+	// ReasonScrapeConfigDrift: the live scrape config (fetched via
+	// /api/v1/status/config) no longer matches the config regenerated from
+	// currently-published metrics endpoint facts.
+	ReasonScrapeConfigDrift = "ScrapeConfigDrift"
+)

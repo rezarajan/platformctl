@@ -33,7 +33,12 @@ const (
 	// clients (Debezium/Connect converters) dial it directly with no
 	// broker-style redirect protocol to decouple (docs/planning/08 D1).
 	schemaRegistryPort = 8081
-	defaultImage       = "docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a"
+	// adminPort is Redpanda's admin API — always on, unlike the opt-in
+	// schema registry. It also carries the /public_metrics
+	// Prometheus-compatible metrics endpoint natively, zero extra
+	// containers (docs/planning/08 C9).
+	adminPort    = 9644
+	defaultImage = "docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a"
 )
 
 // Provider holds no cross-call state (docs/planning/08 F5): every method
@@ -90,6 +95,32 @@ func schemaRegistryHostPort(cfg provider.Provider, name string) int {
 // endpoint fact), not a guess a consumer re-derives independently.
 func schemaRegistryInternalAddr(name string) string {
 	return fmt.Sprintf("http://%s:%d", name, schemaRegistryPort)
+}
+
+// adminHostPort resolves the admin API's host-published port, auto-allocated
+// from a name distinct from the broker's own Kafka host port (see
+// schemaRegistryHostPort's doc comment — same reasoning, a different fixed
+// suffix so the two never collide when both are auto-allocated).
+func adminHostPort(cfg provider.Provider, name string) int {
+	configured := 0
+	if v, ok := cfg.Configuration["adminPort"]; ok {
+		switch n := v.(type) {
+		case int:
+			configured = n
+		case float64:
+			configured = int(n)
+		}
+	}
+	return hostport.Resolve(configured, name+"-admin")
+}
+
+// metricsInternalAddr is the broker's Prometheus-compatible metrics
+// endpoint, reachable from other containers on the shared network (the
+// prometheus provider's scrape target, docs/planning/08 C9) — the
+// *published* value (providerState + endpoint fact), never a guess a
+// consumer re-derives independently.
+func metricsInternalAddr(name string) string {
+	return fmt.Sprintf("http://%s:%d/public_metrics", name, adminPort)
 }
 
 func brokerName(provEnv resource.Envelope) string { return naming.RuntimeObjectName(provEnv) }
@@ -196,6 +227,11 @@ func (p *Provider) reconcileBroker(ctx context.Context, req reconciler.Request) 
 		"--node-id", "0", "--check=false",
 		"--kafka-addr", fmt.Sprintf("INTERNAL://0.0.0.0:%d,EXTERNAL://0.0.0.0:%d", internalKafkaPort, externalKafkaPort),
 		"--advertise-kafka-addr", fmt.Sprintf("INTERNAL://%s:%d,EXTERNAL://%s", name, internalKafkaPort, advertisedAddr(cfg, name)),
+		// No --admin-addr flag: `rpk redpanda start` has none (unlike
+		// --kafka-addr/--schema-registry-addr) — the image's own
+		// /etc/redpanda/redpanda.yaml already binds the admin API (metrics,
+		// cluster control) to 0.0.0.0:9644 by default, so nothing further is
+		// needed to make it reachable on the shared network.
 	}
 	ports := []runtime.PortBinding{
 		{HostPort: hostPort(cfg, name), ContainerPort: externalKafkaPort, Audience: runtime.AudienceHost},
@@ -208,6 +244,7 @@ func (p *Provider) reconcileBroker(ctx context.Context, req reconciler.Request) 
 		// without this; this declaration is a documented no-op there
 		// (portMaps skips the host-binding side for Audience: internal).
 		{ContainerPort: internalKafkaPort, Audience: runtime.AudienceInternal},
+		{HostPort: adminHostPort(cfg, name), ContainerPort: adminPort, Audience: runtime.AudienceHost},
 	}
 	if registryEnabled {
 		// One listener bound to all interfaces: unlike Kafka, the schema
@@ -250,8 +287,17 @@ func (p *Provider) reconcileBroker(ctx context.Context, req reconciler.Request) 
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonBrokerHealthy}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	hostAddr := ctrState.HostAddr(externalKafkaPort) // observed binding, not intent
+	metricsHostAddr := ctrState.HostAddr(adminPort)  // observed binding, not intent
+	metricsHostURL := ""
+	if metricsHostAddr != "" {
+		metricsHostURL = "http://" + metricsHostAddr + "/public_metrics"
+	}
 	endpoints := endpoint.List{
 		{Name: "kafka", Scheme: "kafka", Host: hostAddr, Internal: internalAddr(name), Insecure: true},
+		{
+			Name: "metrics", Scheme: "http", Host: metricsHostURL, Internal: metricsInternalAddr(name),
+			Insecure: true, RuntimeName: name, ContainerPort: adminPort, Audience: runtime.AudienceHost,
+		},
 	}
 	if registryEnabled {
 		registryHostAddr := ctrState.HostAddr(schemaRegistryPort) // observed binding, not intent
