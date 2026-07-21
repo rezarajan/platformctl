@@ -397,6 +397,7 @@ GA. Phase 7 closes with Stage B's exit criteria held (docs/planning/08 §4).
 | `OutOfProcessProviderPlugins` | Phase 8 | Alpha | disabled | — |
 | `SharedStateBackend` | 08 Stage A (A4) | Alpha | disabled | Beta once used by CI itself |
 | `KubernetesSecretBackend` | 08 Stage B (B4) | Beta (08 Stage B/B9) | enabled | GA with KubernetesRuntime |
+| `BackupRestore` | 08 Stage C (C6) | Alpha | disabled | Beta after restore drills in CI |
 
 Gates planned by the production-readiness backlog (`HighAvailability`,
 `IngressProvider`, `TLSTermination`, `MonitoringStackProvider`,

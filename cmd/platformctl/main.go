@@ -104,6 +104,10 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// and the full cdc-attendance/lakehouse example scenarios (B8) all
 	// verified against a real cluster.
 	gates.Register("KubernetesRuntime", featuregate.Beta, true)
+	// docs/planning/08 C6: backup/restore capability (BackupCapableProvider).
+	// Alpha/disabled until restore drills have soaked in CI (§8 graduation
+	// intent).
+	gates.Register("BackupRestore", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")

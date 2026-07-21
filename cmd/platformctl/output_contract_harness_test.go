@@ -215,6 +215,14 @@ var commandScenarios = map[string]commandScenario{
 			assertJSON(t, "import -o json", out)
 		},
 	},
+	"backup": {
+		structured: true,
+		reason:     "needs a real postgres/mysql/s3 instance and object-store destination reachable on Docker; covered by the integration-tagged round-trip tests (cmd/platformctl/backup_integration_test.go).",
+	},
+	"restore": {
+		structured: true,
+		reason:     "needs a real postgres/mysql/s3 instance and object-store source reachable on Docker; covered by the integration-tagged round-trip tests (cmd/platformctl/backup_integration_test.go). The restore-over-existing-data refusal itself needs no infra and is unit-tested directly (TestRestoreRefusesWithoutOverwriteFlag).",
+	},
 	"init": {
 		structured: true,
 		run: func(t *testing.T) {

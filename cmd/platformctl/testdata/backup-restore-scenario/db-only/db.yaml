@@ -1,0 +1,43 @@
+# The database tier under test — destroyed and re-applied fresh mid-test to
+# prove restore actually repopulates a freshly-created, empty database (not
+# just the still-live one). See backup_integration_test.go and
+# db-only/ (a duplicate of this file + its secrets, scoped so destroy/apply
+# can target just this tier without touching store.yaml's durable backup
+# destination, which shares this directory's state file).
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: bkp-postgres
+spec:
+  type: postgres
+  runtime: {type: docker, network: datascape-bkp}
+  configuration: {version: "16", port: 19730, superuserSecretRef: bkp-pg-admin}
+  secretRefs: [bkp-pg-admin]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: bkp-pg-src
+spec:
+  engine: postgres
+  providerRef: {name: bkp-postgres}
+  postgres: {database: bkpdb, schema: public}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: bkp-mysql
+spec:
+  type: mysql
+  runtime: {type: docker, network: datascape-bkp}
+  configuration: {port: 19731, rootSecretRef: bkp-mysql-root}
+  secretRefs: [bkp-mysql-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: bkp-mysql-src
+spec:
+  engine: mysql
+  providerRef: {name: bkp-mysql}
+  mysql: {database: bkpdb}
