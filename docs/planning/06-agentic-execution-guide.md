@@ -368,3 +368,26 @@ Report any field present in one but not the other. Do not edit either file — r
 6. **Escalate to `fable`** only when a task in this phase turns out to be a genuine
    root-cause-unknown investigation or a large, well-bounded unit of work you want to run
    autonomously to completion — not as a default starting point.
+
+## 8. The conformance ratchet (standing policy — docs/planning/08 F6, docs/planning/09 §3-F6)
+
+This policy applies to every bug found only by live testing (a real Docker
+daemon, a real cluster) that unit tests, the conformance suite, and the
+integration suite all missed:
+
+1. **The fix lands with a contract-level reproduction in the same commit** —
+   a conformance-suite subtest (preferred, it runs against every adapter) or
+   a port-contract test. The same discipline the repo already applies to
+   schema↔doc sync. Examples: `RemoveNetwork_refuses_while_container_attached`
+   (the shared-namespace destroy bug), the entrypoint-faithfulness and
+   delayed-listen readiness subtests.
+2. **If the class cannot be expressed at the contract level, that is itself
+   a finding**: the semantic lives outside the port, and it must be recorded
+   in doc 07's Cross-Runtime per-runtime differences ledger instead — the
+   NetworkPolicy/external-access-mode interaction (K13/B7) is the model.
+3. **Translation-fidelity gate for future runtime adapters**: conformance
+   green is necessary but not sufficient; the runtime-parameterized real
+   example suites (`cmd/platformctl/kubernetes_examples_integration_test.go`
+   pattern) reaching Ready with unmodified providers is the acceptance bar.
+   A synthetic conformance suite proves the *port contract*; only real
+   providers against real infrastructure prove the *translation*.

@@ -2,7 +2,7 @@
 
 Audit date: 2026-07-17 (Stage F added 2026-07-19 from doc 09's
 live-testing audit). Audited against: the full planning package (00–07),
-`checkpoint.md`, `errors.md`, `feature-requests.md`, the remediation ledger
+`docs/history/checkpoint.md`, `docs/history/errors.md`, `docs/history/feature-requests.md`, the remediation ledger
 (`docs/remediation/`, all 10 findings closed), and direct code inspection of
 `internal/` (runtime port, Docker and Kubernetes adapters, secrets router,
 state store, registry, engine).
@@ -32,7 +32,7 @@ contributor without needing the rest of this document in context.
   doc 07 §2.1), not just liveness.
 - Validate-time completeness contract: schema → kind validation → graph →
   compatibility/capability → provider `SpecValidator` → feature gates
-  (checkpoint.md "Validate-time completeness").
+  (docs/history/checkpoint.md "Validate-time completeness").
 - Docker runtime: production controls (restart policy, resources, security
   context, log config, aliases, file-mounted secrets, pull policy/digest
   support, observed-port inspection), ownership labels, loopback-default
@@ -96,6 +96,53 @@ first; tasks without dependency edges are safe to parallelize.
 **Stage gating:** a stage's tasks may start early, but a stage is *closed* —
 and its graduations happen — only when its exit criteria all hold. Later
 stages should not close before earlier ones.
+
+### 2.1 Task execution protocol (follow literally, in order)
+
+Every task below is written to be executed by a single agent session with
+no additional context. Execute in exactly this order; do not skip steps:
+
+1. **Read, in order:** `CLAUDE.md`; this task's entry in full (Context, Do,
+   Accept); every doc section the task names; `docs/adr/README.md`'s index
+   for any ADR the task's area touches (ports/providers → ADR 008/009/015/
+   016; destructive surfaces → ADR 013; gates → ADR 014; validation → ADR
+   011). Do not start coding before this.
+2. **Map the task** to the interfaces it touches: open
+   `internal/ports/reconciler/reconciler.go` and/or
+   `internal/ports/runtime/runtime.go` and read the doc comments of every
+   interface/struct the task names. Never re-derive a signature from
+   memory.
+3. **If the task is Size L** and no design note exists yet: write
+   `docs/adr/<next-free-number>-<kebab-title>.md` first (house style: ADR
+   001/003/005/006 — question, options considered, decision, why nothing
+   is boxed out, follow-ups), then implement.
+4. **Implement** under the standing rules of §2 (tests, idempotency,
+   schema→doc-03 sync, feature gate, machine output, no secret values,
+   deterministic plans). New dial/wait logic must use
+   `runtime.WithReachable` — if you are typing an IP address, a port
+   number into a URL, or `time.Sleep` in a retry loop inside a provider,
+   stop: that is the ADR-015 violation the arch test will reject.
+5. **Verify, in order, all must pass:**
+   - `gofmt -l .` (empty output)
+   - `go build ./... && go vet ./...`
+   - `go test ./...`
+   - the task's own Accept list, item by item — run the commands, do not
+     reason that they would pass
+   - `just test-integration` when the task touches adapters or the engine
+     (requires Docker; skip only if the task changed no runtime surface,
+     and say so)
+6. **Doc sync:** tick nothing you did not verify; append facts additively
+   (the guard hook allows checkbox toggles and additive edits; modifying
+   existing planning text is blocked — if a task requires it, stop and
+   report instead of working around the hook).
+7. **Commit** with a conventional-commit subject naming the task ID (e.g.
+   `feat(runtime): ... (C2)`), a body stating what was verified and how,
+   and any deviation from this protocol called out explicitly.
+
+A deviation you cannot avoid (a doc contradiction, a missing seam, an
+Accept item that cannot be satisfied as written) is a **finding, not a
+judgment call**: stop at the smallest consistent state, record it in the
+commit/report, and leave the decision to the maintainer.
 
 ---
 
@@ -175,7 +222,7 @@ mistakes, and auditable cleanup.
 
 ### A4: Shared/remote state backend
 
-- **Size:** L (design note first: `docs/design/003-shared-state.md`).
+- **Size:** L (design note first: `docs/adr/003-shared-state.md`).
   **Depends:** A3 (repair tooling before a second backend multiplies states).
 - **Context:** `ports/state.StateStore` is the seam;
   `adapters/state/localfile` is the only implementation. Production teams and
@@ -287,16 +334,29 @@ Portability section. Gate `KubernetesRuntime` graduates **Alpha → Beta,
 default enabled** at stage close.
 
 **Stage exit criteria:**
-- [ ] The full `examples/cdc-attendance/` acceptance scenario applies to
+- [x] The full `examples/cdc-attendance/` acceptance scenario applies to
       Ready on a real cluster with `platformctl` running *outside* it, and
-      destroys cleanly.
-- [ ] The `examples/lakehouse/` scenario does the same.
-- [ ] Volume data provably survives a Deployment update (write → update →
-      read conformance test).
-- [ ] A documented minimal RBAC manifest is sufficient for the full suite
-      (verified by running CI's K8s job under it).
-- [ ] `inventory` reports honest, observed host-reachable endpoints for every
-      provider on Kubernetes.
+      destroys cleanly. — B8: `TestCDCAttendanceExampleOnKubernetes`
+      (`cmd/platformctl/kubernetes_examples_integration_test.go`), green in
+      CI's kind leg after the external-ingress (`05eeddd`) and
+      `RemoveNetwork` (`ca9d719`) fixes.
+- [x] The `examples/lakehouse/` scenario does the same. — B8:
+      `TestLakehouseExampleOnKubernetes`, including the unmanaged
+      `external-orders-db` surviving destroy.
+- [x] Volume data provably survives a Deployment update (write → update →
+      read conformance test). — B3: `Volume_persists_across_container_update`
+      conformance subtest, run on fake, Docker, and live Kubernetes.
+- [x] A documented minimal RBAC manifest is sufficient for the full suite
+      (verified by running CI's K8s job under it). — B5:
+      `deploy/kubernetes/rbac/` + the "Integration tests (Kubernetes,
+      minimal RBAC role)" CI job running under a minted, token-scoped
+      kubeconfig.
+- [x] `inventory` reports honest, observed host-reachable endpoints for every
+      provider on Kubernetes. — B2: `Inspect_reports_observed_ports`
+      conformance subtest + per-access-mode observed endpoints.
+
+Stage closed 2026-07-19 (`5da8367`, B9): `KubernetesRuntime` graduated
+Alpha → Beta, enabled by default.
 
 ### B1: External reachability — access modes for the Kubernetes runtime
 
@@ -465,7 +525,7 @@ entrypoints, is observable, and its data is recoverable. This is where
 
 ### C1: Replicas and stable identity in the runtime port
 
-- **Size:** L (design note `docs/design/004-replicas-and-identity.md`
+- **Size:** L (design note `docs/adr/004-replicas-and-identity.md`
   first). **Depends:** Stage B closed (K8s is the runtime where HA is real).
 - **Context:** `ContainerSpec` models exactly one container; the K8s adapter
   pins `Replicas: 1` (`convert.go:110`). HA data services need N replicas
@@ -486,6 +546,18 @@ entrypoints, is observable, and its data is recoverable. This is where
   replicas is surfaced (not Healthy=false for the set unless quorum-relevant
   — the *provider* decides meaning); gate `HighAvailability` guards
   Replicas > 1 at validate.
+- **Status (2026-07-21): implemented on branch
+  `worktree-agent-ac3b0d7e379217021`** (worktree under `.claude/worktrees/`;
+  commits `ff2127d` + review-fix `5fd4ac3`, with design note
+  `docs/adr/004-replicas-and-identity.md`). Principles-reviewed
+  2026-07-20: layering/Stage-F clean; the review's four Medium findings
+  (shape-transition refusal, stable per-ordinal hashes, single-container
+  ReadyReplicas contract, de-raced conformance assertions) are fixed in
+  `5fd4ac3`. Merge pending owner decision; the gate-guard-at-validate
+  Accept line is deliberately deferred to C2 (recorded in note 004), the
+  live-Kubernetes conformance leg has not been re-run since the fixes, and
+  the doc 04 §12 gate-table row will conflict with the 2026-07-20 table
+  restructure on merge (trivial resolution).
 
 ### C2: Redpanda multi-broker clusters and replicated topics
 
@@ -542,7 +614,7 @@ entrypoints, is observable, and its data is recoverable. This is where
 - **Context:** Managed Postgres/MySQL are single-container. Real HA
   databases (Patroni, Galera, cloud RDS) are operationally deep — likely
   *not* something platformctl should reimplement.
-- **Do:** `docs/design/005-database-ha-posture.md` deciding: managed
+- **Do:** `docs/adr/005-database-ha-posture.md` deciding: managed
   databases are explicitly **single-node + backup/restore (C6) + fast
   drift-heal**, positioned for dev/staging and small production; production
   HA databases enter as `external: true` Sources through the Connection
@@ -570,11 +642,38 @@ entrypoints, is observable, and its data is recoverable. This is where
   restore → rows present (postgres and mysql); s3 Dataset round-trip;
   backups never embed plaintext credentials; restore onto live data without
   flags refuses.
+- **Status (2026-07-21): implemented on branch
+  `worktree-agent-ad86992b28e68387f` (commit `309d165`) — reviewed
+  2026-07-20, NOT merge-ready.** The interface shape, NFR-3 refusals,
+  secret handling (0600 file mounts, nothing in env/argv/state/output), and
+  layering are verified clean, but both accept-criterion round-trips fail
+  against real Docker. Required before merge:
+  1. dbjob's job containers break on entrypoint-bearing images (`minio/mc`'s
+     ENTRYPOINT swallows `sh -c`): add a `ContainerSpec.Entrypoint` override
+     to the runtime port (Docker `Config.Entrypoint`, K8s
+     `container.Command` — the K1 mapping) with an F6 conformance subtest,
+     and use it in dbjob.
+  2. F1 violation: `engine/backup.go` hands the s3 adapter an in-network
+     `http://<container>:9000` address that `remoteClient` dials from the
+     CLI host — resolve through `EnsureReachable` via F4 endpoint facts
+     (runtime name + container port), keeping the internal address for job
+     containers only.
+  3. F4 regression: the same engine block re-derives s3 conventions (port
+     9000, scheme, secret key names, default network) — consume the
+     provider's published endpoint facts instead.
+  4. `dbjob.RunPipeline` must fail fast when either pipeline side exits
+     nonzero (today the survivor blocks on the FIFO for the full 30-minute
+     timeout).
+  5. `docs/adr/007-backup-restore.md` is referenced five times but was
+     never written — write it, covering the protect-vs-restore decision
+     (prefer refusing protected targets), the restore-output `key`/`prefix`
+     duplication, and the Docker-only mechanism (fail fast on other
+     runtimes).
 
 ### C7: Ingress and HTTP routing on the Connection seam
 
 - **Size:** L. **Depends:** B1 (K8s), C8 pairs naturally.
-- **Context:** docs/design/002 designated Connection as *the* ingress seam;
+- **Context:** docs/adr/002 designated Connection as *the* ingress seam;
   proxy (socat TCP forward) is the only realization. HTTP endpoints (nessie,
   marquez, minio console, Connect REST) deserve hostname routing, not
   port-per-service.
@@ -690,6 +789,15 @@ note first (per doc 06 §3).
   subjects visible in the registry → consumer decodes); validate-time
   failure for format-without-registry; inventory shows the registry
   endpoint; docs/planning/03 documents the options block.
+- **Status (2026-07-21): implemented on branch
+  `worktree-agent-ac9cf81b40022f246`** (commits `0a9bc77` + review-fix
+  `2a05bd4`). Principles-reviewed 2026-07-20: spec conformance, §5.2 error
+  shape, schema↔doc sync, and Stage-F invariants all verified; the one
+  Medium finding (checkSchemaFormat intercepted non-schema formats like
+  parquet while the gate was disabled, breaching the Alpha/disabled
+  convention) is fixed in `2a05bd4` (scoped to avro/protobuf). Merge
+  pending owner decision + one live `TestAvroCDCEndToEnd` integration run;
+  same doc 04 §12 merge-conflict note as C1.
 
 ### D2: Parquet sink format end-to-end
 
@@ -817,7 +925,7 @@ note first (per doc 06 §3).
   infrastructure; jobs/queries remain out-of-scope orchestration (product
   boundary, doc 01). Today `inventory --for` assumes a user-operated
   engine.
-- **Do:** `docs/design/006-compute-engines.md`: decide whether platformctl
+- **Do:** `docs/adr/006-compute-engines.md`: decide whether platformctl
   ships a `trino` provider (coordinator + workers via C1 replicas,
   catalog auto-configured from Nessie/MinIO facts — the strongest
   UX win: `inventory --for trino` becomes "it's already running"), a
@@ -834,7 +942,7 @@ note first (per doc 06 §3).
   not required (warehouseRef makes catalog-to-Dataset wiring first-class,
   but `spec.nessie` already carries warehouse config today per D8's
   context, so the Trino provider can read either shape).
-- **Context:** design note `docs/design/006-compute-engines.md` decided
+- **Context:** design note `docs/adr/006-compute-engines.md` decided
   Trino first: read path completes the lakehouse story, catalog
   auto-configuration is the strongest inventory UX win, and Trino's
   stateless-of-its-own-data shape avoids the storage questions a stateful
@@ -1007,7 +1115,7 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
   historical-record notes; retire the test-only `ContainerProvider` gate
   (checkpoint item 4); verify every doc cross-reference resolves.
 - **Accept:** schema-doc-sync agent clean; a support-level table exists in
-  doc 04; no planning doc contradicts checkpoint.md or this plan.
+  doc 04; no planning doc contradicts docs/history/checkpoint.md or this plan.
 
 ### E8: Release engineering and CI matrix
 
@@ -1077,7 +1185,7 @@ instability (the `*Aware` setter accretion) → F5.
   `runtime.WithReachable(ctx, rt, name, port, opts, fn)` — resolve, call,
   close, and on retryable failure re-resolve a fresh address per attempt
   (the B8 nessie/openlineage fix, generalized), with a configurable
-  ready-wait (default 30s, the errors.md postgres fix generalized).
+  ready-wait (default 30s, the docs/history/errors.md postgres fix generalized).
   Migrate every provider's hand-rolled wait/retry loop to it. (3) An
   architecture test (layering-grep style) banning loopback string literals
   in `internal/adapters/providers` and `internal/domain`, allowlisting
@@ -1176,6 +1284,130 @@ instability (the `*Aware` setter accretion) → F5.
 
 ---
 
+## 7.6 Stage G — Structural debt (2026-07-21 survey)
+
+Theme: seams the 2026-07-21 structural survey found that will degrade
+under Stages C/D/E if left alone. None is a correctness bug; each is
+task-shaped preventive work. Tasks are independent unless noted. Two
+survey results are **dispositions, not tasks**: (a) the "providers/state
+assume one instance per Provider" finding is the C1→C2/C3/C4 chain —
+the runtime-level seam already exists on C1's branch (ADR 004); providers
+and state adopt it per-task, and C2 must decide the
+`ResourceState`-level replica representation before widening state. (b)
+Patterns the survey verified as healthy and worth replicating unchanged:
+the uniform `loadAndValidate` command path, `toolconfig.go`'s map-based
+renderer dispatch, the 96-line registry indirection, and `meta.json`
+`$ref` schema composition (low E5 risk).
+
+### G1: Provider scaffolding kit (`providerkit`)
+
+- **Size:** M. **Depends:** — (do before or alongside the next new
+  provider; hard prerequisite for E6).
+- **Context:** ~150–200 lines of near-identical scaffolding are
+  copy-pasted across all seven technology providers: `hostPort()`
+  (`internal/adapters/providers/postgres/postgres.go:65-76` ==
+  `mysql/mysql.go:79-90`), `network()`, `reachableAddr()`, the
+  reconcile-instance skeleton (profile → credentials → labels →
+  EnsureNetwork → EnsureVolume → EnsureContainer → WaitHealthy), and the
+  credential-rotation dance (try-desired → try-previous → rotate → retry,
+  postgres `ensureSuperuser` vs mysql `ensureRootPassword`). A bug fix in
+  one copy does not propagate; E6's author contract would document
+  tribal knowledge instead of an SDK.
+- **Do:** Extract `internal/adapters/providers/providerkit` (adapter-layer
+  helper package — providers may import it; domain/ports must not)
+  offering: `HostPort`, `Network`, `ReachableAddr`, a single-container
+  ensure helper, and a generic credential-rotation helper. Migrate
+  postgres and mysql first (reference pair), then the rest mechanically,
+  one commit per provider.
+- **Accept:** postgres and mysql each shrink by >100 lines; behavior
+  identical (full unit + Docker integration suites green, zero test
+  edits); archtest still green; E6's guide references providerkit as the
+  documented shape.
+
+### G2: Engine kind-dispatch table
+
+- **Size:** S. **Depends:** —.
+- **Context:** the engine's kind/lifecycle special cases (SecretReference,
+  external-no-provider, external-with-provider) are re-checked as
+  independent if-chains in four methods — `reconcileOne`
+  (`internal/application/engine/engine.go:386-417`),
+  `probeOneAgainstState` (:528-551), `applyDeleteOne` (:870-910), and
+  `Destroy` (:986-1057). A future special-cased kind must be added in all
+  four places with nothing enforcing coverage — a live correctness risk
+  for any Stage-D/E kind that needs engine-level handling.
+- **Do:** Introduce one internal `kindHandler` table (per-kind/lifecycle
+  hooks for reconcile/probe/delete) that the four methods consult;
+  register the existing special cases in it. Pure refactor — no behavior
+  change.
+- **Accept:** `engine_test.go` passes unchanged; adding a fake special
+  kind in a test requires touching exactly one table; the four methods
+  contain no kind-name string checks outside the table lookup.
+
+### G3: Split `kubernetes.go` along its natural seams
+
+- **Size:** S. **Depends:** **after the C1 branch merges** (C1 rewrites
+  large parts of this file; splitting first guarantees painful
+  conflicts).
+- **Context:** `internal/adapters/runtime/kubernetes/kubernetes.go` is
+  1197 lines spanning network/NetworkPolicy CRUD, volumes, container
+  ensure, exec/logs, Services, and three reachability strategies;
+  `convert.go` shows the split precedent. Stage C (StatefulSets) and
+  C7/C8 (ingress) land more code exactly here.
+- **Do:** Split into `network.go`, `volume.go`, `container.go`,
+  `reachability.go`, `exec.go` (same package, zero behavior change).
+- **Accept:** build + runtime conformance suite pass unchanged; no file
+  exceeds ~400 lines.
+
+### G4: Condition-reason catalog (E4 prerequisite)
+
+- **Size:** M. **Depends:** — (must land before E4).
+- **Context:** ~52 distinct condition `Reason` strings exist across ~156
+  construction sites, but only 3 are named constants in
+  `internal/domain/status`; the rest are inline literals with
+  inconsistent spellings for the same semantic (postgres `WALNotLogical`
+  vs mysql `BinlogNotRowFormat` are both "CDC precondition drifted").
+  E4's `explain` catalog cannot be complete against unenumerable strings.
+- **Do:** Declare every reason as a typed constant in
+  `internal/domain/status`; migrate providers/engine to the constants
+  (mechanical, one commit per package); add a test that fails on any
+  `Reason:` string literal outside the status package. Deduplicate
+  same-meaning reasons where doing so is not a user-visible break (note
+  any rename in docs/upgrade-notes.md).
+- **Accept:** literal-ban test green in CI; E4's later catalog
+  completeness test can enumerate `status` package constants; no
+  provider defines a reason locally.
+
+### G5: Conformance suite per-area split
+
+- **Size:** S. **Depends:** after the C1 branch merges (C1 adds ~200
+  conformance lines).
+- **Context:** `internal/ports/runtime/conformance/conformance.go` is one
+  flat `Run` with 21+ inline subtests sharing implicit fixtures; the F6
+  ratchet guarantees growth.
+- **Do:** Split into per-area files (`network.go`, `volume.go`,
+  `container.go`, `reachability.go`, `replicas.go`) each exposing a
+  `run*` helper `Run` calls in order; make shared fixtures explicit
+  parameters.
+- **Accept:** identical subtest names/count pass on fake, Docker, and
+  Kubernetes; no file exceeds ~250 lines.
+
+### G6: Shared integration-test harness
+
+- **Size:** S. **Depends:** —.
+- **Context:** all 17 `cmd/platformctl/*_integration_test.go` files are
+  correctly build-tagged, but setup/cleanup (runtime construction, env
+  skips, container cleanup) is re-implemented per file (~21 helper
+  copies).
+- **Do:** Extract `cmd/platformctl/integration_harness_test.go`
+  (`requireDocker(t)`, runtime construction, cleanup registration); new
+  tests must use it; migrate existing files opportunistically, never as a
+  big-bang rewrite.
+- **Accept:** harness exists and ≥3 existing files migrated as the
+  pattern-proof; doc 06 notes it as the convention for new integration
+  tests.
+
+---
+
 ## 8. New feature gates introduced by this plan
 
 Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
@@ -1183,7 +1415,7 @@ Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
 | Gate | Stage/Task | Default | Graduation intent |
 |---|---|---|---|
 | `SharedStateBackend` | A4 | disabled | Beta once used by CI itself |
-| `KubernetesSecretBackend` | B4 | disabled | Beta with KubernetesRuntime |
+| `KubernetesSecretBackend` | B4 | disabled | Beta with KubernetesRuntime | *(happened: graduated Beta/enabled at B9 alongside `KubernetesRuntime` — doc 04 §12 is the master table)* |
 | `KubernetesRuntime` (existing) | B close | **Beta/enabled at B**, GA target at C close | long hardening period honored |
 | `HighAvailability` | C1 | disabled | Beta after C2/C3 soak |
 | `IngressProvider` | C7 | disabled | Beta with TLSTermination |
@@ -1235,25 +1467,69 @@ Checkpoint.md "Known open items" mapping: 1→D3/D4, 2→D2, 3→A10, 3b→A9,
 4→E7 (retire `ContainerProvider` gate), 5→D5, 6→§8 graduations,
 8→Stage B, 9/10→closed.
 
-## 10. Suggested execution order
+## 10. Execution order (updated 2026-07-21; A, B, F closed)
 
-Stages overlap; tasks within a stage parallelize along the dependency edges.
+Historical sequencing for the closed stages is preserved in git history
+and doc 10; what follows is the **current** order. Tasks parallelize along
+dependency edges; one agent session per task (§2.1's protocol).
 
-1. **Now, in parallel:** A1–A3, A5–A10 (independent, mostly S/M);
-   B1 (the K8s keystone); C5 + D9 (decision notes — cheap, unblock later
-   scoping); E1 (highest direct UX value, independent).
-2. **Then:** A4 (after A3), B2–B8 (after B1 where marked), D1 → D2 → D3/D4.
-3. **Then:** Stage C implementation (C1 first — it feeds C2/C3/C4), C6–C10
-   in parallel with C1's chain.
-4. **Continuously:** E3/E4/E7 as capabilities land; E5 → E6 once provider
-   surface stabilizes; E8 near the end.
-5. **Stage F (doc 09) threads through:** F1–F4 are independent and can
-   start now — F1 first (it deletes the per-provider wait loops the other
-   tasks would otherwise touch); F5 after F1 and **before E6**; F6 closes
-   with F2/F3. Stage F must close before Phase 8 work begins.
+**Step 0 — land the in-flight branches (maintainer decision, blocking
+step 1):**
 
-v-next milestones: **v1.1** = Stage A closed. **v1.2** = Stage B closed
-(Kubernetes Beta). **v1.3** = Stages C+D closed (HA + pipeline
-completeness). **v2.0** = Stages E+F closed — the "production data-pipeline
-platform, contribution-ready" declaration point; Stage F closing is also
-the go signal for Phase 8 (segregating core from provider logic).
+1. Merge **C1** (`worktree-agent-ac3b0d7e379217021`, `ff2127d`+`5fd4ac3`)
+   after its pending live-Kubernetes conformance leg runs green. Resolve
+   the doc 04 §12 table conflict by re-adding its `HighAvailability` row
+   in the current table format, and move its `docs/design/004-*.md` to
+   `docs/adr/004-*.md` (the directory migrated 2026-07-21).
+2. Merge **D1** (`worktree-agent-ac9cf81b40022f246`, `0a9bc77`+`2a05bd4`)
+   after one green `TestAvroCDCEndToEnd` integration run; same doc 04 §12
+   conflict note.
+3. Rework **C6** on its branch per its status note's five required fixes
+   (its ADR lands as `docs/adr/007-backup-restore.md`); re-run both
+   round-trips live before merge. C6 is independent of C1/D1 except for
+   trivial `main.go`/`reconciler.go` rebases — rebase it last.
+
+**Step 1 — immediately, in parallel (all independent):**
+- G1 (providerkit — before any new provider is written),
+  G2 (engine kind table), G4 (reason catalog), G6 (integration harness).
+- C9 (monitoring) and C10 (in-network probes) — independent of the C1
+  chain.
+- E2 (config-minimization audit), E3 (tool renderers), E4 **after G4**.
+
+**Step 2 — after C1 merges:**
+- C2 (Redpanda multi-broker) → then C3 (Connect workers) and C4 (MinIO
+  nodes) in parallel. C2 also decides the state-level replica
+  representation (Stage G's disposition note).
+- G3 (kubernetes.go split) and G5 (conformance split) — mechanical, right
+  after the merge, before C2 lands more code in those files.
+- D10 (Trino) once C2 has proven the replica primitive against a real
+  clustered technology.
+
+**Step 3 — after D1 merges:**
+- D2 (Parquet end-to-end) → then D3 (jdbcsink) and D4 (s3source) in
+  parallel; D6 (DLQ) and D7 (Dataset lifecycle) independent, any time;
+  D8 (warehouseRef) independent, any time; D5 (WireGuard tunnel)
+  independent, any time.
+
+**Step 4 — the reachable-endpoint chain:** C7 (ingress) → C8 (TLS); both
+build on ADR 015's plane and benefit from G3 having landed.
+
+**Step 5 — contribution readiness (strict order):**
+E5 (schema fragments) → E6 (author guide + reconciler conformance suite;
+requires G1 and F5 — F5 is done) → E7 (truth sweep) → E8 (release
+engineering). E6's plugin decision note is the Phase 8 gateway.
+
+**Standing rules:** C5/D9 are decided (ADR 005/006) — do not reopen them
+without new evidence. Stage C closes when its five exit criteria hold;
+`KubernetesRuntime` GA happens at C close, not before. Stage G tasks
+never block a stage's exit criteria but G1 must precede E6 and G4 must
+precede E4.
+
+v-next milestones: **v1.1** = Stage A closed *(reached 2026-07-18 — tag
+pending, binary still reports v1.0.0)*. **v1.2** = Stage B closed
+*(reached 2026-07-19 — tag pending)*. **v1.3** = Stages C+D closed (HA +
+pipeline completeness). **v2.0** = Stages E+F closed — the "production
+data-pipeline platform, contribution-ready" declaration point; Stage F is
+closed, so Phase 8 unblocks at E6's plugin decision note. Maintainer
+action: cut the v1.1/v1.2 tags (or collapse them into one v1.2 release)
+so `main.version` stops under-reporting.

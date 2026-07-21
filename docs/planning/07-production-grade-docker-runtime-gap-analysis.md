@@ -242,7 +242,7 @@ neither anticipated by this section when it was first written:
       `UnknownHostException` trying to reach it. Same fix shape: declare the
       port with `HostPort: 0`.
 - [x] ~~NodePort/LoadBalancer external ingress is dropped by the B7
-      default-deny wall~~ resolved (errors.md, 2026-07-20): a namespace's
+      default-deny wall~~ resolved (docs/history/errors.md, 2026-07-20): a namespace's
       default-deny + allow-same-namespace NetworkPolicy pair (08 B7 / K13)
       silently drops the very external traffic the `node-port`/`load-balancer`
       access modes (08 B1) exist to admit — that traffic reaches the pod
@@ -262,7 +262,7 @@ neither anticipated by this section when it was first written:
       `TestBuildExternalIngressPolicy` and the live node-port subtest of
       `reachability_integration_test.go`.
 - [x] ~~A shared-namespace `destroy` wiped sibling providers and any
-      unmanaged workload alongside them~~ resolved (errors.md, 2026-07-20):
+      unmanaged workload alongside them~~ resolved (docs/history/errors.md, 2026-07-20):
       every provider best-effort-calls `RemoveNetwork` on `Destroy`, and the
       lakehouse example places them all on one namespace next to an
       out-of-band `external-orders-db`. Docker's `NetworkRemove` refuses
@@ -381,7 +381,7 @@ integration tests).
       capability error; they were never silently pretend-available).
 - [x] External ingress and egress are represented through first-class
       Connections, tunnels, TLS/auth, and reachability policies — the
-      Connection seam is the recorded design (docs/design/002): managed =
+      Connection seam is the recorded design (docs/adr/002): managed =
       platform-owned entrypoint, external = declared egress, tunnels chain
       additively; endpoints carry explicit TLS labeling; host-audience
       reachability is probed end-to-end (engine + through-forwarder).
@@ -884,7 +884,7 @@ Resolved (2026-07-18, `docs/planning/08` A3):
 Resolved (2026-07-18, `docs/planning/08` A4):
 
 - [x] Remote/shared state: in scope, decided in
-      `docs/design/003-shared-state.md` — S3-compatible object storage
+      `docs/adr/003-shared-state.md` — S3-compatible object storage
       (`internal/adapters/state/s3`, MinIO tested), a second `StateStore`
       implementation behind `--state-backend s3` and the `SharedStateBackend`
       gate (Alpha, disabled). Locking is a lease object acquired via a
@@ -1069,7 +1069,7 @@ Design notes:
 Resolved:
 
 - [x] First-class ingress/egress design around Connection: recorded in
-      docs/design/002 (+ addendum) — Connection is *the* seam; a managed
+      docs/adr/002 (+ addendum) — Connection is *the* seam; a managed
       Connection is the platform-owned entrypoint, an external one the
       declared egress; tunnel providers chain a managed Connection's egress
       additively (no schema change). This close-out affirms that design

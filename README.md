@@ -148,7 +148,7 @@ databases are legitimate sinks; `ingest`: Dataset→EventStream — object
 stores are legitimate sources). The referenced provider must declare the
 capability interface matching the pairing — all enforced at `validate`.
 Asset kinds are role-neutral; direction lives in the Binding
-(docs/design/001-bindings-are-directed-edges.md).
+(docs/adr/001-bindings-are-directed-edges.md).
 
 ## 🚀 Quickstart
 
@@ -236,7 +236,7 @@ bin/platformctl destroy cdc-to-lake --auto-approve
 
 Global flags: `--state-file` (default `.datascape/state.json`, local backend),
 `--feature-gates`, `-o table|json|yaml`. Shared state
-(`docs/design/003-shared-state.md`, gated `SharedStateBackend`):
+(`docs/adr/003-shared-state.md`, gated `SharedStateBackend`):
 `--state-backend s3 --state-bucket ... --state-endpoint ... --state-secret-ref
 ...` points every command at an S3-compatible bucket instead of a local file,
 with a lease-based lock so two operators can't corrupt each other's apply.
@@ -277,7 +277,7 @@ platformctl doesn't try to own that surface; instead, a production HA
 database integrates as an **`external: true` Source through the Connection
 seam** — already fully supported today, CDC included (see
 `examples/lakehouse/sources-and-datasets.yaml`'s `orders` Source). See
-[`docs/design/005-database-ha-posture.md`](docs/design/005-database-ha-posture.md)
+[`docs/adr/005-database-ha-posture.md`](docs/adr/005-database-ha-posture.md)
 for the full decision and what would change if a replication-capable managed
 mode is ever added.
 
@@ -299,33 +299,41 @@ requires drift reporting, healing, recovery, and convergent teardown.
 
 **Adding a provider:** implement `reconciler.Provider` (plus capability
 interfaces you support), register it in `application/registry` wiring behind
-a feature gate, and cover it with an integration test. The engine hands you
-your `Provider` resource, resolved secrets, and the full resource set via
-optional `*Aware` interfaces — see `internal/adapters/providers/redpanda`
-for the smallest complete example.
+a feature gate, and cover it with an integration test. Every call receives a
+single `reconciler.Request` — your `Provider` resource, the runtime,
+resolved secrets, and the full validated resource set — so providers are
+stateless per call (docs/planning/02 §4.2); see
+`internal/adapters/providers/redpanda` for the smallest complete example.
 
 ## 📚 Documentation
 
-The `docs/planning/` package is the source of truth:
+[docs/README.md](docs/README.md) maps the whole documentation tree —
+contracts vs. plans vs. historical records. The load-bearing pieces:
 
 | Doc | Contents |
 |---|---|
 | [01-product-requirements](docs/planning/01-product-requirements.md) | What Datascape is (and deliberately isn't). |
 | [02-architecture](docs/planning/02-architecture.md) | Layering, ports, capability interfaces, error contracts. |
 | [03-resource-model-reference](docs/planning/03-resource-model-reference.md) | Every Kind, field by field. |
-| [04-roadmap-and-feature-gates](docs/planning/04-roadmap-and-feature-gates.md) | Phases 0–8 with checkable exit criteria. |
-| [05-v1-first-version-spec](docs/planning/05-v1-first-version-spec.md) | The precise v1.0.0 definition of done. |
+| [04-roadmap-and-feature-gates](docs/planning/04-roadmap-and-feature-gates.md) | Phases 0–8 and the feature-gate master table. |
+| [08-production-readiness-plan](docs/planning/08-production-readiness-plan.md) | **The live, stage-gated backlog** (Stages A–F). |
+| [10-project-history-and-evolution](docs/planning/10-project-history-and-evolution.md) | The full history, with reasoning, commit-anchored. |
 
-**Roadmap status:** v1.0.0 is declared — phases 0–5 (foundations, Docker
-runtime, Redpanda, CDC + lineage mechanism, object-storage sink,
-import/external lifecycles + drift) are complete with every exit criterion
-automated, and the spec §6 acceptance scenario runs in CI against the
-literal example manifests. Phase 6's committed scope (parallel
-reconciliation behind the ParallelReconciliation gate, vault and file
-secret backends) is done; the optional openlineage provider is future work.
-Binding taxonomy is a relation over role-neutral asset kinds — database-as-
-sink and object-store-as-source are schema-stable pairings awaiting
-providers (see docs/design/001-bindings-are-directed-edges.md).
+**Status:** v1.0.0 shipped (Phases 0–5, every exit criterion automated; the
+acceptance scenario runs in CI against the literal example manifests),
+followed by Phase 6 (parallel reconciliation, vault backend) and Phase 6.5
+(the orchestrator-ready lakehouse: MySQL/MariaDB, Nessie `Catalog`, Marquez
+lineage, managed `Connection`s). Since then: Stage A (operational
+hardening — shared S3 state, `gc`/`state doctor`, registry auth, deletion
+protection), Stage B (the Kubernetes runtime to **Beta**, enabled by
+default), and Stage F (systemic segregation-readiness fixes — the
+`reconciler.Request` provider contract, explicit port audiences, one
+reachability path) are closed. In progress: Stages C (HA, ingress/TLS,
+monitoring, backup), D (schema registry → Parquet, JDBC sink, ingest,
+tunnels, Trino), and E (blueprints — `init` shipped — and the
+provider-author contract). Binding taxonomy is a relation over role-neutral
+asset kinds — database-as-sink and object-store-as-source are schema-stable
+pairings awaiting providers (docs/adr/001).
 
 ---
 

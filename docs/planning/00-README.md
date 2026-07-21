@@ -30,6 +30,12 @@ assume the current `internal/` layout, resource-kind list, or CLI surface surviv
    hardening, Kubernetes to Beta/GA, HA/routing/TLS/monitoring/backup,
    pipeline-infrastructure providers, DX/contribution readiness, and the
    segregation-readiness fixes from doc 09.
+8a. **[10-project-history-and-evolution.md](10-project-history-and-evolution.md)**
+   — the consolidated historical record: every phase, stage gate, audit,
+   and course-correction with the reasoning behind it, commit-anchored.
+   Read it to understand *why* the project is shaped this way; read doc 08
+   to find what to work on. (A map of the whole `docs/` tree — contracts
+   vs. plans vs. records — lives in [../README.md](../README.md).)
 9. **[09-systemic-findings-and-segregation-readiness.md](09-systemic-findings-and-segregation-readiness.md)**
    — the post-Stage-B audit of every bug that only live testing caught: the
    five recurring failure classes, the systems-level changes (doc 08 Stage F)

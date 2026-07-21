@@ -15,10 +15,10 @@ flowchart TB
         P5[Lineage value type]
     end
     subgraph L3["Layer 3 — Adapters"]
-        A1["providers/redpanda, postgres, debezium, s3, s3sink"]
-        A2["runtime/docker, kubernetes(future), external(future)"]
-        A3["state/localfile"]
-        A4["secrets/env, secrets/file"]
+        A1["providers/redpanda, postgres, mysql, debezium, s3, s3sink, nessie, proxy, openlineage"]
+        A2["runtime/docker, kubernetes (Beta), external(future)"]
+        A3["state/localfile, state/s3"]
+        A4["secrets/env, file, kubernetes, vault"]
     end
     L1 --> L2
     L2 --> L3
@@ -44,8 +44,15 @@ nothing outside `application` and `cmd` knows concretely which adapter is in use
 │   │   ├── dataset/                # Dataset kind + validation
 │   │   ├── provider/                # Provider kind + validation
 │   │   ├── secret/                   # SecretReference kind
+│   │   ├── catalog/                   # Catalog kind (engine-discriminated, Phase 6.5)
+│   │   ├── connection/                # Connection kind (managed entrypoint / external address)
 │   │   ├── status/                    # Condition, ConditionType, rollup logic
 │   │   ├── lineage/                    # LineageEndpoint value type
+│   │   ├── endpoint/                   # endpoint facts providers publish (inventory + F4 lookup)
+│   │   ├── naming/                     # the single resource→runtime-object naming authority (F4)
+│   │   ├── hostport/                   # deterministic auto-allocated host ports
+│   │   ├── storagesize/                # size-string parsing for configuration.storage
+│   │   ├── versionprofile/             # immutable per-version image+internals profiles
 │   │   └── graph/                       # Dependency graph builder + topological sort
 │   ├── ports/
 │   │   ├── runtime/              # ContainerRuntime interface + value types (NetworkSpec, VolumeSpec, ContainerSpec, HealthCheck)
@@ -53,35 +60,49 @@ nothing outside `application` and `cmd` knows concretely which adapter is in use
 │   │   ├── state/                  # StateStore interface
 │   │   ├── secretstore/              # SecretStore interface
 │   │   └── clock/                     # Clock interface (testability: fake time in tests)
+│   ├── archtest/                  # architecture tests (layering grep, F1 loopback ban)
 │   ├── adapters/
+│   │   ├── kafkaconnect/          # shared Kafka Connect REST client (debezium + s3sink)
 │   │   ├── runtime/
 │   │   │   ├── docker/            # real Docker adapter (Docker Engine API client)
-│   │   │   ├── fake/                # in-memory runtime for unit + contract tests
-│   │   │   ├── kubernetes/           # future — not built in v1, package reserved
-│   │   │   └── external/              # future — not built in v1, package reserved
+│   │   │   ├── fake/                # in-memory runtime for unit + contract tests — the strict interpreter (08 F2)
+│   │   │   └── kubernetes/           # real cluster adapter (client-go) — Beta since 08 Stage B; external/terraform remain Phase 8
 │   │   ├── providers/
 │   │   │   ├── redpanda/
 │   │   │   ├── postgres/
+│   │   │   ├── mysql/               # also registered as mariadb
 │   │   │   ├── debezium/            # also implements LineageAware
 │   │   │   ├── s3/                    # object store engine (e.g. MinIO)
 │   │   │   ├── s3sink/                  # Kafka-Connect-based sink connector, implements SinkCapableProvider
-│   │   │   └── openlineage/               # optional, not required for v1.0.0: stands up a lineage backend (e.g. Marquez)
+│   │   │   ├── nessie/                # realizes Catalog(engine: nessie), CatalogCapableProvider
+│   │   │   ├── proxy/                 # realizes managed Connections, ConnectionCapableProvider
+│   │   │   ├── openlineage/           # lineage backend (Marquez + its metadata Postgres)
+│   │   │   ├── noop/                  # test-only
+│   │   │   └── placeholder/           # test-only ("container" type)
 │   │   ├── state/
-│   │   │   └── localfile/           # JSON file + advisory lock
+│   │   │   ├── localfile/           # JSON file + advisory lock
+│   │   │   └── s3/                  # shared/remote backend, lease-locked (docs/adr/003; SharedStateBackend gate)
 │   │   └── secrets/
 │   │       ├── env/
-│   │       └── file/
+│   │       ├── file/
+│   │       ├── kubernetes/          # native K8s Secrets (08 B4; KubernetesSecretBackend gate)
+│   │       ├── vault/               # KV v2 (VaultSecretBackend gate)
+│   │       └── router/              # backend-keyed dispatch
 │   ├── application/
 │   │   ├── manifest/              # load, parse, schema-validate YAML/JSON into domain resources
 │   │   ├── compatibility/           # Binding mode↔Kind rules + provider capability checks
 │   │   ├── plan/                    # diff engine: desired vs. state (+ optional live probe)
 │   │   ├── engine/                    # topological executor: runs Reconcile() per resource per plan; resolves + forwards LineageEndpoint
 │   │   ├── registry/                    # provider type -> Provider constructor; runtime type -> Runtime constructor
-│   │   └── featuregate/                  # feature gate registry + stage metadata
+│   │   ├── featuregate/                  # feature gate registry + stage metadata
+│   │   ├── archview/                # architecture graph rendering (tree/dot/mermaid/json)
+│   │   ├── blueprint/               # `platformctl init` embedded blueprints (08 E1)
+│   │   └── docsgen/                 # docs/reference generation from schemas/ (+ HTML site)
 │   └── cliutil/                    # output formatting (table/json), exit codes, flag helpers
 ├── schemas/                    # JSON Schema per apiVersion/kind, used for `validate` and editor tooling
 ├── examples/
-│   └── cdc-attendance/          # the worked acceptance scenario (Redpanda + Postgres + Debezium + MinIO sink)
+│   ├── cdc-attendance/          # the worked acceptance scenario (Redpanda + Postgres + Debezium + MinIO sink)
+│   └── lakehouse/               # the orchestrator-ready stack (Catalog/Connection/lineage, Phase 6.5)
 ├── docs/                       # this planning package + generated reference docs
 └── scripts/ / justfile / Makefile
 ```
@@ -100,7 +121,7 @@ type GroupVersionKind struct {
 
 type Metadata struct {
     Name        string
-    Namespace   string            // reserved for v1; single implicit namespace "default" is enforced
+    Namespace   string            // DNS-label, defaults to "default"; part of resource identity (Key = Namespace/Kind/Name) since Gate 0 (doc 07 §0.1)
     Labels      map[string]string
     Annotations map[string]string
     Observers   []ObserverRef     // optional; see §3.4
@@ -285,14 +306,48 @@ matches spec, not just "usually" do so.
 
 ### 4.2 Provider (reconciler) port and capability interfaces
 
+**Contract revision (docs/planning/08 Stage F, task F5 — 2026-07-20):**
+providers originally received inputs via `Reconcile(ctx, res, rt)` plus an
+accretion of optional setter interfaces (`ProviderResourceAware`,
+`SecretsAware`, `ResourceSetAware`). That shape made providers stateful
+(`Set*`-before-`Reconcile` was a temporal coupling the compiler could not
+check), made every new cross-cutting input either a breaking signature
+change or another `*Aware` interface plus an engine special case, and was
+unserializable for the Phase 8 plugin protocol. It was replaced by a single
+request-scoped struct; the setter interfaces are deleted. See
+docs/planning/09 §3-F5 for the full rationale. The shape below is the
+current contract (`internal/ports/reconciler/reconciler.go`):
+
 ```go
 package reconciler
 
+// Request is the single input to Reconcile/Destroy/Probe and every
+// capability method that needs more than static config. Adding a field is
+// non-breaking for every implementor (open/closed at the contract level);
+// a zero field means "not resolved/applicable for this call". Providers
+// hold no state across calls — their constructors take nothing but static
+// config.
+type Request struct {
+    Resource  resource.Envelope                  // the envelope being reconciled/destroyed/probed
+    Runtime   runtime.ContainerRuntime           // constructed for the realizing Provider's spec.runtime
+    Provider  resource.Envelope                  // the realizing Provider resource (== Resource for Kind "Provider")
+    Secrets   map[string]map[string]string       // resolved spec.secretRefs, by ref name then key
+    Resources map[resource.Key]resource.Envelope // the full validated set, for related-resource lookup
+}
+
 type Provider interface {
-    Type() string // "redpanda", "postgres", "debezium", "s3", "s3sink"
-    Reconcile(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error)
-    Destroy(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) error
-    Probe(ctx context.Context, res resource.Envelope, rt runtime.ContainerRuntime) (status.Status, error)
+    Type() string // "redpanda", "postgres", "debezium", "s3", "s3sink", ...
+    Reconcile(ctx context.Context, req Request) (status.Status, error)
+    Destroy(ctx context.Context, req Request) error
+    Probe(ctx context.Context, req Request) (status.Status, error)
+}
+
+// ExternalConfigurer is the only capability allowed to configure resources
+// declaring spec.external: true with a providerRef; enforced centrally by
+// the engine, never per-provider convention (doc 07 §0.3).
+type ExternalConfigurer interface {
+    Provider
+    ConfigureExternal(ctx context.Context, req Request) (status.Status, error)
 }
 
 // Declared by a provider that can sit behind a `mode: cdc` Binding.
@@ -321,6 +376,22 @@ type ConnectionCapableProvider interface {
     SupportedConnectionSchemes() []string
 }
 
+// Declared by a provider that can sit behind a `mode: sink` Binding whose
+// target is a Source (a database used in its sink role); no shipped
+// provider implements it yet — the seam exists so database sinks land
+// additively (docs/adr/001).
+type DatabaseSinkCapableProvider interface {
+    Provider
+    SupportedSinkEngines() []string
+}
+
+// Declared by a provider that can sit behind a `mode: ingest` Binding
+// (Dataset → EventStream); no shipped provider implements it yet.
+type IngestCapableProvider interface {
+    Provider
+    SupportedIngestFormats() []string
+}
+
 // Optionally implemented: providers check their own Provider resource's
 // configuration at validate time (required keys, configuration.*SecretRef
 // entries that must also appear in spec.secretRefs) — a mis-wired Provider
@@ -330,13 +401,29 @@ type SpecValidator interface {
     ValidateSpec(cfg provider.Provider) error
 }
 
+// Optionally implemented: providers validate a Binding's provider-specific
+// spec.options block at validate time (same DX contract as SpecValidator).
+type BindingOptionsValidator interface {
+    Provider
+    ValidateBindingOptions(mode string, options map[string]any) error
+}
+
+// Implemented by providers whose internals are coupled to the technology's
+// major version (postgres, mysql/mariadb): configuration.version resolves
+// an immutable Profile pinning image + internals together.
+type VersionedProvider interface {
+    Provider
+    VersionCatalog(cfg provider.Provider) versionprofile.Catalog
+}
+
 // Declared by a provider that knows how to consume a lineage backend's
 // connection details and wire them into its own, real integration.
-// Implemented by `debezium` in v1.0.0; implementing it for other providers
-// (e.g. a future `airflow` provider) is future work, not a v1.0.0 requirement.
+// Implemented by `debezium`. Takes Request like every other capability
+// method: a future cross-cutting need lands as an additive Request field,
+// not a widened signature (docs/planning/08 F5).
 type LineageAware interface {
     Provider
-    ConfigureLineage(ctx context.Context, endpoint lineage.LineageEndpoint) error
+    ConfigureLineage(ctx context.Context, req Request, endpoint lineage.LineageEndpoint) error
 }
 ```
 

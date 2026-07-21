@@ -3,7 +3,7 @@
 **Severity:** Low (self-healing; but the first `drift` after upgrading looks
 like a regression to an operator who wasn't told).
 **Status:** RESOLVED (2026-07-17). `docs/upgrade-notes.md` created;
-cross-linked from docs/planning/07 §2.2 and checkpoint.md. Implementation
+cross-linked from docs/planning/07 §2.2 and docs/history/checkpoint.md. Implementation
 also surfaced that §2.2's whole checklist (all seven items, this one
 included) had never been ticked despite being fixed in the Gate 2
 close-out — corrected in the same pass.
@@ -35,7 +35,7 @@ Behavioral migration shipped without an operator-facing note.
 Documentation only (no code change):
 
 1. Add a "Upgrade notes" entry — location: `errors.md` style is for
-   incidents; use `checkpoint.md`'s hardening section *and* a new
+   incidents; use `docs/history/checkpoint.md`'s hardening section *and* a new
    `docs/upgrade-notes.md` (create it, one dated section per behavioral
    migration) stating: after upgrading past `09e1b61`, existing MySQL
    CDC Bindings report `ConnectorConfigDrift` on `database.server.id` once;

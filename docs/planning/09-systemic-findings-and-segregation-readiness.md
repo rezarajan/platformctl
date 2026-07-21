@@ -1,7 +1,7 @@
 # Systemic Findings from Live Testing & Core/Provider Segregation Readiness
 
 Audit date: 2026-07-19. Audited against: the Stage A/B commit history
-(`da3abe5..5da8367`), `errors.md`, `checkpoint.md`, doc 07's Cross-Runtime
+(`da3abe5..5da8367`), `docs/history/errors.md`, `docs/history/checkpoint.md`, doc 07's Cross-Runtime
 Portability section, and direct inspection of `internal/ports/runtime`,
 `internal/ports/reconciler`, `internal/domain/connection`,
 `internal/application/engine`, and every shipped provider.
@@ -47,7 +47,7 @@ Commit references are to this repository.
 | K12 | K8s `ReadFile`-via-exec never named which pod container to run in ("container not found" on every call); pod selection during a rolling update could pick the old, terminating generation's pod | Live cluster, B3 | `f765a0f` |
 | K13 | Docker network → K8s Namespace mapping gave DNS parity but silently **dropped isolation** (any pod cluster-wide could reach the Services) — a semantic weakening no one opted into | Cross-runtime analysis, B7 | `ebd95b5` |
 
-### 1.2 The same classes, previously, on Docker (errors.md)
+### 1.2 The same classes, previously, on Docker (docs/history/errors.md)
 
 The K8s bugs were not new *kinds* of failure — Docker live testing had
 already surfaced the same classes:
@@ -391,5 +391,5 @@ every translation lesson the Kubernetes adapter paid for.
   §10 execution order updated; gap table row 12 added.
 - **doc 07**: unchanged — it remains the historical record; its Cross-
   Runtime section's per-bug entries are the primary sources cited here.
-- `checkpoint.md`, `errors.md`: untouched — both are historical records
+- `docs/history/checkpoint.md`, `docs/history/errors.md`: untouched — both are historical records
   already superseded by doc 08 for planning purposes.
