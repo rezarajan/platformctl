@@ -1358,6 +1358,18 @@ renderer dispatch, the 96-line registry indirection, and `meta.json`
 - **Accept:** `engine_test.go` passes unchanged; adding a fake special
   kind in a test requires touching exactly one table; the four methods
   contain no kind-name string checks outside the table lookup.
+- **Done (2026-07-21, merged):** `kindHandler` table in
+  `internal/application/engine/kind_handler.go`; the four methods consult
+  it; `TestFakeKindHandlerReachesAllFourDispatchPoints` proves the accept
+  criterion. Two recorded findings from the refactor: (a) the historical
+  per-method check order differed (SecretReference-first vs
+  External-first) — harmless, since a validated SecretReference can never
+  carry `spec.external` (schema `additionalProperties: false`); one table
+  order now serves all four. (b) Defense-in-depth asymmetry: External is
+  double-enforced (plan + engine, per NFR-3) but Imported teardown relies
+  on plan-time exclusion only (`ComputeDestroy`); adding the engine-side
+  Imported re-check is a candidate S-task if NFR-3's posture is ever
+  extended to Imported.
 
 ### G3: Split `kubernetes.go` along its natural seams
 
