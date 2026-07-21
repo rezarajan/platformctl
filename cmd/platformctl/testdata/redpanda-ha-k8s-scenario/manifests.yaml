@@ -1,0 +1,30 @@
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-rphak8s-test
+spec:
+  type: redpanda
+  runtime:
+    type: kubernetes
+    network: datascape-rphak8s-test-ns
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    # 3, not 2: redpanda refuses even replication factors ("replication
+    # factor must be odd" — Raft quorum), so a meaningfully replicated K8s
+    # leg needs 3 brokers. The pods declare no k8s resource requests and
+    # run with --memory 512M each; if the cluster genuinely cannot fit
+    # them, the apply fails honestly and the leg is recorded as deferred —
+    # never faked.
+    brokers: 3
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: datascape-rphak8s-events
+spec:
+  providerRef:
+    name: datascape-rphak8s-test
+  partitions: 3
+  replication: 3
+  retention:
+    duration: 7d

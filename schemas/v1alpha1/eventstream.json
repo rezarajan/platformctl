@@ -13,6 +13,7 @@
       "properties": {
         "providerRef": { "$ref": "meta.json#/$defs/nameRef" },
         "partitions": { "type": "integer", "minimum": 1, "description": "Partition count; increases apply in place, decreases are rejected by the broker." },
+        "replication": { "type": "integer", "minimum": 1, "description": "Replication factor (default 1). Must not exceed the realizing Provider's broker count (configuration.brokers), and redpanda additionally requires an odd factor (Raft quorum) — both refused at validate. Changing it on an existing topic is refused (Kafka cannot alter a topic's replication factor in place); recreate the EventStream instead. docs/adr/017." },
         "retention": {
           "type": "object",
           "properties": {

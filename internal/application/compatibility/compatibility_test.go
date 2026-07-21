@@ -865,3 +865,70 @@ does not support format "protobuf" (supported: json)`
 		t.Errorf("error format mismatch\ngot:\n%s\nwant:\n%s", err.Error(), want)
 	}
 }
+
+// streamReplicationStub is a local double for
+// reconciler.StreamReplicationValidator (docs/adr/017 §a.7) — it exercises
+// compatibility's EventStream replication check without importing the
+// redpanda adapter (CLAUDE.md's layering test exception).
+type streamReplicationStub struct {
+	stubProvider
+	maxReplication int
+}
+
+func (s streamReplicationStub) ValidateStreamReplication(_ provider.Provider, replication int) error {
+	if replication > s.maxReplication {
+		return fmt.Errorf("spec.replication %d exceeds the configured broker count %d", replication, s.maxReplication)
+	}
+	return nil
+}
+
+func replicationManifests(replication any) []resource.Envelope {
+	spec := map[string]any{
+		"providerRef": map[string]any{"name": "kafka-cluster"},
+		"partitions":  3,
+	}
+	if replication != nil {
+		spec["replication"] = replication
+	}
+	return []resource.Envelope{
+		envelope("Provider", "kafka-cluster", map[string]any{
+			"type":          "redpanda",
+			"runtime":       map[string]any{"type": "fake"},
+			"configuration": map[string]any{"brokers": 2},
+		}),
+		envelope("EventStream", "attendance-events", spec),
+	}
+}
+
+// TestCheckEventStreamReplicationExceedsBrokers: an EventStream declaring
+// more replicas than its realizing Provider can host fails at validate with
+// an error naming the resource, the provider, and both numbers
+// (docs/adr/017 §a.7).
+func TestCheckEventStreamReplicationExceedsBrokers(t *testing.T) {
+	err := Check(replicationManifests(3), resolver(streamReplicationStub{stubProvider{"redpanda"}, 2}))
+	if err == nil {
+		t.Fatal("Check accepted replication 3 against a 2-broker provider")
+	}
+	for _, want := range []string{"attendance-events", "kafka-cluster", "3", "2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing %q: %v", want, err)
+		}
+	}
+}
+
+// TestCheckEventStreamReplicationWithinBrokers: replication at or under the
+// broker count validates; so does an EventStream that never declares
+// replication against a provider without the capability (the pre-C2 path,
+// unchanged).
+func TestCheckEventStreamReplicationWithinBrokers(t *testing.T) {
+	if err := Check(replicationManifests(2), resolver(streamReplicationStub{stubProvider{"redpanda"}, 2})); err != nil {
+		t.Errorf("Check rejected replication 2 against a 2-broker provider: %v", err)
+	}
+	if err := Check(replicationManifests(nil), resolver(stubProvider{"redpanda"})); err != nil {
+		t.Errorf("Check rejected an EventStream without replication against a capability-less provider: %v", err)
+	}
+	// replication: 1 is the explicit default — no capability required.
+	if err := Check(replicationManifests(1), resolver(stubProvider{"redpanda"})); err != nil {
+		t.Errorf("Check rejected replication 1 against a capability-less provider: %v", err)
+	}
+}

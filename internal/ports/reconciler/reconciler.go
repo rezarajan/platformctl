@@ -247,6 +247,22 @@ type KafkaBootstrapAddressProvider interface {
 	KafkaBootstrapAddress(name string, cfg provider.Provider) string
 }
 
+// StreamReplicationValidator is declared by an EventStream-realizing
+// provider that can bound a stream's replication factor from its own
+// Provider configuration — redpanda's configuration.brokers today
+// (docs/adr/017 §a.7). Checked at validate for every EventStream declaring
+// spec.replication, with the realizing Provider's parsed config: "how many
+// replicas can this stream backend host" is provider knowledge, exactly
+// like SupportedSchemaFormats's config-dependent answer, so the
+// compatibility layer never reads a provider-specific configuration key
+// itself. The returned error names both numbers (the declared replication
+// and the configured capacity); the compatibility check prefixes the
+// resource identity, mirroring SpecValidator's error handling.
+type StreamReplicationValidator interface {
+	Provider
+	ValidateStreamReplication(cfg provider.Provider, replication int) error
+}
+
 // LineageAware is declared by a provider that knows how to consume a lineage
 // backend's connection details and wire them into its own, real integration.
 // Implemented by `debezium` in v1.0.0. Takes Request like every other

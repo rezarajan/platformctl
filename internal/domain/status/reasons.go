@@ -123,6 +123,16 @@ const (
 	ReasonTopicMissing           = "TopicMissing"
 	ReasonPartitionCountMismatch = "PartitionCountMismatch"
 	ReasonRetentionMismatch      = "RetentionMismatch"
+	// ReasonBrokerMissing, ReasonBrokerNotJoined, and
+	// ReasonReplicationFactorMismatch are the multi-broker drift reasons
+	// (docs/adr/017 §a.6): a set ordinal absent/stopped at the runtime, a
+	// broker present but not a cluster member per the admin API, and a
+	// topic whose observed replication factor differs from
+	// spec.replication. Same constant-prefix + dynamic-detail convention
+	// as PartitionCountMismatch above.
+	ReasonBrokerMissing             = "BrokerMissing"
+	ReasonBrokerNotJoined           = "BrokerNotJoined"
+	ReasonReplicationFactorMismatch = "ReplicationFactorMismatch"
 )
 
 // --- postgres-specific probe reasons ----------------------------------------
