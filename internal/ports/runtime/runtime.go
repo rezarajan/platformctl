@@ -251,16 +251,24 @@ type ContainerSpec struct {
 	// Name and individually by ordinal name (OrdinalName, "<Name>-0" ..
 	// "<Name>-(N-1)").
 	Replicas int
-	// StableIdentity, meaningful only when Replicas > 1, additionally gives
-	// each ordinal its own persistent volume set (K8s: StatefulSet +
-	// volumeClaimTemplates; Docker: one Docker volume per
+	// StableIdentity selects the ordinal-set shape at any replica count
+	// (docs/adr/017-redpanda-multibroker-and-replica-state.md §a.2, amending
+	// docs/adr/004's original "meaningful only when Replicas > 1"): even a
+	// ReplicaCount() of 1 produces ordinal "<Name>-0" (K8s: a 1-replica
+	// StatefulSet; Docker/fake: one ordinal-named container), never the bare
+	// single-container shape — which is what lets a stateful cluster scale
+	// 1 -> N -> 1 in place without ever crossing a shape boundary. It
+	// additionally gives each ordinal its own persistent volume set (K8s:
+	// StatefulSet + volumeClaimTemplates; Docker: one Docker volume per
 	// "<VolumeMount.VolumeName>-<ordinal>") and a stable per-ordinal
 	// hostname reachable independent of which other ordinals are up (K8s:
 	// headless Service; Docker: the ordinal's own container name, always
 	// resolvable). false means replicas are interchangeable pure-compute
 	// units with no per-ordinal storage or identity beyond the ordinal name
 	// itself (e.g. Trino workers, docs/adr/006-compute-engines.md) —
-	// Replicas > 1 alone is enough for horizontal scaling.
+	// Replicas > 1 alone is enough for horizontal scaling, and Replicas <= 1
+	// with StableIdentity false remains today's single-container behavior,
+	// byte-for-byte.
 	StableIdentity bool
 }
 

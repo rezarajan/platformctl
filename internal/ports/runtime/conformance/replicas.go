@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -190,8 +191,14 @@ func runReplicasShapeTransition(t *testing.T, rt runtime.ContainerRuntime, fx fi
 			t.Fatalf("WaitHealthy: %v", err)
 		}
 
+		// Collapsing to the bare single-container shape (StableIdentity off,
+		// one replica) is the transition that must be refused. Note the
+		// docs/adr/017 §a.2 amendment: StableIdentity with Replicas: 1 is
+		// NOT this shape — it is a valid 1-member ordinal set, covered by
+		// ReplicaSet_StableIdentitySingleOrdinal below.
 		collapsed := spec
 		collapsed.Replicas = 1
+		collapsed.StableIdentity = false
 		if _, err := rt.EnsureContainer(ctx, collapsed); err == nil {
 			t.Fatal("EnsureContainer converted a multi-replica set to a single container in place; the transition must be refused (remedy: destroy and recreate)")
 		}
@@ -203,6 +210,159 @@ func runReplicasShapeTransition(t *testing.T, rt runtime.ContainerRuntime, fx fi
 		}
 		if !st.Healthy {
 			t.Errorf("replica set unhealthy after a refused shape transition")
+		}
+	})
+
+	// ReplicaSet_StableIdentitySingleOrdinal pins docs/adr/017 §a.2's
+	// amendment to docs/adr/004: StableIdentity selects the ordinal-set
+	// shape at ANY replica count. A StableIdentity spec with one replica is
+	// a 1-member set (ordinal "<name>-0", never a bare "<name>" container),
+	// which is exactly what lets a stateful cluster (C2's brokers) scale
+	// 1 -> N -> 1 in place without crossing the shape boundary the previous
+	// subtest refuses.
+	t.Run("ReplicaSet_StableIdentitySingleOrdinal", func(t *testing.T) {
+		ctx := fx.ctx
+		name := fx.namePrefix + "-sid1-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		spec := runtime.ContainerSpec{
+			Name:           name,
+			Image:          "alpine:3.20",
+			Cmd:            []string{"sleep", "300"},
+			Networks:       []string{fx.netSpec.Name},
+			Labels:         fx.labels,
+			Replicas:       1,
+			StableIdentity: true,
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer (StableIdentity, Replicas: 1): %v", err)
+		}
+		if err := rt.WaitHealthy(ctx, name, 30*time.Second); err != nil {
+			t.Fatalf("WaitHealthy: %v", err)
+		}
+		waitReadyReplicas(ctx, t, rt, name, 1, 60*time.Second)
+		ordName := runtime.OrdinalName(name, 0)
+		if _, found, err := rt.Inspect(ctx, ordName); err != nil || !found {
+			t.Fatalf("ordinal %q of a 1-member StableIdentity set not resolvable: found=%v err=%v", ordName, found, err)
+		}
+
+		// Idempotency at the 1-member shape (NFR-2).
+		mc, hasCounter := rt.(MutationCounter)
+		before := 0
+		if hasCounter {
+			before = mc.Mutations()
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("second EnsureContainer (unchanged 1-member set): %v", err)
+		}
+		if hasCounter && mc.Mutations() != before {
+			t.Errorf("second EnsureContainer with identical 1-member StableIdentity spec mutated state (NFR-2 violation)")
+		}
+
+		// Scale 1 -> 2 in place: same shape, one new ordinal.
+		scaled := spec
+		scaled.Replicas = 2
+		if _, err := rt.EnsureContainer(ctx, scaled); err != nil {
+			t.Fatalf("EnsureContainer (scale 1 -> 2 within the StableIdentity shape): %v", err)
+		}
+		if err := rt.WaitHealthy(ctx, name, 30*time.Second); err != nil {
+			t.Fatalf("WaitHealthy after scale to 2: %v", err)
+		}
+		waitReadyReplicas(ctx, t, rt, name, 2, 60*time.Second)
+
+		// And back 2 -> 1: a scale-down WITHIN the set shape is runtime
+		// mechanics (whether it is safe is the provider's call —
+		// docs/adr/017 §a.5), unlike the cross-shape collapse above.
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer (scale 2 -> 1 within the StableIdentity shape): %v", err)
+		}
+		waitReadyReplicas(ctx, t, rt, name, 1, 60*time.Second)
+	})
+
+	// ReplicaSet_OrdinalInNetworkDNS pins the cross-runtime claim
+	// docs/adr/004 stated and C2 caught unimplemented live on Kubernetes
+	// (docs/adr/017 §a.3): an ordinal's bare short name ("<name>-<i>") is
+	// dialable from an in-network vantage point on every adapter — Docker
+	// resolves the ordinal container name natively; Kubernetes needs one
+	// Service per ordinal (a StatefulSet pod's DNS record is not covered by
+	// the namespace's search domain); the fake's strict interpreter
+	// resolves its managed ordinal records. Without this, a stateful
+	// cluster's seed list (peers dialing "<name>-0") and any in-network
+	// consumer's bootstrap list silently fail on Kubernetes only.
+	t.Run("ReplicaSet_OrdinalInNetworkDNS", func(t *testing.T) {
+		ctx := fx.ctx
+		name := fx.namePrefix + "-orddns-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		type commandRunner interface{ RunsContainerCommands() bool }
+		cr, execCapable := rt.(commandRunner)
+		execCapable = execCapable && cr.RunsContainerCommands()
+		spec := runtime.ContainerSpec{
+			Name:     name,
+			Image:    "alpine:3.20",
+			Cmd:      []string{"sleep", "300"},
+			Networks: []string{fx.netSpec.Name},
+			Ports:    []runtime.PortBinding{{ContainerPort: 8080, Audience: runtime.AudienceInternal}},
+			Labels:   fx.labels,
+			// Two members so the probe's vantage point can be the *other*
+			// member — cross-member resolution is the claim, not loopback.
+			Replicas:       2,
+			StableIdentity: true,
+		}
+		if execCapable {
+			// A real listener a real in-network dial can succeed against
+			// (the ProbeReachable_InNetwork fixture's pattern).
+			spec.Cmd = []string{"sh", "-c", "while true; do nc -l -p 8080; done"}
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer (StableIdentity, Replicas: 2): %v", err)
+		}
+		if err := rt.WaitHealthy(ctx, name, 30*time.Second); err != nil {
+			t.Fatalf("WaitHealthy: %v", err)
+		}
+		waitReadyReplicas(ctx, t, rt, name, 2, 60*time.Second)
+		for i := 0; i < 2; i++ {
+			target := fmt.Sprintf("%s:%d", runtime.OrdinalName(name, i), 8080)
+			if err := rt.ProbeReachable(ctx, fx.netSpec.Name, target); err != nil {
+				t.Errorf("ProbeReachable(%q, %q) = %v; ordinal short names must resolve in-network on every adapter (docs/adr/017 §a.3)", fx.netSpec.Name, target, err)
+			}
+		}
+	})
+
+	// ReplicaSet_SingleToSetRefused pins the mirror direction of
+	// ReplicaSet_ShapeTransition_Refused (docs/adr/017 §a.2): an existing
+	// bare single container is never converted to a replica set in place —
+	// fanning ordinals out beside it would leave the stale single serving
+	// the shared name.
+	t.Run("ReplicaSet_SingleToSetRefused", func(t *testing.T) {
+		ctx := fx.ctx
+		name := fx.namePrefix + "-single2set-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		single := runtime.ContainerSpec{
+			Name:     name,
+			Image:    "alpine:3.20",
+			Cmd:      []string{"sleep", "300"},
+			Networks: []string{fx.netSpec.Name},
+			Labels:   fx.labels,
+		}
+		if _, err := rt.EnsureContainer(ctx, single); err != nil {
+			t.Fatalf("EnsureContainer (single): %v", err)
+		}
+		if err := rt.WaitHealthy(ctx, name, 30*time.Second); err != nil {
+			t.Fatalf("WaitHealthy: %v", err)
+		}
+
+		set := single
+		set.Replicas = 2
+		set.StableIdentity = true
+		if _, err := rt.EnsureContainer(ctx, set); err == nil {
+			t.Fatal("EnsureContainer converted a single container to a replica set in place; the transition must be refused (remedy: destroy and recreate)")
+		}
+		// The refused call must have changed nothing.
+		st, found, err := rt.Inspect(ctx, name)
+		if err != nil || !found {
+			t.Fatalf("Inspect after refused single-to-set transition: found=%v err=%v", found, err)
+		}
+		if !st.Running {
+			t.Errorf("single container not running after a refused single-to-set transition")
 		}
 	})
 }

@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -22,14 +23,16 @@ import (
 	runtimeport "github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
-// EnsureContainer dispatches to the StatefulSet path (Replicas > 1 and
-// StableIdentity — C2/C4's shape) or the Deployment path (every other case,
-// including a plain Replicas > 1 with StableIdentity: false — D10's shape),
-// per docs/adr/004-replicas-and-identity.md. Replicas <= 1 reproduces
-// this adapter's original single-replica Deployment behavior byte-for-byte.
+// EnsureContainer dispatches to the StatefulSet path (StableIdentity at any
+// replica count — C2/C4's shape; a 1-replica StatefulSet is what lets a
+// stateful cluster scale 1 -> N -> 1 in place, docs/adr/017 §a.2) or the
+// Deployment path (every other case, including a plain Replicas > 1 with
+// StableIdentity: false — D10's shape), per docs/adr/004-replicas-and-
+// identity.md. Replicas <= 1 without StableIdentity reproduces this
+// adapter's original single-replica Deployment behavior byte-for-byte.
 func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.ContainerSpec) (runtimeport.ContainerState, error) {
 	n := spec.ReplicaCount()
-	if n > 1 && spec.StableIdentity {
+	if spec.StableIdentity {
 		return r.ensureStatefulSet(ctx, spec, int32(n))
 	}
 	return r.ensureDeployment(ctx, spec, int32(n))
@@ -167,6 +170,9 @@ func (r *Runtime) ensureStatefulSet(ctx context.Context, spec runtimeport.Contai
 	if err := r.ensureHeadlessService(ctx, ns, spec); err != nil {
 		return runtimeport.ContainerState{}, err
 	}
+	if err := r.ensureOrdinalServices(ctx, ns, spec, replicas); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
 	if err := r.ensureAliasServices(ctx, ns, spec); err != nil {
 		return runtimeport.ContainerState{}, err
 	}
@@ -241,6 +247,77 @@ func (r *Runtime) ensurePodDisruptionBudget(ctx context.Context, ns string, spec
 		}
 		return nil
 	}
+}
+
+// ensureOrdinalServices gives every ordinal of a StableIdentity set an
+// in-namespace short-name DNS identity ("<name>-<i>") matching Docker's
+// per-ordinal container-name resolution — the cross-runtime claim
+// docs/adr/004 stated, made real here (caught live by C2's multi-broker
+// cluster, docs/adr/017 §a.3): a StatefulSet pod's DNS record is only
+// "<pod>.<svc>.<ns>.svc...", which the namespace's search domain does NOT
+// cover, so the bare ordinal name a peer's seed list or an in-network
+// consumer's bootstrap list dials would never resolve without one Service
+// per ordinal, selecting the StatefulSet's own per-pod label.
+// PublishNotReadyAddresses is essential, not decorative: readiness is
+// typically cluster-scoped for the workloads this shape exists for (C2's
+// `rpk cluster health`), so no pod is Ready until the cluster forms —
+// endpoints gated on readiness would deadlock the very bootstrap dial
+// (ordinal 1 → seed ordinal 0) formation depends on. Ordinal Services from
+// a previous, larger generation are pruned by their replica-ordinal label;
+// teardown needs no special casing — they carry app=<name> like every other
+// Service (removeCommonContainerObjects' label query).
+func (r *Runtime) ensureOrdinalServices(ctx context.Context, ns string, spec runtimeport.ContainerSpec, replicas int32) error {
+	ports := servicePorts(spec)
+	if len(ports) == 0 {
+		return nil
+	}
+	for i := 0; i < int(replicas); i++ {
+		ord := runtimeport.OrdinalName(spec.Name, i)
+		labels := withOwnership(spec.Labels)
+		labels["app"] = spec.Name
+		labels[runtimeport.LabelReplicaOrdinal] = strconv.Itoa(i)
+		desired := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: ord, Namespace: ns, Labels: labels},
+			Spec: corev1.ServiceSpec{
+				Selector:                 map[string]string{"statefulset.kubernetes.io/pod-name": ord},
+				Ports:                    ports,
+				PublishNotReadyAddresses: true,
+			},
+		}
+		existing, err := r.clientset.CoreV1().Services(ns).Get(ctx, ord, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+			if _, err := r.clientset.CoreV1().Services(ns).Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("create ordinal service %q: %w", ord, err)
+			}
+		case err != nil:
+			return fmt.Errorf("get ordinal service %q: %w", ord, err)
+		default:
+			desired.ResourceVersion = existing.ResourceVersion
+			desired.Spec.ClusterIP = existing.Spec.ClusterIP
+			if _, err := r.clientset.CoreV1().Services(ns).Update(ctx, desired, metav1.UpdateOptions{}); err != nil {
+				return fmt.Errorf("update ordinal service %q: %w", ord, err)
+			}
+		}
+	}
+	// Prune ordinal Services left over from a previous, larger generation
+	// (the Service-side complement of the StatefulSet's own pod scale-down).
+	svcs, err := r.clientset.CoreV1().Services(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=" + spec.Name + "," + runtimeport.LabelManagedBy + "=" + runtimeport.ManagedByValue + "," + runtimeport.LabelReplicaOrdinal,
+	})
+	if err != nil {
+		return fmt.Errorf("list ordinal services for %q: %w", spec.Name, err)
+	}
+	for _, svc := range svcs.Items {
+		ord, err := strconv.Atoi(svc.Labels[runtimeport.LabelReplicaOrdinal])
+		if err != nil || ord < int(replicas) {
+			continue
+		}
+		if err := r.clientset.CoreV1().Services(ns).Delete(ctx, svc.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete stale ordinal service %q: %w", svc.Name, err)
+		}
+	}
+	return nil
 }
 
 // ensureHeadlessService reconciles the governing Service a StatefulSet's

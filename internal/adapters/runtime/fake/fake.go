@@ -90,7 +90,7 @@ func (r *Runtime) EnsureContainer(_ context.Context, spec runtime.ContainerSpec)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	n := spec.ReplicaCount()
-	if n <= 1 {
+	if n <= 1 && !spec.StableIdentity {
 		// Shape-transition guard (docs/adr/004): collapsing an existing
 		// replica set to a single container in place is refused, exactly as
 		// the Docker and Kubernetes adapters refuse it, so unit tests catch
@@ -106,6 +106,13 @@ func (r *Runtime) EnsureContainer(_ context.Context, spec runtime.ContainerSpec)
 		}
 		r.ensureOneLocked(spec, "", 0)
 		return r.stateOf(spec), nil
+	}
+	// Shape-transition guard, mirror direction (docs/adr/017 §a.2): a
+	// record stored under the bare base name means this spec last applied
+	// as a single container — refuse the in-place conversion, matching
+	// Docker/Kubernetes.
+	if rec, ok := r.containers[spec.Name]; ok && rec.replicaBase == "" {
+		return runtime.ContainerState{}, fmt.Errorf("container %q exists as a single container; refusing to convert it to a replica set in place — remove it first (destroy and recreate) if switching this container to replicas/StableIdentity", spec.Name)
 	}
 	return r.ensureReplicaSetLocked(spec, n), nil
 }

@@ -256,6 +256,28 @@ spec:
   secretRefs: [postgres-admin]
 ```
 
+A `redpanda` Provider additionally accepts `configuration.brokers` (integer ≥ 1, docs/adr/017): declaring
+it opts the broker into the multi-broker, stable-identity ordinal shape (`ContainerSpec.Replicas` +
+`StableIdentity: true` — brokers `<name>-0..<name>-(N-1)`, per-ordinal volumes, seed list from ordinal
+hostnames). `brokers > 1` requires the `HighAvailability` gate, enforced at validate. Declaring `brokers`
+cannot be combined with host-port pins (`kafkaPort`/`adminPort`/`schemaRegistryPort` — each broker's host
+port is auto-assigned) or `schemaRegistry: enabled`. Omitting `brokers` keeps the pre-C2 single-container
+shape byte-for-byte; enabling it on an existing single-broker deployment is a shape transition and
+requires destroy-and-recreate. Scaling `brokers` up applies in place; scaling down is refused
+(data-loss risk — docs/adr/017 §a.5):
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: kafka-cluster
+spec:
+  type: redpanda
+  runtime: {type: docker, network: datascape}
+  configuration:
+    brokers: 3          # requires --feature-gates=HighAvailability=true
+```
+
 Optional, not required for v1.0.0:
 
 ```yaml
@@ -415,6 +437,15 @@ spec:
   providerRef:
     name: local-redpanda
   partitions: 6
+  replication: 3          # optional (default 1, docs/adr/017 §a.7): topic replication factor. Must not
+                           # exceed the realizing Provider's configuration.brokers — refused at validate
+                           # (reconciler.StreamReplicationValidator). Kafka cannot change an existing
+                           # topic's replication factor in place, so changing it is refused with a
+                           # recreate-the-EventStream remedy; drift-probe reports an out-of-band factor
+                           # mismatch as ReplicationFactorMismatch.
+                           # redpanda additionally requires an ODD factor (Raft quorum: its brokers
+                           # refuse "replication factor must be odd") — even values above 1 are
+                           # refused at validate.
   retention:
     duration: 7d
   # keySchemaRef / valueSchemaRef: reserved for a future schema-registry integration, not in v1

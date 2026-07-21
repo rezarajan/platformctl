@@ -39,9 +39,17 @@ func buildStatefulSet(namespace string, spec runtimeport.ContainerSpec, hash str
 		// See buildDeployment's identical comment: Cmd is Docker's
 		// CMD-appends-to-ENTRYPOINT convention, so it maps to Args, never
 		// Command.
-		Args:  spec.Cmd,
-		Env:   envVars(spec.Env),
-		Ports: containerPorts(spec.Ports),
+		Args: spec.Cmd,
+		// And Entrypoint REPLACES the image's ENTRYPOINT, so it maps to
+		// Command — this line was missing until C2's redpanda cluster (the
+		// first StableIdentity consumer to set Entrypoint) crash-looped
+		// live: rpk received the whole start script as a single Args token
+		// through the image's own entrypoint and printed its usage help.
+		// Pinned by the conformance suite's
+		// ReplicaSet_EntrypointReplaces_OnSet (docs/adr/015 F6 ratchet).
+		Command: spec.Entrypoint,
+		Env:     envVars(spec.Env),
+		Ports:   containerPorts(spec.Ports),
 	}
 	probe := healthProbe(spec.HealthCheck)
 	container.ReadinessProbe = probe

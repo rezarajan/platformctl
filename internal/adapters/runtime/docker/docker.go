@@ -100,15 +100,17 @@ func (r *Runtime) EnsureVolume(ctx context.Context, spec runtime.VolumeSpec) err
 // detect "already matches" without diffing every field against inspect output.
 const specGenLabel = "io.datascape.spec-hash"
 
-// EnsureContainer dispatches to the single-container path (spec.Replicas <=
-// 1, today's exact pre-existing behavior, byte-for-byte) or the replica-set
-// path (docs/adr/004-replicas-and-identity.md): Docker has no native
-// replica-set object, so N > 1 always fans out to N separately-named
-// containers ("<Name>-0".."<Name>-(N-1)") — forced by Docker's own
-// unique-container-name requirement, independent of StableIdentity.
+// EnsureContainer dispatches to the single-container path (Replicas <= 1
+// without StableIdentity, today's exact pre-existing behavior,
+// byte-for-byte) or the replica-set path (docs/adr/004-replicas-and-
+// identity.md; StableIdentity at any count per docs/adr/017 §a.2): Docker
+// has no native replica-set object, so the set path always fans out to N
+// separately-named containers ("<Name>-0".."<Name>-(N-1)") — forced by
+// Docker's own unique-container-name requirement, independent of
+// StableIdentity.
 func (r *Runtime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpec) (runtime.ContainerState, error) {
 	n := spec.ReplicaCount()
-	if n <= 1 {
+	if n <= 1 && !spec.StableIdentity {
 		// Shape-transition guard (docs/adr/004): collapsing an existing
 		// replica set to a single container in place would leave the stale
 		// ordinals running and still serving the shared alias — refuse,
@@ -131,6 +133,17 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpe
 // are true when at least one member is; ReadyReplicas is the count of
 // healthy members.
 func (r *Runtime) ensureReplicaSet(ctx context.Context, spec runtime.ContainerSpec, n int) (runtime.ContainerState, error) {
+	// Shape-transition guard, mirror direction (docs/adr/017 §a.2): a
+	// literal container by the base name means this spec last applied as a
+	// single container. Fanning out ordinals beside it would leave the
+	// stale single serving the shared DNS name — refuse, matching the
+	// Kubernetes adapter's Deployment-exists refusal on its StatefulSet
+	// path.
+	if _, err := r.cli.ContainerInspect(ctx, spec.Name); err == nil {
+		return runtime.ContainerState{}, fmt.Errorf("container %q exists as a single container; refusing to convert it to a replica set in place — remove it first (destroy and recreate) if switching this container to replicas/StableIdentity", spec.Name)
+	} else if !errdefs.IsNotFound(err) {
+		return runtime.ContainerState{}, fmt.Errorf("inspect container %q: %w", spec.Name, err)
+	}
 	if err := r.pruneStaleOrdinals(ctx, spec.Name, n); err != nil {
 		return runtime.ContainerState{}, err
 	}

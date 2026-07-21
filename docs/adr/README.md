@@ -42,6 +42,7 @@ pattern of recording a redirected first cut).
 | [014](014-feature-gate-strategy.md) | Feature-gate strategy | accepted, retroactive | Alpha/disabled convention; graduation; master-table sync |
 | [015](015-connectivity-plane.md) | The connectivity/discovery plane | accepted (Stage F) | EnsureReachable-only dialing; port audiences; naming authority; endpoint facts; strict fake; F6 ratchet |
 | [016](016-provider-request-contract.md) | Provider invocation via Request struct | accepted (Stage F5) | stateless providers; additive request fields; no setter interfaces |
+| [017](017-redpanda-multibroker-and-replica-state.md) | Redpanda multi-broker clusters and replica state | accepted (C2) | brokers opts into the ordinal-set shape; StableIdentity at N=1; per-ordinal dialer map; 3→1 refused; aggregate state + published per-ordinal endpoint facts |
 
 "Retroactive" ADRs (008–014) record decisions made in the planning package
 (docs 00–06) before this convention existed — written 2026-07-21 so the

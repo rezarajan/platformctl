@@ -109,4 +109,51 @@ func runEntrypointFaithfulness(t *testing.T, rt runtime.ContainerRuntime, fx fix
 			t.Fatal("container is not running — Entrypoint did not replace the image's own ENTRYPOINT (it looks like it was appended after \"curl\" instead, which then failed treating \"sh\" as a URL): the K1 mistake, inverted")
 		}
 	})
+
+	// ReplicaSet_EntrypointReplaces_OnSet backfills a C2 live catch
+	// (docs/adr/017; docs/adr/015 F6 ratchet): the Kubernetes StatefulSet
+	// builder mapped Cmd->Args but silently dropped Entrypoint — no
+	// StableIdentity consumer had set it until redpanda's multi-broker
+	// start script, whose pods then crash-looped with rpk's usage help
+	// (the whole script arrived as one Args token through the image's own
+	// entrypoint). Same fixture as EntrypointFaithfulness_EntrypointReplaces,
+	// but on the ordinal-set shape, so every adapter proves Entrypoint
+	// replacement holds there too.
+	t.Run("ReplicaSet_EntrypointReplaces_OnSet", func(t *testing.T) {
+		type commandRunner interface {
+			RunsContainerCommands() bool
+		}
+		cr, execCapable := rt.(commandRunner)
+		execCapable = execCapable && cr.RunsContainerCommands()
+		if !execCapable {
+			return
+		}
+
+		name := fx.namePrefix + "-set-entrypoint-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		spec := runtime.ContainerSpec{
+			Name:           name,
+			Image:          "curlimages/curl:8.10.1",
+			Entrypoint:     []string{"sh", "-c"},
+			Cmd:            []string{"sleep 60"},
+			Networks:       []string{fx.netSpec.Name},
+			Labels:         fx.labels,
+			Replicas:       2,
+			StableIdentity: true,
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer (StableIdentity set with Entrypoint): %v", err)
+		}
+		if err := rt.WaitHealthy(ctx, name, 60*time.Second); err != nil {
+			t.Fatalf("WaitHealthy: %v", err)
+		}
+		waitReadyReplicas(ctx, t, rt, name, 2, 60*time.Second)
+		st, found, err := rt.Inspect(ctx, name)
+		if err != nil || !found {
+			t.Fatalf("Inspect: found=%v err=%v", found, err)
+		}
+		if !st.Running {
+			t.Fatal("set is not running — Entrypoint was not translated on the replica-set/StatefulSet path (the C2 live catch: a dropped Command hands the start script to the image's own entrypoint)")
+		}
+	})
 }

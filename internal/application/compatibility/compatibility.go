@@ -13,6 +13,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/catalog"
 	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/dataset"
+	"github.com/rezarajan/platformctl/internal/domain/eventstream"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/source"
@@ -359,6 +360,31 @@ func checkResourceCapabilities(envelopes []resource.Envelope, idx manifestIndex,
 			if vp, ok := impl.(reconciler.VersionedProvider); ok {
 				if err := vp.VersionCatalog(p).ValidateConfig(p.Configuration); err != nil {
 					return fmt.Errorf("Provider %q (type: %s): %w", e.Metadata.Name, p.Type, err)
+				}
+			}
+		case "EventStream":
+			es, err := eventstream.FromEnvelope(e)
+			if err != nil {
+				return err
+			}
+			if es.External || es.ReplicationFactor() <= 1 {
+				// Unset/1 is the pre-C2 single-copy default — nothing to
+				// bound; a provider without the capability keeps validating
+				// exactly as before docs/adr/017.
+				continue
+			}
+			impl, provType, err := resolveProviderImpl(e, "EventStream", e.Metadata.Name, resource.RefFromSpec(e.Spec, "providerRef"))
+			if err != nil {
+				return err
+			}
+			if srv, ok := impl.(reconciler.StreamReplicationValidator); ok {
+				provEnv, _ := idx.resolveKind(e, resource.RefFromSpec(e.Spec, "providerRef"), "Provider")
+				p, err := provider.FromEnvelope(provEnv)
+				if err != nil {
+					return err
+				}
+				if err := srv.ValidateStreamReplication(p, es.ReplicationFactor()); err != nil {
+					return fmt.Errorf("EventStream %q: Provider %q (type: %s): %w", e.Metadata.Name, es.ProviderRef, provType, err)
 				}
 			}
 		case "Catalog":

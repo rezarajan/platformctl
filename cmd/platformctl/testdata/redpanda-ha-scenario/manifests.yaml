@@ -1,0 +1,24 @@
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-rp-ha-test
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-rp-ha-test-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    brokers: 3
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: datascape-ha-events
+spec:
+  providerRef:
+    name: datascape-rp-ha-test
+  partitions: 3
+  replication: 3
+  retention:
+    duration: 7d

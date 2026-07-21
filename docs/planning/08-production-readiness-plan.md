@@ -594,6 +594,40 @@ entrypoints, is observable, and its data is recoverable. This is where
 - **Accept:** integration test: 3-broker cluster to Ready; produce/consume
   during `docker kill`/pod delete of one broker succeeds; drift reports a
   missing broker; re-apply heals it; idempotent re-apply clean.
+- **Done (2026-07-21, C2):** design note
+  `docs/adr/017-redpanda-multibroker-and-replica-state.md` (both assigned
+  questions: multi-broker mechanics on ADR 004's primitive, and the
+  state-level replica representation — state stays one aggregate entry;
+  per-ordinal facts ride as published `providerState` endpoint facts only;
+  no state version bump). Declaring `configuration.brokers` opts into the
+  ordinal-set shape at any N ≥ 1 (ADR 004 amended additively:
+  `StableIdentity` selects the set shape at ReplicaCount()==1 too), which
+  is what makes 1→3 a true same-shape in-place scale; 3→1 is refused at
+  reconcile with a destroy-and-recreate remedy (destructive-flag plumbing
+  judged disproportionate — recorded in ADR 017 §a.5 per this task's own
+  fallback clause). C1's deferred gate-at-validate accept line is closed:
+  `checkHighAvailabilityGate` in `loadAndValidate` (the
+  checkSchemaRegistryGate mechanism; ADR 017 §a.8 records why it is not
+  literally inside `SpecValidator`, which has no gate access by design).
+  Verified live on **Docker** (`TestRedpandaHAEndToEnd`, 16.5s: 3-broker
+  cluster Ready, RF-3 topic via admin API, produce/consume
+  before/during/after an out-of-band broker kill, `BrokerMissing(<ordinal>)`
+  drift, re-apply heal, idempotent re-apply, clean destroy) and on
+  **Kubernetes** at the same brokers: 3 / replication: 3 sizing
+  (`TestRedpandaHAKubernetesEndToEnd`, 69s, minimal-RBAC kubeconfig per
+  deploy/kubernetes/rbac — never ambient admin; the StatefulSet controller
+  performs the heal there, a documented per-runtime difference). Three
+  live-caught defects fixed with conformance pins per the F6 ratchet:
+  the StatefulSet builder dropped `Entrypoint`→`Command`
+  (`ReplicaSet_EntrypointReplaces_OnSet`); ordinal short-name DNS did not
+  actually resolve cross-pod on Kubernetes until per-ordinal Services
+  (publishNotReadyAddresses) made ADR 004's claim real
+  (`ReplicaSet_OrdinalInNetworkDNS`); and Redpanda refuses *even*
+  replication factors ("must be odd", Raft quorum), now refused at
+  validate. Stage-exit criterion 1 ("factor 3 keeps accepting
+  produce/consume while one broker is killed, both runtimes") holds on a
+  single-node minikube; "brokers spread across nodes when possible" (soft
+  anti-affinity, C1) remains unexercised on multi-node clusters.
 
 ### C3: Distributed Kafka Connect workers
 
