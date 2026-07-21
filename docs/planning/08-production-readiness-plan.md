@@ -102,6 +102,19 @@ stages should not close before earlier ones.
 Every task below is written to be executed by a single agent session with
 no additional context. Execute in exactly this order; do not skip steps:
 
+0. **Checkpoint continuously (M/L tasks, mandatory).** Before any other
+   work, create `TASK_PROGRESS.md` in your working-tree root: the step
+   plan for this task, one line per step with status
+   (done / in-progress / next), file anchors, and verification results as
+   they happen. Update it as you go and **commit after every completed
+   increment** (WIP commits are fine — tidy at the end; if commit signing
+   is unavailable, stage and record the state in `TASK_PROGRESS.md`
+   instead). A session that dies mid-task must be resumable by a
+   different session from `TASK_PROGRESS.md` + `git log` alone, without
+   re-reading the full context or repeating completed work. On resume,
+   read those two things first and continue from the first unfinished
+   step.
+
 1. **Read, in order:** `CLAUDE.md`; this task's entry in full (Context, Do,
    Accept); every doc section the task names; `docs/adr/README.md`'s index
    for any ADR the task's area touches (ports/providers → ADR 008/009/015/
