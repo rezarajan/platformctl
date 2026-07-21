@@ -99,6 +99,11 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 
 		// Capability is checked per matched pairing: the same mode makes
 		// different demands of a provider depending on the endpoint kinds.
+		// datasetSinkFormat feeds checkSchemaFormat below (docs/planning/08
+		// D2): only the sink-to-Dataset pairing sets it, since only that
+		// pairing has a Dataset.spec.format to check against the stream's
+		// registry availability.
+		var datasetSinkFormat string
 		switch {
 		case b.Mode == binding.ModeCDC:
 			src, err := source.FromEnvelope(srcEnv)
@@ -126,6 +131,7 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 			if !contains(formats, ds.Format) {
 				return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support sink format %q (supported: %s)", bindingName, b.ProviderRef, p.Type, ds.Format, joinSorted(formats))
 			}
+			datasetSinkFormat = ds.Format
 		case b.Mode == binding.ModeSink && pair.TargetKind == "Source":
 			src, err := source.FromEnvelope(tgtEnv)
 			if err != nil {
@@ -154,15 +160,16 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 			}
 		}
 
-		// Schema-carrying options.format (docs/planning/08 D1): checked
-		// against the EventStream endpoint's own realizing Provider, not
-		// b.ProviderRef — registry availability (configuration.schemaRegistry:
-		// enabled) is a fact of the stream backend a CDC/sink connector
-		// writes into or reads from, not a capability of the connector
-		// itself. Purely a manifest-declared, forward-looking check (no live
-		// infra touched) — the same "validate before apply schedules
-		// anything" contract as every other capability check here.
-		if err := checkSchemaFormat(bindingName, srcEnv, tgtEnv, b, idx, resolve); err != nil {
+		// Schema-carrying options.format (docs/planning/08 D1) and, since D2,
+		// a parquet-format Dataset sink target: both checked against the
+		// EventStream endpoint's own realizing Provider, not b.ProviderRef —
+		// registry availability (configuration.schemaRegistry: enabled) is a
+		// fact of the stream backend a CDC/sink connector writes into or
+		// reads from, not a capability of the connector itself. Purely a
+		// manifest-declared, forward-looking check (no live infra touched) —
+		// the same "validate before apply schedules anything" contract as
+		// every other capability check here.
+		if err := checkSchemaFormat(bindingName, srcEnv, tgtEnv, b, datasetSinkFormat, idx, resolve); err != nil {
 			return err
 		}
 
@@ -178,20 +185,38 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 	return nil
 }
 
-// checkSchemaFormat validates a Binding's spec.options.format (docs/planning/08
-// D1) against the EventStream endpoint's own realizing Provider — whichever
-// of srcEnv/tgtEnv resolved to Kind EventStream, role-neutral per
-// docs/planning/03 §7.1. Only the schema-carrying formats this task
-// introduced (avro, protobuf) are checked here: any other value — unset,
-// json, or a sink-payload format like parquet (docs/planning/03 §7's sink
-// example) — is not a schema-registry concern and is left to the realizing
-// provider's own ValidateBindingOptions, exactly as before D1. This keeps
-// the SchemaRegistrySupport gate boundary clean: gate off ⇒ zero behavior
-// change for manifests that don't use avro/protobuf (doc 02 §11's
-// Alpha/disabled convention).
-func checkSchemaFormat(bindingName string, srcEnv, tgtEnv resource.Envelope, b binding.Binding, idx manifestIndex, resolve ProviderResolver) error {
+// checkSchemaFormat validates two related, EventStream-registry-backed
+// facts against the EventStream endpoint's own realizing Provider —
+// whichever of srcEnv/tgtEnv resolved to Kind EventStream, role-neutral per
+// docs/planning/03 §7.1 — never b.ProviderRef, since registry availability
+// is a fact of the stream backend a CDC/sink connector writes into or reads
+// from, not a capability of the connector itself:
+//
+//  1. (docs/planning/08 D1) a Binding's spec.options.format, when
+//     schema-carrying (avro, protobuf): the EventStream's Provider must
+//     support that exact format.
+//  2. (docs/planning/08 D2) datasetSinkFormat == "parquet" — set by the
+//     caller only for the sink-to-Dataset pairing: the Aiven S3 sink
+//     connector's parquet writer requires schema-carrying Connect records
+//     (SinkCapableProvider.SupportedSinkFormats' doc comment on s3sink),
+//     which this platform only wires via the registry-backed Avro
+//     converters D1 introduced — so a parquet Dataset target requires the
+//     EventStream's Provider to support "avro", exactly like case 1 but
+//     keyed on Dataset.spec.format instead of Binding.spec.options.format.
+//     format.output.type values other than parquet (json, jsonl, csv) are
+//     schemaless and impose no registry requirement.
+//
+// Neither check fires for an unset/json options.format with a non-parquet
+// (or absent) datasetSinkFormat — not a schema-registry concern, left to the
+// realizing provider's own ValidateBindingOptions, exactly as before D1/D2.
+// This keeps the SchemaRegistrySupport gate boundary clean: gate off ⇒ zero
+// behavior change for manifests that don't use avro/protobuf/parquet (doc 02
+// §11's Alpha/disabled convention).
+func checkSchemaFormat(bindingName string, srcEnv, tgtEnv resource.Envelope, b binding.Binding, datasetSinkFormat string, idx manifestIndex, resolve ProviderResolver) error {
 	format, _ := b.Options["format"].(string)
-	if format != "avro" && format != "protobuf" {
+	schemaCarrying := format == "avro" || format == "protobuf"
+	parquetSink := datasetSinkFormat == "parquet"
+	if !schemaCarrying && !parquetSink {
 		return nil
 	}
 
@@ -225,9 +250,13 @@ func checkSchemaFormat(bindingName string, srcEnv, tgtEnv resource.Envelope, b b
 	if schemaCapable, ok := esImpl.(reconciler.SchemaRegistryCapableProvider); ok {
 		supported = schemaCapable.SupportedSchemaFormats(esProv)
 	}
-	if !contains(supported, format) {
+	if schemaCarrying && !contains(supported, format) {
 		return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support format %q (supported: %s)",
 			bindingName, esProvEnv.Metadata.Name, esProv.Type, format, joinSorted(supported))
+	}
+	if parquetSink && !contains(supported, "avro") {
+		return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support format %q (supported: %s)",
+			bindingName, esProvEnv.Metadata.Name, esProv.Type, "parquet", joinSorted(supported))
 	}
 	return nil
 }

@@ -75,7 +75,7 @@ var commandScenarios = map[string]commandScenario{
 	"validate": {
 		structured: true,
 		run: func(t *testing.T) {
-			runBothFormats(t, "validate", "validate", "../../examples/cdc-attendance")
+			runBothFormats(t, "validate", "validate", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true")
 		},
 	},
 	"plan": {
@@ -241,7 +241,7 @@ var commandScenarios = map[string]commandScenario{
 	"graph": {
 		structured: true,
 		run: func(t *testing.T) {
-			runBothFormats(t, "graph", "graph", "../../examples/cdc-attendance")
+			runBothFormats(t, "graph", "graph", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true")
 		},
 	},
 	"inventory": {

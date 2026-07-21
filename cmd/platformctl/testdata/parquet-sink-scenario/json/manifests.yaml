@@ -1,0 +1,184 @@
+# docs/planning/08 D2 integration scenario, phase 1 (schemaless json): the
+# sink-scenario shape with Redpanda's schema registry enabled from the start
+# — so phase 2 (../parquet, dataset format parquet + CDC format avro) is a
+# pure connector-config change that must NOT recreate the broker, database,
+# or object store (the Phase 4 exit-criterion bar). The two phase dirs are
+# identical except Dataset.spec.format and the CDC Binding's options.format.
+# Host ports are non-default to avoid collisions on shared dev machines:
+# Postgres 15645, Debezium Connect 18284, Kafka 19294, schema registry
+# 18582, MinIO 19102, sink Connect 18188.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: pqt-pg-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: pqt-pg-repl
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: pqt-minio-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-pqt-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-pqt-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19294
+    # Enabled in BOTH phases: flipping it later would change the broker
+    # command line and recreate the container, defeating the format-change
+    # assertion this scenario exists for.
+    schemaRegistry: enabled
+    schemaRegistryPort: 18582
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-pqt-pg
+spec:
+  type: postgres
+  runtime:
+    type: docker
+    network: datascape-pqt-net
+  configuration:
+    version: "16"
+    port: 15645
+    superuserSecretRef: pqt-pg-admin
+    replicationSecretRef: pqt-pg-repl
+  secretRefs: [pqt-pg-admin, pqt-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-pqt-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape-pqt-net
+  configuration:
+    # datascape-s3sink-connect:test (testdata/s3sink-image) carries the
+    # Confluent Avro converter on the Debezium Connect base, so it serves
+    # the CDC worker too once phase 2 flips the Binding to format: avro
+    # (docs/planning/03 §7.3's worker-image requirement).
+    image: datascape-s3sink-connect:test
+    connectPort: 18284
+    bootstrapServers: datascape-pqt-rp:29092
+    replicationSecretRef: pqt-pg-repl
+  secretRefs: [pqt-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-pqt-minio
+spec:
+  type: minio
+  runtime:
+    type: docker
+    network: datascape-pqt-net
+  configuration:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    port: 19102
+    rootSecretRef: pqt-minio-root
+  secretRefs: [pqt-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-pqt-s3
+spec:
+  type: s3sink
+  runtime:
+    type: docker
+    network: datascape-pqt-net
+  configuration:
+    image: datascape-s3sink-connect:test
+    connectPort: 18188
+    bootstrapServers: datascape-pqt-rp:29092
+    credentialsSecretRef: pqt-minio-root
+  secretRefs: [pqt-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: pqt-students
+spec:
+  engine: postgres
+  providerRef:
+    name: datascape-pqt-pg
+  postgres:
+    database: attendance
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: pqt-attendance-events
+spec:
+  providerRef:
+    name: datascape-pqt-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: pqt-attendance-raw
+spec:
+  providerRef:
+    name: datascape-pqt-minio
+  bucket: raw-events
+  prefix: attendance/
+  # Phase 1: schemaless json — the kept json-variant fixture for the
+  # schemaless path (docs/planning/08 D2). Phase 2 flips this to parquet.
+  format: json
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: pqt-students-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: pqt-students
+  targetRef:
+    name: pqt-attendance-events
+  providerRef:
+    name: datascape-pqt-dbz
+  options:
+    tables: [students]
+    snapshotMode: initial
+    # Phase 1: no format (schemaless JSON converters). Phase 2 adds
+    # format: avro so the sink receives schema-carrying records.
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: pqt-events-to-lake
+spec:
+  mode: sink
+  sourceRef:
+    name: pqt-attendance-events
+  targetRef:
+    name: pqt-attendance-raw
+  providerRef:
+    name: datascape-pqt-s3

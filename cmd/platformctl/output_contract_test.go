@@ -30,7 +30,7 @@ func runSplit(t *testing.T, args ...string) (stdout, stderr string, err error) {
 // json|yaml must override --format with a single parseable document on
 // stdout, for every graph format request.
 func TestGraphStructuredOutput(t *testing.T) {
-	out, _, err := runSplit(t, "graph", "../../examples/cdc-attendance", "-o", "json")
+	out, _, err := runSplit(t, "graph", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true", "-o", "json")
 	if err != nil {
 		t.Fatalf("graph -o json: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestGraphStructuredOutput(t *testing.T) {
 		t.Errorf("graph -o json produced no nodes:\n%s", out)
 	}
 
-	out, _, err = runSplit(t, "graph", "../../examples/cdc-attendance", "-o", "yaml")
+	out, _, err = runSplit(t, "graph", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true", "-o", "yaml")
 	if err != nil {
 		t.Fatalf("graph -o yaml: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestGraphStructuredOutput(t *testing.T) {
 // TestGraphDefaultOutputUnchanged is the regression guard: graph with no
 // -o override must still render the tree view, not JSON.
 func TestGraphDefaultOutputUnchanged(t *testing.T) {
-	out, _, err := runSplit(t, "graph", "../../examples/cdc-attendance")
+	out, _, err := runSplit(t, "graph", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true")
 	if err != nil {
 		t.Fatalf("graph: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestGraphDefaultOutputUnchanged(t *testing.T) {
 // TestGraphFormatFlagStillWorks: --format continues to select the
 // non-structured presentation when -o is not json/yaml.
 func TestGraphFormatFlagStillWorks(t *testing.T) {
-	out, _, err := runSplit(t, "graph", "../../examples/cdc-attendance", "--format", "dot")
+	out, _, err := runSplit(t, "graph", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true", "--format", "dot")
 	if err != nil {
 		t.Fatalf("graph --format dot: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestGraphFormatFlagStillWorks(t *testing.T) {
 
 // TestValidateStructuredOutput guards docs/planning/07 §0.5 / F-001.
 func TestValidateStructuredOutput(t *testing.T) {
-	out, _, err := runSplit(t, "validate", "../../examples/cdc-attendance", "-o", "json")
+	out, _, err := runSplit(t, "validate", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true", "-o", "json")
 	if err != nil {
 		t.Fatalf("validate -o json: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestValidateStructuredOutput(t *testing.T) {
 // TestValidateDefaultOutputUnchanged is the regression guard for the
 // existing prose contract.
 func TestValidateDefaultOutputUnchanged(t *testing.T) {
-	out, _, err := runSplit(t, "validate", "../../examples/cdc-attendance")
+	out, _, err := runSplit(t, "validate", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true")
 	if err != nil {
 		t.Fatalf("validate: %v", err)
 	}

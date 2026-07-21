@@ -24,6 +24,12 @@ import (
 // resource sets; step 5's fake-provider contract is covered in
 // application/engine — here the forwarded endpoint is asserted on the real
 // connector.
+//
+// Since docs/planning/08 D2 the example lands PARQUET (closing the
+// checkpoint's open item 2, the deliberate json deviation from the §6
+// sketch): the CDC leg serializes Avro against Redpanda's built-in schema
+// registry, so every CLI call passes the SchemaRegistrySupport gate and the
+// landed object is asserted with a real parquet reader, not a string grep.
 func TestAcceptanceCDCAttendance(t *testing.T) {
 	t.Setenv("DATASCAPE_SECRET_POSTGRES_ADMIN_CREDS_USERNAME", "admin")
 	t.Setenv("DATASCAPE_SECRET_POSTGRES_ADMIN_CREDS_PASSWORD", "admin-pw")
@@ -59,16 +65,23 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "../../examples/cdc-attendance"
+	// The example uses the schema-registry chain (parquet ⇒ avro ⇒
+	// registry), which sits behind the Alpha SchemaRegistrySupport gate —
+	// exactly what README.md#run-it tells a user to pass.
+	const gate = "SchemaRegistrySupport=true"
+	runG := func(args ...string) (string, error, int) {
+		return run(t, append(args, "--feature-gates", gate)...)
+	}
 	start := time.Now()
 
 	// Step 1: validate exits 0.
-	out, err, code := run(t, "validate", manifests)
+	out, err, code := runG("validate", manifests)
 	if err != nil || code != 0 {
 		t.Fatalf("validate failed (code %d): %v\n%s", code, err, out)
 	}
 
 	// Step 2: plan against empty state — everything a create.
-	out, _, code = run(t, "plan", manifests, "--state-file", stateFile)
+	out, _, code = runG("plan", manifests, "--state-file", stateFile)
 	if code != cliutil.ExitPlanChanges {
 		t.Fatalf("plan exit = %d, want %d\n%s", code, cliutil.ExitPlanChanges, out)
 	}
@@ -77,13 +90,13 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 	}
 
 	// Step 3: apply reconciles in dependency order.
-	out, err, code = run(t, "apply", manifests, "--state-file", stateFile, "--auto-approve")
+	out, err, code = runG("apply", manifests, "--state-file", stateFile, "--auto-approve")
 	if err != nil || code != 0 {
 		t.Fatalf("apply failed (code %d): %v\n%s", code, err, out)
 	}
 
 	// Step 4: all resources Ready.
-	out, err, code = run(t, "status", manifests, "--state-file", stateFile)
+	out, err, code = runG("status", manifests, "--state-file", stateFile)
 	if err != nil || code != 0 {
 		t.Fatalf("status failed (code %d): %v\n%s", code, err, out)
 	}
@@ -102,7 +115,7 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 
 	// inventory surfaces the service endpoints an operator configures tools
 	// against, with the credential SecretReference.
-	out, err, code = run(t, "inventory", manifests, "--state-file", stateFile)
+	out, err, code = runG("inventory", manifests, "--state-file", stateFile)
 	if err != nil || code != 0 {
 		t.Fatalf("inventory failed (code %d): %v\n%s", code, err, out)
 	}
@@ -113,7 +126,7 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 	}
 
 	// graph renders the architecture pipeline (Source→EventStream→Dataset).
-	out, _, code = run(t, "graph", manifests)
+	out, _, code = runG("graph", manifests)
 	if code != 0 || !strings.Contains(out, "DATA FLOW") || !strings.Contains(out, "──[cdc") {
 		t.Errorf("graph did not render the data-flow architecture:\n%s", out)
 	}
@@ -125,16 +138,14 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 		t.Errorf("lineage endpoint on connector = %q, want %q", got, want)
 	}
 
-	// Sink correctness (§7): CDC traffic lands as objects under the
-	// Dataset's bucket/prefix.
+	// Sink correctness (§7, parquet since docs/planning/08 D2): CDC traffic
+	// lands as PARQUET objects under the Dataset's bucket/prefix, readable
+	// by a real Go parquet reader with the inserted row's content intact.
 	insertAcceptanceRows(t, ctx)
-	obj := waitForObjectAt(t, ctx, "127.0.0.1:19000", "minioadmin", "minioadmin-pw", "raw-events", "attendance/", 180*time.Second)
-	if !strings.Contains(obj, "acceptance-alice") {
-		t.Errorf("landed object missing inserted row:\n%.500s", obj)
-	}
+	waitForParquetRow(t, ctx, "127.0.0.1:19000", "minioadmin", "minioadmin-pw", "raw-events", "attendance/", "name", "acceptance-alice", 180*time.Second)
 
 	// Step 6: idempotent re-apply — zero mutating calls.
-	out, err, code = run(t, "apply", manifests, "--state-file", stateFile, "--auto-approve")
+	out, err, code = runG("apply", manifests, "--state-file", stateFile, "--auto-approve")
 	if err != nil || code != 0 {
 		t.Fatalf("re-apply failed (code %d): %v\n%s", code, err, out)
 	}
@@ -147,7 +158,7 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 	if out, err := exec.Command("docker", "stop", "local-minio").CombinedOutput(); err != nil {
 		t.Fatalf("stop minio: %v\n%s", err, out)
 	}
-	report, code := runDrift(t, manifests, stateFile)
+	report, code := runDrift(t, manifests, stateFile, "--feature-gates", gate)
 	if code != cliutil.ExitPlanChanges {
 		t.Errorf("drift exit = %d, want %d", code, cliutil.ExitPlanChanges)
 	}
@@ -156,14 +167,14 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 			t.Errorf("%s drift = %q, want True", victim, r.Drift)
 		}
 	}
-	out, err, code = run(t, "plan", manifests, "--state-file", stateFile)
+	out, err, code = runG("plan", manifests, "--state-file", stateFile)
 	if err != nil || code != 0 {
 		t.Fatalf("plan during drift: code %d err %v\n%s", code, err, out)
 	}
 	if st, _, _ := rt.Inspect(ctx, "local-minio"); st.Running {
 		t.Error("plan restarted the stopped container; plan must never mutate")
 	}
-	out, err, code = run(t, "apply", manifests, "--state-file", stateFile, "--auto-approve")
+	out, err, code = runG("apply", manifests, "--state-file", stateFile, "--auto-approve")
 	if err != nil || code != 0 {
 		t.Fatalf("healing apply failed (code %d): %v\n%s", code, err, out)
 	}
@@ -172,7 +183,7 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 	}
 
 	// Step 10: destroy removes every managed resource, no labeled leftovers.
-	out, err, code = run(t, "destroy", manifests, "--state-file", stateFile, "--auto-approve")
+	out, err, code = runG("destroy", manifests, "--state-file", stateFile, "--auto-approve")
 	if err != nil || code != 0 {
 		t.Fatalf("destroy failed (code %d): %v\n%s", code, err, out)
 	}

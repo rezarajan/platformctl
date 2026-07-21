@@ -1,7 +1,12 @@
 # json works end-to-end with the schemaless CDC records this blueprint
-# produces; parquet needs schema-carrying records (a schema registry —
-# not part of this blueprint). jsonl/csv also work if you change the
-# sink Binding's connector semantics.
+# produces; jsonl/csv also work if you change the sink Binding's connector
+# semantics. parquet is supported too (docs/planning/08 D2) but needs the
+# schema-carrying chain — broker `schemaRegistry: enabled`, CDC Binding
+# `options.format: avro`, a worker image carrying the Confluent Avro
+# converter — all behind the Alpha `SchemaRegistrySupport` feature gate
+# (disabled by default). This blueprint deliberately stays on json so the
+# generated manifests validate and apply with no feature-gate flags; see
+# examples/cdc-attendance for the full parquet wiring.
 apiVersion: datascape.io/v1alpha1
 kind: Dataset
 metadata:

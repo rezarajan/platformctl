@@ -36,9 +36,10 @@ type driftReport struct {
 	Message  string `json:"message"`
 }
 
-func runDrift(t *testing.T, manifests, stateFile string) (map[string]driftReport, int) {
+func runDrift(t *testing.T, manifests, stateFile string, extraArgs ...string) (map[string]driftReport, int) {
 	t.Helper()
-	out, _, code := run(t, "drift", manifests, "--state-file", stateFile, "-o", "json")
+	args := append([]string{"drift", manifests, "--state-file", stateFile, "-o", "json"}, extraArgs...)
+	out, _, code := run(t, args...)
 	var payload struct {
 		Resources []driftReport `json:"resources"`
 	}
