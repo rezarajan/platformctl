@@ -604,6 +604,25 @@ the jars fails at connector registration with Connect's
 "Class ... could not be found" error — this is an image-content property
 platformctl cannot verify at validate time.
 
+**Parquet sink Datasets (docs/planning/08 D2):** `Dataset.spec.format:
+parquet` behind a sink-mode `Binding` is the one *Dataset* format with a
+schema-registry requirement: the Aiven S3 connector's parquet writer needs
+schema-carrying Connect records, which this platform produces via the
+registry-backed Avro converters above. At validate, a parquet Dataset's
+sink Binding is checked against the EventStream endpoint's realizing
+Provider exactly like an explicit `options.format: avro` — a registry-less
+chain fails with the same standard capability-error shape (`does not
+support format "parquet" (supported: json)`), naming the EventStream's
+Provider. At apply, the `s3sink` provider derives the stream serialization:
+`spec.options.format` if declared, else `avro` when the Dataset is parquet,
+else the schemaless JSON converters (json/jsonl/csv Datasets are unchanged
+— no registry involved). The worker-image requirement above applies to the
+sink worker too: the Aiven release tar bundles the parquet writer's jars
+and `AvroData`, but not the `AvroConverter` class itself — the reference
+builds (`cmd/platformctl/testdata/s3sink-image/Dockerfile`,
+`examples/cdc-attendance/s3sink-image/Dockerfile`) add the version-pinned
+Confluent Avro converter plugin alongside the S3 connector.
+
 ## 8. Kind: `Dataset`
 
 ```yaml

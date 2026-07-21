@@ -736,6 +736,115 @@ func TestSchemaFormatUnsetOrJSONNeedsNoRegistry(t *testing.T) {
 	}
 }
 
+// parquetSinkManifests builds a sink-mode Binding to a Dataset of the given
+// format whose EventStream's own Provider (kafka-cluster, type redpanda) is
+// distinct from the Binding's providerRef (s3-sink, type s3sink) — the D2
+// parquet check resolves the former, never the latter.
+func parquetSinkManifests(format string) []resource.Envelope {
+	return []resource.Envelope{
+		envelope("Provider", "s3-sink", map[string]any{
+			"type":    "s3sink",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Provider", "kafka-cluster", map[string]any{
+			"type":    "redpanda",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Provider", "local-minio", map[string]any{
+			"type":    "minio",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("EventStream", "attendance-events", map[string]any{
+			"providerRef": map[string]any{"name": "kafka-cluster"},
+		}),
+		envelope("Dataset", "attendance-raw", map[string]any{
+			"providerRef": map[string]any{"name": "local-minio"},
+			"bucket":      "raw-events",
+			"format":      format,
+		}),
+		envelope("Binding", "attendance-events-to-lake", map[string]any{
+			"mode":        "sink",
+			"sourceRef":   map[string]any{"name": "attendance-events"},
+			"targetRef":   map[string]any{"name": "attendance-raw"},
+			"providerRef": map[string]any{"name": "s3-sink"},
+		}),
+	}
+}
+
+// TestParquetSinkWithoutRegistryErrorFormat covers the D2 accept criterion:
+// a parquet Dataset behind a sink Binding whose EventStream Provider chain
+// lacks a registry endpoint fails at validate with the standard
+// capability-error shape (docs/planning/02 §5.2 / ADR 009), naming the
+// EventStream's own Provider — the resource whose configuration decides
+// registry availability — not the Binding's providerRef.
+func TestParquetSinkWithoutRegistryErrorFormat(t *testing.T) {
+	resolve := multiResolver(map[string]reconciler.Provider{
+		"s3sink":   sinkStub{stubProvider{"s3sink"}},
+		"minio":    stubProvider{"minio"},
+		"redpanda": schemaRegistryStub{stubProvider{"redpanda"}, []string{"json"}}, // registry disabled
+	})
+	err := Check(parquetSinkManifests("parquet"), resolve)
+	if err == nil {
+		t.Fatal("validate accepted a parquet Dataset against a registry-less provider chain")
+	}
+	want := `Binding "attendance-events-to-lake": Provider "kafka-cluster" (type: redpanda)
+does not support format "parquet" (supported: json)`
+	if err.Error() != want {
+		t.Errorf("error format mismatch\ngot:\n%s\nwant:\n%s", err.Error(), want)
+	}
+}
+
+// TestParquetSinkNoCapabilityFallsBackToJSON: an EventStream Provider with
+// no SchemaRegistryCapableProvider implementation at all is refused the same
+// way as an explicitly registry-less one.
+func TestParquetSinkNoCapabilityFallsBackToJSON(t *testing.T) {
+	resolve := multiResolver(map[string]reconciler.Provider{
+		"s3sink":   sinkStub{stubProvider{"s3sink"}},
+		"minio":    stubProvider{"minio"},
+		"redpanda": stubProvider{"redpanda"},
+	})
+	if err := Check(parquetSinkManifests("parquet"), resolve); err == nil {
+		t.Fatal("validate accepted a parquet Dataset against a provider with no schema-registry capability")
+	}
+}
+
+// TestParquetSinkWithRegistryAccepted: the same set validates once the
+// EventStream's Provider supports avro (registry enabled) — parquet's
+// schema-carrying requirement is satisfied by the Avro converter chain.
+func TestParquetSinkWithRegistryAccepted(t *testing.T) {
+	resolve := multiResolver(map[string]reconciler.Provider{
+		"s3sink":   sinkStub{stubProvider{"s3sink"}},
+		"minio":    stubProvider{"minio"},
+		"redpanda": schemaRegistryStub{stubProvider{"redpanda"}, []string{"avro", "json", "protobuf"}},
+	})
+	if err := Check(parquetSinkManifests("parquet"), resolve); err != nil {
+		t.Fatalf("parquet Dataset with a registry-enabled chain rejected: %v", err)
+	}
+}
+
+// TestNonParquetSinkNeedsNoRegistry: json/jsonl/csv Datasets stay on the
+// schemaless path — no registry demand is made of the EventStream's
+// Provider (gate-off manifests are behavior-identical to pre-D2).
+func TestNonParquetSinkNeedsNoRegistry(t *testing.T) {
+	resolve := multiResolver(map[string]reconciler.Provider{
+		"s3sink":   allFormatSinkStub{stubProvider{"s3sink"}},
+		"minio":    stubProvider{"minio"},
+		"redpanda": stubProvider{"redpanda"}, // no registry capability at all
+	})
+	for _, format := range []string{"json", "jsonl", "csv"} {
+		if err := Check(parquetSinkManifests(format), resolve); err != nil {
+			t.Errorf("schemaless sink format %q rejected: %v", format, err)
+		}
+	}
+}
+
+// allFormatSinkStub mirrors the real s3sink adapter's format list.
+type allFormatSinkStub struct{ stubProvider }
+
+func (allFormatSinkStub) SupportedSinkFormats() []string {
+	return []string{"json", "jsonl", "csv", "parquet"}
+}
+
 // TestSchemaFormatNoCapabilityFallsBackToJSON: an EventStream Provider that
 // doesn't implement SchemaRegistryCapableProvider at all falls back to
 // "supported: json" — the same message shape as an explicitly registry-less

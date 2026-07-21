@@ -9,3 +9,11 @@ spec:
     type: docker
   configuration:
     kafkaPort: 19093
+    # Redpanda's built-in Confluent-compatible schema registry, required by
+    # the parquet Dataset (docs/planning/08 D2): the CDC leg serializes
+    # change events as Avro against it, and the sink decodes them into the
+    # schema-carrying records the parquet writer needs. Endpoint published
+    # via providerState + `platformctl inventory`. Requires the
+    # SchemaRegistrySupport feature gate (see README.md#run-it).
+    schemaRegistry: enabled
+    schemaRegistryPort: 18081

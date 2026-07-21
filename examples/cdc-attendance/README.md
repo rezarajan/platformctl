@@ -2,7 +2,10 @@
 
 The worked example from `docs/planning/05-v1-first-version-spec.md` §6: a
 Postgres database whose changes stream through Debezium into a Redpanda
-topic, with a Kafka Connect S3 sink landing them as objects in MinIO.
+topic, with a Kafka Connect S3 sink landing them as **parquet** objects in
+MinIO. Change events are Avro-serialized against Redpanda's built-in
+Confluent-compatible schema registry (docs/planning/08 D1/D2) — that
+schema-carrying chain is what makes the columnar parquet output possible.
 
 ```
 Source(student-database) ──Binding(cdc)──▶ EventStream(attendance-events)
@@ -18,8 +21,10 @@ Source(student-database) ──Binding(cdc)──▶ EventStream(attendance-even
 ## Prerequisites
 
 - A running Docker daemon (images are pulled on first apply).
-- The sink Connect worker image, built once — stock Connect images ship no
-  S3 sink plugin:
+- The Connect worker image, built once and shared by both Connect workers —
+  stock Connect images ship neither the S3 sink plugin nor Confluent's Avro
+  converter (which the Avro→parquet chain needs on the CDC worker *and* the
+  sink worker; see `s3sink-image/Dockerfile` for the exact pinned jars):
 
   ```sh
   docker build -t datascape-s3sink-connect:local examples/cdc-attendance/s3sink-image/
@@ -39,10 +44,13 @@ Source(student-database) ──Binding(cdc)──▶ EventStream(attendance-even
 
 ## Run it
 
+The schema-registry chain sits behind the Alpha `SchemaRegistrySupport`
+feature gate, so every command passes it explicitly:
+
 ```sh
-platformctl validate examples/cdc-attendance/
-platformctl apply    examples/cdc-attendance/ --auto-approve
-platformctl status   examples/cdc-attendance/
+platformctl validate examples/cdc-attendance/ --feature-gates SchemaRegistrySupport=true
+platformctl apply    examples/cdc-attendance/ --feature-gates SchemaRegistrySupport=true --auto-approve
+platformctl status   examples/cdc-attendance/ --feature-gates SchemaRegistrySupport=true
 ```
 
 Then generate some change traffic and watch it land (`students` is one of
@@ -54,16 +62,30 @@ psql postgres://admin:admin-pw@localhost:15432/studentdb \
   -c "CREATE TABLE students (id serial PRIMARY KEY, name text);
       INSERT INTO students (name) VALUES ('alice'), ('bob');"
 
-# objects appear under raw-events/attendance/ within ~30s
+# parquet objects appear under raw-events/attendance/ within ~30s
 mc alias set local http://localhost:19000 minioadmin minioadmin-pw
 mc ls --recursive local/raw-events/
+
+# subjects registered by the Avro converters are visible in the registry
+curl -s http://localhost:18081/subjects
 ```
 
 Tear down:
 
 ```sh
-platformctl destroy examples/cdc-attendance/ --auto-approve
+platformctl destroy examples/cdc-attendance/ --feature-gates SchemaRegistrySupport=true --auto-approve
 ```
+
+### The schemaless json variant
+
+`parquet` needs the full schema-carrying chain (registry + Avro). To run
+the schemaless path instead — no registry, plain JSON objects — set
+`Dataset.spec.format: json`, drop `options.format: avro` from
+`binding-cdc.yaml`, and drop the `schemaRegistry`/`schemaRegistryPort` keys
+from `provider-redpanda.yaml` (then no feature gate is needed). The
+integration suite keeps exactly that json variant as a fixture:
+`cmd/platformctl/testdata/parquet-sink-scenario/json/` (and the standing
+`testdata/sink-scenario/` set).
 
 ## When something dies out-of-band
 
@@ -132,9 +154,10 @@ snapshots (not wired up in v1).
 Everything shares the `datascape` Docker network internally; these host
 ports are published, chosen away from the services' well-known defaults so
 the example coexists with whatever Postgres/Kafka/MinIO you already have
-running: Redpanda Kafka 19093, Postgres 15432, Debezium Connect 18083, sink
-Connect 18084, MinIO 19000. Adjust the `configuration` blocks (`kafkaPort`,
-`port`, `connectPort`) if any are taken on your machine.
+running: Redpanda Kafka 19093, schema registry 18081, Postgres 15432,
+Debezium Connect 18083, sink Connect 18084, MinIO 19000. Adjust the
+`configuration` blocks (`kafkaPort`, `schemaRegistryPort`, `port`,
+`connectPort`) if any are taken on your machine.
 
 ## Defaults
 
@@ -146,9 +169,11 @@ inspect` already read):
 - `spec.runtime.network`: every Provider defaults to the `datascape`
   network. Pin `runtime: {type: docker, network: <name>}` for a different
   one.
-- `spec.configuration.image` on `redpanda`/`minio`/`debezium` Providers:
-  each has a pinned default image (`s3sink` has none — no stock Connect
-  image ships the S3 sink plugin, so it stays required).
+- `spec.configuration.image` on `redpanda`/`minio` Providers: each has a
+  pinned default image. `s3sink` has none (no stock Connect image ships the
+  S3 sink plugin), and since the parquet flip (docs/planning/08 D2) the
+  `debezium` Provider also pins the shared local build — the stock Debezium
+  image lacks the Confluent Avro converter the `format: avro` Binding needs.
 - `spec.configuration.bootstrapServers` on the `debezium`/`s3sink` Connect
   workers: inferred from the manifest graph — the Binding using the
   worker resolves to `attendance-events`, whose Provider is
@@ -165,10 +190,11 @@ providers; this directory is the runnable version of it:
 
 - `quay.io/debezium/connect:2.7` — Docker Hub stopped receiving Debezium
   2.x tags.
-- `Dataset.spec.format: json` instead of `parquet`: the sink connector's
-  parquet writer needs schema-carrying records, and this pipeline runs
-  schemaless JSON converters end-to-end. Formats `json`/`jsonl`/`csv` work
-  as declared.
+- ~~`Dataset.spec.format: json` instead of `parquet`~~ — **closed by
+  docs/planning/08 D2**: the example now lands parquet as the §6 sketch
+  drew it, via registry-driven Avro converters. The schemaless json path
+  still works as declared (see
+  [the schemaless json variant](#the-schemaless-json-variant)).
 - Explicit `postgres-admin-creds` / `minio-root-creds` SecretReferences and
   the `superuserSecretRef`/`rootSecretRef`/`replicationSecretRef`/
   `credentialsSecretRef` configuration keys: real instances need bootstrap

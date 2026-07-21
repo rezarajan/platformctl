@@ -7,6 +7,9 @@ spec:
     name: local-minio
   bucket: raw-events
   prefix: attendance/
-  # json is the format that works end-to-end with schemaless CDC records;
-  # parquet requires schema-carrying records (see README).
-  format: json
+  # Columnar lake format, matching the 05 §6 sketch (docs/planning/08 D2).
+  # parquet requires schema-carrying records: the CDC Binding declares
+  # options.format: avro and local-redpanda enables its schema registry —
+  # validate refuses parquet if that chain is missing. json/jsonl/csv remain
+  # available for the schemaless path (no registry needed).
+  format: parquet

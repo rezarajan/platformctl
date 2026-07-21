@@ -15,3 +15,9 @@ spec:
   options:
     tables: [students, attendance]
     snapshotMode: initial
+    # Schema-carrying serialization (docs/planning/08 D1/D2): change events
+    # are Avro-encoded against local-redpanda's built-in registry (URL
+    # auto-wired from the EventStream's Provider — never typed here), which
+    # is what lets the sink land them as parquet. Requires the worker image
+    # to carry the Confluent Avro converter (see s3sink-image/Dockerfile).
+    format: avro

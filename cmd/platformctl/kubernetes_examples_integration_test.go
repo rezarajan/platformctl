@@ -147,7 +147,10 @@ func TestCDCAttendanceExampleOnKubernetes(t *testing.T) {
 
 	manifests := rewriteExampleForKubernetes(t, "../../examples/cdc-attendance", ns, "node-port")
 	stateFile := filepath.Join(t.TempDir(), "state.json")
-	const gateVal = "KubernetesRuntime=true"
+	// SchemaRegistrySupport: the example lands parquet via the Avro/schema-
+	// registry chain since docs/planning/08 D2, same as the Docker
+	// acceptance test.
+	const gateVal = "KubernetesRuntime=true,SchemaRegistrySupport=true"
 
 	out, err, code := run(t, "validate", manifests, "--feature-gates", gateVal)
 	if err != nil || code != 0 {
@@ -186,10 +189,9 @@ func TestCDCAttendanceExampleOnKubernetes(t *testing.T) {
 		t.Fatalf("EnsureReachable(local-minio): %v", err)
 	}
 	defer closeMinio()
-	obj := waitForObjectAt(t, ctx, minioAddr, "minioadmin", "minioadmin-pw", "raw-events", "attendance/", 180*time.Second)
-	if !strings.Contains(obj, "k8s-acceptance-alice") {
-		t.Errorf("landed object missing inserted row:\n%.500s", obj)
-	}
+	// Parquet since docs/planning/08 D2 — same readable-parquet assertion as
+	// the Docker acceptance test.
+	waitForParquetRow(t, ctx, minioAddr, "minioadmin", "minioadmin-pw", "raw-events", "attendance/", "name", "k8s-acceptance-alice", 180*time.Second)
 
 	out, err, code = run(t, "destroy", manifests, "--state-file", stateFile, "--auto-approve", "--feature-gates", gateVal)
 	if err != nil || code != 0 {

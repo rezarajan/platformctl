@@ -920,6 +920,16 @@ note first (per doc 06 §3).
   acceptance example applies to Ready with parquet; format-change
   (json→parquet) updates the connector without recreating broker/db/store
   (existing Phase 4 exit-criterion bar).
+- **Done (2026-07-21, merged):** parquet through s3sink via D1's registry
+  (Dataset parquet implies avro stream serialization unless
+  options.format overrides); ADR-009-shaped validate failure for a
+  registry-less parquet chain; acceptance example flipped to parquet with
+  json fixtures retained; rows read back in-test
+  (github.com/parquet-go/parquet-go, integration-only). At merge, the
+  `SchemaRegistrySupport` gate executed its recorded graduation
+  (Beta/enabled — doc 04 §12). Follow-up (small): with the gate now
+  enabled by default, the cdc-to-lake blueprint can flip to parquet on
+  its zero-flag path — needs the E1 blueprint e2e re-run before flipping.
 
 ### D3: JDBC database-sink provider (EventStream → Source)
 

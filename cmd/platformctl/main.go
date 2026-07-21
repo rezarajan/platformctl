@@ -115,7 +115,9 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// docs/planning/08 D1: Redpanda's built-in Confluent-compatible schema
 	// registry (Provider.spec.configuration.schemaRegistry: enabled) and a
 	// Binding's schema-carrying spec.options.format (avro, protobuf).
-	gates.Register("SchemaRegistrySupport", featuregate.Alpha, false)
+	// Graduated Alpha -> Beta/enabled when D2 (Parquet end-to-end) landed,
+	// per doc 04 §12's recorded graduation intent.
+	gates.Register("SchemaRegistrySupport", featuregate.Beta, true)
 	// docs/planning/08 C6: backup/restore capability (BackupCapableProvider).
 	// Alpha/disabled until restore drills have soaked in CI (§8 graduation
 	// intent).

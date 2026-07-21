@@ -23,6 +23,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/application/registry"
 	"github.com/rezarajan/platformctl/internal/domain/binding"
 	"github.com/rezarajan/platformctl/internal/domain/connection"
+	"github.com/rezarajan/platformctl/internal/domain/dataset"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
@@ -1301,15 +1302,18 @@ func (e *Engine) resolveMetricsTargets(env resource.Envelope, st *state.State) [
 	return out
 }
 
-// resolveSchemaRegistryURL resolves the schema registry endpoint a Binding's
-// schema-carrying spec.options.format (avro, protobuf) needs, from the
+// resolveSchemaRegistryURL resolves the schema registry endpoint from the
 // EventStream endpoint's own realizing Provider's already-published
 // "schema-registry" endpoint fact — the same providerState lookup
 // resolveLineageEndpoint uses for a lineage backend's url, never a guessed
-// address (docs/planning/08 D1, docs/planning/09 F4). Returns "" when the
-// Binding's format is unset/json, it isn't a Binding, or the upstream
-// Provider hasn't published the endpoint yet in st (nil st — e.g. Import,
-// which loads no state — behaves the same as "not yet published").
+// address (docs/planning/08 D1, docs/planning/09 F4) — needed by two
+// callers: a Binding's schema-carrying spec.options.format (avro, protobuf,
+// D1), or a sink Binding targeting a Dataset with spec.format: parquet (D2,
+// s3sink wires Avro key/value converters for parquet's schema-carrying
+// requirement even when the Binding itself declares no options.format).
+// Returns "" when neither condition holds, it isn't a Binding, or the
+// upstream Provider hasn't published the endpoint yet in st (nil st — e.g.
+// Import, which loads no state — behaves the same as "not yet published").
 func (e *Engine) resolveSchemaRegistryURL(env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) string {
 	if st == nil || env.Kind != "Binding" {
 		return ""
@@ -1319,7 +1323,16 @@ func (e *Engine) resolveSchemaRegistryURL(env resource.Envelope, byKey map[resou
 		return ""
 	}
 	format, _ := b.Options["format"].(string)
-	if format == "" || format == "json" {
+	needsRegistry := format == "avro" || format == "protobuf"
+	if !needsRegistry && b.Mode == binding.ModeSink {
+		tgtRef := resource.RefFromSpec(env.Spec, "targetRef")
+		if dsEnv, ok := byKey[tgtRef.Key(env.Metadata.Namespace, "Dataset")]; ok {
+			if ds, err := dataset.FromEnvelope(dsEnv); err == nil && ds.Format == "parquet" {
+				needsRegistry = true
+			}
+		}
+	}
+	if !needsRegistry {
 		return ""
 	}
 

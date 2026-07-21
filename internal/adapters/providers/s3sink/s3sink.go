@@ -41,8 +41,12 @@ func New() *Provider { return &Provider{} }
 func (p *Provider) Type() string { return "s3sink" }
 
 // SupportedSinkFormats implements SinkCapableProvider. These are the output
-// formats of the Aiven S3 sink connector; parquet additionally requires
-// schema-carrying records at runtime.
+// formats of the Aiven S3 sink connector. parquet requires schema-carrying
+// records: since docs/planning/08 D2 the connector consumes them via
+// registry-backed Avro converters (compatibility.Check refuses a parquet
+// Dataset at validate time unless the EventStream's Provider exposes a
+// schema registry supporting avro), so listing parquet here is honest —
+// json/jsonl/csv remain the schemaless paths.
 func (p *Provider) SupportedSinkFormats() []string {
 	return []string{"json", "jsonl", "csv", "parquet"}
 }
@@ -213,19 +217,93 @@ func desiredConnectorConfig(req reconciler.Request) (string, map[string]string, 
 		// topic and any prefixed ones. The name is regex-quoted so a topic
 		// name containing regex metacharacters (e.g. a '.') matches
 		// literally instead of as a wildcard (docs/planning/07 §2.2).
-		"topics.regex":                   "^" + regexp.QuoteMeta(b.SourceRef) + "(\\..*)?$",
-		"format.output.type":             ds.Format,
-		"format.output.fields":           "value",
-		"file.compression.type":          "none",
-		"key.converter":                  "org.apache.kafka.connect.json.JsonConverter",
-		"value.converter":                "org.apache.kafka.connect.json.JsonConverter",
-		"key.converter.schemas.enable":   "false",
-		"value.converter.schemas.enable": "false",
+		"topics.regex":          "^" + regexp.QuoteMeta(b.SourceRef) + "(\\..*)?$",
+		"format.output.type":    ds.Format,
+		"format.output.fields":  "value",
+		"file.compression.type": "none",
+	}
+	converterOverride, _ := b.Options["converter"].(string)
+	if err := applyConverterConfig(config, streamFormat(b, ds), converterOverride, req.SchemaRegistryURL); err != nil {
+		return "", nil, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
 	}
 	if ds.Prefix != "" {
 		config["aws.s3.prefix"] = ds.Prefix
 	}
 	return res.Metadata.Name, config, nil
+}
+
+// streamFormat resolves the serialization format of the records this sink
+// reads off the stream: an explicit Binding spec.options.format wins
+// (docs/planning/03 §7.3 — the compatibility layer already validated it
+// against the EventStream's Provider); otherwise a parquet Dataset implies
+// avro, because the Aiven parquet writer requires schema-carrying Connect
+// records and Avro-via-registry is how this platform's CDC leg produces
+// them (docs/planning/08 D2). Everything else stays on the schemaless JSON
+// path, byte-for-byte the pre-D2 connector config.
+func streamFormat(b binding.Binding, ds dataset.Dataset) string {
+	if f, _ := b.Options["format"].(string); f != "" {
+		return f
+	}
+	if ds.Format == "parquet" {
+		return "avro"
+	}
+	return ""
+}
+
+// applyConverterConfig sets the key/value converter config for the resolved
+// stream format — the sink half of debezium's applyConverterConfig
+// (docs/planning/08 D1/D2): json (default) keeps the schemaless JSON
+// converters; avro/protobuf require registryURL, resolved by the engine
+// from the EventStream's own realizing Provider — compatibility.Check
+// already refused schema-carrying formats (and parquet Datasets) against a
+// registry-less provider chain at validate time, so an empty registryURL
+// reaching here means the upstream Provider hasn't reconciled yet in this
+// run (defensive, not expected given dependency-graph ordering).
+// converterOverride is the advanced escape hatch of docs/planning/03 §7.3:
+// an explicit converter class wins over the format-derived default for both
+// key and value converters.
+func applyConverterConfig(config map[string]string, format, converterOverride, registryURL string) error {
+	switch format {
+	case "", "json":
+		class := "org.apache.kafka.connect.json.JsonConverter"
+		if converterOverride != "" {
+			class = converterOverride
+		}
+		config["key.converter"] = class
+		config["value.converter"] = class
+		config["key.converter.schemas.enable"] = "false"
+		config["value.converter.schemas.enable"] = "false"
+	case "avro", "protobuf":
+		if registryURL == "" {
+			return fmt.Errorf("stream format %q requires a schema registry endpoint, but none was resolved from the EventStream's Provider (has it been applied since configuration.schemaRegistry: enabled was set?)", format)
+		}
+		class := defaultConverterClass(format)
+		if converterOverride != "" {
+			class = converterOverride
+		}
+		config["key.converter"] = class
+		config["value.converter"] = class
+		config["key.converter.schema.registry.url"] = registryURL
+		config["value.converter.schema.registry.url"] = registryURL
+	default:
+		return fmt.Errorf("options.format %q is not supported (must be one of: json, avro, protobuf)", format)
+	}
+	return nil
+}
+
+// defaultConverterClass maps a schema-carrying format to the Confluent
+// Connect converter class Redpanda's built-in registry is compatible with —
+// the jars must be present in the worker image (docs/planning/03 §7.3's
+// worker-image requirement; see testdata/s3sink-image's Dockerfile).
+func defaultConverterClass(format string) string {
+	switch format {
+	case "avro":
+		return "io.confluent.connect.avro.AvroConverter"
+	case "protobuf":
+		return "io.confluent.connect.protobuf.ProtobufConverter"
+	default:
+		return ""
+	}
 }
 
 // reconcileConnector registers or updates the S3 sink connector realizing a
@@ -427,6 +505,23 @@ func (p *Provider) ValidateBindingOptions(_ string, options map[string]any) erro
 		u, err := url.Parse(ep)
 		if err != nil || u.Scheme == "" || u.Host == "" {
 			return fmt.Errorf("options.endpoint %q is not a valid URL (need scheme://host[:port])", ep)
+		}
+	}
+	// format/converter (docs/planning/03 §7.3, docs/planning/08 D2): shape
+	// only — whether avro/protobuf actually has a registry to talk to is a
+	// compatibility.Check concern (it needs the EventStream's Provider
+	// resolved), not this provider's own option-shape validation.
+	if v, ok := options["format"]; ok {
+		format, _ := v.(string)
+		switch format {
+		case "json", "avro", "protobuf":
+		default:
+			return fmt.Errorf("options.format %q is not supported (must be one of: json, avro, protobuf)", format)
+		}
+	}
+	if v, ok := options["converter"]; ok {
+		if s, _ := v.(string); s == "" {
+			return fmt.Errorf("options.converter must be a non-empty string when set")
 		}
 	}
 	return nil

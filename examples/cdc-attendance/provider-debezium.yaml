@@ -1,4 +1,4 @@
-# network, image, and bootstrapServers all use their defaults (see README.md#defaults).
+# network and bootstrapServers use their defaults (see README.md#defaults).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -8,6 +8,12 @@ spec:
   runtime:
     type: docker
   configuration:
+    # The CDC Binding's options.format: avro needs Confluent's AvroConverter
+    # in the worker image; the stock Debezium image ships Apicurio only
+    # (docs/planning/03 §7.3's worker-image requirement). This example's
+    # s3sink-image build adds it on the same Debezium Connect base, so both
+    # Connect workers share one image — see s3sink-image/Dockerfile.
+    image: datascape-s3sink-connect:local
     connectPort: 18083
     replicationSecretRef: postgres-replication-creds
   secretRefs: [postgres-replication-creds]
