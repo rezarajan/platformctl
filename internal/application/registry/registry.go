@@ -5,6 +5,7 @@
 package registry
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -76,7 +77,41 @@ func (r *Registry) Runtime(typeName string, config map[string]any) (runtime.Cont
 	if !ok {
 		return nil, fmt.Errorf("unknown runtime type %q (registered: %s)", typeName, joinKeys(r.runtimes))
 	}
-	return ctor(config)
+	rt, err := ctor(config)
+	if err != nil {
+		return nil, err
+	}
+	// Every runtime, on every call, is wrapped with the HighAvailability
+	// gate guard (docs/design/004-replicas-and-identity.md, "Feature gate
+	// enforcement"): no provider yet exposes a schema field that sets
+	// ContainerSpec.Replicas (that first happens in a later task), so there
+	// is no per-provider SpecValidator to attach the check to yet. Wrapping
+	// the single choke point every provider's Request.Runtime passes
+	// through enforces the invariant once, for every current and future
+	// provider, rather than depending on each new replica-capable provider
+	// remembering its own validate-time check (which they should still add,
+	// for the better DX of failing before apply — this wrapper is the
+	// correctness backstop, not a replacement for that).
+	return &haGuardRuntime{ContainerRuntime: rt, gates: r.gates}, nil
+}
+
+// haGuardRuntime wraps a runtime.ContainerRuntime so that any
+// EnsureContainer call requesting more than one replica requires the
+// HighAvailability feature gate to be enabled, refusing with a clear error
+// otherwise. Every other method delegates to the embedded ContainerRuntime
+// unchanged.
+type haGuardRuntime struct {
+	runtime.ContainerRuntime
+	gates *featuregate.Registry
+}
+
+func (g *haGuardRuntime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpec) (runtime.ContainerState, error) {
+	if spec.ReplicaCount() > 1 {
+		if err := g.gates.Require("HighAvailability"); err != nil {
+			return runtime.ContainerState{}, fmt.Errorf("container %q requests %d replicas: %w", spec.Name, spec.Replicas, err)
+		}
+	}
+	return g.ContainerRuntime.EnsureContainer(ctx, spec)
 }
 
 func joinKeys[V any](m map[string]V) string {

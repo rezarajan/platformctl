@@ -100,7 +100,159 @@ func (r *Runtime) EnsureVolume(ctx context.Context, spec runtime.VolumeSpec) err
 // detect "already matches" without diffing every field against inspect output.
 const specGenLabel = "io.datascape.spec-hash"
 
+// EnsureContainer dispatches to the single-container path (spec.Replicas <=
+// 1, today's exact pre-existing behavior, byte-for-byte) or the replica-set
+// path (docs/design/004-replicas-and-identity.md): Docker has no native
+// replica-set object, so N > 1 always fans out to N separately-named
+// containers ("<Name>-0".."<Name>-(N-1)") — forced by Docker's own
+// unique-container-name requirement, independent of StableIdentity.
 func (r *Runtime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpec) (runtime.ContainerState, error) {
+	n := spec.ReplicaCount()
+	if n <= 1 {
+		return r.ensureOneContainer(ctx, spec)
+	}
+	return r.ensureReplicaSet(ctx, spec, n)
+}
+
+// ensureReplicaSet fans spec out to n ordinal containers, prunes any stale
+// ordinal left over from a previous, larger generation (scale-down), and
+// returns the aggregate ContainerState (docs/design/004): Healthy/Running
+// are true when at least one member is; ReadyReplicas is the count of
+// healthy members.
+func (r *Runtime) ensureReplicaSet(ctx context.Context, spec runtime.ContainerSpec, n int) (runtime.ContainerState, error) {
+	if err := r.pruneStaleOrdinals(ctx, spec.Name, n); err != nil {
+		return runtime.ContainerState{}, err
+	}
+	states := make([]runtime.ContainerState, 0, n)
+	for i := 0; i < n; i++ {
+		ordSpec, err := r.ordinalContainerSpec(ctx, spec, i)
+		if err != nil {
+			return runtime.ContainerState{}, err
+		}
+		st, err := r.ensureOneContainer(ctx, ordSpec)
+		if err != nil {
+			return runtime.ContainerState{}, fmt.Errorf("replica %d of %q: %w", i, spec.Name, err)
+		}
+		states = append(states, st)
+	}
+	return aggregateContainerStates(spec.Name, states), nil
+}
+
+// ordinalContainerSpec derives ordinal i's own ContainerSpec: an
+// ordinal-suffixed Name, the base name added as a shared network alias
+// (Docker's embedded DNS round-robins across containers sharing one alias —
+// the closest analog to a Kubernetes Service's virtual-IP round robin it
+// has), replica-membership labels, and — when StableIdentity — an
+// ordinal-suffixed, adapter-owned volume per declared VolumeMount (the
+// runtime owns this volume's entire lifecycle; the caller must not call
+// EnsureVolume for it itself — docs/design/004).
+func (r *Runtime) ordinalContainerSpec(ctx context.Context, spec runtime.ContainerSpec, i int) (runtime.ContainerSpec, error) {
+	out := spec
+	out.Name = runtime.OrdinalName(spec.Name, i)
+	out.Aliases = append(append([]string{}, spec.Aliases...), spec.Name)
+
+	labels := make(map[string]string, len(spec.Labels)+2)
+	for k, v := range spec.Labels {
+		labels[k] = v
+	}
+	labels[runtime.LabelReplicaBase] = spec.Name
+	labels[runtime.LabelReplicaOrdinal] = strconv.Itoa(i)
+	out.Labels = labels
+
+	if spec.StableIdentity && len(spec.Volumes) > 0 {
+		vols := make([]runtime.VolumeMount, len(spec.Volumes))
+		for j, vm := range spec.Volumes {
+			volName := runtime.OrdinalName(vm.VolumeName, i)
+			if err := r.EnsureVolume(ctx, runtime.VolumeSpec{Name: volName, Labels: labels}); err != nil {
+				return runtime.ContainerSpec{}, fmt.Errorf("ensure ordinal volume %q: %w", volName, err)
+			}
+			vols[j] = runtime.VolumeMount{VolumeName: volName, MountPath: vm.MountPath}
+		}
+		out.Volumes = vols
+	}
+	return out, nil
+}
+
+// pruneStaleOrdinals removes any replica-set member of base whose ordinal is
+// >= n — the scale-down complement of ensureReplicaSet's scale-up. Per-ordinal
+// volumes are deliberately left in place (docs/design/004's conservative
+// removal default: Remove never touches volumes, matching the single-
+// container path, where RemoveVolume has always been a separate, explicit
+// call).
+func (r *Runtime) pruneStaleOrdinals(ctx context.Context, base string, n int) error {
+	members, err := r.listReplicaMembers(ctx, base)
+	if err != nil {
+		return err
+	}
+	for _, c := range members {
+		ord, err := strconv.Atoi(c.Labels[runtime.LabelReplicaOrdinal])
+		if err != nil || ord < n {
+			continue
+		}
+		if err := r.Remove(ctx, containerSummaryName(c)); err != nil {
+			return fmt.Errorf("remove stale replica %q: %w", containerSummaryName(c), err)
+		}
+	}
+	return nil
+}
+
+// listReplicaMembers returns every container labeled as a member of the
+// replica set named base, sorted by ordinal ascending.
+func (r *Runtime) listReplicaMembers(ctx context.Context, base string) ([]container.Summary, error) {
+	f := filters.NewArgs(
+		filters.Arg("label", runtime.LabelReplicaBase+"="+base),
+		filters.Arg("label", runtime.LabelManagedBy+"="+runtime.ManagedByValue),
+	)
+	members, err := r.cli.ContainerList(ctx, container.ListOptions{All: true, Filters: f})
+	if err != nil {
+		return nil, fmt.Errorf("list replica members of %q: %w", base, err)
+	}
+	sort.Slice(members, func(i, j int) bool {
+		oi, _ := strconv.Atoi(members[i].Labels[runtime.LabelReplicaOrdinal])
+		oj, _ := strconv.Atoi(members[j].Labels[runtime.LabelReplicaOrdinal])
+		return oi < oj
+	})
+	return members, nil
+}
+
+func containerSummaryName(c container.Summary) string {
+	if len(c.Names) == 0 {
+		return ""
+	}
+	return strings.TrimPrefix(c.Names[0], "/")
+}
+
+// aggregateContainerStates builds the collective ContainerState for a
+// replica set from its members' individually-inspected states: Running/
+// Healthy are true when at least one member is (docs/design/004's "provider
+// decides quorum meaning" rule — the port never fails the set merely because
+// one of N is down); ReadyReplicas is the count of healthy members; the
+// representative Image/Labels/Env/Ports come from the lowest-ordinal member.
+func aggregateContainerStates(name string, states []runtime.ContainerState) runtime.ContainerState {
+	st := runtime.ContainerState{Name: name}
+	for _, s := range states {
+		if s.Running {
+			st.Running = true
+		}
+		if s.Healthy {
+			st.Healthy = true
+			st.ReadyReplicas++
+		}
+	}
+	if len(states) > 0 {
+		st.ID = states[0].ID
+		st.Image = states[0].Image
+		st.Labels = states[0].Labels
+		st.Env = states[0].Env
+		st.Ports = states[0].Ports
+	}
+	return st
+}
+
+// ensureOneContainer is the single-container EnsureContainer path — the
+// pre-existing implementation, unchanged, so that a Replicas <= 1 spec
+// behaves exactly as it always has.
+func (r *Runtime) ensureOneContainer(ctx context.Context, spec runtime.ContainerSpec) (runtime.ContainerState, error) {
 	desiredHash := specHash(spec)
 
 	existing, err := r.cli.ContainerInspect(ctx, spec.Name)
@@ -149,6 +301,20 @@ func (r *Runtime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpe
 		Env:          env,
 		Labels:       labels,
 		ExposedPorts: exposed,
+	}
+	// A StableIdentity ordinal's in-container hostname must be its own
+	// ordinal name, so `$(hostname)` (and anything an entrypoint derives
+	// from it — a broker id, a seed-list peer) matches the stable identity
+	// the port promises. Docker otherwise defaults Hostname to the
+	// container's random short ID, which diverges from Kubernetes, where a
+	// StatefulSet pod's hostname already IS "<name>-<ordinal>" via the
+	// headless Service (docs/design/004-replicas-and-identity.md). spec.Name
+	// is already the ordinal name here (ordinalContainerSpec set it).
+	// Scoped to StableIdentity only: a non-StableIdentity scaled set's
+	// replicas are interchangeable and have non-deterministic hostnames on
+	// Kubernetes too, so leaving Docker's default there preserves parity.
+	if spec.StableIdentity {
+		cfg.Hostname = spec.Name
 	}
 	if spec.HealthCheck != nil {
 		cfg.Healthcheck = &container.HealthConfig{
@@ -257,9 +423,18 @@ func (r *Runtime) copyFilesIn(ctx context.Context, containerID string, files []r
 	return nil
 }
 
-// ReadFile retrieves a file previously placed by ContainerSpec.Files.
+// ReadFile retrieves a file previously placed by ContainerSpec.Files. Against
+// the aggregate name of a replica set (no literal container by that name
+// exists), resolves to ordinal 0 as a best-effort default (docs/design/004,
+// "Known limitations") — a caller wanting a *specific* replica's file should
+// always address it by ordinal name.
 func (r *Runtime) ReadFile(ctx context.Context, name, path string) ([]byte, error) {
 	rc, _, err := r.cli.CopyFromContainer(ctx, name, path)
+	if err != nil && errdefs.IsNotFound(err) {
+		if rc2, _, err2 := r.cli.CopyFromContainer(ctx, runtime.OrdinalName(name, 0), path); err2 == nil {
+			rc, err = rc2, nil
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read %q from container %q: %w", path, name, err)
 	}
@@ -279,22 +454,35 @@ func (r *Runtime) WaitHealthy(ctx context.Context, name string, timeout time.Dur
 	deadline := time.Now().Add(timeout)
 	for {
 		info, err := r.cli.ContainerInspect(ctx, name)
-		if err != nil {
-			return fmt.Errorf("inspect container %q: %w", name, err)
-		}
-		if info.State != nil {
-			// Health-checked containers are healthy when Docker says so;
-			// containers without a healthcheck are healthy when running.
-			if info.State.Health != nil {
-				if info.State.Health.Status == container.Healthy {
-					return nil
-				}
-			} else if info.State.Running {
+		switch {
+		case err == nil:
+			if healthy, dead := containerHealthState(info); healthy {
 				return nil
-			}
-			if info.State.Dead || (info.State.Status == "exited") {
+			} else if dead {
 				return fmt.Errorf("container %q exited before becoming healthy%s", name, r.tailLogs(ctx, name))
 			}
+		case errdefs.IsNotFound(err):
+			// name may be the aggregate base of a replica set: healthy means
+			// "at least one member healthy" (docs/design/004's "provider
+			// decides quorum meaning" rule).
+			members, merr := r.listReplicaMembers(ctx, name)
+			if merr != nil {
+				return merr
+			}
+			if len(members) == 0 {
+				return fmt.Errorf("container %q not found", name)
+			}
+			for _, m := range members {
+				minfo, ierr := r.cli.ContainerInspect(ctx, m.ID)
+				if ierr != nil {
+					continue
+				}
+				if healthy, _ := containerHealthState(minfo); healthy {
+					return nil
+				}
+			}
+		default:
+			return fmt.Errorf("inspect container %q: %w", name, err)
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("container %q did not become healthy within %s%s", name, timeout, r.tailLogs(ctx, name))
@@ -305,6 +493,24 @@ func (r *Runtime) WaitHealthy(ctx context.Context, name string, timeout time.Dur
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// containerHealthState reports whether info is currently healthy (Docker
+// says so for a health-checked container; running, for one without a
+// healthcheck) and whether it is dead/exited — the two terminal signals
+// WaitHealthy's poll loop acts on, factored out so both the single-container
+// and replica-set aggregate paths share exactly one interpretation.
+func containerHealthState(info container.InspectResponse) (healthy, dead bool) {
+	if info.State == nil {
+		return false, false
+	}
+	if info.State.Health != nil {
+		healthy = info.State.Health.Status == container.Healthy
+	} else {
+		healthy = info.State.Running
+	}
+	dead = info.State.Dead || info.State.Status == "exited"
+	return healthy, dead
 }
 
 // networksAttached reports whether the container is attached to every network
@@ -330,7 +536,7 @@ func networksAttached(info container.InspectResponse, want []string) bool {
 // an error message, or "" if logs are unavailable. Failing containers are
 // otherwise a black box to the CLI user.
 func (r *Runtime) tailLogs(ctx context.Context, name string) string {
-	out, err := r.fetchLogs(ctx, name, 10)
+	out, err := r.rawLogs(ctx, name, 10)
 	if err != nil || out == "" {
 		return ""
 	}
@@ -349,22 +555,36 @@ func (r *Runtime) tailLogs(ctx context.Context, name string) string {
 func (r *Runtime) RunsContainerCommands() bool { return true }
 
 // Logs returns the last `tail` lines of the container's combined
-// stdout/stderr for diagnostics. tail <= 0 uses a sane default.
+// stdout/stderr for diagnostics. tail <= 0 uses a sane default. Against the
+// aggregate name of a replica set, resolves to ordinal 0 as a best-effort
+// default (docs/design/004, "Known limitations").
 func (r *Runtime) Logs(ctx context.Context, name string, tail int) (string, error) {
 	if tail <= 0 {
 		tail = 200
 	}
-	return r.fetchLogs(ctx, name, tail)
+	out, err := r.rawLogs(ctx, name, tail)
+	if err != nil && errdefs.IsNotFound(err) {
+		if out2, err2 := r.rawLogs(ctx, runtime.OrdinalName(name, 0), tail); err2 == nil {
+			return out2, nil
+		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("read logs for container %q: %w", name, err)
+	}
+	return out, nil
 }
 
-func (r *Runtime) fetchLogs(ctx context.Context, name string, tail int) (string, error) {
+// rawLogs returns the unwrapped error from ContainerLogs so callers (Logs,
+// tailLogs) can distinguish errdefs.IsNotFound (e.g. to try an ordinal-0
+// fallback) from other failures.
+func (r *Runtime) rawLogs(ctx context.Context, name string, tail int) (string, error) {
 	rc, err := r.cli.ContainerLogs(ctx, name, container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       strconv.Itoa(tail),
 	})
 	if err != nil {
-		return "", fmt.Errorf("read logs for container %q: %w", name, err)
+		return "", err
 	}
 	defer rc.Close()
 	var buf bytes.Buffer
@@ -375,13 +595,31 @@ func (r *Runtime) fetchLogs(ctx context.Context, name string, tail int) (string,
 
 func (r *Runtime) Inspect(ctx context.Context, name string) (runtime.ContainerState, bool, error) {
 	info, err := r.cli.ContainerInspect(ctx, name)
-	if errdefs.IsNotFound(err) {
-		return runtime.ContainerState{}, false, nil
+	if err == nil {
+		return stateFromInspect(info), true, nil
 	}
-	if err != nil {
+	if !errdefs.IsNotFound(err) {
 		return runtime.ContainerState{}, false, fmt.Errorf("inspect container %q: %w", name, err)
 	}
-	return stateFromInspect(info), true, nil
+	// name is not a literal container — it may be the aggregate base name of
+	// a replica set (docs/design/004): Docker has no native object to name
+	// directly, so aggregate by the replica-membership label instead.
+	members, merr := r.listReplicaMembers(ctx, name)
+	if merr != nil {
+		return runtime.ContainerState{}, false, merr
+	}
+	if len(members) == 0 {
+		return runtime.ContainerState{}, false, nil
+	}
+	states := make([]runtime.ContainerState, 0, len(members))
+	for _, c := range members {
+		info, ierr := r.cli.ContainerInspect(ctx, c.ID)
+		if ierr != nil {
+			continue
+		}
+		states = append(states, stateFromInspect(info))
+	}
+	return aggregateContainerStates(name, states), true, nil
 }
 
 // EnsureReachable returns the already-published host address for
@@ -433,19 +671,33 @@ func dialable(ctx context.Context, addr string) bool {
 	return true
 }
 
+// Remove deletes the named container, or — if name is not a literal
+// container but the aggregate base name of a replica set — every member of
+// that set (docs/design/004). Per-ordinal volumes are deliberately left in
+// place, matching the single-container path's existing behavior of never
+// touching volumes as a side effect of Remove.
 func (r *Runtime) Remove(ctx context.Context, name string) error {
 	info, err := r.cli.ContainerInspect(ctx, name)
-	if errdefs.IsNotFound(err) {
+	if err == nil {
+		if info.Config == nil || info.Config.Labels[runtime.LabelManagedBy] != runtime.ManagedByValue {
+			return fmt.Errorf("container %q is not managed by platformctl; refusing to remove it", name)
+		}
+		if err := r.cli.ContainerRemove(ctx, info.ID, container.RemoveOptions{Force: true}); err != nil {
+			return fmt.Errorf("remove container %q: %w", name, err)
+		}
 		return nil
 	}
-	if err != nil {
+	if !errdefs.IsNotFound(err) {
 		return fmt.Errorf("inspect container %q: %w", name, err)
 	}
-	if info.Config == nil || info.Config.Labels[runtime.LabelManagedBy] != runtime.ManagedByValue {
-		return fmt.Errorf("container %q is not managed by platformctl; refusing to remove it", name)
+	members, merr := r.listReplicaMembers(ctx, name)
+	if merr != nil {
+		return merr
 	}
-	if err := r.cli.ContainerRemove(ctx, info.ID, container.RemoveOptions{Force: true}); err != nil {
-		return fmt.Errorf("remove container %q: %w", name, err)
+	for _, c := range members {
+		if err := r.Remove(ctx, containerSummaryName(c)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

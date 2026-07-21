@@ -11,6 +11,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -18,13 +19,15 @@ import (
 	runtimeport "github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
-const one int32 = 1
-
 var terminationGracePeriodSeconds int64 = 15
 
-// buildDeployment translates a ContainerSpec into a single-replica
-// Deployment. See the package doc comment for the mapping rationale.
-func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash string) (*appsv1.Deployment, error) {
+// buildDeployment translates a ContainerSpec into a Deployment with the given
+// replica count. See the package doc comment for the mapping rationale.
+// replicas == 1 (the overwhelming default) reproduces this adapter's
+// original single-replica behavior byte-for-byte: no Affinity is set, since
+// podAntiAffinity returns nil for replicas <= 1
+// (docs/design/004-replicas-and-identity.md).
+func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash string, replicas int32) (*appsv1.Deployment, error) {
 	labels := withOwnership(spec.Labels)
 	labels["app"] = spec.Name
 
@@ -105,7 +108,6 @@ func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash stri
 		pullSecrets = []corev1.LocalObjectReference{{Name: pullSecretName(spec.Name)}}
 	}
 
-	replicas := one
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        spec.Name,
@@ -132,10 +134,37 @@ func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash stri
 					Containers:                    []corev1.Container{container},
 					Volumes:                       volumes,
 					ImagePullSecrets:              pullSecrets,
+					Affinity:                      podAntiAffinity(spec, replicas),
 				},
 			},
 		},
 	}, nil
+}
+
+// podAntiAffinity returns soft (preferred, not required) anti-affinity
+// spreading a Replicas > 1 set's pods across nodes when the scheduler can,
+// applied automatically regardless of StableIdentity (docs/planning/08 §C1
+// Accept criterion). nil for replicas <= 1 — single-node clusters (minikube,
+// kind, CI) never see this field at all for the overwhelming default case,
+// and a *soft* preference (not requiredDuringScheduling) never blocks
+// scheduling on a single-node cluster even when Replicas > 1.
+func podAntiAffinity(spec runtimeport.ContainerSpec, replicas int32) *corev1.Affinity {
+	if replicas <= 1 {
+		return nil
+	}
+	return &corev1.Affinity{
+		PodAntiAffinity: &corev1.PodAntiAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{
+				{
+					Weight: 100,
+					PodAffinityTerm: corev1.PodAffinityTerm{
+						LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": spec.Name}},
+						TopologyKey:   "kubernetes.io/hostname",
+					},
+				},
+			},
+		},
+	}
 }
 
 // buildService creates a ClusterIP Service that gives the Deployment the
@@ -144,19 +173,6 @@ func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash stri
 // way it selects the same pod and carries an "app" label pointing back at
 // the owning container so Remove can find alias Services by selector.
 func buildService(namespace, serviceName string, spec runtimeport.ContainerSpec) *corev1.Service {
-	var ports []corev1.ServicePort
-	for _, p := range spec.Ports {
-		proto := corev1.ProtocolTCP
-		if strings.EqualFold(p.Protocol, "udp") {
-			proto = corev1.ProtocolUDP
-		}
-		ports = append(ports, corev1.ServicePort{
-			Name:       fmt.Sprintf("port-%d", p.ContainerPort),
-			Port:       int32(p.ContainerPort),
-			TargetPort: intstr.FromInt32(int32(p.ContainerPort)),
-			Protocol:   proto,
-		})
-	}
 	labels := withOwnership(spec.Labels)
 	labels["app"] = spec.Name
 	svcType := corev1.ServiceTypeClusterIP
@@ -175,7 +191,77 @@ func buildService(namespace, serviceName string, spec runtimeport.ContainerSpec)
 		Spec: corev1.ServiceSpec{
 			Type:     svcType,
 			Selector: map[string]string{"app": spec.Name},
-			Ports:    ports,
+			Ports:    servicePorts(spec),
+		},
+	}
+}
+
+// servicePorts translates ContainerSpec.Ports into ServicePorts, shared by
+// every Service-shaped object this adapter builds (ClusterIP, headless).
+func servicePorts(spec runtimeport.ContainerSpec) []corev1.ServicePort {
+	var ports []corev1.ServicePort
+	for _, p := range spec.Ports {
+		proto := corev1.ProtocolTCP
+		if strings.EqualFold(p.Protocol, "udp") {
+			proto = corev1.ProtocolUDP
+		}
+		ports = append(ports, corev1.ServicePort{
+			Name:       fmt.Sprintf("port-%d", p.ContainerPort),
+			Port:       int32(p.ContainerPort),
+			TargetPort: intstr.FromInt32(int32(p.ContainerPort)),
+			Protocol:   proto,
+		})
+	}
+	return ports
+}
+
+// buildHeadlessService returns the governing Service a StableIdentity
+// StatefulSet requires (docs/design/004-replicas-and-identity.md):
+// ClusterIP: None gives each ordinal pod its own DNS record
+// ("<Name>-<i>.<Name>.<namespace>.svc.cluster.local") instead of one
+// round-robin address — there is deliberately no plain "<Name>" address for
+// a stable-identity set, the same reason a headless Service exists at all.
+// AccessMode is intentionally ignored here: a headless Service cannot be
+// NodePort/LoadBalancer typed (see the "Known limitations" section of the
+// design note for per-ordinal external access).
+func buildHeadlessService(namespace string, spec runtimeport.ContainerSpec) *corev1.Service {
+	labels := withOwnership(spec.Labels)
+	labels["app"] = spec.Name
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      spec.Name,
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: corev1.ClusterIPNone,
+			Selector:  map[string]string{"app": spec.Name},
+			Ports:     servicePorts(spec),
+		},
+	}
+}
+
+// pdbName is the deterministic name of the PodDisruptionBudget applied
+// whenever Replicas > 1 on Kubernetes, independent of StableIdentity.
+func pdbName(containerName string) string { return "datascape-pdb-" + containerName }
+
+// buildPodDisruptionBudget returns a maxUnavailable:1 PDB selecting the
+// container's pods — applied automatically whenever Replicas > 1
+// (docs/planning/08 §C1 Accept criterion), for both the Deployment
+// (StableIdentity: false) and StatefulSet (StableIdentity: true) shapes.
+func buildPodDisruptionBudget(namespace string, spec runtimeport.ContainerSpec) *policyv1.PodDisruptionBudget {
+	labels := withOwnership(spec.Labels)
+	labels["app"] = spec.Name
+	maxUnavailable := intstr.FromInt32(1)
+	return &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pdbName(spec.Name),
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MaxUnavailable: &maxUnavailable,
+			Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app": spec.Name}},
 		},
 	}
 }
@@ -519,11 +605,12 @@ func securityContext(s *runtimeport.SecurityContext) (*corev1.SecurityContext, e
 
 func stateFromDeployment(d *appsv1.Deployment) runtimeport.ContainerState {
 	st := runtimeport.ContainerState{
-		Name:    d.Name,
-		ID:      string(d.UID),
-		Labels:  d.Labels,
-		Running: d.Status.ReadyReplicas > 0,
-		Healthy: d.Status.ReadyReplicas > 0,
+		Name:          d.Name,
+		ID:            string(d.UID),
+		Labels:        d.Labels,
+		Running:       d.Status.ReadyReplicas > 0,
+		Healthy:       d.Status.ReadyReplicas > 0,
+		ReadyReplicas: int(d.Status.ReadyReplicas),
 	}
 	if len(d.Spec.Template.Spec.Containers) > 0 {
 		c := d.Spec.Template.Spec.Containers[0]
