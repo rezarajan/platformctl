@@ -1,0 +1,160 @@
+package status
+
+// Condition Reason catalog (docs/planning/08 G4). Every `status.Condition`
+// constructed anywhere outside this package must set Reason to one of these
+// constants — internal/archtest/reason_literal_test.go fails the build
+// otherwise. This is a prerequisite for E4's `explain` catalog, which walks
+// this file to enumerate every reason a user can see.
+//
+// These are plain untyped string constants (not a named Reason type): the
+// Condition.Reason field is a bare string, and a named type would force a
+// cast at every construction site for no behavioral benefit.
+//
+// A handful of reasons below are combined with runtime-observed data before
+// being assigned to Condition.Reason (e.g. redpanda's PartitionCountMismatch
+// carries the observed/wanted counts, debezium/s3sink's ConnectorState
+// carries the live connector state). Each such site is commented at its
+// call site explaining why the reason stays partially dynamic; the constant
+// here still names the stable, greppable prefix.
+
+// --- Generic reconcile/probe lifecycle -------------------------------------
+// Used by the engine and by every provider's Reconcile/Probe: these three
+// carry no technology-specific meaning.
+const (
+	ReasonReconcileComplete = "ReconcileComplete"
+	ReasonNoDrift           = "NoDrift"
+	ReasonProbeFailed       = "ProbeFailed"
+)
+
+// --- Secrets (internal/application/engine SecretReference handling) -------
+const (
+	ReasonSecretUnresolvable = "SecretUnresolvable"
+	ReasonSecretResolvable   = "SecretResolvable"
+	ReasonSecretChanged      = "SecretChanged"
+)
+
+// --- External/connection (internal/application/engine External binding) --
+const (
+	ReasonExternalConnectionUnresolvable = "ExternalConnectionUnresolvable"
+	ReasonExternalConnectionResolvable   = "ExternalConnectionResolvable"
+	ReasonExternalEndpointUnreachable    = "ExternalEndpointUnreachable"
+	ReasonExternalEndpointReachable      = "ExternalEndpointReachable"
+)
+
+// --- Lineage (docs/planning/02-architecture.md §5.5) -----------------------
+
+// ReasonLineageNotConsumed is the informational reason recorded when a
+// resource declares observers but its provider does not implement
+// LineageAware. Never blocks Ready.
+const ReasonLineageNotConsumed = "LineageEndpointDeclaredNotConsumed"
+
+// --- Shared instance lifecycle ---------------------------------------------
+// postgres, mysql, nessie, and s3 each provision a base "Instance"-shaped
+// container/service before layering their technology-specific kind on top;
+// all four report its health with these two reasons verbatim.
+const (
+	ReasonInstanceHealthy   = "InstanceHealthy"
+	ReasonInstanceUnhealthy = "InstanceUnhealthy"
+)
+
+// --- Shared CDC source (postgres Source, mysql Source) ---------------------
+// postgres and mysql both implement CDCCapableProvider over a Source kind
+// and share these four reasons verbatim; each also has technology-specific
+// precondition reasons declared in its own section below (WALNotLogical vs
+// BinlogNotRowFormat name different settings and are deliberately not
+// unified — docs/planning/08 G4).
+const (
+	ReasonSourceProvisioned             = "SourceProvisioned"
+	ReasonDatabaseMissing               = "DatabaseMissing"
+	ReasonReplicationCredentialsInvalid = "ReplicationCredentialsInvalid"
+	ReasonSourceHealthy                 = "SourceHealthy"
+)
+
+// --- Shared Kafka Connect connector lifecycle (debezium Binding, s3sink
+// Binding) -------------------------------------------------------------
+// Both providers reconcile a Kafka Connect connector and share these
+// reasons verbatim.
+const (
+	ReasonConnectWorkerHealthy   = "ConnectWorkerHealthy"
+	ReasonConnectWorkerUnhealthy = "ConnectWorkerUnhealthy"
+	ReasonConnectorRunning       = "ConnectorRunning"
+	ReasonConnectorNotRunning    = "ConnectorNotRunning"
+	ReasonConnectorMissing       = "ConnectorMissing"
+	ReasonConnectorConfigDrift   = "ConnectorConfigDrift"
+	// ReasonConnectorState is a prefix, not a complete reason: both
+	// providers append the live Kafka Connect connector state (e.g.
+	// "PAUSED", "FAILED") to it at the call site so the reason names the
+	// exact observed state without a separate Message. See debezium.go and
+	// s3sink.go for the call sites.
+	ReasonConnectorState = "ConnectorState"
+)
+
+// --- noop provider (internal/adapters/providers/noop; test/dev only) ------
+const (
+	ReasonNoopReconciled = "NoopReconciled"
+	ReasonNoopHealthy    = "NoopHealthy"
+)
+
+// --- placeholder provider ---------------------------------------------------
+const (
+	ReasonHealthCheckPassed  = "HealthCheckPassed"
+	ReasonContainerMissing   = "ContainerMissing"
+	ReasonContainerUnhealthy = "ContainerUnhealthy"
+)
+
+// --- redpanda (EventStream broker, Topic) -----------------------------------
+const (
+	ReasonBrokerHealthy   = "BrokerHealthy"
+	ReasonBrokerUnhealthy = "BrokerUnhealthy"
+	ReasonTopicReconciled = "TopicReconciled"
+	ReasonTopicHealthy    = "TopicHealthy"
+	// ReasonTopicMissing, ReasonPartitionCountMismatch, and
+	// ReasonRetentionMismatch are probeTopic's drift reasons
+	// (internal/adapters/providers/redpanda/kafka.go). The latter two are
+	// combined with the observed/wanted values via fmt.Sprintf at the call
+	// site so the reason carries the mismatch detail; the constant here
+	// names the stable, greppable prefix.
+	ReasonTopicMissing           = "TopicMissing"
+	ReasonPartitionCountMismatch = "PartitionCountMismatch"
+	ReasonRetentionMismatch      = "RetentionMismatch"
+)
+
+// --- postgres-specific probe reasons ----------------------------------------
+const ReasonWALNotLogical = "WALNotLogical"
+
+// --- mysql-specific probe reasons -------------------------------------------
+const ReasonBinlogNotRowFormat = "BinlogNotRowFormat"
+
+// --- openlineage --------------------------------------------------------
+const (
+	ReasonLineageBackendHealthy   = "LineageBackendHealthy"
+	ReasonLineageBackendUnhealthy = "LineageBackendUnhealthy"
+)
+
+// --- proxy ------------------------------------------------------------------
+const (
+	ReasonEntrypointSurfaceReady = "EntrypointSurfaceReady"
+	ReasonForwarding             = "Forwarding"
+	ReasonForwarderDown          = "ForwarderDown"
+	ReasonUpstreamUnreachable    = "UpstreamUnreachable"
+)
+
+// --- nessie ------------------------------------------------------------
+const (
+	ReasonCatalogProvisioned = "CatalogProvisioned"
+	ReasonCatalogHealthy     = "CatalogHealthy"
+	// ReasonBranchMissing and ReasonCatalogUnreachable are Catalog probe's
+	// two possible drift reasons (internal/adapters/providers/nessie/
+	// nessie.go); selected between, not interpolated, so they stay plain
+	// constants.
+	ReasonBranchMissing      = "BranchMissing"
+	ReasonCatalogUnreachable = "CatalogUnreachable"
+)
+
+// --- s3 (Dataset) ------------------------------------------------------
+const (
+	ReasonDatasetProvisioned = "DatasetProvisioned"
+	ReasonDatasetHealthy     = "DatasetHealthy"
+	ReasonBucketMissing      = "BucketMissing"
+	ReasonPrefixUnlistable   = "PrefixUnlistable"
+)

@@ -138,8 +138,8 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	}
 
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonInstanceHealthy}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	hostAddr := ctrState.HostAddr(apiPort) // observed binding, not intent
 	hostURL := ""
 	if hostAddr != "" {
@@ -176,8 +176,8 @@ func (p *Provider) reconcileDataset(ctx context.Context, req reconciler.Request)
 	}
 
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "DatasetProvisioned"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonDatasetProvisioned}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	st.ProviderState = map[string]any{"bucket": ds.Bucket, "prefix": ds.Prefix, "format": ds.Format}
 	return st, nil
 }
@@ -252,12 +252,12 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			return st, err
 		}
 		if !found || !ctrState.Healthy {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "InstanceUnhealthy"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "InstanceUnhealthy"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonInstanceUnhealthy}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonInstanceUnhealthy}, now)
 			return st, nil
 		}
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonInstanceHealthy}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		return st, nil
 	case "Dataset":
 		ds, err := dataset.FromEnvelope(res)
@@ -282,8 +282,8 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			return st, err
 		}
 		if !exists {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "BucketMissing"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "BucketMissing"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonBucketMissing}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonBucketMissing}, now)
 			return st, nil
 		}
 		// Beyond existence (docs/planning/07 §2.1): the prefix must be
@@ -291,12 +291,12 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		// change that breaks readers is drift, not health.
 		if err := prefixListable(ctx, cl, ds.Bucket, ds.Prefix); err != nil {
 			msg := "bucket exists but prefix is not listable: " + err.Error()
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "PrefixUnlistable", Message: msg}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "PrefixUnlistable", Message: msg}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonPrefixUnlistable, Message: msg}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonPrefixUnlistable, Message: msg}, now)
 			return st, nil
 		}
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "DatasetHealthy"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonDatasetHealthy}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		return st, nil
 	default:
 		return st, fmt.Errorf("s3 provider cannot probe kind %s", res.Kind)

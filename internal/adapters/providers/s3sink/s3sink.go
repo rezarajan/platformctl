@@ -129,8 +129,8 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 	}
 
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectWorkerHealthy"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonConnectWorkerHealthy}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	// Observed binding, not configured intent (docs/planning/09 F1: no
 	// domain-layer address guess is kept around for this).
 	hostAddr := ctrState.HostAddr(8083)
@@ -239,12 +239,15 @@ func (p *Provider) reconcileConnector(ctx context.Context, req reconciler.Reques
 	state, err := kafkaconnect.WaitConnectorRunning(ctx, url, connectorName, 90*time.Second)
 	now := time.Now()
 	if err != nil {
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorNotRunning", Message: err.Error()}, now)
-		st.SetCondition(status.Condition{Type: status.Degraded, Status: status.True, Reason: "ConnectorState" + state}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonConnectorNotRunning, Message: err.Error()}, now)
+		// ReasonConnectorState is a prefix: the observed live connector
+		// state is appended so the reason names the exact state without a
+		// separate Message (docs/planning/08 G4).
+		st.SetCondition(status.Condition{Type: status.Degraded, Status: status.True, Reason: status.ReasonConnectorState + state}, now)
 		return st, err
 	}
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectorRunning"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonConnectorRunning}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	st.ProviderState = map[string]any{"connector": connectorName, "state": state}
 	return st, nil
 }
@@ -311,11 +314,11 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			return st, err
 		}
 		if found && ctrState.Healthy {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectWorkerHealthy"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonConnectWorkerHealthy}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		} else {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectWorkerUnhealthy"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectWorkerUnhealthy"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonConnectWorkerUnhealthy}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonConnectWorkerUnhealthy}, now)
 		}
 		return st, nil
 	case "Binding":
@@ -326,15 +329,18 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		defer closeURL()
 		state, err := kafkaconnect.ConnectorState(ctx, url, res.Metadata.Name)
 		if err != nil {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorMissing", Message: err.Error()}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorMissing"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonConnectorMissing, Message: err.Error()}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonConnectorMissing}, now)
 			return st, nil
 		}
 		if state != "RUNNING" {
 			// Declared state is a RUNNING connector; anything else is drift.
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorState" + state}, now)
-			st.SetCondition(status.Condition{Type: status.Degraded, Status: status.True, Reason: "ConnectorState" + state}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorState" + state}, now)
+			// ReasonConnectorState is a prefix: the observed live connector
+			// state is appended so the reason names the exact state without
+			// a separate Message (docs/planning/08 G4).
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonConnectorState + state}, now)
+			st.SetCondition(status.Condition{Type: status.Degraded, Status: status.True, Reason: status.ReasonConnectorState + state}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonConnectorState + state}, now)
 			return st, nil
 		}
 		// RUNNING is not enough (docs/planning/07 §2.1): the live config
@@ -343,12 +349,12 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		// conditions.
 		if drifted := connectorConfigDrift(ctx, req, url); len(drifted) > 0 {
 			msg := "connector config differs from manifest at: " + strings.Join(drifted, ", ")
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ConnectorConfigDrift", Message: msg}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ConnectorConfigDrift", Message: msg}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonConnectorConfigDrift, Message: msg}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonConnectorConfigDrift, Message: msg}, now)
 			return st, nil
 		}
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ConnectorRunning"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonConnectorRunning}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		return st, nil
 	default:
 		return st, fmt.Errorf("s3sink provider cannot probe kind %s", res.Kind)

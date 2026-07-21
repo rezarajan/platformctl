@@ -521,8 +521,8 @@ func (e *Engine) probeOneAgainstState(ctx context.Context, env resource.Envelope
 			return probed
 		}
 	}
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ProbeFailed", Message: err.Error()}, now)
-	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ProbeFailed"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonProbeFailed, Message: err.Error()}, now)
+	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonProbeFailed}, now)
 	return st
 }
 
@@ -544,16 +544,16 @@ func (e *Engine) secretReferenceStatus(ctx context.Context, env resource.Envelop
 		}
 	}
 	if err != nil {
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "SecretUnresolvable", Message: err.Error()}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "SecretUnresolvable"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonSecretUnresolvable, Message: err.Error()}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonSecretUnresolvable}, now)
 		return st
 	}
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "SecretResolvable"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonSecretResolvable}, now)
 	if priorHash != "" && currentHash != "" && priorHash != currentHash {
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "SecretChanged", Message: "resolved secret material differs from the last applied fingerprint"}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonSecretChanged, Message: "resolved secret material differs from the last applied fingerprint"}, now)
 		return st
 	}
-	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 	return st
 }
 
@@ -578,8 +578,8 @@ func (e *Engine) reconcileSecretReference(ctx context.Context, entry plan.Entry,
 	}
 	newStatus := status.Status{}
 	now := e.Clock.Now()
-	newStatus.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "SecretResolvable"}, now)
-	newStatus.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	newStatus.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonSecretResolvable}, now)
+	newStatus.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
 	imported := st.Resources[env.Key()].Imported
@@ -627,8 +627,8 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 	// 1. The connection details (address + credentials) must resolve.
 	if connName != "" {
 		if err := e.resolveConnectionRef(ctx, connRef, env.Metadata.Namespace, byKey); err != nil {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ExternalConnectionUnresolvable", Message: err.Error()}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ExternalConnectionUnresolvable"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonExternalConnectionUnresolvable, Message: err.Error()}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonExternalConnectionUnresolvable}, now)
 			return st
 		}
 	}
@@ -646,12 +646,12 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 					defer closeAddr()
 				}
 				if derr := probeTCPReachable(ctx, addr); derr != nil {
-					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ExternalEndpointUnreachable", Message: derr.Error()}, now)
-					st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ExternalEndpointUnreachable"}, now)
+					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonExternalEndpointUnreachable, Message: derr.Error()}, now)
+					st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonExternalEndpointUnreachable}, now)
 					return st
 				}
-				st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ExternalEndpointReachable"}, now)
-				st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+				st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonExternalEndpointReachable}, now)
+				st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 				return st
 			}
 		}
@@ -659,8 +659,8 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 
 	// Bare-SecretReference shorthand (no address to probe): the most we can
 	// assert is that the connection details resolve.
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "ExternalConnectionResolvable"}, now)
-	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonExternalConnectionResolvable}, now)
+	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 	return st
 }
 
