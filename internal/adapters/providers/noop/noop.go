@@ -23,8 +23,8 @@ func (p *Provider) Reconcile(_ context.Context, _ reconciler.Request) (status.St
 	p.ReconcileCount++
 	st := status.Status{}
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "NoopReconciled"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonNoopReconciled}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	return st, nil
 }
 
@@ -35,7 +35,7 @@ func (p *Provider) Destroy(_ context.Context, _ reconciler.Request) error {
 func (p *Provider) Probe(_ context.Context, _ reconciler.Request) (status.Status, error) {
 	st := status.Status{}
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "NoopHealthy"}, now)
-	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonNoopHealthy}, now)
+	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 	return st, nil
 }

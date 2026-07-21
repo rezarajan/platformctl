@@ -75,8 +75,8 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 		return st, err
 	}
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "EntrypointSurfaceReady"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonEntrypointSurfaceReady}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	st.ProviderState = map[string]any{"network": providerkit.Network(cfg), "image": image(cfg)}
 	return st, nil
 }
@@ -124,8 +124,8 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 	// Observed binding, not intent.
 	hostAddr := ctrState.HostAddr(conn.Port)
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "Forwarding"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonForwarding}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	st.ProviderState = map[string]any{
 		"containerId": ctrState.ID,
 		"internal":    fmt.Sprintf("%s:%d", host, port),
@@ -160,8 +160,8 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 	now := time.Now()
 	switch res.Kind {
 	case "Provider":
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "EntrypointSurfaceReady"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonEntrypointSurfaceReady}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		return st, nil
 	case "Connection":
 		ctr, found, err := rt.Inspect(ctx, naming.RuntimeObjectName(res))
@@ -169,8 +169,8 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			return st, err
 		}
 		if !found || !ctr.Healthy {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ForwarderDown"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ForwarderDown"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonForwarderDown}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonForwarderDown}, now)
 			return st, nil
 		}
 		// Beyond the forwarder container's health (docs/planning/07 §2.1):
@@ -185,13 +185,13 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		if addr := ctr.HostAddr(conn.Port); addr != "" {
 			if err := probeThroughForwarder(addr); err != nil {
 				msg := fmt.Sprintf("forwarder is up but upstream %s is unreachable: %v", conn.Target, err)
-				st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "UpstreamUnreachable", Message: msg}, now)
-				st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "UpstreamUnreachable", Message: msg}, now)
+				st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonUpstreamUnreachable, Message: msg}, now)
+				st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonUpstreamUnreachable, Message: msg}, now)
 				return st, nil
 			}
 		}
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "Forwarding"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonForwarding}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		return st, nil
 	default:
 		return st, fmt.Errorf("proxy provider cannot probe kind %s", res.Kind)

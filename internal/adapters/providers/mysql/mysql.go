@@ -169,8 +169,8 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	}
 
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonInstanceHealthy}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	hostAddr := ctrState.HostAddr(3306) // observed binding, not intent
 	st.ProviderState = map[string]any{
 		"containerId":  ctrState.ID,
@@ -284,8 +284,8 @@ func (p *Provider) reconcileSource(ctx context.Context, req reconciler.Request) 
 	}
 
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "SourceProvisioned"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonSourceProvisioned}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	st.ProviderState = map[string]any{"database": dbName, "replicationUser": replUser}
 	return st, nil
 }
@@ -357,12 +357,12 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			return st, err
 		}
 		if !found || !ctrState.Healthy {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "InstanceUnhealthy"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "InstanceUnhealthy"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonInstanceUnhealthy}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonInstanceUnhealthy}, now)
 			return st, nil
 		}
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonInstanceHealthy}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		return st, nil
 	case "Source":
 		src, err := source.FromEnvelope(res)
@@ -389,30 +389,30 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			return st, err
 		}
 		if !exists {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "DatabaseMissing"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "DatabaseMissing"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonDatabaseMissing}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonDatabaseMissing}, now)
 			return st, nil
 		}
 		if format, err := globalVariable(ctx, admin, "binlog_format"); err != nil {
 			return st, err
 		} else if !strings.EqualFold(format, "ROW") {
 			msg := fmt.Sprintf("binlog_format is %q, want ROW", format)
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "BinlogNotRowFormat", Message: msg}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "BinlogNotRowFormat", Message: msg}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonBinlogNotRowFormat, Message: msg}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonBinlogNotRowFormat, Message: msg}, now)
 			return st, nil
 		}
 		if replRefName, _ := cfg.Configuration["replicationSecretRef"].(string); replRefName != "" {
 			if creds, ok := req.Secrets[replRefName]; ok {
 				if err := ping(ctx, dsnAddr(addr, creds["username"], creds["password"], "")); err != nil {
 					msg := fmt.Sprintf("replication credentials (%s) no longer authenticate", replRefName)
-					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ReplicationCredentialsInvalid", Message: msg}, now)
-					st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ReplicationCredentialsInvalid", Message: msg}, now)
+					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonReplicationCredentialsInvalid, Message: msg}, now)
+					st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonReplicationCredentialsInvalid, Message: msg}, now)
 					return st, nil
 				}
 			}
 		}
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "SourceHealthy"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonSourceHealthy}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		return st, nil
 	default:
 		return st, fmt.Errorf("%s provider cannot probe kind %s", cfg.Type, res.Kind)

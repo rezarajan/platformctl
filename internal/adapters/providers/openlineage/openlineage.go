@@ -165,8 +165,8 @@ func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (statu
 	}
 
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "LineageBackendHealthy"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonLineageBackendHealthy}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	// Observed binding, not intent.
 	hostAddr := ctrState.HostAddr(marquezAPIPort)
 	hostAPI := ""
@@ -234,11 +234,11 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		}
 	}
 	if healthy {
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "LineageBackendHealthy"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonLineageBackendHealthy}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 	} else {
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "LineageBackendUnhealthy"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "LineageBackendUnhealthy"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonLineageBackendUnhealthy}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonLineageBackendUnhealthy}, now)
 	}
 	return st, nil
 }

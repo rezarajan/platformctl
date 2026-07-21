@@ -1417,6 +1417,24 @@ renderer dispatch, the 96-line registry indirection, and `meta.json`
 - **Accept:** literal-ban test green in CI; E4's later catalog
   completeness test can enumerate `status` package constants; no
   provider defines a reason locally.
+- **Done (2026-07-21, merged):** 52 constants declared in
+  `internal/domain/status/reasons.go`, grouped by area; all 156
+  `status.Condition{Reason: ...}` construction sites plus 5 dynamic
+  reason-building call sites (redpanda `probeTopic`'s 3 return statements,
+  nessie's 2-way reason selection) migrated — zero string-value changes,
+  confirmed by full-suite green with no test edits beyond constant
+  references. `internal/archtest/reason_literal_test.go` (`TestNoConditionReasonStringLiterals`)
+  bans any `Reason: "literal"` outside `internal/domain/status` and
+  `_test.go` files; verified to fail on an injected violation, then
+  reverted. No dedup/renames were needed — every reused reason string
+  (`InstanceHealthy`, the `ConnectWorker*`/`Connector*` Kafka Connect set,
+  the postgres/mysql CDC-source set) was already spelled identically
+  across providers, so no `docs/upgrade-notes.md` entry was required.
+  Debezium/s3sink's `"ConnectorState" + state` and redpanda's
+  `PartitionCountMismatch`/`RetentionMismatch` stay intentionally dynamic
+  (constant prefix + runtime-observed suffix, documented at each call
+  site) to preserve their existing diagnostic detail without a behavior
+  change.
 
 ### G5: Conformance suite per-area split
 

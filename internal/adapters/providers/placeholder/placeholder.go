@@ -80,8 +80,8 @@ func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (statu
 	}
 
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "HealthCheckPassed"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonHealthCheckPassed}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	st.ProviderState = map[string]any{"containerId": ctrState.ID}
 	return st, nil
 }
@@ -120,14 +120,14 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 	now := time.Now()
 	switch {
 	case !found:
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ContainerMissing"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ContainerMissing"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonContainerMissing}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonContainerMissing}, now)
 	case !ctrState.Healthy:
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "ContainerUnhealthy"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "ContainerUnhealthy"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonContainerUnhealthy}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonContainerUnhealthy}, now)
 	default:
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "HealthCheckPassed"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonHealthCheckPassed}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 	}
 	return st, nil
 }

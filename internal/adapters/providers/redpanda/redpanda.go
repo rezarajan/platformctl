@@ -247,8 +247,8 @@ func (p *Provider) reconcileBroker(ctx context.Context, req reconciler.Request) 
 	}
 
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "BrokerHealthy"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonBrokerHealthy}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	hostAddr := ctrState.HostAddr(externalKafkaPort) // observed binding, not intent
 	endpoints := endpoint.List{
 		{Name: "kafka", Scheme: "kafka", Host: hostAddr, Internal: internalAddr(name), Insecure: true},
@@ -305,8 +305,8 @@ func (p *Provider) reconcileTopic(ctx context.Context, req reconciler.Request) (
 	}
 
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "TopicReconciled"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTopicReconciled}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	st.ProviderState = map[string]any{"topic": topic, "partitions": partitions}
 	return st, nil
 }
@@ -363,12 +363,12 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			return st, err
 		}
 		if !found || !ctrState.Healthy {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "BrokerUnhealthy"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "BrokerUnhealthy"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonBrokerUnhealthy}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonBrokerUnhealthy}, now)
 			return st, nil
 		}
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "BrokerHealthy"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonBrokerHealthy}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		return st, nil
 	case "EventStream":
 		es, err := eventstream.FromEnvelope(res)
@@ -396,8 +396,8 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: reason}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: reason}, now)
 		} else {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "TopicHealthy"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTopicHealthy}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		}
 		return st, nil
 	default:

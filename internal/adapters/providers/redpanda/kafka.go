@@ -9,6 +9,8 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
+
+	"github.com/rezarajan/platformctl/internal/domain/status"
 )
 
 // adminClient connects using dialAddr — an address genuinely dialable right
@@ -135,10 +137,14 @@ func probeTopic(ctx context.Context, addr, advertisedAddr, topic string, wantPar
 		return false, "", fmt.Errorf("list topics on %s: %w", addr, err)
 	}
 	if !details.Has(topic) {
-		return true, "TopicMissing", nil
+		return true, status.ReasonTopicMissing, nil
 	}
 	if got := len(details[topic].Partitions); got != wantPartitions {
-		return true, fmt.Sprintf("PartitionCountMismatch(%d!=%d)", got, wantPartitions), nil
+		// The reason carries the observed/wanted counts inline (no separate
+		// Message field on this path) — the constant names the stable,
+		// greppable prefix; the suffix is intentionally dynamic
+		// (docs/planning/08 G4).
+		return true, fmt.Sprintf("%s(%d!=%d)", status.ReasonPartitionCountMismatch, got, wantPartitions), nil
 	}
 	// Full desired configuration, not just liveness (docs/planning/07
 	// §2.1): declared retention must still hold against out-of-band
@@ -160,7 +166,9 @@ func probeTopic(ctx context.Context, addr, advertisedAddr, topic string, wantPar
 			}
 		}
 		if want := strconv.FormatInt(wantRetentionMS, 10); currentRetention != want {
-			return true, fmt.Sprintf("RetentionMismatch(%s!=%s)", currentRetention, want), nil
+			// Same pattern as PartitionCountMismatch above: constant prefix,
+			// dynamic detail suffix (docs/planning/08 G4).
+			return true, fmt.Sprintf("%s(%s!=%s)", status.ReasonRetentionMismatch, currentRetention, want), nil
 		}
 	}
 	return false, "", nil

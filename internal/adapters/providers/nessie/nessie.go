@@ -127,8 +127,8 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	}
 
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonInstanceHealthy}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	// Observed binding, not intent; "" (in-network only) on runtimes
 	// without host publishing.
 	hostAddr := ctrState.HostAddr(apiPort)
@@ -187,8 +187,8 @@ func (p *Provider) reconcileCatalog(ctx context.Context, req reconciler.Request)
 	}
 
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "CatalogProvisioned"}, now)
-	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonCatalogProvisioned}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	st.ProviderState = map[string]any{
 		"engine":        "nessie",
 		"defaultBranch": branch,
@@ -245,11 +245,11 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			}
 		}
 		if healthy {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "InstanceHealthy"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonInstanceHealthy}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		} else {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: "InstanceUnhealthy"}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: "InstanceUnhealthy"}, now)
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonInstanceUnhealthy}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonInstanceUnhealthy}, now)
 		}
 		return st, nil
 	case "Catalog":
@@ -264,16 +264,18 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			closeAPI()
 		}
 		if err != nil || !ok {
-			reason := "BranchMissing"
+			// Selected between two fixed reasons (not interpolated), so both
+			// sides stay plain constants (docs/planning/08 G4).
+			reason := status.ReasonBranchMissing
 			if err != nil {
-				reason = "CatalogUnreachable"
+				reason = status.ReasonCatalogUnreachable
 			}
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: reason}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: reason}, now)
 			return st, nil
 		}
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "CatalogHealthy"}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: "NoDrift"}, now)
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonCatalogHealthy}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		return st, nil
 	default:
 		return st, fmt.Errorf("nessie provider cannot probe kind %s", req.Resource.Kind)

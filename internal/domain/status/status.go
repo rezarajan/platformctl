@@ -22,10 +22,8 @@ const (
 	Unknown TriState = "Unknown"
 )
 
-// ReasonLineageNotConsumed is the informational reason recorded when a
-// resource declares observers but its provider does not implement
-// LineageAware. Never blocks Ready. See docs/planning/02-architecture.md §5.5.
-const ReasonLineageNotConsumed = "LineageEndpointDeclaredNotConsumed"
+// Condition Reason constants (ReasonReconcileComplete, ReasonNoDrift, ...)
+// live in reasons.go, grouped by area.
 
 type Condition struct {
 	Type               ConditionType `json:"type"`
