@@ -385,36 +385,13 @@ func secretRefFrom(env resource.Envelope) secret.SecretReference {
 }
 
 func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, deps DependencyGraph, st *state.State) error {
-	// SecretReference is a pure declaration with no provider or runtime
-	// behind it: reconciling one means verifying it resolves.
-	if env.Kind == "SecretReference" {
-		return e.reconcileSecretReference(ctx, entry, env, deps, st)
-	}
-	// An External resource without a providerRef lives entirely outside
-	// Datascape: "reconciling" it means verifying its connection is
-	// resolvable, never creating anything (plan.ActionConfigure path).
-	if isExternalNoProvider(env) {
-		return e.reconcileExternal(ctx, entry, env, byKey, deps, st)
-	}
-	if isExternal(env) {
-		prov, req, err := e.resolveRequest(ctx, env, byKey, st)
-		if err != nil {
-			return err
-		}
-		configurer, ok := prov.(reconciler.ExternalConfigurer)
-		if !ok {
-			return fmt.Errorf("%s is External with providerRef, but provider type %q does not implement ExternalConfigurer", env.Key(), prov.Type())
-		}
-		newStatus, err := configurer.ConfigureExternal(ctx, req)
-		if err != nil {
-			return err
-		}
-		e.stateMu.Lock()
-		defer e.stateMu.Unlock()
-		imported := st.Resources[env.Key()].Imported
-		st.Resources[env.Key()] = e.resourceState(env, entry.SpecHash, newStatus, resource.External, imported, deps)
-		e.recordDependencyHashes(st, env.Key(), deps)
-		return e.StateStore.Save(ctx, *st)
+	// SecretReference, external-no-provider, and external-with-provider are
+	// all kind/lifecycle special cases dispatched through the single table
+	// in kind_handler.go — see its doc comment for why table order doesn't
+	// matter here despite the four engine methods checking these cases in
+	// different orders.
+	if h := lookupKindHandler(env); h != nil && h.reconcile != nil {
+		return h.reconcile(e, ctx, entry, env, byKey, deps, st)
 	}
 
 	prov, req, err := e.resolveRequest(ctx, env, byKey, st)
@@ -530,12 +507,10 @@ func (e *Engine) probeOneAgainstState(ctx context.Context, env resource.Envelope
 	now := e.Clock.Now()
 	st := status.Status{}
 
-	if env.Kind == "SecretReference" {
-		return e.secretReferenceStatus(ctx, env, rs.SecretHash)
-	}
-
-	if isExternalNoProvider(env) {
-		return e.externalConnectionStatus(ctx, env, byKey)
+	// See reconcileOne: same kind/lifecycle dispatch table, consulted the
+	// same way.
+	if h := lookupKindHandler(env); h != nil && h.probe != nil {
+		return h.probe(e, ctx, env, byKey, rs, fullState)
 	}
 
 	prov, req, err := e.resolveRequest(ctx, env, byKey, fullState)
@@ -818,6 +793,31 @@ func (e *Engine) reconcileExternal(ctx context.Context, entry plan.Entry, env re
 	return e.StateStore.Save(ctx, *st)
 }
 
+// reconcileExternalWithProvider is the reconcile hook (kind_handler.go) for
+// an External resource that names a providerRef: unlike a bare external
+// declaration, something in the platform actively configures it through
+// ExternalConfigurer rather than only verifying reachability.
+func (e *Engine) reconcileExternalWithProvider(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, deps DependencyGraph, st *state.State) error {
+	prov, req, err := e.resolveRequest(ctx, env, byKey, st)
+	if err != nil {
+		return err
+	}
+	configurer, ok := prov.(reconciler.ExternalConfigurer)
+	if !ok {
+		return fmt.Errorf("%s is External with providerRef, but provider type %q does not implement ExternalConfigurer", env.Key(), prov.Type())
+	}
+	newStatus, err := configurer.ConfigureExternal(ctx, req)
+	if err != nil {
+		return err
+	}
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	imported := st.Resources[env.Key()].Imported
+	st.Resources[env.Key()] = e.resourceState(env, entry.SpecHash, newStatus, resource.External, imported, deps)
+	e.recordDependencyHashes(st, env.Key(), deps)
+	return e.StateStore.Save(ctx, *st)
+}
+
 func (e *Engine) resourceState(env resource.Envelope, specHash string, st status.Status, lifecycle resource.Lifecycle, imported bool, deps DependencyGraph) state.ResourceState {
 	env.Metadata.Namespace = resource.NormalizeNamespace(env.Metadata.Namespace)
 	return state.ResourceState{
@@ -873,15 +873,20 @@ func (e *Engine) applyDeleteOne(ctx context.Context, entry plan.Entry, env resou
 	rs := st.Resources[entry.Key]
 	e.stateMu.Unlock()
 
+	// See reconcileOne: same kind/lifecycle dispatch table. This method
+	// (like Destroy) checks the External-lifecycle case before consulting
+	// the table generically, whereas reconcileOne/probeOneAgainstState check
+	// SecretReference first — see kind_handler.go's doc comment for why
+	// this doesn't change behavior (spec.external and Kind=="SecretReference"
+	// are mutually exclusive by schema).
 	lifecycle := resource.LifecycleOf(env, rs.Imported)
 	if lifecycle == resource.External {
 		if !e.AllowDestructive {
 			return fmt.Errorf("%s is External: deleting it during apply requires both --include-external and --yes-i-understand-this-is-destructive", entry.Key)
 		}
-		if isExternalNoProvider(env) {
+		if h := lookupKindHandler(env); h != nil && h.del != nil {
 			e.stateMu.Lock()
-			delete(st.Resources, entry.Key)
-			err := e.StateStore.Save(ctx, *st)
+			err := h.del(e, ctx, env, entry.Key, st)
 			e.stateMu.Unlock()
 			return err
 		}
@@ -889,10 +894,9 @@ func (e *Engine) applyDeleteOne(ctx context.Context, entry plan.Entry, env resou
 	if lifecycle == resource.Imported && !e.AllowImportedDeletes {
 		return fmt.Errorf("%s is Imported: deleting it during apply requires --include-imported-deletes", entry.Key)
 	}
-	if env.Kind == "SecretReference" {
+	if h := lookupKindHandler(env); h != nil && h.del != nil {
 		e.stateMu.Lock()
-		delete(st.Resources, entry.Key)
-		err := e.StateStore.Save(ctx, *st)
+		err := h.del(e, ctx, env, entry.Key, st)
 		e.stateMu.Unlock()
 		return err
 	}
@@ -1010,7 +1014,10 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 		}
 		// NFR-3, engine-enforced (not per-provider convention): External
 		// resources are never destroyed without the explicit double opt-in,
-		// even if a plan claims otherwise.
+		// even if a plan claims otherwise. The kind/lifecycle special cases
+		// below (external-no-provider, SecretReference) share the same
+		// dispatch table reconcileOne/probeOneAgainstState/applyDeleteOne
+		// use — see kind_handler.go's doc comment.
 		if resource.LifecycleOf(env, st.Resources[entry.Key].Imported) == resource.External {
 			if !e.AllowDestructive {
 				err := fmt.Errorf("%s is External: destroying it requires both --include-external and --yes-i-understand-this-is-destructive", entry.Key)
@@ -1019,11 +1026,10 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 				block(entry.Key)
 				continue
 			}
-			if isExternalNoProvider(env) {
+			if h := lookupKindHandler(env); h != nil && h.del != nil {
 				// Nothing in the platform realizes it; forgetting it is all
 				// destroy can (and should) do.
-				delete(st.Resources, entry.Key)
-				if err := e.StateStore.Save(ctx, st); err != nil {
+				if err := h.del(e, ctx, env, entry.Key, &st); err != nil {
 					return res, err
 				}
 				res.Succeeded = append(res.Succeeded, entry.Key)
@@ -1031,9 +1037,8 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 				continue
 			}
 		}
-		if env.Kind == "SecretReference" {
-			delete(st.Resources, entry.Key)
-			if err := e.StateStore.Save(ctx, st); err != nil {
+		if h := lookupKindHandler(env); h != nil && h.del != nil {
+			if err := h.del(e, ctx, env, entry.Key, &st); err != nil {
 				return res, err
 			}
 			res.Succeeded = append(res.Succeeded, entry.Key)
