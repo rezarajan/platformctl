@@ -33,7 +33,7 @@ import (
 
 // version is the binary's semantic version; overridable at build time via
 // -ldflags "-X main.version=...".
-var version = "v1.0.0"
+var version = "v1.2.0"
 
 func main() {
 	root := newRootCmd(defaultWiring)

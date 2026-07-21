@@ -1548,4 +1548,6 @@ pipeline completeness). **v2.0** = Stages E+F closed — the "production
 data-pipeline platform, contribution-ready" declaration point; Stage F is
 closed, so Phase 8 unblocks at E6's plugin decision note. Maintainer
 action: cut the v1.1/v1.2 tags (or collapse them into one v1.2 release)
-so `main.version` stops under-reporting.
+so `main.version` stops under-reporting. *(Done 2026-07-21: collapsed into
+one `v1.2.0` tag — Stages A+B+F closed plus C1 and D1 merged;
+`main.version` bumped.)*
