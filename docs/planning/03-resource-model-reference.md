@@ -20,7 +20,11 @@ Every manifest shares this shape:
 apiVersion: datascape.io/v1alpha1
 kind: <Kind>
 metadata:
-  name: <string, required, unique per Kind>
+  name: <string, required, unique per namespace/Kind; DNS-label pattern, max 63 chars>
+  namespace: default   # optional, DNS-label; defaults to "default". Part of every
+                       # resource's identity (resource.Key = Namespace/Kind/Name);
+                       # nameRef fields accept an optional namespace for
+                       # cross-namespace references.
   labels: {}       # optional, free-form
   annotations: {}  # optional, free-form
   observers:       # optional, any data-plane Kind may declare this
@@ -162,7 +166,7 @@ spec:
                                   # allow-same-namespace NetworkPolicy pair so the Namespace isn't DNS-parity-only —
                                   # without it any pod anywhere in the cluster could reach it. "none" opts out (prints
                                   # a stderr warning); docker ignores this entirely, a Docker network is always isolated.
-                                  # Exception (errors.md, 2026-07-20): a container using access node-port/load-balancer
+                                  # Exception (docs/history/errors.md, 2026-07-20): a container using access node-port/load-balancer
                                   # additionally gets a per-container `datascape-allow-external-<name>` NetworkPolicy that
                                   # opens this wall to exactly its declared ports. External traffic arrives SNAT'd to a
                                   # non-pod source that allow-same-namespace never matches, so without the hole the very
@@ -360,7 +364,7 @@ above, through the Connection seam, with CDC already working against that
 path unchanged (`internal/adapters/providers/debezium` resolves the
 Source's `connectionRef`; see `examples/lakehouse/sources-and-datasets.yaml`'s
 `orders` Source for the shipped example). See
-`docs/design/005-database-ha-posture.md` for the full decision and what
+`docs/adr/005-database-ha-posture.md` for the full decision and what
 would change if a replication-capable managed mode is ever added.
 
 ## 6. Kind: `EventStream`
@@ -492,6 +496,20 @@ spec:
 
 `Dataset` reconciliation is a required v1.0.0 deliverable: `platformctl apply` creates the
 bucket/prefix via the `s3`/`minio` provider, and a `sink`-mode `Binding` populates it.
+
+External example (a bucket operated elsewhere — schema aligned with §3.3's
+contract on 2026-07-20; previously `dataset.json` accepted `external: true`
+with no `connectionRef` property at all, so the connection-resolvable path
+§3.3 documents was unreachable for Datasets):
+
+```yaml
+spec:
+  external: true
+  connectionRef:
+    name: prod-lake            # a Connection (preferred) or SecretReference; required when external
+  bucket: raw-events
+  format: parquet
+```
 
 ## 8.1 Kind: `Catalog`
 

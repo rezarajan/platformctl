@@ -14,7 +14,7 @@ For external systems, changing a SecretReference only changes the credentials pl
 |---|---|---|---|
 | `metadata.name` | string | yes | Unique per Kind within a manifest set. |
 | `metadata.observers[].name` | string | no | Provider names resolved to LineageEndpoints and forwarded when this resource's provider is LineageAware. |
-| `spec.backend` | `env` \| `file` \| `kubernetes` \| `vault` | yes | env and file are implemented; kubernetes lands with the KubernetesSecretBackend gate (Alpha, disabled); vault lands with the VaultSecretBackend gate. |
+| `spec.backend` | `env` \| `file` \| `kubernetes` \| `vault` | yes | env and file are implemented; kubernetes is implemented behind the KubernetesSecretBackend gate (Beta, enabled by default); vault is implemented behind the VaultSecretBackend gate (Alpha, disabled). |
 | `spec.keys` | array of string | yes | Logical key names; backend-specific configuration maps them to storage (e.g. env: DATASCAPE_SECRET_<NAME>_<KEY>; kubernetes: Secret data keys). |
 | `spec.kubernetes` | object | no | backend: kubernetes only. Overrides which Kubernetes Secret object this reference resolves against; both fields are optional. |
 | `spec.kubernetes.name` | string | no | Kubernetes Secret name. Defaults to metadata.name. |
