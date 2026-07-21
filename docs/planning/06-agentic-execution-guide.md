@@ -414,3 +414,48 @@ instead of re-implementing them. Migration of existing suites is
 opportunistic, never a big-bang rewrite — bespoke setups (Kubernetes
 cluster guards, chaos's mid-apply kill, shared-state's raw MinIO container)
 stay local to their file.
+
+## 10. Integration-test economy (docs/planning/08 G7)
+
+The integration suites are the project's ground truth, but a full sweep
+costs ~30+ minutes and this repo's agent workflow was re-running
+overlapping suites at branch gates, merge gates, and after flakes. The
+standing method — **run each affected suite exactly once per
+content-state, across all sessions**:
+
+1. **Select by impact, not by habit:** `scripts/test-impact.sh --base
+   main` diffs your change, maps it through the suite↔scope table inside
+   the script, and runs only the affected suites. `--print` previews;
+   `--full` selects everything (release gates). The map is a contract:
+   adding a suite or moving files updates it in the same commit.
+2. **Dedup by scope-hash, not by memory:** every pass is recorded in the
+   shared git common dir keyed by (suite, hash of the suite's scoped
+   content, including uncommitted changes). An identical content-state is
+   SKIPped with the prior evidence cited — across branches, worktrees,
+   agents, and sessions. A change outside a suite's scope cannot
+   invalidate its green, so a merge gate re-runs only the suites whose
+   scope the merge actually touched. `--force` overrides when you have
+   reason to distrust a recorded pass.
+3. **Two tiers:** an agent's branch gate runs its affected suites once
+   and records the evidence in TASK_PROGRESS.md (suite ids + timings).
+   The merge gate runs the union of affected suites once on the merged
+   tree — which the ledger reduces to only the suites whose scope changed
+   in the merge. The broad sweep (`--full` or `just test-integration`)
+   is reserved for: runtime-port contract changes, provider-wide
+   refactors (the providerkit class), and release tags.
+4. **Serialize on the shared daemon:** the script wraps every suite in a
+   single flock — two example-scenario suites racing one Docker daemon
+   produce flaky timeouts whose retries cost more than serialization
+   saves. Agents must not run integration suites outside the wrapper
+   while other agents are active.
+5. **Environment hygiene before any long suite** — a red run caused by
+   the environment costs a full re-run: pre-pull pinned images on a fresh
+   node (`scripts/pinned-images.txt`), re-mint the minimal-RBAC token if
+   older than its duration (§8 rule 4), and clear leftover
+   `datascape-*` namespaces/containers from aborted runs first. The two
+   historical wasted K8s runs were cold image pulls and an expired token,
+   not code.
+6. **Kubernetes legs** run only when the k8s-adapter scope (or a
+   provider's K8s-relevant behavior) changed — and always under the
+   minted minimal-RBAC kubeconfig (§8 rule 4), via
+   `PLATFORMCTL_KUBECONFIG`/`KUBECONFIG` env ahead of the script.

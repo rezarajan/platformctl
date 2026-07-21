@@ -8,6 +8,12 @@ build:
 test:
     go test ./...
 
+# Minimal affected integration suites for your diff (docs/planning/06 §10):
+# impact-mapped, ledger-deduped per content-state, daemon-serialized.
+# `just test-affected` before reaching for the full sweep below.
+test-affected base="main":
+    scripts/test-impact.sh --base {{base}}
+
 # Integration tests against a live Docker daemon. The suite stands up the
 # full provider set several times over (acceptance, chaos, lakehouse);
 # budget an hour so a slow machine or cold image cache never aborts it

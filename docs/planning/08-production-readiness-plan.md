@@ -144,6 +144,11 @@ no additional context. Execute in exactly this order; do not skip steps:
    - `just test-integration` when the task touches adapters or the engine
      (requires Docker; skip only if the task changed no runtime surface,
      and say so)
+   - Preferred over a blind full run: `scripts/test-impact.sh --base main`
+     (doc 06 §10) — runs only the suites your diff affects, dedups
+     content-states already proven green (shared ledger), and serializes
+     on the shared daemon. Record the suite ids + timings in
+     TASK_PROGRESS.md so the merge gate cites instead of re-runs.
 6. **Doc sync:** tick nothing you did not verify; append facts additively
    (the guard hook allows checkbox toggles and additive edits; modifying
    existing planning text is blocked — if a task requires it, stop and
@@ -1589,6 +1594,24 @@ renderer dispatch, the 96-line registry indirection, and `meta.json`
   mariadb suites migrated and re-verified live; remaining
   close-to-the-shape suites (cdc, sink, avro_cdc, drift_config) are the
   opportunistic follow-up pass.
+
+### G7: Integration-test economy hardening
+
+- **Size:** S. **Depends:** — (the mechanism shipped 2026-07-22:
+  `scripts/test-impact.sh` + doc 06 §10; this task hardens it).
+- **Context:** the suite↔scope map inside the script is a hand-maintained
+  contract; nothing fails when a new integration test lands unmapped, and
+  the ledger has no expiry/pruning.
+- **Do:** (1) a completeness guard test: every `Test*` in
+  `cmd/platformctl/*_integration_test.go` (and integration-tagged
+  packages) must be matched by exactly one suite's `-run` pattern, or be
+  on an explicit exemption list with a reason — fails CI otherwise;
+  (2) `--prune` for ledger entries older than N days; (3) a CI leg that
+  uses `test-impact.sh --base origin/main` for PR builds and `--full`
+  for main/nightly, replacing the always-full PR sweep.
+- **Accept:** guard test proven by a deliberately unmapped fixture test
+  failing it; PR CI time drops measurably for docs-only/scoped changes;
+  full sweep still runs on main.
 
 ---
 

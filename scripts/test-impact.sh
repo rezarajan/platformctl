@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Integration-test economy (docs/planning/06 §10): run the MINIMAL set of
+# integration suites affected by a change, exactly once per content-state,
+# serialized on the shared Docker daemon.
+#
+#   scripts/test-impact.sh [--base <ref>] [--print] [--force] [--full]
+#
+# --base <ref>  diff against <ref> (default: main) to select affected suites
+# --print       list the selected suites and their ledger status; run nothing
+# --force       ignore ledger hits (re-run even if this content-state passed)
+# --full        select every suite regardless of the diff
+#
+# Suite selection: each suite declares the path scope that can affect it.
+# Ledger: a pass is recorded under (suite, scope-hash) where scope-hash
+# covers the tracked content AND uncommitted changes of the suite's scope —
+# so an identical content-state never runs the same suite twice, across
+# branches, worktrees, and sessions (the ledger lives in the shared git
+# common dir). A change outside a suite's scope cannot invalidate its green.
+#
+# The suite<->scope map below is the contract; when adding a suite or moving
+# files, update it in the same commit (doc 08 G7 adds the completeness guard).
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+COMMON_DIR=$(git rev-parse --git-common-dir)
+LEDGER="$COMMON_DIR/platformctl-itest-ledger"
+LOCK="/tmp/platformctl-itest.lock"
+mkdir -p "$LEDGER"
+
+BASE="main"; PRINT=0; FORCE=0; FULL=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --base) BASE="$2"; shift 2 ;;
+    --print) PRINT=1; shift ;;
+    --force) FORCE=1; shift ;;
+    --full) FULL=1; shift ;;
+    *) echo "unknown flag: $1" >&2; exit 2 ;;
+  esac
+done
+
+# suite id | scope (space-separated pathspecs) | test command
+# Scopes deliberately include the shared surfaces every suite depends on
+# (ports, engine wiring) only where a change there genuinely alters the
+# suite's behavior.
+SHARED_CORE="internal/ports internal/application/engine internal/application/plan internal/application/registry internal/domain go.mod"
+suites() {
+  cat <<'EOF'
+docker-conformance|internal/adapters/runtime/docker internal/adapters/runtime/fake internal/ports/runtime|go test -tags integration -count=1 -run Conformance -timeout 900s ./internal/adapters/runtime/docker/
+k8s-adapter|internal/adapters/runtime/kubernetes internal/ports/runtime deploy/kubernetes/rbac|go test -tags integration -count=1 -timeout 1800s ./internal/adapters/runtime/kubernetes/
+redpanda|internal/adapters/providers/redpanda internal/adapters/providers/providerkit SHARED_CORE|go test -tags integration -count=1 -run 'TestRedpandaEndToEnd|TestRedpandaHA' -timeout 1800s ./cmd/platformctl/
+cdc|internal/adapters/providers/postgres internal/adapters/providers/mysql internal/adapters/providers/debezium internal/adapters/kafkaconnect internal/adapters/providers/providerkit internal/application/compatibility SHARED_CORE|go test -tags integration -count=1 -run 'TestCDC|TestMariaDBCDCEndToEnd|TestAvroCDCEndToEnd' -timeout 2400s ./cmd/platformctl/
+sink|internal/adapters/providers/s3 internal/adapters/providers/s3sink internal/adapters/kafkaconnect internal/adapters/providers/providerkit cmd/platformctl/testdata/s3sink-image SHARED_CORE|go test -tags integration -count=1 -run 'TestSinkEndToEnd|TestParquetSinkEndToEnd' -timeout 2400s ./cmd/platformctl/
+acceptance|examples/cdc-attendance internal/application SHARED_CORE|go test -tags integration -count=1 -run 'TestAcceptance' -timeout 1800s ./cmd/platformctl/
+lakehouse|internal/adapters/providers/nessie internal/adapters/providers/openlineage internal/adapters/providers/proxy internal/adapters/providers/mysql examples/lakehouse SHARED_CORE|go test -tags integration -count=1 -run 'TestLakehouse' -timeout 2400s ./cmd/platformctl/
+chaos|internal/application/engine internal/application/plan internal/adapters/runtime/docker|go test -tags integration -count=1 -run 'TestChaos' -timeout 2400s ./cmd/platformctl/
+backup|internal/adapters/providers/dbjob internal/adapters/providers/postgres internal/adapters/providers/mysql internal/adapters/providers/s3 internal/application/engine/backup.go internal/domain/backup cmd/platformctl/backup.go|go test -tags integration -count=1 -run 'TestBackupRestore' -timeout 1800s ./cmd/platformctl/
+prometheus|internal/adapters/providers/prometheus internal/adapters/providers/redpanda internal/adapters/providers/s3 SHARED_CORE|go test -tags integration -count=1 -run 'TestPrometheusMonitoringStackEndToEnd' -timeout 1200s ./cmd/platformctl/
+state-s3|internal/adapters/state internal/ports/state|go test -tags integration -count=1 -timeout 1200s ./internal/adapters/state/... ./cmd/platformctl/ -run 'TestSharedState'
+blueprints|internal/application/blueprint SHARED_CORE|go test -tags integration -count=1 -run 'TestBlueprint' -timeout 1800s ./cmd/platformctl/
+gc-state-ops|cmd/platformctl/gc.go cmd/platformctl/state.go internal/ports/state|go test -tags integration -count=1 -run 'TestGC|TestState' -timeout 1200s ./cmd/platformctl/
+EOF
+}
+
+scope_hash() {
+  # Content hash of a scope: tracked file blobs + uncommitted modifications.
+  # Same content => same hash, regardless of branch/commit history.
+  local scope=$1
+  { git ls-files -s -- $scope 2>/dev/null; git diff HEAD -- $scope 2>/dev/null; } | sha256sum | cut -d' ' -f1
+}
+
+changed() { git diff --name-only "$BASE"...HEAD 2>/dev/null; git diff --name-only HEAD 2>/dev/null; }
+CHANGED=$(changed | sort -u)
+
+selected=0; ran=0; skipped=0; failed=0
+while IFS='|' read -r id scope cmd; do
+  [[ -z "$id" ]] && continue
+  scope=${scope//SHARED_CORE/$SHARED_CORE}
+  hit=0
+  if [[ $FULL -eq 1 ]]; then hit=1; else
+    for path in $scope; do
+      if grep -q "^${path}" <<<"$CHANGED"; then hit=1; break; fi
+    done
+  fi
+  [[ $hit -eq 0 ]] && continue
+  selected=$((selected+1))
+  h=$(scope_hash "$scope")
+  entry="$LEDGER/${id}-${h}"
+  if [[ -f "$entry" && $FORCE -eq 0 ]]; then
+    echo "SKIP  $id — already green at this content-state ($(cat "$entry"))"
+    skipped=$((skipped+1)); continue
+  fi
+  if [[ $PRINT -eq 1 ]]; then echo "WOULD RUN  $id: $cmd"; continue; fi
+  echo "RUN   $id: $cmd"
+  # One suite at a time on the shared daemon: contention causes flaky
+  # timeouts whose retries cost more than the serialization saves.
+  if flock "$LOCK" bash -c "$cmd"; then
+    echo "pass $(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD)" > "$entry"
+    ran=$((ran+1))
+  else
+    echo "FAIL  $id" >&2; failed=$((failed+1))
+  fi
+done < <(suites)
+
+echo "impact: $selected selected, $ran ran, $skipped deduped, $failed failed (base: $BASE)"
+[[ $failed -eq 0 ]]

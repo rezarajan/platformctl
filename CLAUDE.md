@@ -1,6 +1,6 @@
 # Datascape (platformctl)
 
-Go 1.22+. Build: `CGO_ENABLED=0 go build -trimpath -buildvcs=false ./cmd/platformctl`. Test: `go test ./...`. Integration: `just test-integration` (requires Docker; tagged `integration`, skipped by default).
+Go 1.22+. Build: `CGO_ENABLED=0 go build -trimpath -buildvcs=false ./cmd/platformctl`. Test: `go test ./...`. Integration: `just test-affected` first (impact-mapped + ledger-deduped, docs/planning/06 §10); `just test-integration` for the full sweep (requires Docker; tagged `integration`, skipped by default).
 
 ## Layering (see docs/planning/02-architecture.md §1-2)
 
