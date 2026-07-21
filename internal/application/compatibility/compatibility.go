@@ -174,6 +174,16 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 			return err
 		}
 
+		// spec.options.deadLetter.stream must resolve to an EventStream
+		// in-graph (docs/planning/08 D6). binding.FromEnvelope already
+		// refused deadLetter on a non-sink Binding and enforced its shape
+		// (stream required, tolerance ∈ {all,none}) — this is the one
+		// check only compatibility.Check can make: whether the named
+		// stream actually exists in this manifest set.
+		if err := checkDeadLetterQueue(bindingName, e, b, idx); err != nil {
+			return err
+		}
+
 		// Provider-specific option-block validation (the Binding half of the
 		// SpecValidator DX contract): apply-time-only option errors are
 		// validate-time regressions.
@@ -258,6 +268,53 @@ func checkSchemaFormat(bindingName string, srcEnv, tgtEnv resource.Envelope, b b
 	if parquetSink && !contains(supported, "avro") {
 		return fmt.Errorf("Binding %q: Provider %q (type: %s)\ndoes not support format %q (supported: %s)",
 			bindingName, esProvEnv.Metadata.Name, esProv.Type, "parquet", joinSorted(supported))
+	}
+	return nil
+}
+
+// checkDeadLetterQueue is docs/planning/08 D6's structural half: a
+// sink-mode Binding's spec.options.deadLetter.stream must name an
+// EventStream that actually exists in this manifest set. It resolves the
+// same way sourceRef/targetRef do (idx.resolve, namespace-defaulted to the
+// Binding's own), and the error message matches that exact family
+// ("Binding %q: <field> %q does not resolve to <kind> in namespace %q").
+//
+// Ordering note, recorded here per this task's own instruction (deviation
+// from doc 08's "compatibility resolves the named EventStream in-graph
+// with ordering" wording): this is an *existence* check only, not a
+// dependency edge. internal/domain/graph.Build's refFields
+// (providerRef/sourceRef/targetRef/connectionRef/secretRef) are a fixed,
+// generic, top-level list shared uniformly by every Kind; deadLetter.stream
+// is nested inside spec.options, sink-mode-scoped, and provider-consumed
+// (only s3sink translates it today) — special-casing the generic graph
+// walker for one nested field of one Kind/mode is exactly the
+// "engine-block introspection" this task's own text says to avoid when it
+// would require it. Consequence: graph.TopologicalLevels does not
+// guarantee the DLQ EventStream reconciles before the sink Binding that
+// references it — under ParallelReconciliation they may land in the same
+// level. This is safe in practice because Kafka Connect's own framework
+// creates the DLQ topic itself (via the worker's internal AdminClient) the
+// first time a poison record needs it, using
+// errors.deadletterqueue.topic.replication.factor (s3sink.
+// applyDeadLetterConfig resolves this from the named EventStream's own
+// spec.replication when the engine has it in req.Resources — which it
+// always does, Resources is the full validated set regardless of reconcile
+// order — else "1"); the platform-managed EventStream's own
+// partition/retention config "wins" once it reconciles (same apply or a
+// later one). A future task wiring destructive/ordering intent through
+// reconciler.Request could upgrade this to a real edge; until then this is
+// a known, documented limitation, not a silent gap.
+func checkDeadLetterQueue(bindingName string, e resource.Envelope, b binding.Binding, idx manifestIndex) error {
+	if b.DeadLetter == nil {
+		return nil
+	}
+	ref := resource.NameRef{Name: b.DeadLetter.Stream}
+	dlqEnv, ok, ambiguous := idx.resolve(e, ref, "EventStream")
+	if ambiguous {
+		return fmt.Errorf("Binding %q: options.deadLetter.stream %q is ambiguous in namespace %q", bindingName, b.DeadLetter.Stream, resource.NormalizeNamespace(e.Metadata.Namespace))
+	}
+	if !ok || dlqEnv.Kind != "EventStream" {
+		return fmt.Errorf("Binding %q: options.deadLetter.stream %q does not resolve to an EventStream in namespace %q", bindingName, b.DeadLetter.Stream, resource.NormalizeNamespace(e.Metadata.Namespace))
 	}
 	return nil
 }

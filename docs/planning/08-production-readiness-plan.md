@@ -654,6 +654,46 @@ entrypoints, is observable, and its data is recoverable. This is where
 - **Accept:** integration test: 2 workers, kill one, Binding stays/returns
   RUNNING without `apply`; REST failover unit-tested; worker-count drift
   detected.
+- **Done (2026-07-22, merged, bundled with D6):** workers: N via ADR
+  004's Deployment-shaped branch (first real consumer); kafkaconnect REST
+  failover across live workers (providerkit.ReachableURLs);
+  ConnectWorkerMissing drift; the HA gate check generalized to a field
+  list (brokers, workers). Two live-caught defects pinned: per-ordinal
+  host-port collision (pin+workers refused at validate) and Connect's
+  transient REST-forwarding failures (shared retryTransient at the
+  client). D6 landed in the same commit: options.deadLetter with
+  validate-time EventStream resolution (existence check — graph-edge
+  introspection of options deliberately not taken, ordering story
+  documented), DLQ keys in the drift diff, live poison-record proof.
+- **Done (2026-07-21, C3; bundled with D6 — same files):**
+  `spec.configuration.workers: N` on debezium/s3sink opts into ADR 004's
+  `Replicas: N, StableIdentity: false` shape (the first real consumer of
+  that branch; declaration is the opt-in, mirroring ADR 017 §a.1 —
+  undeclared stays the single-container shape byte-for-byte).
+  `internal/adapters/kafkaconnect` REST calls take `baseURLs []string` and
+  try each live worker (`tryEach`); per-call addresses come from
+  `providerkit.ReachableURLs` (per-ordinal EnsureReachable, skip-dead,
+  error only at zero reachable — the clusterDial pattern). Probe for
+  workers > 1 is per-ordinal presence via
+  `providerkit.ProbeConnectWorkerSet` (drift reason
+  `ConnectWorkerMissing(<ordinals>)`; Connect's REST API has no
+  group-membership listing to check beyond presence — the rebalance
+  protocol self-heals membership). `checkHighAvailabilityGate` now scans a
+  field list (`brokers`, `workers`) and names whichever field triggered
+  it. Two live-caught defects fixed with pins in the same commits:
+  (i) workers > 1 with a pinned `connectPort` would give every ordinal the
+  identical HostPort (ADR 004's known limitation) — ports are now
+  auto-assigned per ordinal for the set shape and the pin combination is
+  refused at validate, mirroring ADR 017 §a.4; (ii) `DeleteConnector` hit
+  Connect's internal REST-forwarding window mid-rejoin (HTTP 500 "IO Error
+  trying to forward REST request: Connection refused" / connection reset)
+  — the shared `retryTransient` primitive now covers Delete as well as
+  Put, pinned at the client level by
+  `TestIsTransientConnectErrorRecognizesForwardingFailure`. Accept
+  verified live on Docker (`TestConnectWorkersHAAndDeadLetterQueue`,
+  58.5s: 2 workers Ready, kill one out-of-band, `drift` — not `apply` —
+  reports the CDC Binding Ready=True via the survivor and
+  `ConnectWorkerMissing` on the Provider, heal, clean destroy).
 
 ### C4: Object-store production posture: distributed MinIO or external S3
 
@@ -1127,6 +1167,29 @@ note first (per doc 06 §3).
 - **Accept:** integration: sink with DLQ declared, one poison record →
   lands in the DLQ topic, connector stays RUNNING, valid records keep
   flowing; validate rejects a deadLetter naming a missing EventStream.
+- **Done (2026-07-21, D6; bundled with C3 — same files):**
+  `Binding.spec.options.deadLetter: {stream, tolerance: all|none}` parsed
+  and shape-validated in `internal/domain/binding` (sink-mode only,
+  tolerance defaults `all`); `compatibility.Check` verifies the named
+  EventStream exists in-set (`checkDeadLetterQueue`, the standard
+  does-not-resolve error family — the Accept's "rejects a deadLetter
+  naming a missing EventStream" line, unit-pinned). Deviation from the
+  "in-graph with ordering" wording, recorded in the check's doc comment
+  and docs/planning/03 §7.4: no dependency edge is added —
+  `graph.Build`'s refFields are a fixed generic top-level list, and
+  special-casing one nested, mode-scoped, provider-consumed options field
+  is the engine-block introspection this plan avoids. The existence check
+  plus Kafka Connect's own DLQ-topic auto-creation (RF resolved from the
+  named EventStream's `spec.replication` via `req.Resources`, else 1)
+  covers the ordering window; the platform-managed EventStream's config
+  wins once it reconciles. s3sink translates to `errors.tolerance` +
+  `errors.deadletterqueue.topic.name`/`.topic.replication.factor`/
+  `.context.headers.enable`; the DLQ keys ride in `desiredConnectorConfig`
+  so Probe's existing drift diff covers them. jdbcsink half is N/A (no
+  shipped provider — D3 open). Accept verified live on Docker
+  (`TestConnectWorkersHAAndDeadLetterQueue`, 58.5s: poison record lands in
+  the DLQ topic with the connector RUNNING throughout; valid records land
+  in MinIO before and after the poison).
 
 ### D7: Dataset lifecycle and retention policies
 

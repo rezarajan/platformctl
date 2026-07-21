@@ -5,8 +5,10 @@ import (
 	"testing"
 
 	fakeruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/fake"
+	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
+	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
 func workerEnvelope(name string, configuration map[string]any) resource.Envelope {
@@ -220,4 +222,172 @@ func TestValidateBindingOptionsFormatShape(t *testing.T) {
 	if err := p.ValidateBindingOptions("sink", map[string]any{"format": "avro"}); err != nil {
 		t.Errorf("valid options.format rejected: %v", err)
 	}
+}
+
+// TestDeadLetterConfigTranslation covers docs/planning/08 D6: a declared
+// options.deadLetter translates to the Aiven connector's error-handling
+// config, defaulting the DLQ topic's replication factor to 1 when the
+// named EventStream isn't present in req.Resources (e.g. a stub Request in
+// a unit test, or a not-yet-graph-resolved DLQ stream).
+func TestDeadLetterConfigTranslation(t *testing.T) {
+	req := sinkRequest("json", "", map[string]any{
+		"deadLetter": map[string]any{"stream": "dlq-events"},
+	})
+	_, cfg, err := desiredConnectorConfig(req)
+	if err != nil {
+		t.Fatalf("desiredConnectorConfig: %v", err)
+	}
+	want := map[string]string{
+		"errors.tolerance":                                "all",
+		"errors.deadletterqueue.topic.name":               "dlq-events",
+		"errors.deadletterqueue.topic.replication.factor": "1",
+		"errors.deadletterqueue.context.headers.enable":   "true",
+	}
+	for k, v := range want {
+		if got := cfg[k]; got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
+	}
+}
+
+// TestDeadLetterConfigReplicationFromEventStream: when the named DLQ
+// EventStream is present in req.Resources (the normal engine-resolved
+// case), its own spec.replication wins over the "1" fallback.
+func TestDeadLetterConfigReplicationFromEventStream(t *testing.T) {
+	req := sinkRequest("json", "", map[string]any{
+		"deadLetter": map[string]any{"stream": "dlq-events", "tolerance": "none"},
+	})
+	dlq := simpleEnvelope("EventStream", "dlq-events", map[string]any{
+		"providerRef": map[string]any{"name": "broker"},
+		"replication": 3,
+	})
+	req.Resources[dlq.Key()] = dlq
+	_, cfg, err := desiredConnectorConfig(req)
+	if err != nil {
+		t.Fatalf("desiredConnectorConfig: %v", err)
+	}
+	if got := cfg["errors.tolerance"]; got != "none" {
+		t.Errorf("errors.tolerance = %q, want none", got)
+	}
+	if got := cfg["errors.deadletterqueue.topic.replication.factor"]; got != "3" {
+		t.Errorf("errors.deadletterqueue.topic.replication.factor = %q, want 3 (from the DLQ EventStream's own spec.replication)", got)
+	}
+}
+
+// TestDeadLetterAbsentNoConfig: zero behavior change when deadLetter is
+// unset — none of the errors.* keys appear at all.
+func TestDeadLetterAbsentNoConfig(t *testing.T) {
+	_, cfg, err := desiredConnectorConfig(sinkRequest("json", "", nil))
+	if err != nil {
+		t.Fatalf("desiredConnectorConfig: %v", err)
+	}
+	for k := range cfg {
+		if len(k) >= 7 && k[:7] == "errors." {
+			t.Errorf("unexpected %s in config when deadLetter is unset", k)
+		}
+	}
+}
+
+// TestReconcileWorkerWorkersReplicaSet mirrors debezium's coverage of
+// docs/planning/08 C3: configuration.workers: N fans the Connect worker out
+// to N ordinals.
+func TestReconcileWorkerWorkersReplicaSet(t *testing.T) {
+	rt := fakeruntime.New()
+	env := workerEnvelope("sink", map[string]any{
+		"image":                "datascape-s3sink-connect:local",
+		"credentialsSecretRef": "creds",
+		"bootstrapServers":     "broker:29092",
+		"workers":              2,
+	})
+	p := New()
+	req := reconciler.Request{Resource: env, Provider: env, Runtime: rt}
+	st, err := p.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := st.ProviderState["workers"]; got != 2 {
+		t.Errorf("providerState[workers] = %v, want 2", got)
+	}
+	for i := 0; i < 2; i++ {
+		ord := runtime.OrdinalName("sink", i)
+		if _, found, err := rt.Inspect(context.Background(), ord); err != nil || !found {
+			t.Errorf("ordinal %s not found after reconcile: found=%v err=%v", ord, found, err)
+		}
+	}
+}
+
+// TestReconcileWorkerWorkersUndeclaredIsSingleContainer guards the zero-
+// behavior-change bar, mirroring debezium's identical test.
+func TestReconcileWorkerWorkersUndeclaredIsSingleContainer(t *testing.T) {
+	rt := fakeruntime.New()
+	env := workerEnvelope("sink", map[string]any{
+		"image":                "datascape-s3sink-connect:local",
+		"credentialsSecretRef": "creds",
+		"bootstrapServers":     "broker:29092",
+	})
+	p := New()
+	req := reconciler.Request{Resource: env, Provider: env, Runtime: rt}
+	if _, err := p.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if _, found, _ := rt.Inspect(context.Background(), "sink-0"); found {
+		t.Error("ordinal \"sink-0\" must not exist when workers is undeclared")
+	}
+}
+
+// TestValidateSpecWorkers mirrors debezium's identical coverage.
+func TestValidateSpecWorkers(t *testing.T) {
+	p := New()
+	base := map[string]any{
+		"image":                "datascape-s3sink-connect:local",
+		"bootstrapServers":     "broker:29092",
+		"credentialsSecretRef": "creds",
+	}
+	for _, v := range []any{1, 2, float64(3)} {
+		cfg := provider.Provider{
+			Configuration: mergeConfig(base, "workers", v),
+			SecretRefs:    []string{"creds"},
+		}
+		if err := p.ValidateSpec(cfg); err != nil {
+			t.Errorf("workers %v rejected: %v", v, err)
+		}
+	}
+	for _, v := range []any{0, -1, "two", 1.5} {
+		cfg := provider.Provider{
+			Configuration: mergeConfig(base, "workers", v),
+			SecretRefs:    []string{"creds"},
+		}
+		if err := p.ValidateSpec(cfg); err == nil {
+			t.Errorf("workers %v (%T) accepted, want an error", v, v)
+		}
+	}
+}
+
+// TestValidateSpecWorkersRefusesConnectPortPin mirrors debezium's identical
+// coverage of the real Docker port-collision bug a pinned connectPort
+// combined with workers > 1 would hit.
+func TestValidateSpecWorkersRefusesConnectPortPin(t *testing.T) {
+	p := New()
+	cfg := provider.Provider{
+		Configuration: map[string]any{
+			"image":                "datascape-s3sink-connect:local",
+			"bootstrapServers":     "broker:29092",
+			"credentialsSecretRef": "creds",
+			"workers":              2,
+			"connectPort":          18186,
+		},
+		SecretRefs: []string{"creds"},
+	}
+	if err := p.ValidateSpec(cfg); err == nil {
+		t.Fatal("want an error when connectPort is pinned alongside workers")
+	}
+}
+
+func mergeConfig(base map[string]any, key string, value any) map[string]any {
+	out := make(map[string]any, len(base)+1)
+	for k, v := range base {
+		out[k] = v
+	}
+	out[key] = value
+	return out
 }

@@ -93,6 +93,13 @@ const (
 	// exact observed state without a separate Message. See debezium.go and
 	// s3sink.go for the call sites.
 	ReasonConnectorState = "ConnectorState"
+	// ReasonConnectWorkerMissing is a prefix, not a complete reason
+	// (docs/planning/08 C3, mirrors redpanda's ReasonBrokerMissing): a
+	// declared spec.configuration.workers > 1 Connect-worker set whose
+	// per-ordinal Probe finds one or more ordinals absent/stopped appends
+	// the missing ordinal names to this prefix, naming exactly which
+	// worker(s) are gone.
+	ReasonConnectWorkerMissing = "ConnectWorkerMissing"
 )
 
 // --- noop provider (internal/adapters/providers/noop; test/dev only) ------

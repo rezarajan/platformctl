@@ -5,8 +5,10 @@ import (
 	"testing"
 
 	fakeruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/fake"
+	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
+	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
 func workerEnvelope(name string, configuration map[string]any) resource.Envelope {
@@ -209,6 +211,105 @@ func TestValidateBindingOptionsFormat(t *testing.T) {
 	if err := p.ValidateBindingOptions("cdc", map[string]any{"converter": "com.example.Custom"}); err != nil {
 		t.Errorf("valid options.converter rejected: %v", err)
 	}
+}
+
+// TestReconcileWorkerWorkersReplicaSet covers docs/planning/08 C3:
+// declaring configuration.workers: N fans the Connect worker out to N
+// ordinals (ContainerSpec.Replicas, StableIdentity: false — no per-ordinal
+// storage/hostname identity needed, unlike redpanda's brokers), and the
+// declared count is echoed into providerState for operators.
+func TestReconcileWorkerWorkersReplicaSet(t *testing.T) {
+	rt := fakeruntime.New()
+	env := workerEnvelope("cdc", map[string]any{
+		"replicationSecretRef": "creds",
+		"bootstrapServers":     "broker:29092",
+		"workers":              2,
+	})
+	p := New()
+	req := reconciler.Request{Resource: env, Provider: env, Runtime: rt}
+	st, err := p.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := st.ProviderState["workers"]; got != 2 {
+		t.Errorf("providerState[workers] = %v, want 2", got)
+	}
+	for i := 0; i < 2; i++ {
+		ord := runtime.OrdinalName("cdc", i)
+		if _, found, err := rt.Inspect(context.Background(), ord); err != nil || !found {
+			t.Errorf("ordinal %s not found after reconcile: found=%v err=%v", ord, found, err)
+		}
+	}
+}
+
+// TestReconcileWorkerWorkersUndeclaredIsSingleContainer guards the zero-
+// behavior-change bar: configuration.workers absent must reconcile the
+// exact pre-C3 single-container shape (no "-0" ordinal suffix), the same
+// assertion ADR 017's brokers opt-in makes for redpanda.
+func TestReconcileWorkerWorkersUndeclaredIsSingleContainer(t *testing.T) {
+	rt := fakeruntime.New()
+	env := workerEnvelope("cdc", map[string]any{
+		"replicationSecretRef": "creds",
+		"bootstrapServers":     "broker:29092",
+	})
+	p := New()
+	req := reconciler.Request{Resource: env, Provider: env, Runtime: rt}
+	if _, err := p.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if _, found, _ := rt.Inspect(context.Background(), "cdc"); !found {
+		t.Fatal("literal container \"cdc\" not found")
+	}
+	if _, found, _ := rt.Inspect(context.Background(), "cdc-0"); found {
+		t.Error("ordinal \"cdc-0\" must not exist when workers is undeclared")
+	}
+}
+
+// TestValidateSpecWorkers covers the shape half of docs/planning/08 C3
+// (gate enforcement is cmd/platformctl's checkHighAvailabilityGate, not
+// this method — docs/adr/017 §a.8's established split).
+func TestValidateSpecWorkers(t *testing.T) {
+	p := New()
+	base := map[string]any{"bootstrapServers": "broker:29092"}
+	for _, v := range []any{1, 2, float64(3)} {
+		cfg := provider.Provider{Configuration: mergeConfig(base, "workers", v)}
+		if err := p.ValidateSpec(cfg); err != nil {
+			t.Errorf("workers %v rejected: %v", v, err)
+		}
+	}
+	for _, v := range []any{0, -1, "two", 1.5} {
+		cfg := provider.Provider{Configuration: mergeConfig(base, "workers", v)}
+		if err := p.ValidateSpec(cfg); err == nil {
+			t.Errorf("workers %v (%T) accepted, want an error", v, v)
+		}
+	}
+}
+
+// TestValidateSpecWorkersRefusesConnectPortPin guards the real Docker bug
+// a pinned connectPort combined with workers > 1 would hit: every ordinal
+// would inherit the identical HostPort (ordinalContainerSpec copies Ports
+// verbatim), so the second ordinal's container create fails with a
+// port-already-allocated error — refused at validate instead, mirroring
+// docs/adr/017 §a.4's identical refusal for redpanda's brokers.
+func TestValidateSpecWorkersRefusesConnectPortPin(t *testing.T) {
+	p := New()
+	cfg := provider.Provider{Configuration: map[string]any{
+		"bootstrapServers": "broker:29092",
+		"workers":          2,
+		"connectPort":      18085,
+	}}
+	if err := p.ValidateSpec(cfg); err == nil {
+		t.Fatal("want an error when connectPort is pinned alongside workers")
+	}
+}
+
+func mergeConfig(base map[string]any, key string, value any) map[string]any {
+	out := make(map[string]any, len(base)+1)
+	for k, v := range base {
+		out[k] = v
+	}
+	out[key] = value
+	return out
 }
 
 // TestServerIDUniquePerConnector guards docs/planning/07 §2.2: two MySQL

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/binding"
 	"github.com/rezarajan/platformctl/internal/domain/dataset"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
+	"github.com/rezarajan/platformctl/internal/domain/eventstream"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
@@ -55,6 +57,21 @@ func connectPort(cfg provider.Provider, name string) int {
 	return providerkit.HostPort(cfg, name, "connectPort")
 }
 
+// connectPorts builds the worker container's Ports declaration: workers <=
+// 1 (undeclared) keeps the exact pre-C3 single-container behavior — a
+// concrete, deterministically-derived (or pinned) HostPort via
+// connectPort. workers > 1 deliberately leaves HostPort unset (0) so
+// Docker/Kubernetes auto-assign a *distinct* port per ordinal — mirroring
+// redpanda's reconcileBrokerSet and debezium's identical helper (see its
+// doc comment for the full ADR 004/017 reasoning). ValidateSpec refuses a
+// connectPort pin combined with workers.
+func connectPorts(cfg provider.Provider, name string, workers int) []runtime.PortBinding {
+	if workers > 1 {
+		return []runtime.PortBinding{{ContainerPort: 8083, Audience: runtime.AudienceHost}}
+	}
+	return []runtime.PortBinding{{HostPort: connectPort(cfg, name), ContainerPort: 8083, Audience: runtime.AudienceHost}}
+}
+
 // reachableURL returns an "http://host:port" this process can dial right
 // now for the Connect worker's REST API, plus a close func that must always
 // be called. Kafka Connect's REST API is stateless HTTP with no
@@ -62,6 +79,41 @@ func connectPort(cfg provider.Provider, name string) int {
 // directly for one call.
 func reachableURL(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
 	return providerkit.ReachableURL(ctx, rt, name, 8083)
+}
+
+// workersDeclared reads spec.configuration.workers (docs/planning/08 C3).
+// declared=false (the key absent) selects the pre-C3 single-container
+// shape, byte-for-byte; declared=true (any value >= 1, validated by
+// ValidateSpec) opts into the `ContainerSpec.Replicas: N, StableIdentity:
+// false` shape — Connect workers are natively distributed (group.id +
+// internal topics) and hold no per-worker durable state, so unlike
+// redpanda's brokers (docs/adr/017) no stable per-ordinal identity is
+// needed. See debezium.go's identical helper — not shared via providerkit
+// because it is one three-line map read, well under G1's "more parameters
+// than lines saved" bar for an extraction.
+func workersDeclared(cfg provider.Provider) (int, bool) {
+	v, ok := cfg.Configuration["workers"]
+	if !ok {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case float64:
+		return int(n), true
+	}
+	return 0, true
+}
+
+// workerURLs resolves every currently-reachable Connect worker's REST base
+// URL for this Provider (docs/planning/08 C3) — the input to
+// kafkaconnect's multi-address failover. workers <= 1 (undeclared) is the
+// pre-C3 single-address reachableURL path, unchanged; workers > 1 iterates
+// ordinals via providerkit.ReachableURLs, skipping any that don't currently
+// resolve (a killed worker just isn't offered as a failover candidate).
+func workerURLs(ctx context.Context, rt runtime.ContainerRuntime, name string, cfg provider.Provider) ([]string, func() error, error) {
+	n, _ := workersDeclared(cfg)
+	return providerkit.ReachableURLs(ctx, rt, name, 8083, n)
 }
 
 func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
@@ -97,12 +149,21 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 	if bootstrap == "" {
 		return st, fmt.Errorf("Provider %q (type: s3sink): spec.configuration.bootstrapServers is required (declare it, or wire a Binding on this Provider to an EventStream whose Provider publishes a Kafka bootstrap address)", name)
 	}
+	workers, workersDecl := workersDeclared(cfg)
+	if workersDecl && workers < 1 {
+		return st, fmt.Errorf("Provider %q (type: s3sink): spec.configuration.workers must be a positive integer, got %v", name, cfg.Configuration["workers"])
+	}
 	ctrState, err := providerkit.EnsureInstance(ctx, rt, providerkit.InstanceSpec{
 		Namespace: req.Provider.Metadata.Namespace,
 		Name:      name,
 		Network:   providerkit.Network(cfg),
 		Container: runtime.ContainerSpec{
 			Image: image,
+			// Replicas/StableIdentity (docs/planning/08 C3, docs/adr/004):
+			// workers undeclared -> ReplicaCount()==1, byte-for-byte the
+			// pre-C3 single-container shape. StableIdentity is always
+			// false — see debezium.go's identical reasoning.
+			Replicas: workers,
 			Env: map[string]string{
 				"BOOTSTRAP_SERVERS":                      bootstrap,
 				"GROUP_ID":                               name,
@@ -124,7 +185,7 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 				// default would stall CDC topics that appear on first table event.
 				"CONNECT_CONSUMER_METADATA_MAX_AGE_MS": "10000",
 			},
-			Ports: []runtime.PortBinding{{HostPort: connectPort(cfg, name), ContainerPort: 8083, Audience: runtime.AudienceHost}},
+			Ports: connectPorts(cfg, name, workers),
 			HealthCheck: &runtime.HealthCheck{
 				Test:     []string{"CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"},
 				Interval: 3 * time.Second,
@@ -148,7 +209,7 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 	if hostAddr != "" {
 		hostURL = "http://" + hostAddr
 	}
-	st.ProviderState = map[string]any{
+	providerState := map[string]any{
 		endpoint.Key: endpoint.List{
 			{Name: "connect-rest", Scheme: "http", Host: hostURL, Internal: fmt.Sprintf("http://%s:8083", name), Insecure: true},
 		}.ToState(),
@@ -158,6 +219,12 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 		// `platformctl state inspect`, not silently baked in.
 		"bootstrapServers": bootstrap,
 	}
+	if workersDecl {
+		// Echoed for operators (docs/planning/08 C3), mirroring redpanda's
+		// "brokers" providerState field.
+		providerState["workers"] = workers
+	}
+	st.ProviderState = providerState
 	return st, nil
 }
 
@@ -229,7 +296,42 @@ func desiredConnectorConfig(req reconciler.Request) (string, map[string]string, 
 	if ds.Prefix != "" {
 		config["aws.s3.prefix"] = ds.Prefix
 	}
+	if b.DeadLetter != nil {
+		applyDeadLetterConfig(config, b.DeadLetter, req, res.Metadata.Namespace)
+	}
 	return res.Metadata.Name, config, nil
+}
+
+// applyDeadLetterConfig translates Binding.spec.options.deadLetter
+// (docs/planning/08 D6) into the Aiven S3 sink connector's error-handling
+// config: errors.tolerance is a direct pass-through of dl.Tolerance
+// (Kafka Connect's own values, all|none); errors.deadletterqueue.topic.name
+// is dl.Stream itself — an EventStream's resource name IS its Kafka topic
+// name (the same convention redpanda.reconcileTopic uses), so no separate
+// lookup is needed to know the topic to route to.
+// errors.deadletterqueue.topic.replication.factor is resolved from the
+// named EventStream's own spec.replication when it is present in
+// req.Resources (always true once compatibility.Check's existence check
+// has passed — Resources is the full validated manifest set regardless of
+// reconcile order, see compatibility.go's ordering-story comment), else
+// "1" (compatible with every single-broker dev deployment, Kafka Connect's
+// own framework default of 3 would otherwise fail topic creation against
+// them). errors.deadletterqueue.context.headers.enable is always "true"
+// when a DLQ is declared: the original topic/partition/offset/exception
+// ride along as record headers, the only way to make a landed poison
+// record diagnosable after the fact.
+func applyDeadLetterConfig(config map[string]string, dl *binding.DeadLetter, req reconciler.Request, namespace string) {
+	config["errors.tolerance"] = dl.Tolerance
+	config["errors.deadletterqueue.topic.name"] = dl.Stream
+	config["errors.deadletterqueue.context.headers.enable"] = "true"
+	replication := 1
+	dlqKey := resource.Key{Namespace: resource.NormalizeNamespace(namespace), Kind: "EventStream", Name: dl.Stream}
+	if dlqEnv, ok := req.Resources[dlqKey]; ok {
+		if es, err := eventstream.FromEnvelope(dlqEnv); err == nil {
+			replication = es.ReplicationFactor()
+		}
+	}
+	config["errors.deadletterqueue.topic.replication.factor"] = strconv.Itoa(replication)
 }
 
 // streamFormat resolves the serialization format of the records this sink
@@ -314,18 +416,22 @@ func (p *Provider) reconcileConnector(ctx context.Context, req reconciler.Reques
 	if err != nil {
 		return st, err
 	}
-
-	name := naming.RuntimeObjectName(req.Provider)
-	url, closeURL, err := reachableURL(ctx, req.Runtime, name)
+	cfg, err := provider.FromEnvelope(req.Provider)
 	if err != nil {
 		return st, err
 	}
-	defer closeURL()
-	if err := kafkaconnect.PutConnectorConfig(ctx, url, connectorName, config); err != nil {
+
+	name := naming.RuntimeObjectName(req.Provider)
+	urls, closeURLs, err := workerURLs(ctx, req.Runtime, name, cfg)
+	if err != nil {
+		return st, err
+	}
+	defer closeURLs()
+	if err := kafkaconnect.PutConnectorConfig(ctx, urls, connectorName, config); err != nil {
 		return st, err
 	}
 
-	state, err := kafkaconnect.WaitConnectorRunning(ctx, url, connectorName, 90*time.Second)
+	state, err := kafkaconnect.WaitConnectorRunning(ctx, urls, connectorName, 90*time.Second)
 	now := time.Now()
 	if err != nil {
 		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonConnectorNotRunning, Message: err.Error()}, now)
@@ -376,16 +482,23 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 	case "Binding":
 		// A dead Connect worker takes its connectors with it; requiring a
 		// live REST API here would make destroy unable to converge after
-		// out-of-band failures.
+		// out-of-band failures. Inspect(name) covers both shapes: the
+		// literal container (workers undeclared) or the replica-set
+		// aggregate (docs/adr/004) — "at least one member running" for the
+		// latter.
 		if ctr, found, err := rt.Inspect(ctx, name); err != nil || !found || !ctr.Running {
 			return err
 		}
-		url, closeURL, err := reachableURL(ctx, rt, name)
+		cfg, err := provider.FromEnvelope(req.Provider)
 		if err != nil {
 			return err
 		}
-		defer closeURL()
-		return kafkaconnect.DeleteConnector(ctx, url, res.Metadata.Name)
+		urls, closeURLs, err := workerURLs(ctx, rt, name, cfg)
+		if err != nil {
+			return err
+		}
+		defer closeURLs()
+		return kafkaconnect.DeleteConnector(ctx, urls, res.Metadata.Name)
 	default:
 		return fmt.Errorf("s3sink provider cannot destroy kind %s", res.Kind)
 	}
@@ -396,8 +509,15 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 	st := status.Status{}
 	now := time.Now()
 	name := naming.RuntimeObjectName(req.Provider)
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
 	switch res.Kind {
 	case "Provider":
+		if n, declared := workersDeclared(cfg); declared && n > 1 {
+			return providerkit.ProbeConnectWorkerSet(ctx, rt, name, n, now)
+		}
 		ctrState, found, err := rt.Inspect(ctx, name)
 		if err != nil {
 			return st, err
@@ -411,12 +531,12 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		}
 		return st, nil
 	case "Binding":
-		url, closeURL, err := reachableURL(ctx, rt, name)
+		urls, closeURLs, err := workerURLs(ctx, rt, name, cfg)
 		if err != nil {
 			return st, err
 		}
-		defer closeURL()
-		state, err := kafkaconnect.ConnectorState(ctx, url, res.Metadata.Name)
+		defer closeURLs()
+		state, err := kafkaconnect.ConnectorState(ctx, urls, res.Metadata.Name)
 		if err != nil {
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonConnectorMissing, Message: err.Error()}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonConnectorMissing}, now)
@@ -433,10 +553,11 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			return st, nil
 		}
 		// RUNNING is not enough (docs/planning/07 §2.1): the live config
-		// must still match the manifest-derived one. Drifted key *names*
-		// only — values may carry credentials and must never leak into
-		// conditions.
-		if drifted := connectorConfigDrift(ctx, req, url); len(drifted) > 0 {
+		// must still match the manifest-derived one — including the DLQ
+		// keys applyDeadLetterConfig added when spec.options.deadLetter is
+		// declared (docs/planning/08 D6). Drifted key *names* only — values
+		// may carry credentials and must never leak into conditions.
+		if drifted := connectorConfigDrift(ctx, req, urls); len(drifted) > 0 {
 			msg := "connector config differs from manifest at: " + strings.Join(drifted, ", ")
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonConnectorConfigDrift, Message: msg}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonConnectorConfigDrift, Message: msg}, now)
@@ -454,12 +575,12 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 // manifest-derived one and returns the drifted key names (sorted), or nil
 // when equivalent. Extra live keys beyond the desired set are Connect-added
 // defaults, not drift.
-func connectorConfigDrift(ctx context.Context, req reconciler.Request, url string) []string {
+func connectorConfigDrift(ctx context.Context, req reconciler.Request, urls []string) []string {
 	name, desired, err := desiredConnectorConfig(req)
 	if err != nil {
 		return []string{"(desired config unresolvable: " + err.Error() + ")"}
 	}
-	actual, err := kafkaconnect.GetConnectorConfig(ctx, url, name)
+	actual, err := kafkaconnect.GetConnectorConfig(ctx, urls, name)
 	if err != nil {
 		return []string{"(live config unreadable: " + err.Error() + ")"}
 	}
@@ -489,6 +610,32 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 	}
 	if !cfg.HasSecretRef(ref) {
 		return fmt.Errorf("configuration.credentialsSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
+	}
+	// workers > 1 (docs/planning/08 C3) requires the HighAvailability gate
+	// (enforced at validate by cmd/platformctl's checkHighAvailabilityGate);
+	// this check only guards the value's own shape, mirroring redpanda's/
+	// debezium's ValidateSpec split between gate-independent shape checks
+	// here and gate enforcement in loadAndValidate.
+	if v, declared := cfg.Configuration["workers"]; declared {
+		n, ok := -1, false
+		switch t := v.(type) {
+		case int:
+			n, ok = t, true
+		case float64:
+			if t == float64(int(t)) {
+				n, ok = int(t), true
+			}
+		}
+		if !ok || n < 1 {
+			return fmt.Errorf("spec.configuration.workers must be a positive integer, got %v", v)
+		}
+		// Host-port pin cannot be combined with the replica-set shape:
+		// every ordinal's host port is auto-assigned (connectPorts,
+		// mirroring docs/adr/017 §a.4's identical refusal for redpanda's
+		// brokers).
+		if _, pinned := cfg.Configuration["connectPort"]; pinned {
+			return fmt.Errorf("spec.configuration.connectPort cannot be combined with spec.configuration.workers: each worker's host port is auto-assigned")
+		}
 	}
 	return nil
 }
