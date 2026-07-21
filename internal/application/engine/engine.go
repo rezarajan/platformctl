@@ -660,7 +660,7 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 	// 2. When the connectionRef names a Connection with an address, actually
 	// verify the endpoint answers — "resolvable" is not "reachable", and an
 	// external resource that isn't reachable must not report Ready
-	// (errors.md: an unreachable external source claiming health is a lie).
+	// (docs/history/errors.md: an unreachable external source claiming health is a lie).
 	if connEnv, ok := byKey[connRef.Key(env.Metadata.Namespace, "Connection")]; ok {
 		conn, err := connection.FromEnvelope(connEnv)
 		if err == nil {

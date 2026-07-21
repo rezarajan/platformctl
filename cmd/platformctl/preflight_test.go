@@ -11,7 +11,7 @@ import (
 
 // TestApplyRefusesOnMissingSecrets: apply must fail before touching any
 // infrastructure when a declared secret is unresolvable, listing every
-// missing variable — the "cannot half-apply" guard from errors.md.
+// missing variable — the "cannot half-apply" guard from docs/history/errors.md.
 func TestApplyRefusesOnMissingSecrets(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	// import-scenario declares SecretReference cdc? no — use import-scenario

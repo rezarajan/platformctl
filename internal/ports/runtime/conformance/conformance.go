@@ -676,7 +676,7 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		// endpoints"; the Kubernetes adapter must not let a Namespace deletion
 		// cascade to a still-running Deployment (regression: a shared-namespace
 		// destroy that wiped its siblings and any unmanaged workload alongside
-		// them — errors.md, 2026-07-20).
+		// them — docs/history/errors.md, 2026-07-20).
 		if err := rt.RemoveNetwork(ctx, netSpec.Name); err == nil {
 			t.Fatal("RemoveNetwork removed a network that still has a container attached")
 		}

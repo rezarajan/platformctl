@@ -10,7 +10,7 @@ import (
 )
 
 // TestBuildExternalIngressPolicy is the contract-level reproduction for the
-// errors.md NodePort/LoadBalancer bug: the namespace default-deny wall (B7)
+// docs/history/errors.md NodePort/LoadBalancer bug: the namespace default-deny wall (B7)
 // silently drops the very external traffic node-port/load-balancer modes (B1)
 // exist to admit, so those modes need a per-container hole. The live proof is
 // reachability_integration_test.go on a policy-enforcing cluster; this unit

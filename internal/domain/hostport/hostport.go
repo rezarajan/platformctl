@@ -1,6 +1,6 @@
 // Package hostport allocates host-side ports for published container ports.
 //
-// The problem it solves (feature-requests.md): when every provider hand-picks
+// The problem it solves (docs/history/feature-requests.md): when every provider hand-picks
 // its host port, two components in a large platform inevitably collide. The
 // answer here is that a host port is *optional* — omit it and one is
 // allocated deterministically from the component's (unique) name, so:

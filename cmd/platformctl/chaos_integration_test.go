@@ -59,7 +59,7 @@ func runDrift(t *testing.T, manifests, stateFile string) (map[string]driftReport
 // managed containers out-of-band, then require the tooling to observe it
 // (drift), refuse to panic-mutate (plan), heal it (apply), and still tear
 // everything down cleanly when parts of the platform are already dead
-// (destroy). This is the errors.md "external failures are not observed and
+// (destroy). This is the docs/history/errors.md "external failures are not observed and
 // thus impossible to reconcile" regression test.
 func TestChaosExternalFailures(t *testing.T) {
 	setSinkSecrets(t)
