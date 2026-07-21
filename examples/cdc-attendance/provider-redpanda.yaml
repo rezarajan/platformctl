@@ -1,3 +1,4 @@
+# network and image use their defaults (see README.md#defaults).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -6,7 +7,5 @@ spec:
   type: redpanda
   runtime:
     type: docker
-    network: datascape
   configuration:
-    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
     kafkaPort: 19093

@@ -1,5 +1,6 @@
 # Realizes Catalog(engine: nessie) below — the Iceberg REST catalog the
-# warehouse Dataset is cataloged under.
+# warehouse Dataset is cataloged under. spec.runtime.network is omitted
+# (default applies, docs/planning/08 E2).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -8,4 +9,3 @@ spec:
   type: nessie
   runtime:
     type: docker
-    network: datascape

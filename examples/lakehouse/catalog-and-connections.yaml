@@ -1,6 +1,7 @@
 # The Iceberg catalog, as a noun: orchestrators reference "the catalog of
 # this platform", not a technology. Nessie is the engine realizing it; the
-# engine block carries engine-specific facts.
+# engine block carries engine-specific facts. nessie.defaultBranch is
+# omitted — see README.md#defaults.
 apiVersion: datascape.io/v1alpha1
 kind: Catalog
 metadata:
@@ -8,7 +9,6 @@ metadata:
 spec:
   engine: nessie
   providerRef: {name: catalog-svc}
-  nessie: {defaultBranch: main}
 ---
 # The stable entrypoint to the external orders database. In-network
 # consumers (the CDC connector) address orders-db:15999; host tools

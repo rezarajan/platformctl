@@ -8,7 +8,9 @@
 #   docker build -t datascape-s3sink-connect:local ./s3sink-image
 #
 # `platformctl validate` does not need the image to exist (it never talks
-# to Docker); `platformctl apply` does.
+# to Docker); `platformctl apply` does. spec.runtime.network is omitted
+# (default applies) and so is bootstrapServers — inferred from the manifest
+# graph, the same as provider-cdc.yaml (docs/planning/08 E2).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -17,9 +19,7 @@ spec:
   type: s3sink
   runtime:
     type: docker
-    network: datascape
   configuration:
     image: datascape-s3sink-connect:local
-    bootstrapServers: broker:29092
     credentialsSecretRef: lake-root-creds
   secretRefs: [lake-root-creds]

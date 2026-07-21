@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/application/compatibility"
 	"github.com/rezarajan/platformctl/internal/application/plan"
 	"github.com/rezarajan/platformctl/internal/application/registry"
 	"github.com/rezarajan/platformctl/internal/domain/binding"
@@ -1237,13 +1238,34 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 		return nil, reconciler.Request{}, err
 	}
 	return prov, reconciler.Request{
-		Resource:          env,
-		Runtime:           rt,
-		Provider:          provEnv,
-		Secrets:           secrets,
-		Resources:         byKey,
-		SchemaRegistryURL: e.resolveSchemaRegistryURL(env, byKey, st),
+		Resource:              env,
+		Runtime:               rt,
+		Provider:              provEnv,
+		Secrets:               secrets,
+		Resources:             byKey,
+		SchemaRegistryURL:     e.resolveSchemaRegistryURL(env, byKey, st),
+		KafkaBootstrapServers: e.resolveKafkaBootstrapServers(provEnv, p, byKey),
 	}, nil
+}
+
+// resolveKafkaBootstrapServers mirrors resolveSchemaRegistryURL's seam
+// (docs/planning/08 E2): computed once per request from provEnv (the
+// realizing Provider — env itself when env.Kind == "Provider", or the
+// Provider a dependent resource like Binding resolves through), so both
+// reconcileWorker (Provider-kind request) and buildDesiredConnector
+// (Binding-kind request, for the same worker) see the identical effective
+// value the worker container was actually started with. p is provEnv's
+// already-decoded configuration; an explicit spec.configuration.
+// bootstrapServers always wins and skips the graph walk entirely.
+func (e *Engine) resolveKafkaBootstrapServers(provEnv resource.Envelope, p provider.Provider, byKey map[resource.Key]resource.Envelope) string {
+	if _, has := p.Configuration["bootstrapServers"]; has {
+		return ""
+	}
+	envelopes := make([]resource.Envelope, 0, len(byKey))
+	for _, v := range byKey {
+		envelopes = append(envelopes, v)
+	}
+	return compatibility.ResolveKafkaBootstrapAddress(provEnv, envelopes, e.Registry.Provider)
 }
 
 // resolveSchemaRegistryURL resolves the schema registry endpoint a Binding's

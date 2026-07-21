@@ -1,4 +1,7 @@
 # Managed MinIO — the object store the sink Binding lands objects in.
+# spec.runtime.network and spec.configuration.image are omitted: the
+# default network and this provider's pinned default image apply
+# (docs/planning/08 E2).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -7,7 +10,6 @@ spec:
   type: minio
   runtime:
     type: docker
-    network: datascape
   configuration:
     rootSecretRef: lake-root-creds
   secretRefs: [lake-root-creds]

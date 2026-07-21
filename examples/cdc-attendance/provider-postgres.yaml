@@ -6,7 +6,6 @@ spec:
   type: postgres
   runtime:
     type: docker
-    network: datascape
   configuration:
     version: "16"
     port: 15432

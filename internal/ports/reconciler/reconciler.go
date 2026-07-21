@@ -64,6 +64,24 @@ type Request struct {
 	// when options.format is unset/"json", or the upstream Provider has
 	// not published the endpoint yet in this state (not yet reconciled).
 	SchemaRegistryURL string
+	// KafkaBootstrapServers is the resolved in-network Kafka address a
+	// Connect-worker Provider (debezium, s3sink) should join, when
+	// spec.configuration.bootstrapServers is omitted — docs/planning/08 E2.
+	// Unlike SchemaRegistryURL, this is resolved from the manifest graph
+	// alone (compatibility.ResolveKafkaBootstrapAddress), not from
+	// published state: a Connect worker's own reconcile has no dependency
+	// edge guaranteeing the EventStream's broker Provider reconciled
+	// first (nothing in the worker's own spec references it — only a
+	// Binding using the worker does), so waiting on published state would
+	// be an ordering hazard under ParallelReconciliation. The address is
+	// instead a graph-resolved manifest fact: the broker Provider's own
+	// name plus its fixed/declared Kafka port, which a
+	// KafkaBootstrapAddressProvider can compute without having reconciled.
+	// Empty when configuration.bootstrapServers is already set, or when
+	// zero or more than one distinct address would result (ambiguous —
+	// the provider must then require an explicit value, same as before
+	// this field existed).
+	KafkaBootstrapServers string
 }
 
 type Provider interface {
@@ -185,6 +203,25 @@ type BindingOptionsValidator interface {
 type SchemaRegistryCapableProvider interface {
 	Provider
 	SupportedSchemaFormats(cfg provider.Provider) []string
+}
+
+// KafkaBootstrapAddressProvider is declared by an EventStream-realizing
+// provider (redpanda) whose in-network Kafka listener address is fully
+// determined by its own manifest facts — the realizing Provider's runtime
+// object name and its fixed/declared Kafka port — with no live reconcile
+// required (docs/planning/08 E2). This lets a Kafka Connect worker
+// (debezium, s3sink) omit spec.configuration.bootstrapServers and have the
+// engine infer it from the manifest graph (compatibility.
+// ResolveKafkaBootstrapAddress) even though nothing guarantees this
+// Provider reconciles before the Connect worker's own reconcile — unlike
+// SchemaRegistryCapableProvider/SchemaRegistryURL (D1), which reads a
+// *published* endpoint fact because the registry's presence is
+// config-gated and only knowable post-reconcile. name is the broker
+// Provider's own runtime object name (naming.RuntimeObjectName); cfg
+// mirrors SupportedSchemaFormats's pattern for a config-dependent answer.
+type KafkaBootstrapAddressProvider interface {
+	Provider
+	KafkaBootstrapAddress(name string, cfg provider.Provider) string
 }
 
 // LineageAware is declared by a provider that knows how to consume a lineage

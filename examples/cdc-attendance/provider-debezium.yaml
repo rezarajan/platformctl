@@ -1,3 +1,4 @@
+# network, image, and bootstrapServers all use their defaults (see README.md#defaults).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -6,10 +7,7 @@ spec:
   type: debezium
   runtime:
     type: docker
-    network: datascape
   configuration:
-    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
     connectPort: 18083
-    bootstrapServers: local-redpanda:29092
     replicationSecretRef: postgres-replication-creds
   secretRefs: [postgres-replication-creds]

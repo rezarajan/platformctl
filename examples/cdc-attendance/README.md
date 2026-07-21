@@ -136,6 +136,28 @@ running: Redpanda Kafka 19093, Postgres 15432, Debezium Connect 18083, sink
 Connect 18084, MinIO 19000. Adjust the `configuration` blocks (`kafkaPort`,
 `port`, `connectPort`) if any are taken on your machine.
 
+## Defaults
+
+Fields this example used to spell out that a `platformctl` default already
+covers (docs/planning/08 E2 — the manifests here omit them; every default
+is still visible after apply, in the same providerState `inventory`/`state
+inspect` already read):
+
+- `spec.runtime.network`: every Provider defaults to the `datascape`
+  network. Pin `runtime: {type: docker, network: <name>}` for a different
+  one.
+- `spec.configuration.image` on `redpanda`/`minio`/`debezium` Providers:
+  each has a pinned default image (`s3sink` has none — no stock Connect
+  image ships the S3 sink plugin, so it stays required).
+- `spec.configuration.bootstrapServers` on the `debezium`/`s3sink` Connect
+  workers: inferred from the manifest graph — the Binding using the
+  worker resolves to `attendance-events`, whose Provider is
+  `local-redpanda`. Pin it explicitly, e.g.
+  `bootstrapServers: local-redpanda:29092`, if a worker's Bindings don't
+  unambiguously resolve to one broker.
+- `spec.postgres.schema` on a `Source`: the CDC connector defaults an
+  unset schema to `"public"`. Pin `schema: <name>` for any other schema.
+
 ## Deviations from the spec document's sketch
 
 The manifest sketch in 05-v1-first-version-spec.md §6 predates the working

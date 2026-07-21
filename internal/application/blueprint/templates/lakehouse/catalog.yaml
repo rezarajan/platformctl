@@ -1,5 +1,6 @@
 # The Iceberg catalog, as a noun: orchestrators reference "the catalog of
 # this platform", not a technology. Nessie is the engine realizing it.
+# nessie.defaultBranch is omitted: defaults to "main" (docs/planning/08 E2).
 apiVersion: datascape.io/v1alpha1
 kind: Catalog
 metadata:
@@ -8,5 +9,3 @@ spec:
   engine: nessie
   providerRef:
     name: catalog
-  nessie:
-    defaultBranch: main

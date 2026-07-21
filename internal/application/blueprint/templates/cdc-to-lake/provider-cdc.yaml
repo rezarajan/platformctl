@@ -1,6 +1,10 @@
 # The Debezium Kafka Connect worker realizing Binding(mode: cdc) below.
-# bootstrapServers addresses the broker Provider by name on the shared
-# Docker network at its fixed in-network Kafka port (29092).
+# spec.runtime.network and spec.configuration.bootstrapServers are both
+# omitted (docs/planning/08 E2): the default network applies, and
+# bootstrapServers is inferred from the manifest graph — the CDC Binding
+# below targets app-events, whose Provider is broker. Pin
+# bootstrapServers: broker:29092 explicitly if you rewire the Binding to a
+# different EventStream than this worker should actually join.
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -9,8 +13,6 @@ spec:
   type: debezium
   runtime:
     type: docker
-    network: datascape
   configuration:
-    bootstrapServers: broker:29092
     replicationSecretRef: db-replication-creds
   secretRefs: [db-replication-creds]

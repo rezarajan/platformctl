@@ -1,4 +1,6 @@
-# Managed Redpanda broker — the change events land here.
+# Managed Redpanda broker — the change events land here. spec.runtime.network
+# is omitted: every Provider in this blueprint defaults to the same
+# "datascape" network (docs/planning/08 E2).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -7,4 +9,3 @@ spec:
   type: redpanda
   runtime:
     type: docker
-    network: datascape

@@ -103,6 +103,23 @@ The table below is what that produces (abridged):
 | Kafka (Redpanda) | `lake-redpanda:29092` | `127.0.0.1:19096` |
 | External orders db | `orders-db:15999` | `127.0.0.1:15999` |
 
+## Defaults
+
+Fields this example used to spell out that a `platformctl` default already
+covers (docs/planning/08 E2 — omitted below; every default stays visible
+after apply through the same providerState `inventory`/`state inspect`
+already read):
+
+- `spec.runtime.network`: every Provider defaults to `datascape`.
+- `spec.configuration.image` on `minio`/`redpanda`/`debezium`: each has a
+  pinned default image.
+- `spec.configuration.bootstrapServers` on `orders-cdc` (debezium):
+  inferred from the manifest graph — both CDC Bindings using it resolve to
+  `lake-redpanda`. Pin it explicitly, e.g.
+  `bootstrapServers: lake-redpanda:29092`, if that ever becomes ambiguous.
+- `spec.nessie.defaultBranch` on the Catalog: defaults to `"main"`.
+- `spec.postgres.schema` on a Source: defaults to `"public"`.
+
 ## When things drift
 
 Kill anything and reconcile: `platformctl drift examples/lakehouse/`
