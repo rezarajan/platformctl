@@ -6,6 +6,7 @@ package redpanda
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -20,10 +21,18 @@ import (
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
+var httpClient = &http.Client{Timeout: 10 * time.Second}
+
 const (
 	internalKafkaPort = 29092
 	externalKafkaPort = 9092
-	defaultImage      = "docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a"
+	// schemaRegistryPort is Redpanda's built-in Confluent-compatible schema
+	// registry (pandaproxy's sibling listener) — one fixed port, unlike
+	// Kafka's dual INTERNAL/EXTERNAL listeners, because HTTP schema-registry
+	// clients (Debezium/Connect converters) dial it directly with no
+	// broker-style redirect protocol to decouple (docs/planning/08 D1).
+	schemaRegistryPort = 8081
+	defaultImage       = "docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a"
 )
 
 // Provider holds no cross-call state (docs/planning/08 F5): every method
@@ -34,6 +43,53 @@ type Provider struct{}
 func New() *Provider { return &Provider{} }
 
 func (p *Provider) Type() string { return "redpanda" }
+
+// SupportedSchemaFormats implements reconciler.SchemaRegistryCapableProvider:
+// the answer is config-dependent (configuration.schemaRegistry: enabled),
+// not a static per-type capability — a Binding declaring avro/protobuf
+// against a broker without the registry enabled fails at validate with the
+// standard capability-error shape (docs/planning/08 D1).
+func (p *Provider) SupportedSchemaFormats(cfg provider.Provider) []string {
+	if schemaRegistryEnabled(cfg) {
+		return []string{"avro", "json", "protobuf"}
+	}
+	return []string{"json"}
+}
+
+// schemaRegistryEnabled reads spec.configuration.schemaRegistry (an
+// enabled|disabled enum, mirroring D7's lifecycle.versioning:
+// enabled|suspended convention) — unset/anything else is disabled.
+func schemaRegistryEnabled(cfg provider.Provider) bool {
+	v, _ := cfg.Configuration["schemaRegistry"].(string)
+	return v == "enabled"
+}
+
+// schemaRegistryHostPort resolves the schema registry's host-published port,
+// auto-allocated (like every other host port here) from a name distinct from
+// the broker's own Kafka host port — Resolve hashes on name alone, so reusing
+// brokerName would collide the two ports whenever both are auto-allocated.
+func schemaRegistryHostPort(cfg provider.Provider, name string) int {
+	configured := 0
+	if v, ok := cfg.Configuration["schemaRegistryPort"]; ok {
+		switch n := v.(type) {
+		case int:
+			configured = n
+		case float64:
+			configured = int(n)
+		}
+	}
+	return hostport.Resolve(configured, name+"-schema-registry")
+}
+
+// schemaRegistryInternalAddr is the registry's address reachable from other
+// containers on the shared network (Debezium's Avro/Protobuf converters) —
+// deterministic by construction (Docker/Kubernetes DNS resolves a
+// container/Service name within the shared network), exactly like
+// internalAddr for Kafka. This is the *published* value (providerState +
+// endpoint fact), not a guess a consumer re-derives independently.
+func schemaRegistryInternalAddr(name string) string {
+	return fmt.Sprintf("http://%s:%d", name, schemaRegistryPort)
+}
 
 func brokerName(provEnv resource.Envelope) string { return naming.RuntimeObjectName(provEnv) }
 
@@ -96,6 +152,38 @@ func reachableAddr(ctx context.Context, rt runtime.ContainerRuntime, name string
 	return rt.EnsureReachable(ctx, name, externalKafkaPort)
 }
 
+// waitSchemaRegistryReady polls the registry's /subjects endpoint via
+// runtime.WithReachable (docs/planning/09 Class 2 / F1) so every attempt gets
+// a freshly-resolved address rather than reusing one across the whole wait —
+// the same defensive pattern nessie's waitAPIReady documents for a
+// port-forward tunnel opened while the app is still starting.
+func waitSchemaRegistryReady(ctx context.Context, rt runtime.ContainerRuntime, name string, timeout time.Duration) error {
+	opts := runtime.ReachableOptions{Timeout: timeout, Interval: 2 * time.Second}
+	err := runtime.WithReachable(ctx, rt, name, schemaRegistryPort, opts, func(ctx context.Context, addr string) error {
+		if !httpOK(ctx, "http://"+addr+"/subjects") {
+			return fmt.Errorf("schema registry did not answer 200 on /subjects")
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("schema registry did not become ready within %s: %w", timeout, err)
+	}
+	return nil
+}
+
+func httpOK(ctx context.Context, url string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
 func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
 	res := req.Resource
 	switch res.Kind {
@@ -129,20 +217,16 @@ func (p *Provider) reconcileBroker(ctx context.Context, req reconciler.Request) 
 		return st, err
 	}
 
-	hostPortVal := hostPort(cfg, name)
-	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
-		Name:       name,
-		Image:      image,
-		AccessMode: accessMode(cfg),
-		Cmd: []string{
-			"redpanda", "start",
-			"--overprovisioned", "--smp", "1", "--memory", "512M", "--reserve-memory", "0M",
-			"--node-id", "0", "--check=false",
-			"--kafka-addr", fmt.Sprintf("INTERNAL://0.0.0.0:%d,EXTERNAL://0.0.0.0:%d", internalKafkaPort, externalKafkaPort),
-			"--advertise-kafka-addr", fmt.Sprintf("INTERNAL://%s:%d,EXTERNAL://%s", name, internalKafkaPort, advertisedAddr(cfg, name)),
-		},
-		Networks: []string{network(cfg)},
-		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/var/lib/redpanda/data"}},
+	registryEnabled := schemaRegistryEnabled(cfg)
+	cmd := []string{
+		"redpanda", "start",
+		"--overprovisioned", "--smp", "1", "--memory", "512M", "--reserve-memory", "0M",
+		"--node-id", "0", "--check=false",
+		"--kafka-addr", fmt.Sprintf("INTERNAL://0.0.0.0:%d,EXTERNAL://0.0.0.0:%d", internalKafkaPort, externalKafkaPort),
+		"--advertise-kafka-addr", fmt.Sprintf("INTERNAL://%s:%d,EXTERNAL://%s", name, internalKafkaPort, advertisedAddr(cfg, name)),
+	}
+	ports := []runtime.PortBinding{
+		{HostPort: hostPort(cfg, name), ContainerPort: externalKafkaPort, Audience: runtime.AudienceHost},
 		// INTERNAL (29092) is Audience: internal — no host publish, but
 		// still declared so the Kubernetes adapter's Service actually
 		// carries a port for it — a Service only forwards ports present in
@@ -151,10 +235,25 @@ func (p *Provider) reconcileBroker(ctx context.Context, req reconciler.Request) 
 		// what's published. Docker itself already reached INTERNAL fine
 		// without this; this declaration is a documented no-op there
 		// (portMaps skips the host-binding side for Audience: internal).
-		Ports: []runtime.PortBinding{
-			{HostPort: hostPortVal, ContainerPort: externalKafkaPort, Audience: runtime.AudienceHost},
-			{ContainerPort: internalKafkaPort, Audience: runtime.AudienceInternal},
-		},
+		{ContainerPort: internalKafkaPort, Audience: runtime.AudienceInternal},
+	}
+	if registryEnabled {
+		// One listener bound to all interfaces: unlike Kafka, the schema
+		// registry's HTTP clients dial it directly with no advertised-address
+		// redirect protocol to decouple (see reachableAddr's doc comment for
+		// why Kafka needs one and this doesn't).
+		cmd = append(cmd, "--schema-registry-addr", fmt.Sprintf("0.0.0.0:%d", schemaRegistryPort))
+		ports = append(ports, runtime.PortBinding{HostPort: schemaRegistryHostPort(cfg, name), ContainerPort: schemaRegistryPort, Audience: runtime.AudienceHost})
+	}
+
+	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
+		Name:       name,
+		Image:      image,
+		AccessMode: accessMode(cfg),
+		Cmd:        cmd,
+		Networks:   []string{network(cfg)},
+		Volumes:    []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/var/lib/redpanda/data"}},
+		Ports:      ports,
 		HealthCheck: &runtime.HealthCheck{
 			Test:     []string{"CMD-SHELL", "rpk cluster health --exit-when-healthy || exit 1"},
 			Interval: 2 * time.Second,
@@ -169,18 +268,35 @@ func (p *Provider) reconcileBroker(ctx context.Context, req reconciler.Request) 
 	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
 		return st, err
 	}
+	if registryEnabled {
+		if err := waitSchemaRegistryReady(ctx, rt, name, 120*time.Second); err != nil {
+			return st, err
+		}
+	}
 
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: "BrokerHealthy"}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: "ReconcileComplete"}, now)
 	hostAddr := ctrState.HostAddr(externalKafkaPort) // observed binding, not intent
+	endpoints := endpoint.List{
+		{Name: "kafka", Scheme: "kafka", Host: hostAddr, Internal: internalAddr(name), Insecure: true},
+	}
+	if registryEnabled {
+		registryHostAddr := ctrState.HostAddr(schemaRegistryPort) // observed binding, not intent
+		registryHostURL := ""
+		if registryHostAddr != "" {
+			registryHostURL = "http://" + registryHostAddr
+		}
+		endpoints = append(endpoints, endpoint.Endpoint{
+			Name: "schema-registry", Scheme: "http", Host: registryHostURL, Internal: schemaRegistryInternalAddr(name),
+			Insecure: true, RuntimeName: name, ContainerPort: schemaRegistryPort, Audience: runtime.AudienceHost,
+		})
+	}
 	st.ProviderState = map[string]any{
 		"containerId":  ctrState.ID,
 		"kafkaAddr":    hostAddr,
 		"internalAddr": internalAddr(name),
-		endpoint.Key: endpoint.List{
-			{Name: "kafka", Scheme: "kafka", Host: hostAddr, Internal: internalAddr(name), Insecure: true},
-		}.ToState(),
+		endpoint.Key:   endpoints.ToState(),
 	}
 	return st, nil
 }
@@ -339,4 +455,16 @@ func retentionMillis(s string) (int64, error) {
 	default:
 		return 0, fmt.Errorf("invalid retention duration %q (allowed suffixes: s, m, h, d)", s)
 	}
+}
+
+// ValidateSpec implements SpecValidator: a typo'd schemaRegistry value fails
+// at validate, never as a half-applied platform.
+func (p *Provider) ValidateSpec(cfg provider.Provider) error {
+	if v, ok := cfg.Configuration["schemaRegistry"]; ok {
+		s, _ := v.(string)
+		if s != "enabled" && s != "disabled" {
+			return fmt.Errorf("spec.configuration.schemaRegistry must be \"enabled\" or \"disabled\", got %v", v)
+		}
+	}
+	return nil
 }

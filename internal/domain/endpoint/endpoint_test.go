@@ -57,3 +57,22 @@ func TestRuntimeFactsSurviveRealJSONRoundTrip(t *testing.T) {
 		t.Errorf("endpoint = %+v, want %+v", out[0], in[0])
 	}
 }
+
+// TestFromStateAcceptsRawToStateShape covers docs/planning/08 D1: a
+// same-process consumer reading providerState before any StateStore
+// Save/Load round-trip sees ToState()'s literal []map[string]any return
+// type, not the []any a JSON decode always produces. A regression here
+// would silently break any engine-level code resolving a just-reconciled
+// sibling resource's endpoint later in the same Apply call (found live by
+// TestResolveSchemaRegistryURLFromEventStreamProvider in
+// internal/application/engine).
+func TestFromStateAcceptsRawToStateShape(t *testing.T) {
+	in := List{{Name: "schema-registry", Scheme: "http", Internal: "http://stream-broker:8081"}}
+	out := FromState(in.ToState())
+	if len(out) != 1 {
+		t.Fatalf("got %d endpoints, want 1", len(out))
+	}
+	if out[0] != in[0] {
+		t.Errorf("endpoint = %+v, want %+v", out[0], in[0])
+	}
+}

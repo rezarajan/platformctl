@@ -39,7 +39,7 @@
         },
         "options": {
           "type": "object",
-          "description": "Mode/provider-specific options (e.g. cdc: tables, snapshotMode, databaseHostname/databasePort for external sources).",
+          "description": "Mode/provider-specific options (e.g. cdc: tables, snapshotMode, databaseHostname/databasePort for external sources). format (json|avro|protobuf, default json) and converter select the record serialization; avro/protobuf are schema-carrying and require a schema registry auto-wired from the EventStream's Provider (SchemaRegistrySupport gate, docs/planning/08 D1).",
           "additionalProperties": true
         }
       },

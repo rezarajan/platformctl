@@ -51,6 +51,18 @@ type Request struct {
 	// keyed by resource.Key — used to resolve related resources (a
 	// Binding's sourceRef/targetRef, a Source's connectionRef, ...).
 	Resources map[resource.Key]resource.Envelope
+	// SchemaRegistryURL is the resolved schema registry endpoint for a
+	// Binding declaring a schema-carrying spec.options.format (avro,
+	// protobuf) — docs/planning/08 D1. The engine resolves it from the
+	// EventStream endpoint's own realizing Provider's already-published
+	// "schema-registry" endpoint fact (internal address, reachable from
+	// other containers on the shared network) — never constructed here by
+	// string convention (docs/planning/09 F4): a provider consuming this
+	// field reads exactly what the registry-hosting provider published,
+	// the same way every other cross-provider address is resolved. Empty
+	// when options.format is unset/"json", or the upstream Provider has
+	// not published the endpoint yet in this state (not yet reconciled).
+	SchemaRegistryURL string
 }
 
 type Provider interface {
@@ -156,6 +168,22 @@ type SpecValidator interface {
 type BindingOptionsValidator interface {
 	Provider
 	ValidateBindingOptions(mode string, options map[string]any) error
+}
+
+// SchemaRegistryCapableProvider is declared by a provider that can expose a
+// Confluent-compatible schema registry — Redpanda's built-in registry today
+// (docs/planning/08 D1) — enabling a Binding's schema-carrying
+// spec.options.format (avro, protobuf) in addition to json. Checked against
+// the EventStream endpoint's own realizing Provider, not necessarily the
+// Binding's own providerRef: registry availability is a fact of the stream
+// backend, not of the CDC/sink connector realizing the Binding. cfg mirrors
+// VersionedProvider.VersionCatalog's pattern — the answer is config-dependent
+// (configuration.schemaRegistry: enabled), not a static capability of the
+// provider type, so it cannot be a no-argument method like
+// SupportedSourceEngines.
+type SchemaRegistryCapableProvider interface {
+	Provider
+	SupportedSchemaFormats(cfg provider.Provider) []string
 }
 
 // LineageAware is declared by a provider that knows how to consume a lineage

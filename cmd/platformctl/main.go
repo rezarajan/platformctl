@@ -104,6 +104,10 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// and the full cdc-attendance/lakehouse example scenarios (B8) all
 	// verified against a real cluster.
 	gates.Register("KubernetesRuntime", featuregate.Beta, true)
+	// docs/planning/08 D1: Redpanda's built-in Confluent-compatible schema
+	// registry (Provider.spec.configuration.schemaRegistry: enabled) and a
+	// Binding's schema-carrying spec.options.format (avro, protobuf).
+	gates.Register("SchemaRegistrySupport", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")

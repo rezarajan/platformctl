@@ -20,6 +20,7 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/application/plan"
 	"github.com/rezarajan/platformctl/internal/application/registry"
+	"github.com/rezarajan/platformctl/internal/domain/binding"
 	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
@@ -195,7 +196,7 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 			if !inState || resource.LifecycleOf(env, rs.Imported) != resource.Managed {
 				return
 			}
-			probed := e.probeOne(ctx, env, byKey)
+			probed := e.probeOne(ctx, env, byKey, &st)
 			if !HasDrift(probed) {
 				return
 			}
@@ -396,7 +397,7 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 		return e.reconcileExternal(ctx, entry, env, byKey, deps, st)
 	}
 	if isExternal(env) {
-		prov, req, err := e.resolveRequest(ctx, env, byKey)
+		prov, req, err := e.resolveRequest(ctx, env, byKey, st)
 		if err != nil {
 			return err
 		}
@@ -416,7 +417,7 @@ func (e *Engine) reconcileOne(ctx context.Context, entry plan.Entry, env resourc
 		return e.StateStore.Save(ctx, *st)
 	}
 
-	prov, req, err := e.resolveRequest(ctx, env, byKey)
+	prov, req, err := e.resolveRequest(ctx, env, byKey, st)
 	if err != nil {
 		return err
 	}
@@ -493,7 +494,7 @@ func (e *Engine) Probe(ctx context.Context, envelopes []resource.Envelope) ([]Pr
 		if !ok {
 			continue
 		}
-		probed := e.probeOneAgainstState(ctx, env, byKey, rs)
+		probed := e.probeOneAgainstState(ctx, env, byKey, rs, &st)
 		merged := rs.Status
 		for _, c := range probed.Conditions {
 			merged.SetCondition(c, e.Clock.Now())
@@ -521,11 +522,11 @@ func (e *Engine) Probe(ctx context.Context, envelopes []resource.Envelope) ([]Pr
 // probeOne asks the provider for the resource's live status. It never
 // returns an error: an unreachable or unresolvable resource *is* drift —
 // things failing out-of-band is the expected case, not an exception.
-func (e *Engine) probeOne(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope) status.Status {
-	return e.probeOneAgainstState(ctx, env, byKey, state.ResourceState{})
+func (e *Engine) probeOne(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope, fullState *state.State) status.Status {
+	return e.probeOneAgainstState(ctx, env, byKey, state.ResourceState{}, fullState)
 }
 
-func (e *Engine) probeOneAgainstState(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope, rs state.ResourceState) status.Status {
+func (e *Engine) probeOneAgainstState(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope, rs state.ResourceState, fullState *state.State) status.Status {
 	now := e.Clock.Now()
 	st := status.Status{}
 
@@ -537,7 +538,7 @@ func (e *Engine) probeOneAgainstState(ctx context.Context, env resource.Envelope
 		return e.externalConnectionStatus(ctx, env, byKey)
 	}
 
-	prov, req, err := e.resolveRequest(ctx, env, byKey)
+	prov, req, err := e.resolveRequest(ctx, env, byKey, fullState)
 	if err == nil {
 		var probed status.Status
 		probed, err = prov.Probe(ctx, req)
@@ -711,7 +712,7 @@ func (e *Engine) connectionDialAddress(ctx context.Context, connEnv resource.Env
 		addr, _ := conn.ExternalAddress()
 		return addr, nil
 	}
-	_, req, err := e.resolveRequest(ctx, connEnv, byKey)
+	_, req, err := e.resolveRequest(ctx, connEnv, byKey, nil)
 	if err != nil {
 		return "", nil
 	}
@@ -895,7 +896,7 @@ func (e *Engine) applyDeleteOne(ctx context.Context, entry plan.Entry, env resou
 		e.stateMu.Unlock()
 		return err
 	}
-	prov, req, err := e.resolveRequest(ctx, env, byKey)
+	prov, req, err := e.resolveRequest(ctx, env, byKey, st)
 	if err != nil {
 		return err
 	}
@@ -927,7 +928,11 @@ func (e *Engine) Import(ctx context.Context, envelopes []resource.Envelope, key 
 		return status.Status{}, fmt.Errorf("--from %q: v1 adopts by name — the backing object must be named %q (the name providers derive from metadata.name)", from, env.Metadata.Name)
 	}
 
-	probed := e.probeOne(ctx, env, byKey)
+	// Import loads no state (there is none yet for a not-applied-before
+	// resource); a schema-carrying Binding's registry endpoint simply won't
+	// be resolved this way here (nil st) — resolveSchemaRegistryURL treats
+	// that the same as "not yet published".
+	probed := e.probeOne(ctx, env, byKey, nil)
 	if !probed.IsReady() {
 		msg := "backing object not found or unhealthy"
 		if c, ok := probed.Condition(status.Ready); ok && c.Message != "" {
@@ -1035,7 +1040,7 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 			e.logf("ok   destroy %s", entry.Key)
 			continue
 		}
-		prov, req, err := e.resolveRequest(ctx, env, byKey)
+		prov, req, err := e.resolveRequest(ctx, env, byKey, &st)
 		if err != nil {
 			res.Failed[entry.Key] = err
 			e.logf("fail destroy %s: %v", entry.Key, err)
@@ -1070,7 +1075,7 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 // Set*-before-call dance (SetProviderResource/SetResourceSet/SetSecrets)
 // with one immutable value built once per call, so a provider never holds
 // state across calls.
-func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope) (reconciler.Provider, reconciler.Request, error) {
+func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) (reconciler.Provider, reconciler.Request, error) {
 	provEnv := env
 	if env.Kind != "Provider" {
 		ref := resource.RefFromSpec(env.Spec, "providerRef")
@@ -1116,12 +1121,70 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 		return nil, reconciler.Request{}, err
 	}
 	return prov, reconciler.Request{
-		Resource:  env,
-		Runtime:   rt,
-		Provider:  provEnv,
-		Secrets:   secrets,
-		Resources: byKey,
+		Resource:          env,
+		Runtime:           rt,
+		Provider:          provEnv,
+		Secrets:           secrets,
+		Resources:         byKey,
+		SchemaRegistryURL: e.resolveSchemaRegistryURL(env, byKey, st),
 	}, nil
+}
+
+// resolveSchemaRegistryURL resolves the schema registry endpoint a Binding's
+// schema-carrying spec.options.format (avro, protobuf) needs, from the
+// EventStream endpoint's own realizing Provider's already-published
+// "schema-registry" endpoint fact — the same providerState lookup
+// resolveLineageEndpoint uses for a lineage backend's url, never a guessed
+// address (docs/planning/08 D1, docs/planning/09 F4). Returns "" when the
+// Binding's format is unset/json, it isn't a Binding, or the upstream
+// Provider hasn't published the endpoint yet in st (nil st — e.g. Import,
+// which loads no state — behaves the same as "not yet published").
+func (e *Engine) resolveSchemaRegistryURL(env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) string {
+	if st == nil || env.Kind != "Binding" {
+		return ""
+	}
+	b, err := binding.FromEnvelope(env)
+	if err != nil {
+		return ""
+	}
+	format, _ := b.Options["format"].(string)
+	if format == "" || format == "json" {
+		return ""
+	}
+
+	var esEnv resource.Envelope
+	var found bool
+	for _, field := range []string{"sourceRef", "targetRef"} {
+		ref := resource.RefFromSpec(env.Spec, field)
+		if candidate, ok := byKey[ref.Key(env.Metadata.Namespace, "EventStream")]; ok {
+			esEnv, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		return ""
+	}
+	provRef := resource.RefFromSpec(esEnv.Spec, "providerRef")
+	esProvEnv, ok := byKey[provRef.Key(esEnv.Metadata.Namespace, "Provider")]
+	if !ok {
+		return ""
+	}
+	// st.Resources is shared, mutated-in-place engine state (docs/planning/08
+	// D1): under ParallelReconciliation, another goroutine may be writing a
+	// sibling resource's entry concurrently, so this read takes the same
+	// lock every other st.Resources access in this file does.
+	e.stateMu.Lock()
+	rs, ok := st.Resources[esProvEnv.Key()]
+	e.stateMu.Unlock()
+	if !ok {
+		return ""
+	}
+	for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
+		if ep.Name == "schema-registry" && ep.Internal != "" {
+			return ep.Internal
+		}
+	}
+	return ""
 }
 
 func (e *Engine) resolveLineageEndpoint(ctx context.Context, observer resource.ObserverRef, defaultNamespace string, byKey map[resource.Key]resource.Envelope, st *state.State) (lineage.LineageEndpoint, error) {

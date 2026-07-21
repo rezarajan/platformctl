@@ -1,0 +1,113 @@
+# docs/planning/08 D1 integration scenario: Postgres CDC via Debezium into
+# Redpanda, serialized as Avro against Redpanda's built-in Confluent-
+# compatible schema registry. Host ports are deliberately non-default to
+# avoid collisions on shared dev machines: Postgres 15644, Connect 18283,
+# Kafka 19293, schema registry 18581.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: avro-pg-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: avro-pg-repl
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-avro-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-avro-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19293
+    # Enables Redpanda's built-in Confluent-compatible schema registry
+    # (pandaproxy's sibling listener, container port 8081). The provider
+    # publishes its endpoint via endpoint facts (providerState + inventory);
+    # the Binding's avro format auto-wires the internal address from here.
+    schemaRegistry: enabled
+    schemaRegistryPort: 18581
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-avro-pg
+spec:
+  type: postgres
+  runtime:
+    type: docker
+    network: datascape-avro-net
+  configuration:
+    version: "16"
+    port: 15644
+    superuserSecretRef: avro-pg-admin
+    replicationSecretRef: avro-pg-repl
+  secretRefs: [avro-pg-admin, avro-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-avro-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape-avro-net
+  configuration:
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
+    connectPort: 18283
+    bootstrapServers: datascape-avro-rp:29092
+    replicationSecretRef: avro-pg-repl
+  secretRefs: [avro-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: avro-students
+spec:
+  engine: postgres
+  providerRef:
+    name: datascape-avro-pg
+  postgres:
+    database: attendance
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: avro-attendance-events
+spec:
+  providerRef:
+    name: datascape-avro-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: avro-students-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: avro-students
+  targetRef:
+    name: avro-attendance-events
+  providerRef:
+    name: datascape-avro-dbz
+  options:
+    tables: [students]
+    snapshotMode: initial
+    # Schema-carrying serialization; the registry URL is auto-wired from the
+    # EventStream's Provider (never typed here) — docs/planning/08 D1.
+    format: avro

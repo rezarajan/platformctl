@@ -3,6 +3,7 @@ package compatibility
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -617,5 +618,141 @@ func TestBindingOptionsValidated(t *testing.T) {
 	}
 	if err := Check(manifests, resolver(optionsValidatingStub{stubProvider{"debezium"}})); err != nil {
 		t.Fatalf("valid option block rejected: %v", err)
+	}
+}
+
+// multiResolver dispatches by provider type — needed once a test has more
+// than one distinct Provider type in play (docs/planning/08 D1's
+// schema-format check resolves the EventStream's own Provider, which is a
+// different type from the Binding's providerRef in a realistic CDC set).
+func multiResolver(byType map[string]reconciler.Provider) ProviderResolver {
+	return func(typeName string) (reconciler.Provider, error) {
+		impl, ok := byType[typeName]
+		if !ok {
+			return nil, fmt.Errorf("unknown provider type %q", typeName)
+		}
+		return impl, nil
+	}
+}
+
+// schemaRegistryStub is a local double for reconciler.SchemaRegistryCapableProvider
+// (docs/planning/08 D1) — stands in for the redpanda adapter without
+// importing it (CLAUDE.md's application-test layering exception).
+type schemaRegistryStub struct {
+	stubProvider
+	formats []string
+}
+
+func (s schemaRegistryStub) SupportedSchemaFormats(provider.Provider) []string { return s.formats }
+
+// schemaFormatManifests builds a cdc-mode Binding whose EventStream's own
+// Provider (kafka-cluster, type redpanda) is distinct from the Binding's own
+// providerRef (postgres-cdc, type debezium) — the schema-format check
+// resolves the former, never the latter.
+func schemaFormatManifests(format string) []resource.Envelope {
+	bindingEnv := envelope("Binding", "student-db-to-events", map[string]any{
+		"mode":        "cdc",
+		"sourceRef":   map[string]any{"name": "student-database"},
+		"targetRef":   map[string]any{"name": "attendance-events"},
+		"providerRef": map[string]any{"name": "postgres-cdc"},
+	})
+	if format != "" {
+		bindingEnv.Spec["options"] = map[string]any{"format": format}
+	}
+	return []resource.Envelope{
+		envelope("Provider", "postgres-cdc", map[string]any{
+			"type":    "debezium",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Provider", "local-postgres", map[string]any{
+			"type":    "postgres",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Provider", "kafka-cluster", map[string]any{
+			"type":    "redpanda",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Source", "student-database", map[string]any{
+			"engine":      "postgres",
+			"providerRef": map[string]any{"name": "local-postgres"},
+		}),
+		envelope("EventStream", "attendance-events", map[string]any{
+			"providerRef": map[string]any{"name": "kafka-cluster"},
+		}),
+		bindingEnv,
+	}
+}
+
+// TestSchemaFormatWithoutRegistryErrorFormat covers the D1 accept criterion:
+// a Binding declaring a schema-carrying format against a provider chain
+// without a registry endpoint fails at validate with the standard
+// capability-error shape (docs/planning/02-architecture.md §5.2), naming the
+// EventStream's own Provider — the one whose configuration actually decides
+// registry availability — not the Binding's providerRef.
+func TestSchemaFormatWithoutRegistryErrorFormat(t *testing.T) {
+	resolve := multiResolver(map[string]reconciler.Provider{
+		"debezium": cdcStub{stubProvider{"debezium"}},
+		"postgres": stubProvider{"postgres"},
+		"redpanda": schemaRegistryStub{stubProvider{"redpanda"}, []string{"json"}}, // registry disabled
+	})
+	err := Check(schemaFormatManifests("avro"), resolve)
+	if err == nil {
+		t.Fatal("validate accepted a schema-carrying format against a registry-less provider chain")
+	}
+	want := `Binding "student-db-to-events": Provider "kafka-cluster" (type: redpanda)
+does not support format "avro" (supported: json)`
+	if err.Error() != want {
+		t.Errorf("error format mismatch\ngot:\n%s\nwant:\n%s", err.Error(), want)
+	}
+}
+
+// TestSchemaFormatWithRegistryAccepted: the same Binding validates once the
+// EventStream's Provider declares the format supported (registry enabled).
+func TestSchemaFormatWithRegistryAccepted(t *testing.T) {
+	resolve := multiResolver(map[string]reconciler.Provider{
+		"debezium": cdcStub{stubProvider{"debezium"}},
+		"postgres": stubProvider{"postgres"},
+		"redpanda": schemaRegistryStub{stubProvider{"redpanda"}, []string{"avro", "json", "protobuf"}},
+	})
+	if err := Check(schemaFormatManifests("avro"), resolve); err != nil {
+		t.Fatalf("valid schema-carrying format rejected: %v", err)
+	}
+}
+
+// TestSchemaFormatUnsetOrJSONNeedsNoRegistry: the common (unset/json) case
+// never touches the EventStream's Provider capability at all — a provider
+// that doesn't implement SchemaRegistryCapableProvider is still a valid
+// target for a plain json-format (or format-unset) Binding.
+func TestSchemaFormatUnsetOrJSONNeedsNoRegistry(t *testing.T) {
+	resolve := multiResolver(map[string]reconciler.Provider{
+		"debezium": cdcStub{stubProvider{"debezium"}},
+		"postgres": stubProvider{"postgres"},
+		"redpanda": stubProvider{"redpanda"}, // no SchemaRegistryCapableProvider at all
+	})
+	for _, format := range []string{"", "json"} {
+		if err := Check(schemaFormatManifests(format), resolve); err != nil {
+			t.Errorf("format %q rejected: %v", format, err)
+		}
+	}
+}
+
+// TestSchemaFormatNoCapabilityFallsBackToJSON: an EventStream Provider that
+// doesn't implement SchemaRegistryCapableProvider at all falls back to
+// "supported: json" — the same message shape as an explicitly registry-less
+// one, since from the Binding's perspective the two are indistinguishable.
+func TestSchemaFormatNoCapabilityFallsBackToJSON(t *testing.T) {
+	resolve := multiResolver(map[string]reconciler.Provider{
+		"debezium": cdcStub{stubProvider{"debezium"}},
+		"postgres": stubProvider{"postgres"},
+		"redpanda": stubProvider{"redpanda"},
+	})
+	err := Check(schemaFormatManifests("protobuf"), resolve)
+	if err == nil {
+		t.Fatal("validate accepted a schema-carrying format against a provider with no schema-registry capability")
+	}
+	want := `Binding "student-db-to-events": Provider "kafka-cluster" (type: redpanda)
+does not support format "protobuf" (supported: json)`
+	if err.Error() != want {
+		t.Errorf("error format mismatch\ngot:\n%s\nwant:\n%s", err.Error(), want)
 	}
 }
