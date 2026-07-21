@@ -2,7 +2,10 @@
 # Its secretRefs lists the external Connection's own credentials
 # (ext-db-creds) — the CDC provider resolves the source database's
 # address from the Source's Connection automatically; only credentials
-# need to be declared here.
+# need to be declared here. spec.configuration.bootstrapServers is
+# similarly omitted — inferred from the manifest graph, since the CDC
+# Binding below targets change-events, whose Provider is broker
+# (docs/planning/08 E2).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -11,7 +14,4 @@ spec:
   type: debezium
   runtime:
     type: docker
-    network: datascape
-  configuration:
-    bootstrapServers: broker:29092
   secretRefs: [ext-db-creds]

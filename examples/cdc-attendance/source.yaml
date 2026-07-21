@@ -8,4 +8,4 @@ spec:
     name: local-postgres
   postgres:
     database: studentdb
-    schema: public
+    # schema omitted: defaults to "public" — see README.md#defaults.

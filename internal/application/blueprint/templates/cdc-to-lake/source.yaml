@@ -8,4 +8,4 @@ spec:
     name: db
   postgres:
     database: appdb
-    schema: public
+    # schema omitted: defaults to "public" (docs/planning/08 E2).

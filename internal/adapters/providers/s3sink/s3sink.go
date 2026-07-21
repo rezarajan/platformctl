@@ -85,7 +85,13 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 	}
 	bootstrap, _ := cfg.Configuration["bootstrapServers"].(string)
 	if bootstrap == "" {
-		return st, fmt.Errorf("Provider %q (type: s3sink): spec.configuration.bootstrapServers is required", name)
+		// Graph-inferred (docs/planning/08 E2): the engine already resolved
+		// this from the Binding(s) wired to this worker's target/source
+		// EventStream, when unambiguous — req.KafkaBootstrapServers.
+		bootstrap = req.KafkaBootstrapServers
+	}
+	if bootstrap == "" {
+		return st, fmt.Errorf("Provider %q (type: s3sink): spec.configuration.bootstrapServers is required (declare it, or wire a Binding on this Provider to an EventStream whose Provider publishes a Kafka bootstrap address)", name)
 	}
 	ctrState, err := providerkit.EnsureInstance(ctx, rt, providerkit.InstanceSpec{
 		Namespace: req.Provider.Metadata.Namespace,
@@ -142,6 +148,11 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 		endpoint.Key: endpoint.List{
 			{Name: "connect-rest", Scheme: "http", Host: hostURL, Internal: fmt.Sprintf("http://%s:8083", name), Insecure: true},
 		}.ToState(),
+		// The effective bootstrapServers this worker was actually started
+		// with — declared or graph-inferred (docs/planning/08 E2) — so an
+		// inferred default is as visible as an explicit one via
+		// `platformctl state inspect`, not silently baked in.
+		"bootstrapServers": bootstrap,
 	}
 	return st, nil
 }

@@ -3,6 +3,8 @@
 # image for spec.configuration.version. The host port is omitted too: the
 # provider auto-assigns a stable, collision-avoiding port from the resource
 # name (see `platformctl inventory` after apply for the chosen port).
+# spec.runtime.network is omitted too — every Provider in this blueprint
+# defaults to the same "datascape" network (docs/planning/08 E2).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -11,7 +13,6 @@ spec:
   type: postgres
   runtime:
     type: docker
-    network: datascape
   configuration:
     version: "16"
     superuserSecretRef: db-admin-creds

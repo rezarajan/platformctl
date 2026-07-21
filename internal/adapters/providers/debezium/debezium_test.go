@@ -1,6 +1,99 @@
 package debezium
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	fakeruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/fake"
+	"github.com/rezarajan/platformctl/internal/domain/resource"
+	"github.com/rezarajan/platformctl/internal/ports/reconciler"
+)
+
+func workerEnvelope(name string, configuration map[string]any) resource.Envelope {
+	e := resource.Envelope{}
+	e.APIVersion = "datascape.io/v1alpha1"
+	e.Kind = "Provider"
+	e.Metadata.Name = name
+	e.Spec = map[string]any{
+		"type":          "debezium",
+		"runtime":       map[string]any{"type": "fake"},
+		"configuration": configuration,
+	}
+	return e
+}
+
+// TestReconcileWorkerBootstrapServersInferred covers docs/planning/08 E2:
+// when spec.configuration.bootstrapServers is unset, the worker container
+// starts with req.KafkaBootstrapServers (the engine's graph-inferred
+// value) instead of failing — and publishes the effective value into
+// providerState so it stays visible (`state inspect`), not silently baked
+// in.
+func TestReconcileWorkerBootstrapServersInferred(t *testing.T) {
+	rt := fakeruntime.New()
+	env := workerEnvelope("cdc", map[string]any{"replicationSecretRef": "creds"})
+	p := New()
+	req := reconciler.Request{
+		Resource:              env,
+		Provider:              env,
+		Runtime:               rt,
+		KafkaBootstrapServers: "broker:29092",
+	}
+	st, err := p.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := st.ProviderState["bootstrapServers"]; got != "broker:29092" {
+		t.Errorf("providerState[bootstrapServers] = %v, want %q", got, "broker:29092")
+	}
+	ctrState, found, err := rt.Inspect(context.Background(), "cdc")
+	if err != nil || !found {
+		t.Fatalf("Inspect: found=%v err=%v", found, err)
+	}
+	if got := ctrState.Env["BOOTSTRAP_SERVERS"]; got != "broker:29092" {
+		t.Errorf("container BOOTSTRAP_SERVERS = %q, want %q", got, "broker:29092")
+	}
+}
+
+// TestReconcileWorkerBootstrapServersRequiredWithoutInference: when neither
+// spec.configuration.bootstrapServers nor req.KafkaBootstrapServers is set
+// (nothing to infer from), the worker still fails clearly instead of
+// starting with an empty Kafka address.
+func TestReconcileWorkerBootstrapServersRequiredWithoutInference(t *testing.T) {
+	rt := fakeruntime.New()
+	env := workerEnvelope("cdc", map[string]any{"replicationSecretRef": "creds"})
+	p := New()
+	req := reconciler.Request{Resource: env, Provider: env, Runtime: rt}
+	if _, err := p.Reconcile(context.Background(), req); err == nil {
+		t.Fatal("want an error when bootstrapServers is neither declared nor inferable")
+	}
+}
+
+// TestReconcileWorkerBootstrapServersExplicitWins: an explicit
+// spec.configuration.bootstrapServers always wins over
+// req.KafkaBootstrapServers — the engine only populates the latter when the
+// former is absent (engine.resolveKafkaBootstrapServers), but this guards
+// the provider's own fallback order too.
+func TestReconcileWorkerBootstrapServersExplicitWins(t *testing.T) {
+	rt := fakeruntime.New()
+	env := workerEnvelope("cdc", map[string]any{
+		"replicationSecretRef": "creds",
+		"bootstrapServers":     "explicit-broker:29092",
+	})
+	p := New()
+	req := reconciler.Request{
+		Resource:              env,
+		Provider:              env,
+		Runtime:               rt,
+		KafkaBootstrapServers: "inferred-broker:29092",
+	}
+	st, err := p.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := st.ProviderState["bootstrapServers"]; got != "explicit-broker:29092" {
+		t.Errorf("providerState[bootstrapServers] = %v, want explicit value to win", got)
+	}
+}
 
 // TestApplyConverterConfigJSON covers the default/unset format: unchanged
 // pre-D1 behavior (JsonConverter, schemas disabled), no registry needed.

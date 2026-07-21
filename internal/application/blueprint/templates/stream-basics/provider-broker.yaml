@@ -1,5 +1,6 @@
 # Managed Redpanda broker. No image/port configured — the default pinned
-# image and an auto-assigned host port are used.
+# image and an auto-assigned host port are used. spec.runtime.network is
+# omitted too (default applies, docs/planning/08 E2).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -8,4 +9,3 @@ spec:
   type: redpanda
   runtime:
     type: docker
-    network: datascape

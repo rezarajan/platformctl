@@ -1,3 +1,4 @@
+# network and image use their defaults (see README.md#defaults).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -6,9 +7,7 @@ spec:
   type: minio
   runtime:
     type: docker
-    network: datascape
   configuration:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
     port: 19000
     rootSecretRef: minio-root-creds
   secretRefs: [minio-root-creds]

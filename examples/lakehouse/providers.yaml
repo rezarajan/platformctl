@@ -2,15 +2,16 @@
 # resources declared in the other files — the model speaks Catalog,
 # Connection, Source, EventStream, Dataset; technologies never become nouns.
 # Dagster and Metabase run outside platformctl and connect to the endpoints
-# in README.md.
+# in README.md. network/image/bootstrapServers all use their defaults
+# throughout — see README.md#defaults (docs/planning/08 E2).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: lake-minio
 spec:
   type: minio
-  runtime: {type: docker, network: datascape}
-  configuration: {image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e, port: 19010, rootSecretRef: lake-minio-root}
+  runtime: {type: docker}
+  configuration: {port: 19010, rootSecretRef: lake-minio-root}
   secretRefs: [lake-minio-root]
 ---
 # Realizes Catalog(engine: nessie) — see catalog-and-connections.yaml.
@@ -20,7 +21,7 @@ metadata:
   name: catalog-svc
 spec:
   type: nessie
-  runtime: {type: docker, network: datascape}
+  runtime: {type: docker}
   configuration: {port: 19121}
 ---
 # Marquez + its dedicated metadata store (a Postgres internal to the
@@ -32,7 +33,7 @@ metadata:
   name: lake-lineage
 spec:
   type: openlineage
-  runtime: {type: docker, network: datascape}
+  runtime: {type: docker}
   configuration: {apiPort: 15100}
 ---
 apiVersion: datascape.io/v1alpha1
@@ -41,7 +42,7 @@ metadata:
   name: lake-postgres
 spec:
   type: postgres
-  runtime: {type: docker, network: datascape}
+  runtime: {type: docker}
   configuration: {version: "16", port: 15434, superuserSecretRef: lake-pg-admin}
   secretRefs: [lake-pg-admin]
 ---
@@ -51,7 +52,7 @@ metadata:
   name: lake-mysql
 spec:
   type: mysql
-  runtime: {type: docker, network: datascape}
+  runtime: {type: docker}
   configuration: {port: 13306, rootSecretRef: lake-mysql-root}
   secretRefs: [lake-mysql-root]
 ---
@@ -64,7 +65,7 @@ metadata:
   name: edge
 spec:
   type: proxy
-  runtime: {type: docker, network: datascape}
+  runtime: {type: docker}
 ---
 apiVersion: datascape.io/v1alpha1
 kind: Provider
@@ -72,9 +73,8 @@ metadata:
   name: lake-redpanda
 spec:
   type: redpanda
-  runtime: {type: docker, network: datascape}
+  runtime: {type: docker}
   configuration:
-    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
     kafkaPort: 19096
 ---
 # The CDC worker for the external orders database. It lists the
@@ -86,9 +86,7 @@ metadata:
   name: orders-cdc
 spec:
   type: debezium
-  runtime: {type: docker, network: datascape}
+  runtime: {type: docker}
   configuration:
-    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
     connectPort: 18086
-    bootstrapServers: lake-redpanda:29092
   secretRefs: [ext-orders-creds]

@@ -300,7 +300,27 @@ func checkResourceCapabilities(envelopes []resource.Envelope, idx manifestIndex,
 				return fmt.Errorf("Provider %q: %w", e.Metadata.Name, err)
 			}
 			if sv, ok := impl.(reconciler.SpecValidator); ok {
-				if err := sv.ValidateSpec(p); err != nil {
+				// Configuration-minimization (docs/planning/08 E2): a
+				// graph-inferable bootstrapServers satisfies ValidateSpec
+				// exactly like an explicit one — the same value
+				// reconciler.Request.KafkaBootstrapServers supplies at apply
+				// time (engine.resolveRequest) — so validate-time and
+				// apply-time completeness stay in lockstep (ADR 011: a
+				// manifest that validates must not half-apply). Only
+				// synthesized when the field is genuinely absent, and only
+				// passed to ValidateSpec, never mutates p itself.
+				validated := p
+				if _, has := p.Configuration["bootstrapServers"]; !has {
+					if addr := ResolveKafkaBootstrapAddress(e, envelopes, resolve); addr != "" {
+						cfg := make(map[string]any, len(p.Configuration)+1)
+						for k, v := range p.Configuration {
+							cfg[k] = v
+						}
+						cfg["bootstrapServers"] = addr
+						validated.Configuration = cfg
+					}
+				}
+				if err := sv.ValidateSpec(validated); err != nil {
 					return fmt.Errorf("Provider %q (type: %s): %w", e.Metadata.Name, p.Type, err)
 				}
 			}

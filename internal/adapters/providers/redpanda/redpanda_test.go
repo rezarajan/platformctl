@@ -144,6 +144,20 @@ func TestSchemaRegistryInternalAddr(t *testing.T) {
 	}
 }
 
+// TestKafkaBootstrapAddress covers reconciler.KafkaBootstrapAddressProvider
+// (docs/planning/08 E2): identical to internalAddr, and stable across an
+// empty vs. populated cfg since the internal Kafka port isn't configurable.
+func TestKafkaBootstrapAddress(t *testing.T) {
+	p := New()
+	if got, want := p.KafkaBootstrapAddress("lake-redpanda", provider.Provider{}), "lake-redpanda:29092"; got != want {
+		t.Errorf("KafkaBootstrapAddress = %q, want %q", got, want)
+	}
+	cfg := provider.Provider{Configuration: map[string]any{"kafkaPort": 19093}}
+	if got, want := p.KafkaBootstrapAddress("lake-redpanda", cfg), "lake-redpanda:29092"; got != want {
+		t.Errorf("KafkaBootstrapAddress with host kafkaPort set = %q, want %q (internal port is fixed, not the host port)", got, want)
+	}
+}
+
 // TestReconcileBrokerRegistryDisabled is a regression guard: the pre-D1
 // behavior (no schema-registry port, one "kafka" endpoint only) is
 // unchanged when the field is unset.

@@ -3,7 +3,9 @@
 # credentials for both — the managed Source's replicationSecretRef
 # (already declared on the Provider config) and the external Connection's
 # own credentials (ext-legacy-creds), which the CDC provider resolves the
-# legacy database's address from automatically.
+# legacy database's address from automatically. bootstrapServers is
+# omitted — inferred from the manifest graph: both CDC Bindings below
+# target an EventStream whose Provider is broker (docs/planning/08 E2).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -12,8 +14,6 @@ spec:
   type: debezium
   runtime:
     type: docker
-    network: datascape
   configuration:
-    bootstrapServers: broker:29092
     replicationSecretRef: db-replication-creds
   secretRefs: [db-replication-creds, ext-legacy-creds]

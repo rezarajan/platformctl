@@ -246,6 +246,40 @@ func TestStateInspectStructuredOutput(t *testing.T) {
 	}
 }
 
+// TestStateInspectSurfacesProviderState is the E2 visibility contract
+// (docs/planning/08 E2): an applied default (e.g. a Connect worker's
+// graph-inferred bootstrapServers) is published into providerState exactly
+// like any other resolved fact, and must be genuinely inspectable — not
+// silently baked in — via `state inspect`, the same mechanism auto-allocated
+// host ports already rely on (`inventory`'s narrower "endpoints" projection
+// of this same map).
+func TestStateInspectSurfacesProviderState(t *testing.T) {
+	stateFile := writeStateFixture(t, `{
+  "version": 2,
+  "resources": {
+    "default/Provider/cdc": {
+      "specHash": "abc",
+      "lifecycle": "Managed",
+      "providerState": {"bootstrapServers": "broker:29092"}
+    }
+  }
+}`)
+	out, err, code := run(t, "state", "inspect", "--state-file", stateFile, "-o", "json")
+	if err != nil || code != 0 {
+		t.Fatalf("state inspect failed (code %d): %v\n%s", code, err, out)
+	}
+	var parsed stateInspectOutput
+	if jsonErr := json.Unmarshal([]byte(out), &parsed); jsonErr != nil {
+		t.Fatalf("decode state inspect output: %v\n%s", jsonErr, out)
+	}
+	if len(parsed.Resources) != 1 {
+		t.Fatalf("state inspect output = %+v, want one resource", parsed)
+	}
+	if got := parsed.Resources[0].ProviderState["bootstrapServers"]; got != "broker:29092" {
+		t.Errorf("providerState[bootstrapServers] = %v, want %q", got, "broker:29092")
+	}
+}
+
 // TestStateInspectEmptyResourcesIsEmptyArray guards the same nil-slice class
 // of bug A7 found in `inventory` (docs/planning/08): a Go nil slice
 // marshals to JSON null, not [] — state inspect's Resources field must be

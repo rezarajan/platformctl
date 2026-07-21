@@ -107,6 +107,18 @@ func internalAddr(name string) string {
 	return name + ":" + strconv.Itoa(internalKafkaPort)
 }
 
+// KafkaBootstrapAddress implements reconciler.KafkaBootstrapAddressProvider:
+// identical to internalAddr(name) — the internal Kafka port is fixed, not
+// configurable — but exposed as a capability method so a Connect worker's
+// bootstrapServers can be inferred from the manifest graph without this
+// Provider having reconciled yet (docs/planning/08 E2). cfg is unused today
+// (kept for interface-signature parity with SupportedSchemaFormats, and in
+// case a future configuration key ever makes the internal port
+// non-default).
+func (p *Provider) KafkaBootstrapAddress(name string, _ provider.Provider) string {
+	return internalAddr(name)
+}
+
 // accessMode selects how CLI-side admin calls (reconcileTopic, Probe,
 // Destroy for EventStream) reach the broker on Kubernetes — one of the
 // runtime.Access* constants (docs/planning/08 B1). Docker ignores it: the

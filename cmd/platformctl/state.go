@@ -75,6 +75,13 @@ type stateEntryOutput struct {
 	Lifecycle      string `json:"lifecycle" yaml:"lifecycle"`
 	Imported       bool   `json:"imported,omitempty" yaml:"imported,omitempty"`
 	HasLastApplied bool   `json:"hasLastApplied" yaml:"hasLastApplied"`
+	// ProviderState is the resource's raw published facts (docs/planning/08
+	// E2) — the same map a provider sets on status.Status.ProviderState,
+	// including any config value the engine resolved on the manifest's
+	// behalf (e.g. a Connect worker's graph-inferred bootstrapServers), so
+	// an applied default is inspectable here, not just in `inventory`'s
+	// narrower "endpoints" projection of this same map.
+	ProviderState map[string]any `json:"providerState,omitempty" yaml:"providerState,omitempty"`
 }
 
 type stateInspectOutput struct {
@@ -248,6 +255,7 @@ func newStateCmd(a *app) *cobra.Command {
 					Lifecycle:      rs.Lifecycle,
 					Imported:       rs.Imported,
 					HasLastApplied: rs.LastApplied != nil,
+					ProviderState:  rs.Provider,
 				}
 				out.Resources = append(out.Resources, e)
 				rows = append(rows, []string{e.Key, e.SpecHash, e.Lifecycle, fmt.Sprintf("%v", e.Imported), fmt.Sprintf("%v", e.HasLastApplied)})

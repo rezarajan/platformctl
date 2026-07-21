@@ -1,4 +1,4 @@
-# Managed sources orchestrators read from / write to.
+# Managed sources orchestrators read from / write to (postgres.schema is omitted below — see README.md#defaults).
 apiVersion: datascape.io/v1alpha1
 kind: Source
 metadata:
@@ -6,7 +6,7 @@ metadata:
 spec:
   engine: postgres
   providerRef: {name: lake-postgres}
-  postgres: {database: appdb, schema: public}
+  postgres: {database: appdb}
 ---
 apiVersion: datascape.io/v1alpha1
 kind: Source
@@ -30,7 +30,7 @@ spec:
   engine: postgres
   external: true
   connectionRef: {name: orders-db}
-  postgres: {database: orders, schema: public}
+  postgres: {database: orders}
 ---
 # The Iceberg warehouse bucket Dagster materializes assets into, cataloged
 # by lakehouse-catalog.
