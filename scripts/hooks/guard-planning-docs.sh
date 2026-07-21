@@ -12,9 +12,22 @@
 #      newly-observed per-runtime difference or a limit of shipped behavior is
 #      additive; it records a fact, it does not revise the plan.
 #
+# Two further shapes are permitted:
+#
+#   3. Creating a NEW file under docs/planning/ (Write to a path that does
+#      not exist yet) — a new document cannot alter what existing contract
+#      text asserts, so it is additive by definition.
+#   4. A maintenance unlock: while the marker file
+#      `.claude/planning-docs-unlock` exists at the repo root, all edits
+#      pass. This is the explicit, auditable bypass for user-authorized
+#      documentation-maintenance passes (e.g. the 2026-07-20 docs
+#      consolidation); remove the marker to restore protection. The marker
+#      is intentionally not checked into git.
+#
 # Everything else — modifying or deleting an existing line — is blocked
 # outright. There is no retry-with-justification path; changing what an
-# existing contract statement says needs a human to make it directly.
+# existing contract statement says needs a human to make it directly (or to
+# grant the maintenance unlock above).
 set -euo pipefail
 
 input=$(cat)
@@ -22,6 +35,13 @@ tool_name=$(echo "$input" | jq -r '.tool_name // empty')
 file_path=$(echo "$input" | jq -r '.tool_input.file_path // empty')
 
 if [[ "$file_path" != *docs/planning/*.md ]]; then
+  exit 0
+fi
+
+# Maintenance unlock (shape 4): a marker file at the repo root suspends the
+# guard for a user-authorized documentation-maintenance pass.
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+if [[ -f "$repo_root/.claude/planning-docs-unlock" ]]; then
   exit 0
 fi
 
@@ -66,11 +86,13 @@ case "$tool_name" in
     ;;
   Write)
     new_content=$(echo "$input" | jq -r '.tool_input.content // empty')
-    if [[ -f "$file_path" ]]; then
-      old_content=$(cat "$file_path")
-      if only_checkbox_toggle "$old_content" "$new_content" || only_additions "$old_content" "$new_content"; then
-        exit 0
-      fi
+    if [[ ! -f "$file_path" ]]; then
+      # Shape 3: a brand-new document is additive by definition.
+      exit 0
+    fi
+    old_content=$(cat "$file_path")
+    if only_checkbox_toggle "$old_content" "$new_content" || only_additions "$old_content" "$new_content"; then
+      exit 0
     fi
     ;;
 esac

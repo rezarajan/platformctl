@@ -1,2 +1,4 @@
 bin/
 .datascape/
+.claude/planning-docs-unlock
+/platformctl
