@@ -212,7 +212,20 @@ type ContainerSpec struct {
 	// unchanged (the pre-existing behavior).
 	ImagePullAuth *ImagePullAuth
 	Cmd           []string // implementation-revealed addition: real providers need command/args; pending doc amendment to 02-architecture.md §4.1
-	Networks      []string
+	// Entrypoint, when non-nil, REPLACES the image's own ENTRYPOINT — unlike
+	// Cmd, which APPENDS to it (docs/planning/09 Class 5, the K1 lesson).
+	// nil (the default) leaves the image's ENTRYPOINT untouched, the
+	// pre-existing behavior every provider that only sets Cmd still gets.
+	// Set this when Cmd alone cannot be trusted to run under a shell
+	// regardless of the image's own entrypoint — the dbjob mechanism
+	// (internal/adapters/providers/dbjob) is the motivating case: minio/mc's
+	// image ENTRYPOINT is ["mc"], so a bare Cmd: ["sh", "-c", script] ran as
+	// "mc sh -c ...", an instant, silent failure (docs/planning/08 C6 review
+	// finding 1; docs/adr/007-backup-restore.md). Docker maps this to
+	// Config.Entrypoint; Kubernetes maps it to container.Command (the mirror
+	// image of Cmd/Args, per the same K1 lesson).
+	Entrypoint []string
+	Networks   []string
 	// Aliases are additional in-network DNS names for this container beyond
 	// its Name, so a stable internal address can outlive a container rename
 	// (docs/planning/07 §1.1/§2.4). Docker: per-network endpoint aliases;

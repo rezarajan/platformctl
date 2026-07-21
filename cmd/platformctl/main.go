@@ -115,6 +115,10 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// registry (Provider.spec.configuration.schemaRegistry: enabled) and a
 	// Binding's schema-carrying spec.options.format (avro, protobuf).
 	gates.Register("SchemaRegistrySupport", featuregate.Alpha, false)
+	// docs/planning/08 C6: backup/restore capability (BackupCapableProvider).
+	// Alpha/disabled until restore drills have soaked in CI (§8 graduation
+	// intent).
+	gates.Register("BackupRestore", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")

@@ -43,6 +43,13 @@ type Endpoint struct {
 	// ("internal") by value — this package cannot import internal/ports/runtime
 	// (layering: domain imports nothing else in this repo).
 	Audience string `json:"audience,omitempty"`
+	// Network names the runtime network RuntimeName is attached to — the
+	// fact a consumer needs to additionally join that network to resolve
+	// Internal by its DNS name (docs/planning/08 F4; docs/adr/007-backup-
+	// restore.md). Empty when the endpoint publishes no in-network address
+	// at all, or when a consumer never needs to join anything to reach it
+	// (a host-published address is reachable without joining any network).
+	Network string `json:"network,omitempty"`
 }
 
 // List is an ordered set of a component's endpoints.
@@ -72,6 +79,9 @@ func (l List) ToState() []map[string]any {
 		}
 		if e.Audience != "" {
 			m["audience"] = e.Audience
+		}
+		if e.Network != "" {
+			m["network"] = e.Network
 		}
 		out = append(out, m)
 	}
@@ -116,6 +126,7 @@ func FromState(v any) List {
 		}
 		e.RuntimeName, _ = m["runtimeName"].(string)
 		e.Audience, _ = m["audience"].(string)
+		e.Network, _ = m["network"].(string)
 		switch v := m["containerPort"].(type) {
 		case float64: // the common case: state persists providerState as JSON, decoded back into map[string]any
 			e.ContainerPort = int(v)

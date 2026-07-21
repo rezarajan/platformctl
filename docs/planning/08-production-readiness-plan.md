@@ -676,6 +676,19 @@ entrypoints, is observable, and its data is recoverable. This is where
      (prefer refusing protected targets), the restore-output `key`/`prefix`
      duplication, and the Docker-only mechanism (fail fast on other
      runtimes).
+- **Reworked and merged 2026-07-21** (`3c0f6dc` + merge): all five findings
+  closed — `ContainerSpec.Entrypoint` (with the EntrypointReplaces
+  conformance subtest), endpoint-fact Location resolution via
+  `EnsureReachable`, the engine consuming published facts (port/scheme/
+  secret-key names no longer hardcoded), fail-fast pipeline, and ADR 007
+  (protect refusal, prefix fix, Docker-only fail-fast gate). Two further
+  live-found fixes: `pg_dump --no-publications` (the dump collided with
+  the Source's own publication) and per-store state isolation in the
+  round-trip test. Merge-time adaptations: the backup helpers moved onto
+  providerkit (G1); `resolveRequest`'s post-D1 state parameter passed nil
+  (registry URLs are Binding-only); the conformance subtest re-inserted
+  beside its sibling. Verified at merge: postgres/mysql/s3 round-trips +
+  full Docker conformance live; unit + archtests green.
 
 ### C7: Ingress and HTTP routing on the Connection seam
 

@@ -32,7 +32,7 @@ pattern of recording a redirected first cut).
 | [004](004-replicas-and-identity.md) | Replicas and stable identity | accepted, shipped (08 C1) | `ContainerSpec.Replicas`/`StableIdentity`; ordinal naming; StatefulSet mapping |
 | [005](005-database-ha-posture.md) | Database HA posture | accepted, decision-only | managed DBs stay single-node; production HA enters via `external: true` + Connection |
 | [006](006-compute-engines.md) | Compute-engine infrastructure | accepted | Trino provider first (D10); Flink deferred; engine infra in scope, jobs never |
-| 007 | Backup/restore mechanism | **reserved** — required by C6's review before its branch merges | job-container pipeline design, Location resolution, protect interplay |
+| [007](007-backup-restore.md) | Backup/restore mechanism | accepted, shipped (08 C6) | job-container pipeline; endpoint-fact Location resolution; protect refusal; Docker-only for now |
 | [008](008-hexagonal-layering.md) | Hexagonal layering and the one invariant | accepted, retroactive | domain/ports/adapters; who may import adapters |
 | [009](009-capability-interfaces.md) | Compatibility as provider capability | accepted, retroactive | optional capability interfaces checked at validate; the exact error shape |
 | [010](010-lineage-observed-not-synthesized.md) | Lineage observed, never synthesized | accepted, retroactive | `observers` forwards connection facts only |

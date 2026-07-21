@@ -5,6 +5,7 @@ package reconciler
 import (
 	"context"
 
+	"github.com/rezarajan/platformctl/internal/domain/backup"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
@@ -196,4 +197,35 @@ type SchemaRegistryCapableProvider interface {
 type LineageAware interface {
 	Provider
 	ConfigureLineage(ctx context.Context, req Request, endpoint lineage.LineageEndpoint) error
+}
+
+// BackupCapableProvider is declared by a provider whose realized resource
+// carries data that can be dumped to, and restored from, an object-store
+// location — the data-recoverability half of docs/design/005's single-node
+// managed-database posture (docs/planning/08 C6): drift-healing rebuilds
+// infrastructure, never data. Implemented by `postgres` and `mysql` (a
+// pg_dump/mysqldump streamed to dest via a short-lived job container on the
+// realizing Provider's own network) and `s3` (a bucket/prefix sync using its
+// existing S3-API client — no job container needed).
+//
+// dest/src are already-resolved object-store locations (endpoint, bucket,
+// prefix, credentials) — never a bare providerRef/secretRef the method
+// itself would have to resolve, mirroring how every other capability method
+// takes only already-resolved inputs via Request (docs/planning/08 F5); the
+// caller (the engine) resolves a Dataset or a raw URL + SecretReference into
+// one before calling either method.
+type BackupCapableProvider interface {
+	Provider
+	// Backup streams req.Resource's data to dest and returns a Manifest
+	// recording where it landed — the Manifest and every error this method
+	// returns must never carry dest's or req.Resource's credentials in any
+	// field or message (Accept: "backups never embed plaintext
+	// credentials").
+	Backup(ctx context.Context, req Request, dest backup.Location) (backup.Manifest, error)
+	// Restore streams src back into req.Resource's backing store,
+	// unconditionally overwriting whatever data is already there. The
+	// restore-over-existing-data safety gate (NFR-3-style: refuse without an
+	// explicit flag) is the engine's responsibility, enforced before this is
+	// ever called — Restore itself performs no such check.
+	Restore(ctx context.Context, req Request, src backup.Location) error
 }

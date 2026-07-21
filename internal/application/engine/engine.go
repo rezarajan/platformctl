@@ -53,6 +53,10 @@ type Engine struct {
 	// AllowImportedDeletes permits authoritative apply to delete resources
 	// recorded as Imported when they are absent from desired manifests.
 	AllowImportedDeletes bool
+	// AllowOverwrite permits Restore to replace a resource's existing data.
+	// It is the engine half of NFR-3-style safety: the CLI only sets it when
+	// --yes-i-understand-this-overwrites-existing-data was passed.
+	AllowOverwrite bool
 	// Parallelism bounds concurrent reconciliation within a topological
 	// level (resources in the same level share no dependency relationship).
 	// Values <= 1 mean fully sequential. Gated by ParallelReconciliation.

@@ -698,6 +698,59 @@ func Run(t *testing.T, rt runtime.ContainerRuntime, namePrefix string) {
 		}
 	})
 
+	// EntrypointFaithfulness_EntrypointReplaces backfills docs/planning/08
+	// C6 review finding 1 (docs/adr/007-backup-restore.md): dbjob's job
+	// containers set ContainerSpec.Entrypoint to force a shell regardless of
+	// the image's own ENTRYPOINT — found live when minio/mc's image
+	// ENTRYPOINT (["mc"]) swallowed a bare Cmd: ["sh", "-c", script] as
+	// "mc sh -c ...", an instant exit the FIFO's other side then blocked on
+	// forever. curlimages/curl is the fixture: its ENTRYPOINT is ["curl"]
+	// with no argument-forwarding fallback (unlike postgres/mysql's official
+	// images, whose entrypoint scripts happen to exec an unrecognized
+	// command as-is) — if this adapter merely appended Entrypoint after the
+	// image's own ENTRYPOINT instead of replacing it (the K1 mistake,
+	// inverted), the real process would be "curl sh -c ...", which treats
+	// "sh" as a URL, fails immediately, and the container never reaches
+	// Running. The container staying Running also proves Cmd still appends
+	// after the replaced Entrypoint: "sh -c" alone (Cmd dropped) is invalid
+	// usage and sh would exit immediately too.
+	t.Run("EntrypointFaithfulness_EntrypointReplaces", func(t *testing.T) {
+		type commandRunner interface {
+			RunsContainerCommands() bool
+		}
+		cr, execCapable := rt.(commandRunner)
+		execCapable = execCapable && cr.RunsContainerCommands()
+		if !execCapable {
+			// The fake never runs a real image/ENTRYPOINT; there is nothing
+			// to prove faithful translation of on an adapter that doesn't
+			// execute anything.
+			return
+		}
+
+		name := namePrefix + "-entrypoint-replace-ctr"
+		t.Cleanup(func() { _ = rt.Remove(ctx, name) })
+		spec := runtime.ContainerSpec{
+			Name:       name,
+			Image:      "curlimages/curl:8.10.1",
+			Entrypoint: []string{"sh", "-c"},
+			Cmd:        []string{"sleep 60"},
+			Networks:   []string{netSpec.Name},
+			Labels:     labels,
+		}
+		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+			t.Fatalf("EnsureContainer: %v", err)
+		}
+		// Give the process a moment to exit if Entrypoint didn't take.
+		time.Sleep(2 * time.Second)
+		st, found, err := rt.Inspect(ctx, name)
+		if err != nil {
+			t.Fatalf("Inspect: %v", err)
+		}
+		if !found || !st.Running {
+			t.Fatal("container is not running — Entrypoint did not replace the image's own ENTRYPOINT (it looks like it was appended after \"curl\" instead, which then failed treating \"sh\" as a URL): the K1 mistake, inverted")
+		}
+	})
+
 	// ReplicaSet_ScaleUp_Idempotent proves the core C1 primitive
 	// (docs/adr/004-replicas-and-identity.md): Replicas > 1 fans out to N
 	// individually-managed units reported through one aggregate

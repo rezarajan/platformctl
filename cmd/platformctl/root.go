@@ -138,6 +138,8 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 		newStatusCmd(a),
 		newDriftCmd(a),
 		newImportCmd(a),
+		newBackupCmd(a),
+		newRestoreCmd(a),
 		newGraphCmd(a),
 		newInventoryCmd(a),
 		newDocsCmd(),

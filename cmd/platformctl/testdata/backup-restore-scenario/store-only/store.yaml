@@ -1,0 +1,35 @@
+# The durable backup destination — a separate lifecycle from db.yaml's
+# database tier, applied once with its own state file and never destroyed
+# during the C6 round-trip tests (destroying it would wipe the very backups
+# under test). See backup_integration_test.go.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: bkp-minio
+spec:
+  type: minio
+  runtime: {type: docker, network: datascape-bkp}
+  configuration: {port: 19732, rootSecretRef: bkp-minio-root}
+  secretRefs: [bkp-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: bkp-store
+spec:
+  providerRef: {name: bkp-minio}
+  bucket: bkp-store
+  prefix: dumps
+  format: parquet
+---
+# A second Dataset on the same instance — the destination half of the s3
+# Dataset-round-trip test (Dataset -> Dataset, not just Dataset -> URL).
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: bkp-store-mirror
+spec:
+  providerRef: {name: bkp-minio}
+  bucket: bkp-store-mirror
+  prefix: mirror
+  format: parquet

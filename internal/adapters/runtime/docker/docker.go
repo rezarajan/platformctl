@@ -311,8 +311,14 @@ func (r *Runtime) ensureOneContainer(ctx context.Context, spec runtime.Container
 	}
 
 	cfg := &container.Config{
-		Image:        spec.Image,
-		Cmd:          spec.Cmd,
+		Image: spec.Image,
+		Cmd:   spec.Cmd,
+		// Entrypoint is nil unless the spec sets it, in which case it
+		// replaces the image's own ENTRYPOINT (docs/planning/08 C6 review
+		// finding 1) — Docker's own nil-vs-empty-slice distinction: nil
+		// serializes as JSON null ("use the image's ENTRYPOINT unchanged"),
+		// a non-nil (possibly empty) slice always overrides it.
+		Entrypoint:   spec.Entrypoint,
 		Env:          env,
 		Labels:       labels,
 		ExposedPorts: exposed,
