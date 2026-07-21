@@ -20,6 +20,16 @@
             "command": "/home/cascadura/git/platformctl/scripts/hooks/guard-planning-docs.sh"
           }
         ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/cascadura/git/platformctl/scripts/hooks/guard-agent-model.sh",
+            "statusMessage": "Checking subagent model cost guard"
+          }
+        ]
       }
     ]
   }

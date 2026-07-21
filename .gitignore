@@ -2,3 +2,4 @@ bin/
 .datascape/
 .claude/planning-docs-unlock
 /platformctl
+.claude/agent-model-unlock
