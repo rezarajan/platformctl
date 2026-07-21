@@ -1487,6 +1487,10 @@ renderer dispatch, the 96-line registry indirection, and `meta.json`
   `reachability.go`, `exec.go` (same package, zero behavior change).
 - **Accept:** build + runtime conformance suite pass unchanged; no file
   exceeds ~400 lines.
+- **Done (2026-07-21, merged):** seven files, largest 400 lines
+  (container.go split into ensure + container_remove.go halves — recorded
+  deviation); --color-moved proves 3155 moved vs 74 new lines; live K8s
+  suite green under minimal RBAC as the gate.
 
 ### G4: Condition-reason catalog (E4 prerequisite)
 
@@ -1538,6 +1542,10 @@ renderer dispatch, the 96-line registry indirection, and `meta.json`
   parameters.
 - **Accept:** identical subtest names/count pass on fake, Docker, and
   Kubernetes; no file exceeds ~250 lines.
+- **Done (2026-07-21, merged):** eight per-area files, largest 259 lines,
+  explicit fixtures struct, cross-subtest dependencies documented;
+  27/27 subtests byte-identical in name/count/order vs main (fake +
+  Docker legs diffed live).
 
 ### G6: Shared integration-test harness
 
