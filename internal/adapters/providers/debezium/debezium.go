@@ -20,10 +20,10 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/rezarajan/platformctl/internal/adapters/kafkaconnect"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/domain/binding"
 	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
-	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
@@ -55,16 +55,7 @@ func (p *Provider) SupportedSourceEngines() []string {
 }
 
 func connectPort(cfg provider.Provider, name string) int {
-	configured := 0
-	if v, ok := cfg.Configuration["connectPort"]; ok {
-		switch n := v.(type) {
-		case int:
-			configured = n
-		case float64:
-			configured = int(n)
-		}
-	}
-	return hostport.Resolve(configured, name)
+	return providerkit.HostPort(cfg, name, "connectPort")
 }
 
 // reachableURL returns an "http://host:port" this process can dial right
@@ -74,18 +65,7 @@ func connectPort(cfg provider.Provider, name string) int {
 // connection — the resolved address can be used directly for one call, no
 // placeholder/dialer-interception trick needed.
 func reachableURL(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
-	addr, closeAddr, err := rt.EnsureReachable(ctx, name, 8083)
-	if err != nil {
-		return "", nil, err
-	}
-	return "http://" + addr, closeAddr, nil
-}
-
-func network(cfg provider.Provider) string {
-	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
-		return n
-	}
-	return "datascape"
+	return providerkit.ReachableURL(ctx, rt, name, 8083)
 }
 
 func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
@@ -115,42 +95,37 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 	if bootstrap == "" {
 		return st, fmt.Errorf("Provider %q (type: debezium): spec.configuration.bootstrapServers is required", name)
 	}
-	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
-
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
-		return st, err
-	}
-	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
-		Name:  name,
-		Image: image,
-		Env: map[string]string{
-			"BOOTSTRAP_SERVERS":                      bootstrap,
-			"GROUP_ID":                               name,
-			"CONFIG_STORAGE_TOPIC":                   name + "-configs",
-			"OFFSET_STORAGE_TOPIC":                   name + "-offsets",
-			"STATUS_STORAGE_TOPIC":                   name + "-status",
-			"CONFIG_STORAGE_REPLICATION_FACTOR":      "1",
-			"OFFSET_STORAGE_REPLICATION_FACTOR":      "1",
-			"STATUS_STORAGE_REPLICATION_FACTOR":      "1",
-			"KEY_CONVERTER":                          "org.apache.kafka.connect.json.JsonConverter",
-			"VALUE_CONVERTER":                        "org.apache.kafka.connect.json.JsonConverter",
-			"CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE":   "false",
-			"CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE": "false",
+	ctrState, err := providerkit.EnsureInstance(ctx, rt, providerkit.InstanceSpec{
+		Namespace: req.Provider.Metadata.Namespace,
+		Name:      name,
+		Network:   providerkit.Network(cfg),
+		Container: runtime.ContainerSpec{
+			Image: image,
+			Env: map[string]string{
+				"BOOTSTRAP_SERVERS":                      bootstrap,
+				"GROUP_ID":                               name,
+				"CONFIG_STORAGE_TOPIC":                   name + "-configs",
+				"OFFSET_STORAGE_TOPIC":                   name + "-offsets",
+				"STATUS_STORAGE_TOPIC":                   name + "-status",
+				"CONFIG_STORAGE_REPLICATION_FACTOR":      "1",
+				"OFFSET_STORAGE_REPLICATION_FACTOR":      "1",
+				"STATUS_STORAGE_REPLICATION_FACTOR":      "1",
+				"KEY_CONVERTER":                          "org.apache.kafka.connect.json.JsonConverter",
+				"VALUE_CONVERTER":                        "org.apache.kafka.connect.json.JsonConverter",
+				"CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE":   "false",
+				"CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE": "false",
+			},
+			Ports: []runtime.PortBinding{{HostPort: connectPort(cfg, name), ContainerPort: 8083, Audience: runtime.AudienceHost}},
+			HealthCheck: &runtime.HealthCheck{
+				Test:     []string{"CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"},
+				Interval: 3 * time.Second,
+				Timeout:  5 * time.Second,
+				Retries:  40,
+			},
 		},
-		Networks: []string{network(cfg)},
-		Ports:    []runtime.PortBinding{{HostPort: connectPort(cfg, name), ContainerPort: 8083, Audience: runtime.AudienceHost}},
-		HealthCheck: &runtime.HealthCheck{
-			Test:     []string{"CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"},
-			Interval: 3 * time.Second,
-			Timeout:  5 * time.Second,
-			Retries:  40,
-		},
-		Labels: labels,
+		WaitTimeout: 180 * time.Second,
 	})
 	if err != nil {
-		return st, err
-	}
-	if err := rt.WaitHealthy(ctx, name, 180*time.Second); err != nil {
 		return st, err
 	}
 
@@ -574,7 +549,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 		if err := rt.Remove(ctx, name); err != nil {
 			return err
 		}
-		_ = rt.RemoveNetwork(ctx, network(cfg))
+		_ = rt.RemoveNetwork(ctx, providerkit.Network(cfg))
 		return nil
 	case "Binding":
 		// A dead Connect worker takes its connectors with it; requiring a

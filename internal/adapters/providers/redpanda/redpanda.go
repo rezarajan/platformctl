@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/eventstream"
 	"github.com/rezarajan/platformctl/internal/domain/hostport"
@@ -93,30 +94,17 @@ func schemaRegistryInternalAddr(name string) string {
 
 func brokerName(provEnv resource.Envelope) string { return naming.RuntimeObjectName(provEnv) }
 
+// hostPort is providerkit.HostPort at the "kafkaPort" config key — kept as a
+// named wrapper (rather than inlined at each call site) because
+// advertisedAddr's redpanda_test.go coverage dials it directly by name.
 func hostPort(cfg provider.Provider, name string) int {
-	configured := 0
-	if v, ok := cfg.Configuration["kafkaPort"]; ok {
-		switch n := v.(type) {
-		case int:
-			configured = n
-		case float64:
-			configured = int(n)
-		}
-	}
-	return hostport.Resolve(configured, name)
+	return providerkit.HostPort(cfg, name, "kafkaPort")
 }
 
 // internalAddr is the broker address reachable from containers on the shared
 // network (Debezium, sink connectors).
 func internalAddr(name string) string {
 	return name + ":" + strconv.Itoa(internalKafkaPort)
-}
-
-func network(cfg provider.Provider) string {
-	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
-		return n
-	}
-	return "datascape"
 }
 
 // accessMode selects how CLI-side admin calls (reconcileTopic, Probe,
@@ -141,15 +129,7 @@ func accessMode(cfg provider.Provider) string {
 // "what the broker advertises" from "where a request actually goes" — the
 // broker's own protocol never needs to be told the (changing) truth.
 func advertisedAddr(cfg provider.Provider, name string) string {
-	return "127.0.0.1:" + strconv.Itoa(hostPort(cfg, name)) // archtest:allow-loopback: sentinel never dialed directly, only matched+redirected by kafka.go's kgo.Dialer
-}
-
-// reachableAddr returns an address this process can dial right now to reach
-// the broker's admin (external Kafka) port, plus a close func that must
-// always be called — on Docker this is a cheap no-op; on Kubernetes it may
-// tear down a port-forward tunnel opened just for this call.
-func reachableAddr(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
-	return rt.EnsureReachable(ctx, name, externalKafkaPort)
+	return "127.0.0.1:" + strconv.Itoa(providerkit.HostPort(cfg, name, "kafkaPort")) // archtest:allow-loopback: sentinel never dialed directly, only matched+redirected by kafka.go's kgo.Dialer
 }
 
 // waitSchemaRegistryReady polls the registry's /subjects endpoint via
@@ -208,14 +188,6 @@ func (p *Provider) reconcileBroker(ctx context.Context, req reconciler.Request) 
 	if image == "" {
 		image = defaultImage
 	}
-	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
-
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
-		return st, err
-	}
-	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name + "-data", Labels: labels, Networks: []string{network(cfg)}}); err != nil {
-		return st, err
-	}
 
 	registryEnabled := schemaRegistryEnabled(cfg)
 	cmd := []string{
@@ -246,26 +218,26 @@ func (p *Provider) reconcileBroker(ctx context.Context, req reconciler.Request) 
 		ports = append(ports, runtime.PortBinding{HostPort: schemaRegistryHostPort(cfg, name), ContainerPort: schemaRegistryPort, Audience: runtime.AudienceHost})
 	}
 
-	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
-		Name:       name,
-		Image:      image,
-		AccessMode: accessMode(cfg),
-		Cmd:        cmd,
-		Networks:   []string{network(cfg)},
-		Volumes:    []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/var/lib/redpanda/data"}},
-		Ports:      ports,
-		HealthCheck: &runtime.HealthCheck{
-			Test:     []string{"CMD-SHELL", "rpk cluster health --exit-when-healthy || exit 1"},
-			Interval: 2 * time.Second,
-			Timeout:  5 * time.Second,
-			Retries:  30,
+	ctrState, err := providerkit.EnsureInstance(ctx, rt, providerkit.InstanceSpec{
+		Namespace: req.Provider.Metadata.Namespace,
+		Name:      name,
+		Network:   providerkit.Network(cfg),
+		Volume:    &providerkit.InstanceVolume{Name: name + "-data", MountPath: "/var/lib/redpanda/data"},
+		Container: runtime.ContainerSpec{
+			Image:      image,
+			AccessMode: accessMode(cfg),
+			Cmd:        cmd,
+			Ports:      ports,
+			HealthCheck: &runtime.HealthCheck{
+				Test:     []string{"CMD-SHELL", "rpk cluster health --exit-when-healthy || exit 1"},
+				Interval: 2 * time.Second,
+				Timeout:  5 * time.Second,
+				Retries:  30,
+			},
 		},
-		Labels: labels,
+		WaitTimeout: 120 * time.Second,
 	})
 	if err != nil {
-		return st, err
-	}
-	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
 		return st, err
 	}
 	if registryEnabled {
@@ -323,7 +295,7 @@ func (p *Provider) reconcileTopic(ctx context.Context, req reconciler.Request) (
 		return st, err
 	}
 
-	addr, closeAddr, err := reachableAddr(ctx, rt, name)
+	addr, closeAddr, err := providerkit.ReachableAddr(ctx, rt, name, externalKafkaPort)
 	if err != nil {
 		return st, err
 	}
@@ -355,7 +327,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 			return err
 		}
 		// Network may still be shared; ignore removal failure from active endpoints.
-		_ = rt.RemoveNetwork(ctx, network(cfg))
+		_ = rt.RemoveNetwork(ctx, providerkit.Network(cfg))
 		return nil
 	case "EventStream":
 		// A dead broker takes its topics with it; requiring a live admin
@@ -364,7 +336,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 		if ctr, found, err := rt.Inspect(ctx, name); err != nil || !found || !ctr.Running {
 			return err
 		}
-		addr, closeAddr, err := reachableAddr(ctx, rt, name)
+		addr, closeAddr, err := providerkit.ReachableAddr(ctx, rt, name, externalKafkaPort)
 		if err != nil {
 			return err
 		}
@@ -411,7 +383,7 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		if err != nil {
 			return st, err
 		}
-		addr, closeAddr, err := reachableAddr(ctx, rt, name)
+		addr, closeAddr, err := providerkit.ReachableAddr(ctx, rt, name, externalKafkaPort)
 		if err != nil {
 			return st, err
 		}

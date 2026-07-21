@@ -1342,6 +1342,16 @@ renderer dispatch, the 96-line registry indirection, and `meta.json`
   identical (full unit + Docker integration suites green, zero test
   edits); archtest still green; E6's guide references providerkit as the
   documented shape.
+- **Done (2026-07-21, merged), with one criterion revised by evidence:**
+  the kit exists (Network/HostPort/ReachableAddr/ResolveCredential/
+  EnsureInstance/CredentialRotation, 262 lines) and all nine providers
+  migrated where the helpers honestly apply, net −536 provider lines and
+  full-sweep green — but the ">100 lines per reference provider" number
+  was an overestimate (postgres −47, mysql −43): the remaining per-file
+  bulk is engine-specific reconcile/probe/destroy logic the task itself
+  excludes, and forcing it through knob-laden helpers is what the task
+  prohibits. E6 should document providerkit as the authored shape; the
+  E6 reference to this note stands.
 
 ### G2: Engine kind-dispatch table
 

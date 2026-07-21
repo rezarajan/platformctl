@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
-	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/source"
@@ -76,45 +76,13 @@ func profile(cfg provider.Provider) (versionprofile.Profile, error) {
 	return prof, nil
 }
 
-func hostPort(cfg provider.Provider, name string) int {
-	configured := 0
-	if v, ok := cfg.Configuration["port"]; ok {
-		switch n := v.(type) {
-		case int:
-			configured = n
-		case float64:
-			configured = int(n)
-		}
-	}
-	return hostport.Resolve(configured, name)
-}
-
-// reachableAddr returns an address this process can dial right now to reach
-// the instance's MySQL/MariaDB port, plus a close func that must always be
-// called (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may
-// tear down a port-forward tunnel opened just for this call).
-func reachableAddr(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
-	return rt.EnsureReachable(ctx, name, 3306)
-}
-
-func network(cfg provider.Provider) string {
-	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
-		return n
-	}
-	return "datascape"
-}
-
 // rootPassword returns the server root password: the "password" key of the
 // SecretReference named by configuration.rootSecretRef, or the first
 // declared secretRef.
 func rootPassword(cfg provider.Provider, secrets map[string]map[string]string, name string) (string, error) {
-	refName, _ := cfg.Configuration["rootSecretRef"].(string)
-	if refName == "" && len(cfg.SecretRefs) > 0 {
-		refName = cfg.SecretRefs[0]
-	}
-	creds, ok := secrets[refName]
-	if !ok {
-		return "", fmt.Errorf("Provider %q (type: %s): no resolved credentials for secretRef %q", name, cfg.Type, refName)
+	creds, refName, err := providerkit.ResolveCredential(cfg, secrets, "rootSecretRef", name)
+	if err != nil {
+		return "", err
 	}
 	if creds["password"] == "" {
 		return "", fmt.Errorf("Provider %q: secretRef %q must provide a password key", name, refName)
@@ -153,15 +121,8 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	if err != nil {
 		return st, err
 	}
-	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
 	oldRootPass, _ := liveRootPassword(ctx, rt, name)
 
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
-		return st, err
-	}
-	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name + "-data", Labels: labels, Networks: []string{network(cfg)}}); err != nil {
-		return st, err
-	}
 	// The password rides a file mount, not env — env is readable by anyone
 	// with `docker inspect` access (docs/planning/07 Gate 1 checkbox 4);
 	// both official images consume *_FILE natively.
@@ -177,28 +138,28 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	if mariadb(cfg) {
 		adminTool = "mariadb-admin"
 	}
-	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
-		Name:     name,
-		Image:    prof.Image,
-		Cmd:      cmd,
-		Env:      env,
-		Files:    files,
-		Networks: []string{network(cfg)},
-		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: prof.DataMount}},
-		Ports:    []runtime.PortBinding{{HostPort: hostPort(cfg, name), ContainerPort: 3306, Audience: runtime.AudienceHost}},
-		HealthCheck: &runtime.HealthCheck{
-			// TCP ping, no credentials required for liveness.
-			Test:     []string{"CMD-SHELL", adminTool + " ping -h 127.0.0.1 --silent"},
-			Interval: 2 * time.Second,
-			Timeout:  5 * time.Second,
-			Retries:  45,
+	ctrState, err := providerkit.EnsureInstance(ctx, rt, providerkit.InstanceSpec{
+		Namespace: req.Provider.Metadata.Namespace,
+		Name:      name,
+		Network:   providerkit.Network(cfg),
+		Volume:    &providerkit.InstanceVolume{Name: name + "-data", MountPath: prof.DataMount},
+		Container: runtime.ContainerSpec{
+			Image: prof.Image,
+			Cmd:   cmd,
+			Env:   env,
+			Files: files,
+			Ports: []runtime.PortBinding{{HostPort: providerkit.HostPort(cfg, name, "port"), ContainerPort: 3306, Audience: runtime.AudienceHost}},
+			HealthCheck: &runtime.HealthCheck{
+				// TCP ping, no credentials required for liveness.
+				Test:     []string{"CMD-SHELL", adminTool + " ping -h 127.0.0.1 --silent"},
+				Interval: 2 * time.Second,
+				Timeout:  5 * time.Second,
+				Retries:  45,
+			},
 		},
-		Labels: labels,
+		WaitTimeout: 180 * time.Second,
 	})
 	if err != nil {
-		return st, err
-	}
-	if err := rt.WaitHealthy(ctx, name, 180*time.Second); err != nil {
 		return st, err
 	}
 	// Health says the server answers; make sure root auth over TCP works
@@ -244,27 +205,28 @@ func liveRootPassword(ctx context.Context, rt runtime.ContainerRuntime, name str
 	return "", false
 }
 
+// ensureRootPassword runs providerkit's try-desired → try-previous-bootstrap
+// → rotate-live → retry state machine (docs/planning/08 G1) with mysql's
+// database/sql-backed ping and ALTER USER rotation as the callbacks.
 func ensureRootPassword(ctx context.Context, rt runtime.ContainerRuntime, name, desiredPass, previousPass string) error {
-	buildDesired := func(addr string) string { return dsnAddr(addr, "root", desiredPass, "") }
-	if previousPass == "" || previousPass == desiredPass {
-		return waitReadyReachable(ctx, rt, name, 3306, buildDesired, 60*time.Second)
-	}
-	if err := waitReadyReachable(ctx, rt, name, 3306, buildDesired, 5*time.Second); err == nil {
-		return nil
-	}
-	buildPrevious := func(addr string) string { return dsnAddr(addr, "root", previousPass, "") }
-	if err := waitReadyReachable(ctx, rt, name, 3306, buildPrevious, 60*time.Second); err != nil {
-		return fmt.Errorf("mysql root credentials changed but neither the desired SecretReference nor the previous managed-container environment password can authenticate; manual recovery is required: %w", err)
-	}
-	addr, closeAddr, err := reachableAddr(ctx, rt, name)
-	if err != nil {
-		return err
-	}
-	defer closeAddr()
-	if err := rotateRootPassword(ctx, dsnAddr(addr, "root", previousPass, ""), desiredPass); err != nil {
-		return err
-	}
-	return waitReadyReachable(ctx, rt, name, 3306, buildDesired, 30*time.Second)
+	return providerkit.CredentialRotation{
+		Runtime:               rt,
+		Name:                  name,
+		Port:                  3306,
+		NoPreviousOrUnchanged: previousPass == "" || previousPass == desiredPass,
+		PingDesired: func(ctx context.Context, addr string) error {
+			return ping(ctx, dsnAddr(addr, "root", desiredPass, ""))
+		},
+		PingPrevious: func(ctx context.Context, addr string) error {
+			return ping(ctx, dsnAddr(addr, "root", previousPass, ""))
+		},
+		Rotate: func(ctx context.Context, addr string) error {
+			return rotateRootPassword(ctx, dsnAddr(addr, "root", previousPass, ""), desiredPass)
+		},
+		Exhausted: func(err error) error {
+			return fmt.Errorf("mysql root credentials changed but neither the desired SecretReference nor the previous managed-container environment password can authenticate; manual recovery is required: %w", err)
+		},
+	}.Run(ctx)
 }
 
 // reconcileSource ensures the declared database exists, a replication-capable
@@ -296,7 +258,7 @@ func (p *Provider) reconcileSource(ctx context.Context, req reconciler.Request) 
 	}, 30*time.Second); err != nil {
 		return st, err
 	}
-	addr, closeAddr, err := reachableAddr(ctx, rt, name)
+	addr, closeAddr, err := providerkit.ReachableAddr(ctx, rt, name, 3306)
 	if err != nil {
 		return st, err
 	}
@@ -343,7 +305,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 		if err := rt.RemoveVolume(ctx, name+"-data"); err != nil {
 			return err
 		}
-		_ = rt.RemoveNetwork(ctx, network(cfg))
+		_ = rt.RemoveNetwork(ctx, providerkit.Network(cfg))
 		return nil
 	case "Source":
 		// deletionPolicy governs the data (docs/planning/07 §2.2): retain
@@ -368,7 +330,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 		if err != nil {
 			return err
 		}
-		addr, closeAddr, err := reachableAddr(ctx, rt, name)
+		addr, closeAddr, err := providerkit.ReachableAddr(ctx, rt, name, 3306)
 		if err != nil {
 			return err
 		}
@@ -412,7 +374,7 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		if err != nil {
 			return st, err
 		}
-		addr, closeAddr, err := reachableAddr(ctx, rt, name)
+		addr, closeAddr, err := providerkit.ReachableAddr(ctx, rt, name, 3306)
 		if err != nil {
 			return st, err
 		}

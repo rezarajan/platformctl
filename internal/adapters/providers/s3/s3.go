@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/domain/dataset"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
-	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -34,44 +34,20 @@ func New() *Provider { return &Provider{} }
 
 func (p *Provider) Type() string { return "s3" }
 
-func hostPort(cfg provider.Provider, name string) int {
-	configured := 0
-	if v, ok := cfg.Configuration["port"]; ok {
-		switch n := v.(type) {
-		case int:
-			configured = n
-		case float64:
-			configured = int(n)
-		}
-	}
-	return hostport.Resolve(configured, name)
-}
-
 // reachableAddr returns an address this process can dial right now to reach
 // the store's S3 API port, plus a close func that must always be called
 // (docs/planning/08 B8: Docker's is a cheap no-op; Kubernetes may tear down
 // a port-forward tunnel opened just for this call).
 func reachableAddr(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
-	return rt.EnsureReachable(ctx, name, apiPort)
-}
-
-func network(cfg provider.Provider) string {
-	if n, ok := cfg.RuntimeConfig["network"].(string); ok && n != "" {
-		return n
-	}
-	return "datascape"
+	return providerkit.ReachableAddr(ctx, rt, name, apiPort)
 }
 
 // rootCredentials returns the MinIO root credentials: the SecretReference
 // named by configuration.rootSecretRef, or the first declared secretRef.
 func rootCredentials(cfg provider.Provider, secrets map[string]map[string]string, name string) (user, pass string, err error) {
-	refName, _ := cfg.Configuration["rootSecretRef"].(string)
-	if refName == "" && len(cfg.SecretRefs) > 0 {
-		refName = cfg.SecretRefs[0]
-	}
-	creds, ok := secrets[refName]
-	if !ok {
-		return "", "", fmt.Errorf("Provider %q (type: s3): no resolved credentials for secretRef %q", name, refName)
+	creds, refName, err := providerkit.ResolveCredential(cfg, secrets, "rootSecretRef", name)
+	if err != nil {
+		return "", "", err
 	}
 	user, pass = creds["username"], creds["password"]
 	if user == "" || pass == "" {
@@ -130,42 +106,34 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	if err != nil {
 		return st, err
 	}
-	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
-
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: network(cfg), Labels: labels}); err != nil {
-		return st, err
-	}
-	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: name + "-data", Labels: labels, Networks: []string{network(cfg)}}); err != nil {
-		return st, err
-	}
-	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
-		Name:          name,
-		Image:         image,
-		ImagePullAuth: pullAuth,
-		Cmd:           []string{"server", "/data"},
-		// The password rides a file mount, not env — env is readable by
-		// anyone with `docker inspect` access (docs/planning/07 Gate 1
-		// checkbox 4); MinIO's entrypoint consumes *_FILE natively.
-		Env: map[string]string{
-			"MINIO_ROOT_USER":          user,
-			"MINIO_ROOT_PASSWORD_FILE": rootPasswordPath,
+	ctrState, err := providerkit.EnsureInstance(ctx, rt, providerkit.InstanceSpec{
+		Namespace: req.Provider.Metadata.Namespace,
+		Name:      name,
+		Network:   providerkit.Network(cfg),
+		Volume:    &providerkit.InstanceVolume{Name: name + "-data", MountPath: "/data"},
+		Container: runtime.ContainerSpec{
+			Image:         image,
+			ImagePullAuth: pullAuth,
+			Cmd:           []string{"server", "/data"},
+			// The password rides a file mount, not env — env is readable by
+			// anyone with `docker inspect` access (docs/planning/07 Gate 1
+			// checkbox 4); MinIO's entrypoint consumes *_FILE natively.
+			Env: map[string]string{
+				"MINIO_ROOT_USER":          user,
+				"MINIO_ROOT_PASSWORD_FILE": rootPasswordPath,
+			},
+			Files: []runtime.FileMount{{Path: rootPasswordPath, Content: []byte(pass)}},
+			Ports: []runtime.PortBinding{{HostPort: providerkit.HostPort(cfg, name, "port"), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
+			HealthCheck: &runtime.HealthCheck{
+				Test:     []string{"CMD-SHELL", fmt.Sprintf("curl -sf http://localhost:%d/minio/health/live || exit 1", apiPort)},
+				Interval: 2 * time.Second,
+				Timeout:  5 * time.Second,
+				Retries:  30,
+			},
 		},
-		Files:    []runtime.FileMount{{Path: rootPasswordPath, Content: []byte(pass)}},
-		Networks: []string{network(cfg)},
-		Volumes:  []runtime.VolumeMount{{VolumeName: name + "-data", MountPath: "/data"}},
-		Ports:    []runtime.PortBinding{{HostPort: hostPort(cfg, name), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
-		HealthCheck: &runtime.HealthCheck{
-			Test:     []string{"CMD-SHELL", fmt.Sprintf("curl -sf http://localhost:%d/minio/health/live || exit 1", apiPort)},
-			Interval: 2 * time.Second,
-			Timeout:  5 * time.Second,
-			Retries:  30,
-		},
-		Labels: labels,
+		WaitTimeout: 120 * time.Second,
 	})
 	if err != nil {
-		return st, err
-	}
-	if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
 		return st, err
 	}
 
@@ -229,7 +197,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 		if err := rt.RemoveVolume(ctx, name+"-data"); err != nil {
 			return err
 		}
-		_ = rt.RemoveNetwork(ctx, network(cfg))
+		_ = rt.RemoveNetwork(ctx, providerkit.Network(cfg))
 		return nil
 	case "Dataset":
 		ds, err := dataset.FromEnvelope(res)
