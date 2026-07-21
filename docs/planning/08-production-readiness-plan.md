@@ -767,6 +767,75 @@ entrypoints, is observable, and its data is recoverable. This is where
   `http://nessie.localhost:<port>` on Docker and via Ingress on K8s; two
   Connections route independently; inventory shows the routed URL; drift
   detects a mangled route and heals.
+- **Done (2026-07-22, merged):** ADR 018 (Caddy via read-write admin API —
+  route changes never restart the shared proxy; native Ingress on K8s;
+  TLS deferred to C8 with the `Connection.spec.tls` seam noted); all
+  accept items live on both runtimes; load-bearing fix: registry
+  decorators must explicitly delegate optional runtime capabilities
+  (interface embedding hides them — pinned). The agent-side RBAC
+  deviation (K8s leg under ambient admin) was closed at the merge gate:
+  the new `ingresses` verbs applied to the cluster and
+  TestIngressKubernetesEndToEnd re-run green under a minted minimal-RBAC
+  kubeconfig (35.9s).
+- **Done (2026-07-21):** design note `docs/adr/018-ingress-routing.md`
+  decides Caddy over Traefik on Docker (Caddy's admin API is read-write —
+  `PATCH`/`POST`/`DELETE /id/<id>` — so per-Connection routes reconcile
+  without ever touching `ContainerSpec.Files`, which participates in the
+  Docker spec hash and would restart the shared proxy, dropping every other
+  Connection's traffic; Traefik's API is read-only by design) and native
+  `networking.k8s.io/v1 Ingress` over Gateway API `HTTPRoute` on Kubernetes
+  (zero-install on every cluster; Gateway API CRDs are not guaranteed
+  present, and this project's own minimal-RBAC posture already depends on
+  well-known API groups). `internal/adapters/providers/ingress` implements
+  `ConnectionCapableProvider{"http"}`: Docker/fake realize one shared Caddy
+  container bootstrapped once via `EnsureContainer`, with every Connection's
+  route reconciled through Caddy's admin API afterward; Kubernetes realizes
+  one `Ingress` object per Connection via a new optional
+  `runtime.IngressCapableRuntime` port capability
+  (`internal/adapters/runtime/kubernetes/ingress.go`), which the provider
+  type-asserts against — never an adapter-package import — after branching
+  on `provider.Provider.RuntimeType` (a domain-layer fact, not adapter
+  introspection). Gate `IngressProvider` (Alpha, disabled). RBAC:
+  `deploy/kubernetes/rbac/role.yaml` + `preflight.go` +
+  `deploy/kubernetes/rbac/README.md` gained `ingresses.networking.k8s.io`
+  (get/create/update/delete/list), same-commit per doc 06 §8 rule 4.
+  Verified live: **Docker** (`TestIngressRoutingEndToEnd`,
+  `cmd/platformctl/ingress_integration_test.go`, ~11s) — nessie reachable at
+  `http://nessie.localhost:<port>` and minio independently at
+  `http://minio.localhost:<port>` through the one shared proxy container, an
+  unrecognized Host routes to neither, `inventory` shows both routed URLs,
+  an out-of-band admin-API edit to nessie's route is detected as
+  `RouteConfigDrift` by `drift` and healed by the next `apply`, re-apply is
+  idempotent (proxy container ID unchanged — confirming no route change
+  ever restarts it), destroy is clean. **Kubernetes**
+  (`TestIngressKubernetesEndToEnd`,
+  `cmd/platformctl/ingress_kubernetes_integration_test.go`, ~32s, against a
+  live minikube cluster with the `ingress-nginx` addon enabled) — the
+  `Ingress` object is created with the correct Host/backend, idempotent
+  re-apply, an out-of-band mangled `Ingress` heals on the next `apply`,
+  clean destroy. One live-caught defect fixed with a conformance
+  reproduction in the same commit (the F6 ratchet): `application/registry`'s
+  `haGuardRuntime` wrapper embedded the `runtime.ContainerRuntime`
+  *interface*, which only promotes that interface's own declared methods —
+  so a provider's `req.Runtime.(runtime.IngressCapableRuntime)` assertion
+  always failed for every runtime obtained through the registry, including a
+  real Kubernetes adapter that genuinely implements it; the Kubernetes
+  adapter's own fake-clientset unit tests never exercise this wrapper and so
+  never caught it. Fixed by giving `haGuardRuntime` three explicit
+  delegating methods; pinned by
+  `TestRuntime_PromotesIngressCapableRuntime`
+  (`internal/application/registry/registry_test.go`).
+  **Deviation from doc 08 §2.1 step 5:** the live-cluster verification used
+  the ambient (pre-existing, cluster-admin-bound) minikube kubeconfig, not a
+  freshly minted minimal-RBAC one — minting one requires `kubectl apply` of
+  `deploy/kubernetes/rbac/{serviceaccount,role,binding}.yaml`, which this
+  session's environment blocked as a protected cluster-mutating action
+  requiring interactive review. The RBAC manifests themselves were updated
+  (the new `ingresses.networking.k8s.io` verbs), matching every other verb
+  this adapter uses, but their *sufficiency* was not re-proven live the way
+  B5's CI job proves it for the rest of the adapter — recorded here for the
+  maintainer to verify with `kubectl apply -f deploy/kubernetes/rbac/` +
+  `kubectl create token` per `deploy/kubernetes/rbac/README.md`.
 
 ### C8: TLS termination and certificate handling
 

@@ -71,4 +71,5 @@ cluster, to prove it's actually sufficient — not just documented as such.
 | `pods/exec` | create | `ReadFile`'s live-path fallback, `ProbeReachable`'s exec-dial fast path |
 | `pods/portforward` | create | `EnsureReachable`'s `port-forward` access mode (the default) |
 | `networkpolicies.networking.k8s.io` | get, create, update, delete | `EnsureNetwork`'s default-deny + allow-same-namespace pair (opt out with `networkPolicy: none`) |
+| `ingresses.networking.k8s.io` | get, create, update, delete, list | `IngressCapableRuntime`'s `EnsureIngress`/`GetIngress`/`RemoveIngress` — one native Ingress per managed HTTP `Connection` (docs/planning/08 C7, docs/adr/018) |
 | `selfsubjectaccessreviews.authorization.k8s.io` | create | The `validate`/`plan`-time preflight check itself |

@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/rezarajan/platformctl/internal/adapters/providers/debezium"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/ingress"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/mysql"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/nessie"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/noop"
@@ -127,6 +128,13 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// exporters and a standalone grafana provider are explicit deferrals,
 	// see the C9 status note).
 	gates.Register("MonitoringStackProvider", featuregate.Alpha, false)
+	// docs/planning/08 C7, docs/adr/018: the ingress provider (HTTP routing
+	// on the Connection seam). Alpha/disabled — a new provider exposing a
+	// new network-reachable surface (an HTTP reverse proxy accepting
+	// arbitrary Host headers) defaults off until soaked, matching the
+	// TrinoProvider/JDBCSinkProvider posture (design note 006), not the
+	// Phase 6.5 enabled-Alpha precedent.
+	gates.Register("IngressProvider", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
@@ -147,6 +155,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	reg.RegisterProvider("openlineage", func() reconciler.Provider { return openlineage.New() }, "OpenLineageProvider")
 	reg.RegisterProvider("proxy", func() reconciler.Provider { return proxy.New() }, "ProxyProvider")
 	reg.RegisterProvider("prometheus", func() reconciler.Provider { return prometheus.New() }, "MonitoringStackProvider")
+	reg.RegisterProvider("ingress", func() reconciler.Provider { return ingress.New() }, "IngressProvider")
 	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
 		return fakeruntime.New(), nil
 	})

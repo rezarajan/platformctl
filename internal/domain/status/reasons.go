@@ -175,6 +175,35 @@ const (
 	ReasonPrefixUnlistable   = "PrefixUnlistable"
 )
 
+// --- ingress (managed HTTP Connection routing; docs/planning/08 C7,
+// docs/adr/018) -------------------------------------------------------------
+const (
+	// ReasonProxySurfaceReady: the shared reverse-proxy container (Docker)
+	// or the ingress provider's Provider-level anchor (Kubernetes — no
+	// central container, mirroring proxy's own EntrypointSurfaceReady) is
+	// up.
+	ReasonProxySurfaceReady = "ProxySurfaceReady"
+	ReasonProxySurfaceDown  = "ProxySurfaceDown"
+	// ReasonRouteHealthy: the Connection's route answers through the
+	// entrypoint (Docker: dialed through Caddy with the route's Host
+	// header; Kubernetes: the Ingress object matches spec).
+	ReasonRouteHealthy = "RouteHealthy"
+	// ReasonRouteMissing: the route was removed out-of-band (Docker: no
+	// matching @id in Caddy's live config; Kubernetes: the Ingress object
+	// is gone) — a drift condition, healed by re-reconciling.
+	ReasonRouteMissing = "RouteMissing"
+	// ReasonRouteConfigDrift: the route exists but its live Host match or
+	// upstream target differs from what the Connection's spec generates —
+	// drifted *names*, never target values, matching the debezium/s3sink/
+	// prometheus config-drift bar.
+	ReasonRouteConfigDrift = "RouteConfigDrift"
+	// ReasonIngressUpstreamUnreachable: the route is correctly configured but
+	// the upstream it forwards to does not answer. Named distinctly from
+	// proxy's own ReasonUpstreamUnreachable (same package, different
+	// constant) even though the concept mirrors it exactly.
+	ReasonIngressUpstreamUnreachable = "IngressUpstreamUnreachable"
+)
+
 // --- prometheus (managed monitoring stack; docs/planning/08 C9) ------------
 // The base container reuses ReasonInstanceHealthy/ReasonInstanceUnhealthy
 // above (the shared single-container-instance shape). These two are

@@ -452,6 +452,64 @@ type ContainerRuntime interface {
 	ProbeReachable(ctx context.Context, network, target string) error
 }
 
+// IngressSpec describes one HTTP route to publish through the runtime's own
+// native ingress mechanism (docs/planning/08 C7, docs/adr/018): Kubernetes
+// realizes it as a networking.k8s.io/v1 Ingress object routing Host(Host) to
+// an existing Service. Docker has no native ingress concept — the `ingress`
+// provider realizes Docker-runtime HTTP routing entirely itself, via a
+// shared reverse-proxy container it manages with EnsureContainer plus its
+// own admin-API reconciliation (see internal/adapters/providers/ingress) —
+// so this spec, and IngressCapableRuntime below, exist for Kubernetes only.
+type IngressSpec struct {
+	// Name is the Ingress object's own name (conventionally the realizing
+	// Connection's runtime object name).
+	Name string
+	// Namespace is the Connection's owning Provider's runtime.network
+	// (already-created by EnsureNetwork).
+	Namespace string
+	// Host is the Host(...) match rule, e.g. "nessie.localhost".
+	Host string
+	// TargetName is the existing Service name to route to — the upstream
+	// resource's own runtime object name (naming.RuntimeObjectName),
+	// resolved from Connection.spec.target by the ingress provider, never
+	// constructed by this port (docs/adr/015).
+	TargetName string
+	TargetPort int
+	Labels     map[string]string
+}
+
+// IngressState reports what EnsureIngress/GetIngress observed — Host,
+// TargetName, and TargetPort mirror the live object's own rule/backend (so a
+// caller can drift-check them against IngressSpec without a second read),
+// Address is the ingress controller's own observed load-balancer address
+// when the cluster's controller publishes one (best-effort; empty when
+// unknown, e.g. no LoadBalancer support on a local cluster).
+type IngressState struct {
+	Host       string
+	TargetName string
+	TargetPort int
+	Address    string
+}
+
+// IngressCapableRuntime is an optional ContainerRuntime capability
+// (docs/adr/018's "provider type-asserts a runtime," the mirror image of the
+// engine type-asserting an optional Provider capability like SpecValidator):
+// implemented only by the Kubernetes adapter. A provider that wants
+// native-ingress realization type-asserts req.Runtime against this
+// interface rather than importing any concrete adapter package (the
+// domain/ports/adapters layering invariant forbids that); on Docker/fake the
+// assertion fails and the caller takes its own Docker-native path instead.
+type IngressCapableRuntime interface {
+	// EnsureIngress creates or updates the named Ingress to match spec —
+	// idempotent, like every other Ensure* method on this port.
+	EnsureIngress(ctx context.Context, spec IngressSpec) (IngressState, error)
+	// GetIngress reads the current state of a previously-ensured Ingress
+	// without mutating it, for drift detection. found is false when no such
+	// Ingress exists (e.g. removed out-of-band).
+	GetIngress(ctx context.Context, namespace, name string) (state IngressState, found bool, err error)
+	RemoveIngress(ctx context.Context, namespace, name string) error
+}
+
 // Datascape ownership labels — applied to every created object so
 // ListManaged/destroy never touch unlabeled resources.
 const (
