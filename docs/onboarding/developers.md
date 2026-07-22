@@ -136,6 +136,22 @@ this is the recipe (docs/planning/02-architecture.md §11):
   check list, and `deploy/kubernetes/rbac/README.md` must all gain a new verb in the same commit
   (docs/planning/06 §8, rule 4).
 
+## Guardrails: lints and policies
+
+Two layers, don't conflate them: **lints** (`internal/application/lint`, docs/adr/020) are
+advisory design-quality findings built into `validate`; **policies** (`internal/application/
+policy`, docs/adr/021) are organizational rules loaded from a separate `--policies` channel,
+deny-wins, with exemptions honored only when a rule opts in (`exemptible: true`). See
+[docs/onboarding/users.md#governance-lints-vs-policies](users.md#governance-lints-vs-policies)
+for the operator-facing explanation and a worked deny/waiver example; if your task adds a new
+built-in lint code or policy vocabulary item, it needs a fixture in the relevant catalog-
+completeness guard (`cmd/platformctl/lint_catalog_test.go` / `policy_catalog_test.go`) in the same
+commit. The shipped zero-trust pack (`platformctl policy init zero-trust`, docs/adr/021 §4) is
+evaluated against every shipped example and blueprint in CI
+(`cmd/platformctl/policy_pack_examples_test.go`) — a new example/blueprint resource that trips an
+exemptible rule needs its own `policy.datascape.io/exempt` waiver in the same commit, the same way
+a new lint finding needs `lint.datascape.io/waive`.
+
 ## Docs rules
 
 - **Schema → doc 03, same commit.** A change under `schemas/` requires a matching update to

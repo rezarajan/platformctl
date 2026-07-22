@@ -179,6 +179,102 @@ Multiple `Name=true|false` pairs are comma-separated. A manifest that uses a dis
 (a `Provider` of a gated type, `spec.external: true`, a schema-carrying Binding format, ...)
 fails at `validate`, not partway through `apply` — see Troubleshooting.
 
+## Governance: lints vs policies
+
+platformctl has two distinct guardrail layers — don't confuse them, because they answer
+different questions and one of them a team can override, the other it can't.
+
+| | **Lints** (`platformctl lint`, docs/adr/020) | **Policies** (`platformctl policy`, docs/adr/021) |
+|---|---|---|
+| Question answered | "Is this design-quality clean?" | "Is this *allowed* here?" |
+| Nature | **Advisory** — findings, not gates | **Governed** — organizational rule, deny-wins |
+| Source | Built into every `validate` (DL001–DL021 + provider-contributed codes) | A separate, explicit channel: `--policies <dir>` or the conventional `.datascape/policies/` |
+| Override | `lint.datascape.io/waive: "DLxxx: <reason>"` — any resource, any finding, "do as they please, but informed" | `policy.datascape.io/exempt: "<rule-id>: <reason>"` — **only if the rule itself declares `exemptible: true`**; a non-exemptible deny has no in-manifest escape at all |
+| Who decides the rules | Datascape (the built-in DL set is fixed) | **You** — policies are typed YAML you author, own, and version like any other manifest |
+
+A **lint** is Datascape telling you "this looks like a mistake" (two Bindings capturing
+overlapping tables, a plaintext Connection where a TLS path exists). A **policy** is your team
+telling *every* `validate`/`plan`/`apply`/`destroy` "this is forbidden here, full stop" — the
+policy-as-code equivalent of an AWS SCP or a Kubernetes admission webhook. Lints ship with the
+tool; policies don't ship at all until you write or generate one. **A repository with no
+`--policies` directory has zero policy enforcement** — enabling the `PolicyEngine` feature gate
+with nothing to load is a no-op, not a trap.
+
+### Getting started: the zero-trust starter pack
+
+You don't hand-write a policy file from scratch. `platformctl policy init zero-trust` writes a
+versioned starter pack (the "blueprint" pattern applied to governance) covering the zero-trust
+posture Datascape already ships as *defaults* — TLS-terminated Connections, digest-pinned
+images, `vault`/`kubernetes`-backed secrets, default-deny network isolation, protected data
+resources, and a few lint findings escalated from advisory to mandatory:
+
+```sh
+platformctl policy init zero-trust                    # writes .datascape/policies/policy.yaml
+platformctl policy test ./platform/                   # preview what it would deny — no state, no runtime calls
+platformctl apply ./platform/ --feature-gates PolicyEngine=true   # now it's enforced
+```
+
+Review the written file before enabling it — every rule's comment cites the mechanism ADR/doc
+section it enforces, and a few rules ship with a literal `REPLACE_ME`-style placeholder (e.g. the
+corp-registry hostname, the external-target allowlist) that only makes sense once you fill in
+your organization's own values. `PolicyEngine` stays **Alpha and disabled by default** — no
+policy evaluation happens anywhere until you both load a policies directory *and* pass
+`--feature-gates PolicyEngine=true`.
+
+### A worked example: deny, then waive
+
+Say the pack is enabled and you `validate` a manifest set with a plaintext Connection:
+
+```
+$ platformctl validate ./platform/ --feature-gates PolicyEngine=true
+error: denied by policy:
+  default/Connection/orders-db (rule no-plaintext-connections): Connections must terminate TLS (spec.scheme: https) — docs/adr/018, docs/planning/08 C8. Exempt for local-only dev traffic with a reason.
+```
+
+Same shape as any other validation error: the rule id, the message, and exactly which resource
+tripped it. Two ways forward:
+
+1. **Fix it** — set `spec.scheme: https` on the Connection (the actually-governed outcome the
+   policy wants).
+2. **Waive it, with a reason** — only because `no-plaintext-connections` is authored
+   `exemptible: true` in the pack. Add the annotation directly on the resource:
+
+   ```yaml
+   apiVersion: datascape.io/v1alpha1
+   kind: Connection
+   metadata:
+     name: orders-db
+     annotations:
+       policy.datascape.io/exempt: "no-plaintext-connections: local dev sandbox, no real data, TLS added before staging"
+   spec:
+     scheme: tcp
+     ...
+   ```
+
+   `validate` now reports the decision as exempted (visible in `-o json`, never silently dropped)
+   and exits `0`. The reason is mandatory — an entry with no `: <reason>` half is dropped by the
+   parser and the deny still blocks.
+
+Now compare a rule the pack authors deliberately made **non-exemptible** —
+`protect-data` (`Dataset`/`Source` must set `metadata.protect: true`, docs/adr/013). The same
+annotation on that resource does *nothing*: the evaluator only ever honors an exemption when the
+rule itself opted in, "unlike a lint waiver, which any resource can always claim" (ADR 021 §3).
+If your team hits a non-exemptible deny you genuinely can't satisfy, that's a real finding to
+raise with whoever owns the pack — not something to route around.
+
+### `policy test` in CI
+
+`platformctl policy test <dir>` evaluates policies against a manifest set on its own — schema +
+graph + lint findings, no compatibility checks, no state, no runtime calls — the fast,
+CI-friendly authoring loop for policy files themselves. This repository's own CI runs the shipped
+zero-trust pack via `policy test` against every example and blueprint it ships (`.github/
+workflows/ci.yml`'s "Policy pack against examples and blueprints" step, docs/planning/08 §7.7
+H4): a posture regression — a resource that starts tripping a rule it didn't before, or a waiver
+that quietly disappears — fails the build, the same way a broken unit test would. Wire your own
+policy directory into your pipeline the same way: `platformctl policy test ./platform/
+--feature-gates PolicyEngine=true` as a required check before `apply` ever runs against anything
+that matters.
+
 ## Troubleshooting
 
 ### `apply` was killed mid-run (CI job cancelled, laptop slept, crash)

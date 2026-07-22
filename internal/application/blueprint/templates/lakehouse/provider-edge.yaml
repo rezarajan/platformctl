@@ -5,6 +5,13 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: edge
+  # docs/adr/021 zero-trust pack (H4): blueprint uses the default pinned
+  # forwarder image, not a registry.corp.* one — waived, not applicable
+  # outside this dev-flavored starting point.
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: blueprint uses the default pinned forwarder image, not registry.corp.*
+      require-digest-pins: blueprint's default forwarder image is tag-resolved at the runtime layer, not expressed as a digest in this manifest field
 spec:
   type: proxy
   runtime:

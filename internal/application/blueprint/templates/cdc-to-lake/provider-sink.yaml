@@ -15,6 +15,14 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: sink
+  # docs/adr/021 zero-trust pack (H4): blueprint requires a locally built
+  # image (no stock Connect image ships the S3 sink plugin), not a
+  # registry.corp.* digest-pinned one — waived, not applicable outside
+  # this dev-flavored starting point.
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: blueprint requires a locally built image (datascape-s3sink-connect:local), not a corp registry
+      require-digest-pins: blueprint tags locally for build-your-own iteration; docs/planning/08 A10 covers production digest pinning
 spec:
   type: s3sink
   runtime:

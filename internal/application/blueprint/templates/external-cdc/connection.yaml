@@ -8,6 +8,11 @@ apiVersion: datascape.io/v1alpha1
 kind: Connection
 metadata:
   name: source-db
+  # docs/adr/021 zero-trust pack (H4): blueprint forwards a plaintext TCP
+  # connection to the external database for simplicity — waived; ADR
+  # 018/C8 covers the production TLS-terminated path.
+  annotations:
+    policy.datascape.io/exempt: "no-plaintext-connections: blueprint forwards raw TCP to a local/dev database for simplicity"
 spec:
   providerRef:
     name: edge

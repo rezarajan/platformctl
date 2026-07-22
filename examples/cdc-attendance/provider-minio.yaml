@@ -3,6 +3,13 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: local-minio
+  # docs/adr/021 zero-trust pack (H4): dev example uses the stock default
+  # MinIO image (see README.md#defaults), not a corp-registry digest pin —
+  # waived, not applicable outside this dev example.
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: dev example uses the stock default image, not registry.corp.*
+      require-digest-pins: dev example uses the stock default image by tag; docs/planning/08 A10 covers production digest pinning
 spec:
   type: minio
   runtime:

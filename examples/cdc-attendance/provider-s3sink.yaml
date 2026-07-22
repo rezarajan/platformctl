@@ -5,6 +5,13 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: s3-sink
+  # docs/adr/021 zero-trust pack (H4): this dev example builds and runs a
+  # local Connect image, not a registry.corp.* digest-pinned one — waived,
+  # not applicable outside this dev example.
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: dev example runs a locally built image (datascape-s3sink-connect:local), not a corp registry
+      require-digest-pins: dev example tags locally for fast rebuild iteration; docs/planning/08 A10 covers production digest pinning
 spec:
   type: s3sink
   runtime:
