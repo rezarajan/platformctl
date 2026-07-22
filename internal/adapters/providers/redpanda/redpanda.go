@@ -806,7 +806,12 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			return st, err
 		}
 		defer closeAll()
-		drift, reason, err := probeTopic(ctx, dialMap, seeds, res.Metadata.Name, wantPartitions, es.ReplicationFactor(), wantRetentionMS)
+		// retryTransientProbe: a transport error is "undetermined", not a
+		// verdict — see topicProbeRetryWindow's doc (kafka.go) for the
+		// live-caught heal-window race this absorbs.
+		drift, reason, err := retryTransientProbe(ctx, func() (bool, string, error) {
+			return probeTopic(ctx, dialMap, seeds, res.Metadata.Name, wantPartitions, es.ReplicationFactor(), wantRetentionMS)
+		})
 		if err != nil {
 			return st, err
 		}

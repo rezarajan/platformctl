@@ -265,3 +265,25 @@ static. Dimensions, each producing findings verified before fixing:
   against examples + governance onboarding), and a hygiene batch
   (.golangci.yml adoption follow-up + G7 exemption-list absorption).
   E6→E7, H5→H6 queue behind their dependencies next wave.
+- 2026-07-22: CI failure (owner-reported) FIXED BY ORCHESTRATOR directly:
+  TestRedpandaHAEndToEnd on Docker — drift-after-heal reported
+  ProbeFailed because a DescribeConfigs shard hit the just-restarted
+  broker while it accepted TCP but closed during ApiVersions
+  negotiation. Root cause: 93fbf14 fixed the RECONCILE side
+  (waitTopicSettled before Ready) but the PROBE side stayed single-shot
+  — a transport error became an instant verdict. Fix:
+  retryTransientProbe in the redpanda provider (errors = undetermined,
+  retried within a 15s bounded window; verdicts clean-or-drifted return
+  immediately, so real drift is never masked; persistent failure
+  surfaces the honest last error). Unit-pinned (TestRetryTransientProbe:
+  transient-then-clean, immediate-verdict, persistent-error,
+  ctx-cancel); live redpanda suite re-run queued+ledger-recorded. The
+  earlier K8s produce-during-kill flake (I8) is this race's sibling in
+  the TEST client — still open, distinct fix.
+- 2026-07-22: OWNER DECISION: zero-trust pack treated as the prod
+  starter it is (option 1) — drop the non-exemptible
+  secrets-from-vault-or-k8s twin (exemptible forbid-env-secret-backend
+  covers the fact; orgs flip exemptible locally per ADR 021's tailoring
+  frame), keep protect-data non-exemptible with the examples'
+  known-baseline. To be applied at H4's merge gate with an ADR 021
+  addendum; Stage H criterion 2 pack-half ticked then.

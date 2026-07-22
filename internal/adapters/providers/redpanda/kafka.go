@@ -199,6 +199,42 @@ func countJoinedBrokers(ctx context.Context, dialMap map[string]string, seeds []
 // cluster. A healthy cluster passes on the first attempt.
 const topicSettleTimeout = 45 * time.Second
 
+// topicProbeRetryWindow bounds retryTransientProbe below: the PROBE-side
+// half of the same discipline. Found live twice (the second time on CI,
+// doc 11): right after a healing apply, a just-restarted broker accepts
+// TCP but closes connections during ApiVersions negotiation for a few
+// seconds; a DescribeConfigs shard routed to it errors, and a
+// single-shot probe reported ProbeFailed (drift dirty) against a topic
+// that was serving fine on the survivors. Errors mean "state
+// undetermined" — retried within this window; verdicts (clean OR
+// drifted) are determined and return immediately, so real drift is
+// never masked and an unreachable cluster still reports, 15s later,
+// with the honest last error. Vars, not consts, so tests shrink them.
+var (
+	topicProbeRetryWindow   = 15 * time.Second
+	topicProbeRetryInterval = 2 * time.Second
+)
+
+// retryTransientProbe re-runs probe while it returns an error, bounded by
+// topicProbeRetryWindow; the first determined verdict returns immediately.
+func retryTransientProbe(ctx context.Context, probe func() (bool, string, error)) (bool, string, error) {
+	deadline := time.Now().Add(topicProbeRetryWindow)
+	for {
+		drifted, reason, err := probe()
+		if err == nil {
+			return drifted, reason, nil
+		}
+		if time.Now().After(deadline) {
+			return false, "", err
+		}
+		select {
+		case <-ctx.Done():
+			return false, "", ctx.Err()
+		case <-time.After(topicProbeRetryInterval):
+		}
+	}
+}
+
 func waitTopicSettled(ctx context.Context, dialMap map[string]string, seeds []string, topic string, wantPartitions, wantReplication int, wantRetentionMS int64) error {
 	deadline := time.Now().Add(topicSettleTimeout)
 	var lastErr error
