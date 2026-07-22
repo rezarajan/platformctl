@@ -2529,6 +2529,37 @@ unless a dependency is stated.
 - **Accept:** NFR-11 present in docs 01+02; B1 audit report cites it
   per finding.
 
+### I4: Reconcile/Probe symmetry — Ready must use the probe's own serving check (B1 findings 1–3)
+
+- **Size:** S–M. **Depends:** none. **Why:** the B1 audit (doc 11) found
+  one recurring class: three connection-realizing providers set Ready in
+  Reconcile from a WEAKER signal than their own Probe verifies —
+  wireguard (container healthcheck = interface exists, vs Probe's
+  handshake + dial-through-forwarder; CONFIRMED, the redpanda-93fbf14
+  signature), ingress-docker (route written via admin API, vs Probe's
+  dial-through-route), proxy (container Running — no healthcheck even
+  configured — vs Probe's dial-through-forwarder). NFR-11 names exactly
+  this: Ready means serving NOW, and an immediate drift probe reports
+  clean.
+- **Do:** in each provider, before setting Ready in reconcile, run the
+  SAME serving check Probe uses (extract/reuse the existing functions:
+  wireguard's handshake+`dialUpstream`, ingress-docker's
+  `probeThroughRoute`/`probeThroughRouteTLS`, proxy's
+  `probeThroughForwarder`) inside a bounded condition-poll with an
+  honest timeout error naming the last observed state (the
+  `waitTopicSettled` pattern). No new signals — symmetry with Probe is
+  the whole fix. Proxy additionally gains a real container HealthCheck.
+- **Accept:** unit: reconcile fails (honest error) when the upstream
+  never answers; e2e: existing wireguard + ingress suites stay green,
+  and each gains an assertion that `drift` immediately after `apply`
+  reports zero drift (the NFR-11 acceptance bar).
+- **Deferred sibling (recorded, not scheduled):** ingress-kubernetes is
+  symmetric-shallow (neither Reconcile nor Probe dials through the
+  ingress controller) — no false-Ready flap, and a serving probe would
+  hardcode assumptions about which ingress controller the cluster runs;
+  revisit if a live K8s ingress flake ever surfaces (B1 finding 4).
+
+
 
 ## 8. New feature gates introduced by this plan
 
