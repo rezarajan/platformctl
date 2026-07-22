@@ -107,7 +107,24 @@ scope_hash() {
 }
 
 changed() { git diff --name-only "$BASE"...HEAD 2>/dev/null; git diff --name-only HEAD 2>/dev/null; }
+
+# K8s credential preflight (doc 06 §10 rule 5, made mechanical after an
+# expired minted token silently failed three suites' K8s legs mid-sweep,
+# 2026-07-22): if any selected suite can touch the kubernetes adapter and
+# a KUBECONFIG is set, prove the credentials answer BEFORE burning suite
+# runtime. Fail fast with the re-mint pointer instead of failing late
+# with "the server has asked for the client to provide credentials".
+k8s_preflight() {
+  [[ -n "${KUBECONFIG:-}" ]] || return 0
+  if ! kubectl --request-timeout=5s auth whoami >/dev/null 2>&1; then
+    echo "FATAL: KUBECONFIG=$KUBECONFIG cannot authenticate — the minted minimal-RBAC token has likely expired." >&2
+    echo "Re-mint per docs/planning/06 §8 rule 4 (kubectl create token platformctl -n platformctl-system --duration=8h) and retry." >&2
+    exit 3
+  fi
+}
 CHANGED=$(changed | sort -u)
+
+k8s_preflight
 
 selected=0; ran=0; skipped=0; failed=0
 while IFS='|' read -r id scope cmd; do

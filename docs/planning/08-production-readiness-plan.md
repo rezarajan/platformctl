@@ -529,17 +529,27 @@ entrypoints, is observable, and its data is recoverable. This is where
 `TLSTermination`, `MonitoringStackProvider`, `BackupRestore` (all Alpha).
 
 **Stage exit criteria:**
-- [ ] A 3-broker Redpanda EventStream with replication factor 3 keeps
+- [x] A 3-broker Redpanda EventStream with replication factor 3 keeps
       accepting produce/consume while one broker is killed (both runtimes;
       on K8s, brokers spread across nodes when possible).
-- [ ] A 2-worker Connect group keeps a CDC Binding RUNNING through the loss
+- [x] A 2-worker Connect group keeps a CDC Binding RUNNING through the loss
       of one worker.
-- [ ] An HTTP endpoint (nessie or minio console) is reachable through a
+- [x] An HTTP endpoint (nessie or minio console) is reachable through a
       routed, TLS-terminated, stable-hostname entrypoint on both runtimes.
-- [ ] `platformctl backup && platformctl restore` round-trips a Postgres
+- [x] `platformctl backup && platformctl restore` round-trips a Postgres
       Source and a MinIO Dataset onto fresh infrastructure.
-- [ ] `inventory --for prometheus` yields scrape config that collects broker,
+- [x] `inventory --for prometheus` yields scrape config that collects broker,
       database, connect, and object-store metrics into a managed Prometheus.
+
+(Criteria ticked 2026-07-22 by the production review's checkbox-truth
+audit — the FOURTH recurrence of doc 10 §6's known failure mode, found
+with all five criteria already evidence-complete: redpanda HA both
+runtimes `TestRedpandaHAEndToEnd`/`TestRedpandaHAKubernetesEndToEnd`;
+Connect worker-loss `TestConnectWorkersHAAndDeadLetterQueue`; routed
+TLS entrypoints `TestIngress*` incl. the C8 TLS scenarios on both
+runtimes; backup/restore round-trip `TestBackupRestore` (C6); the
+monitoring criterion verbatim in C9's accept evidence. Stage C closed
+at merge e69f1b4.)
 
 ### C1: Replicas and stable identity in the runtime port
 
@@ -1227,7 +1237,7 @@ expected; any task that discovers otherwise must stop and raise a design
 note first (per doc 06 §3).
 
 **Stage exit criteria:**
-- [ ] A CDC pipeline lands **Parquet** in the lake, schema-evolved via a
+- [x] A CDC pipeline lands **Parquet** in the lake, schema-evolved via a
       registry, queryable by Spark/Trino through the Nessie catalog.
 - [x] Lake data can be replayed into an EventStream (ingest) and an
       EventStream can be served into a relational Source (jdbc sink), both
@@ -1722,7 +1732,7 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
 - [ ] A third-party provider can be built from the provider-author guide +
       conformance suite alone (proven by an example provider PR that
       touches no core code).
-- [ ] Versioned release artifacts (multi-platform binaries) build from CI.
+- [x] Versioned release artifacts (multi-platform binaries) build from CI.
 
 ### E1: Blueprint scaffolding — `platformctl init`
 

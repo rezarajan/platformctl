@@ -184,3 +184,24 @@ static. Dimensions, each producing findings verified before fixing:
   (via consumption), I2 (outbound DB TLS), I6 (K8s GA-parity evidence),
   H3 (policy engine) — E5 deliberately held until I1/I2 merge (it
   restructures every provider's validation and would conflict).
+- 2026-07-22: ORCHESTRATOR FULL-REPO REVIEW (owner-requested, done
+  in-session while wave 2 runs). Verified in order: git state clean, all
+  recent commits signed, origin up to date; worktrees = exactly the 4
+  wave-2 agents; hooks (guard-planning-docs, guard-agent-model,
+  fmt-and-lint) present and wired; unlock markers gitignored; justfile ↔
+  CLAUDE.md accurate; docs/reference in sync; CI workflow wires
+  test-impact both tiers; remediation ledger has no open items; ledger
+  185 entries healthy. FIXED during review: (1) checkbox-truth 4th
+  recurrence — Stage C's five exit criteria + Stage D's parquet
+  criterion + E8's release-artifacts criterion were all unchecked with
+  evidence complete; ticked with citations. (2) stale merged branch
+  fix/k8s-external-ingress-networkpolicy deleted. (3) go.mod: accepted
+  tidy's direct classification of parquet-go (E9's manual indirect
+  revert made every future tidy dirty). (4) LIVE ISSUE caught: the
+  minted RBAC token had expired mid-wave — k8s-adapter, redpanda, cdc
+  legs of the I4+I5 delta sweep failed on credentials, not code;
+  re-minted 8h, re-runs queued and ledger-recorded on green. (5) The
+  class is now mechanically dead: scripts/test-impact.sh gained a
+  k8s_preflight that fails fast with the re-mint pointer when
+  KUBECONFIG can't authenticate. Notable non-issue: v1.1.0 tag absent
+  (v1.0.0 → v1.2.0) — historical numbering, not an error.
