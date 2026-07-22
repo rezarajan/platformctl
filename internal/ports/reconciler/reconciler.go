@@ -144,6 +144,43 @@ type Request struct {
 	// CatalogFacts's optional warehouseProviderRef case, which has no such
 	// graph edge and can genuinely need a second apply.
 	WarehouseFacts *WarehouseFacts
+	// TunnelFacts resolves a managed Connection's spec.via (docs/adr/023,
+	// closed by docs/planning/08 I1) into what its realizing provider
+	// (proxy today) needs to route its own forwarder's egress through the
+	// named tunnel Provider. TransitNetwork is read directly from the
+	// tunnel Provider's own static spec.configuration.peerNetwork — a
+	// manifest fact needing no reconcile to have happened (mirroring
+	// KafkaBootstrapServers's graph-resolved-fact discipline above, not
+	// CatalogFacts's published-state one, since this value cannot change
+	// between manifest load and reconcile). Internal is the tunnel
+	// Provider's own per-Connection published endpoint fact (ADR 015: the
+	// tunnel Provider's reconcile writes it, this field never constructs
+	// it) — the in-network "host:port" of the tunnel-side container the
+	// forwarder dials THROUGH to reach spec.target; the fact name is
+	// connection.ViaFactName(namespace, name), the same convention both
+	// the engine (reading) and the tunnel provider (writing) use so
+	// neither has to be told the other's key by hand. Populated only for a
+	// managed Connection-kind Resource declaring spec.via; nil when via is
+	// unset, Resource.Kind != "Connection", the named Provider does not
+	// resolve, or the tunnel leg has not yet published its endpoint fact —
+	// a provider reading this field must treat nil as "not ready yet",
+	// never construct a substitute. graph.Build's via -> Provider edge
+	// means this is, in practice, always non-nil by the time a via'd
+	// Connection reconciles within the same apply, mirroring
+	// WarehouseFacts's ordering guarantee.
+	TunnelFacts *TunnelFacts
+}
+
+// TunnelFacts is Request.TunnelFacts's payload — see its doc comment.
+type TunnelFacts struct {
+	// TransitNetwork is the tunnel Provider's own transit network name
+	// (its spec.configuration.peerNetwork) — the network a via-consuming
+	// forwarder must additionally join to reach Internal below.
+	TransitNetwork string
+	// Internal is the tunnel-side container's own in-network "host:port"
+	// address on TransitNetwork — dial THIS, not spec.target directly, to
+	// route through the tunnel.
+	Internal string
 }
 
 // CatalogFacts is Request.CatalogFacts's payload — see its doc comment.
@@ -275,6 +312,24 @@ type ConnectionCapableProvider interface {
 type TunnelCapableProvider interface {
 	Provider
 	SupportsTunnelChaining() []string
+}
+
+// ViaConsumingProvider is declared by a ConnectionCapableProvider that can
+// realize a managed Connection whose own spec.via names a second,
+// TunnelCapableProvider Provider — routing its own forwarder's egress
+// through that named tunnel (docs/adr/023's Scope section, closed by
+// docs/planning/08 I1). Implemented by `proxy`, deliberately not by
+// `wireguard` itself: wireguard realizes a tunnel-mediated Connection
+// directly (it IS the tunnel), it does not chain its own forwarder through
+// a second tunnel Provider. Checked at validate time whenever a
+// Connection's spec.via is set: the Connection's own realizing provider
+// (its providerRef, resolved exactly like ConnectionCapableProvider is)
+// must implement this, or via would silently apply as an unconsumed,
+// inert field — the same completeness bar ConnectionCapableProvider's own
+// scheme check already enforces.
+type ViaConsumingProvider interface {
+	ConnectionCapableProvider
+	ConsumesVia() bool
 }
 
 // VersionedProvider is implemented by providers whose internals are coupled

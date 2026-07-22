@@ -1439,6 +1439,18 @@ spec:
   directly by a `wireguard` Provider (as shown) needs no `via`, since the
   `providerRef` already names the tunnel.
 
+  **Update (docs/planning/08 I1, 2026-07-22):** `via` is now consumed —
+  `proxy` (`reconciler.ViaConsumingProvider`) realizes a Connection whose
+  `spec.via` names a tunnel-capable Provider by joining its forwarder ONLY
+  to that Provider's transit network (never the platform network's other
+  workloads) and dialing the tunnel's own per-Connection published address
+  instead of `spec.target` directly. Validate now pairs the two
+  capabilities: `via` set on a Connection whose realizing provider does
+  NOT implement `ViaConsumingProvider` is refused (the same completeness
+  bar the scheme check already enforces), rather than the prior blanket
+  refusal of every `via`. See §8.2.4 item 3 below and docs/adr/023's
+  closure note.
+
 ### 8.2.4 Reaching cloud-managed databases (worked topologies, docs/adr/025)
 
 Three production topologies for a database Datascape does not run, in
@@ -1467,6 +1479,14 @@ is consumed as-is (§3).
    provider's Connection through the tunnel, blast-minimized to the
    forwarder alone) is doc 08 **I1** — until it lands, `validate`
    refuses `via` rather than silently realizing an untunneled forwarder.
+
+   **Update (I1, 2026-07-22):** landed. `spec.via` on a `proxy`-realized
+   Connection now chains that forwarder's egress through the named
+   `wireguard` Provider's tunnel, blast-minimized exactly as designed:
+   only the forwarder container joins the tunnel's transit network, never
+   the consumer workloads. `validate` no longer refuses `via` outright —
+   it refuses only when the Connection's realizing provider does not
+   consume it (see §8.2.3's "Update" note above).
 
 ## 9. Lineage / observability schema
 

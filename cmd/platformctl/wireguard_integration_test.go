@@ -15,15 +15,18 @@ import (
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
-// TestWireGuardTunnelEndToEnd covers docs/planning/08 D5's Accept criteria
-// and the Stage D exit criterion: a CDC Binding against a database that
-// lives in an isolated "VPC" Docker network reaches RUNNING only through a
-// wireguard-realized Connection.
+// TestWireGuardTunnelEndToEnd covers docs/planning/08 D5's original Accept
+// criteria PLUS I1's extension (docs/planning/08 §7.8): a CDC Binding
+// against a database that lives in an isolated "VPC" Docker network reaches
+// RUNNING only through a `proxy`-realized Connection whose spec.via chains
+// its forwarder's egress through the `wireguard` tunnel Provider — never a
+// Connection realized directly by `wireguard` (that was D5's shape; I1
+// replaces it in this scenario to exercise the via seam end to end).
 //
 // Topology (docs/adr/023 Decision 7 — every piece below except the managed
-// wireguard/redpanda/debezium Providers is a raw, unmanaged test fixture,
-// standing in for infrastructure platformctl never provisions: a VPC, and
-// the corporate VPN gateway fronting it):
+// proxy/wireguard/redpanda/debezium Providers is a raw, unmanaged test
+// fixture, standing in for infrastructure platformctl never provisions: a
+// VPC, and the corporate VPN gateway fronting it):
 //
 //	datascape-wg-vpc (isolated, subnet 10.13.13.0/24, no path to the
 //	platform network at all):
@@ -32,14 +35,19 @@ import (
 //	  - wg-responder: also attached to datascape-wg-transit — the VPC's
 //	    own WireGuard gateway (fixed test keypair), dual-homed so it can
 //	    NAT/forward between the tunnel and the VPC.
-//	datascape-wg-transit (where the *managed* wireguard Provider's tunnel
-//	container dials the responder's WireGuard UDP endpoint):
+//	datascape-wg-transit (the tunnel transit network — I1's via-tunnel
+//	container dials the responder's WireGuard UDP endpoint here):
 //	  - wg-responder (see above)
-//	  - the managed wg-orders-db-conn tunnel container (created by apply)
+//	  - wg-orders-db-conn-via-tunnel: the managed via-tunnel container
+//	    (created by wireguard's reconcileInstance, I1) — the ONLY thing
+//	    on this network with real wg0 routing to the VPC subnet.
 //	datascape-wg-net (the ordinary shared platform network): redpanda,
-//	  debezium, and the managed tunnel container all also join this one —
-//	  Debezium never touches datascape-wg-transit or datascape-wg-vpc at
-//	  all, only the tunnel container's own name:port on datascape-wg-net.
+//	  debezium, and the managed proxy forwarder (wg-orders-db-conn) all
+//	  join this one — Debezium never touches datascape-wg-transit or
+//	  datascape-wg-vpc at all, only the forwarder's own name:port on
+//	  datascape-wg-net. The forwarder ALSO joins datascape-wg-transit
+//	  (I1's blast-minimized attachment: only the forwarder, never
+//	  Debezium/redpanda) to dial the via-tunnel container's own address.
 func TestWireGuardTunnelEndToEnd(t *testing.T) {
 	t.Setenv("DATASCAPE_SECRET_WG_TUNNEL_KEY_PRIVATEKEY", wgClientPrivateKey)
 	t.Setenv("DATASCAPE_SECRET_WG_DB_CREDS_USERNAME", "wg_orders_ro")
@@ -52,7 +60,7 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 	ctx := context.Background()
 
 	cleanup := func() {
-		for _, c := range []string{"wg-orders-to-events", "datascape-wg-dbz", "datascape-wg-rp", "wg-orders-db-conn"} {
+		for _, c := range []string{"wg-orders-to-events", "datascape-wg-dbz", "datascape-wg-rp", "wg-orders-db-conn", "wg-orders-db-conn-via-tunnel"} {
 			_ = rt.Remove(ctx, c)
 		}
 		_ = exec.Command("docker", "rm", "-f", wgDBContainer, wgResponderContainer).Run()
@@ -128,15 +136,28 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 	}
 
 	// Positive proof: the CDC connector reached RUNNING — through the
-	// tunnel, since Debezium (on datascape-wg-net only) has no other path
-	// to 10.13.13.10.
+	// via'd Connection's forwarder and tunnel, since Debezium (on
+	// datascape-wg-net only) has no other path to 10.13.13.10.
 	if state := wgConnectorStatus(t, "wg-orders-to-events"); state != "RUNNING" {
 		t.Errorf("connector state = %q, want RUNNING", state)
 	}
 
-	tunnelBefore, found, err := rt.Inspect(ctx, "wg-orders-db-conn")
+	// Negative proof (docs/planning/08 I1 Accept): being on the transit
+	// network alone does not reach the VPC subnet — only the via-tunnel
+	// container's own wg0 routing does. A raw, unmanaged, non-forwarder
+	// container attached to datascape-wg-transit dialing the VPC target
+	// directly must fail, exactly like the pre-apply platform-network
+	// negative proof above, now scoped to the network I1's blast-
+	// minimized attachment actually grants membership to.
+	probeVPCFromTransitFails(t)
+
+	forwarderBefore, found, err := rt.Inspect(ctx, "wg-orders-db-conn")
 	if err != nil || !found {
-		t.Fatalf("tunnel container not found after apply: %v", err)
+		t.Fatalf("forwarder container not found after apply: %v", err)
+	}
+	tunnelBefore, found, err := rt.Inspect(ctx, "wg-orders-db-conn-via-tunnel")
+	if err != nil || !found {
+		t.Fatalf("via tunnel container not found after apply: %v", err)
 	}
 
 	// --- idempotent re-apply -----------------------------------------------
@@ -147,12 +168,19 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 	if !strings.Contains(out, "no changes") {
 		t.Errorf("re-apply did not report 'no changes':\n%s", out)
 	}
-	tunnelAfterNoop, found, err := rt.Inspect(ctx, "wg-orders-db-conn")
+	forwarderAfterNoop, found, err := rt.Inspect(ctx, "wg-orders-db-conn")
 	if err != nil || !found {
-		t.Fatalf("tunnel container missing after no-op re-apply: %v", err)
+		t.Fatalf("forwarder container missing after no-op re-apply: %v", err)
+	}
+	if forwarderAfterNoop.ID != forwarderBefore.ID {
+		t.Errorf("forwarder container was recreated on a no-op re-apply (ID %s -> %s)", forwarderBefore.ID, forwarderAfterNoop.ID)
+	}
+	tunnelAfterNoop, found, err := rt.Inspect(ctx, "wg-orders-db-conn-via-tunnel")
+	if err != nil || !found {
+		t.Fatalf("via tunnel container missing after no-op re-apply: %v", err)
 	}
 	if tunnelAfterNoop.ID != tunnelBefore.ID {
-		t.Errorf("tunnel container was recreated on a no-op re-apply (ID %s -> %s)", tunnelBefore.ID, tunnelAfterNoop.ID)
+		t.Errorf("via tunnel container was recreated on a no-op re-apply (ID %s -> %s)", tunnelBefore.ID, tunnelAfterNoop.ID)
 	}
 
 	// --- key rotation: a new SecretReference value re-establishes the
@@ -168,12 +196,22 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("rotation apply failed (code %d): %v\n%s", code, err, out)
 	}
-	tunnelAfterRotate, found, err := rt.Inspect(ctx, "wg-orders-db-conn")
+	tunnelAfterRotate, found, err := rt.Inspect(ctx, "wg-orders-db-conn-via-tunnel")
 	if err != nil || !found {
-		t.Fatalf("tunnel container missing after key rotation: %v", err)
+		t.Fatalf("via tunnel container missing after key rotation: %v", err)
 	}
 	if tunnelAfterRotate.ID == tunnelBefore.ID {
-		t.Error("tunnel container was not recreated on a private-key rotation")
+		t.Error("via tunnel container was not recreated on a private-key rotation")
+	}
+	// I1's isolation property: the forwarder's own ContainerSpec never
+	// references the tunnel Provider's private key (only the via-tunnel's
+	// spec does) — rotating it must NOT recreate the unrelated forwarder.
+	forwarderAfterRotate, found, err := rt.Inspect(ctx, "wg-orders-db-conn")
+	if err != nil || !found {
+		t.Fatalf("forwarder container missing after key rotation: %v", err)
+	}
+	if forwarderAfterRotate.ID != forwarderBefore.ID {
+		t.Errorf("forwarder container was recreated by an unrelated tunnel key rotation (ID %s -> %s)", forwarderBefore.ID, forwarderAfterRotate.ID)
 	}
 	// The re-established tunnel is still functionally up: the connector
 	// stays RUNNING (Debezium's own connection survived, or Connect
@@ -192,12 +230,13 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 		}
 	}
 
-	// --- destroy: leaves no tunnel artifacts. -------------------------
+	// --- destroy: leaves no tunnel artifacts, including no transit-network
+	// attachments (docs/planning/08 I1 Accept). -------------------------
 	out, err, code = run(t, "destroy", manifests, "--state-file", stateFile, "--auto-approve", "--feature-gates=TunnelProvider=true")
 	if err != nil || code != 0 {
 		t.Fatalf("destroy failed (code %d): %v\n%s", code, err, out)
 	}
-	for _, c := range []string{"wg-orders-db-conn", "datascape-wg-dbz", "datascape-wg-rp"} {
+	for _, c := range []string{"wg-orders-db-conn", "wg-orders-db-conn-via-tunnel", "datascape-wg-dbz", "datascape-wg-rp"} {
 		if _, found, _ := rt.Inspect(ctx, c); found {
 			t.Errorf("container %s still present after destroy", c)
 		}
@@ -207,12 +246,20 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 		t.Fatalf("list managed: %v", err)
 	}
 	for _, m := range managed {
-		if strings.HasPrefix(m.Name, "datascape-wg-") || m.Name == "wg-orders-db-conn" {
+		if strings.HasPrefix(m.Name, "datascape-wg-") || m.Name == "wg-orders-db-conn" || m.Name == "wg-orders-db-conn-via-tunnel" {
 			t.Errorf("orphaned managed container after destroy: %s", m.Name)
 		}
 	}
+	// No transit-network attachments survive destroy: the only other thing
+	// ever attached to datascape-wg-transit is the raw wg-responder fixture
+	// (never platformctl-managed) — asserted below by RemoveNetwork's own
+	// refusal *not* firing for the platform network (every member of THAT
+	// network was platformctl-managed and is gone), while wgTransitNetwork
+	// itself is deliberately left for this test's own cleanup() (comment
+	// below).
+	//
 	// The shared platform network is fully removable: every container ever
-	// attached to it was platformctl-managed (redpanda/debezium/tunnel),
+	// attached to it was platformctl-managed (redpanda/debezium/forwarder),
 	// and all are gone now (RemoveNetwork's own documented refusal — never
 	// cascade-delete, never remove while anything is still attached —
 	// internal/ports/runtime.ContainerRuntime's doc comment).
@@ -272,6 +319,33 @@ const (
 // with the identical tooling, just hand-configured as a server instead of
 // driven by the provider.
 const wireguardImage = "linuxserver/wireguard:1.0.20260223@sha256:2868ae5e3dd9065ea3b1e44b4214b33b02b7ce5ebcb9e4f33e1132b75007f39c"
+
+// socatProbeImage is the same pinned image the proxy provider itself uses
+// (internal/adapters/providers/proxy's defaultImage, scripts/pinned-
+// images.txt) — reused here as a plain, throwaway TCP-dial tool for
+// probeVPCFromTransitFails below, never through the proxy provider itself.
+const socatProbeImage = "alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e"
+
+// probeVPCFromTransitFails is docs/planning/08 I1's negative proof: a raw,
+// unmanaged, non-forwarder container attached ONLY to the tunnel's transit
+// network dials the VPC target directly and must fail — being on the
+// transit network alone grants no route to the VPC subnet; only the
+// via-tunnel container's own wg0 interface does (I1's blast-minimized
+// attachment is exactly the point being proven). A plain
+// rt.ProbeReachable(wgTransitNetwork, ...) is deliberately NOT used here:
+// its real-Docker implementation may pick ANY platformctl-managed
+// container already on that network as its exec vantage point — including
+// the via-tunnel container itself, which legitimately CAN reach the VPC
+// subnet, silently defeating the proof. This dials from a container this
+// test controls directly instead.
+func probeVPCFromTransitFails(t *testing.T) {
+	t.Helper()
+	cmd := exec.Command("docker", "run", "--rm", "--network", wgTransitNetwork,
+		socatProbeImage, "-T2", "-", "TCP:10.13.13.10:5432,connect-timeout=2")
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("dial to the VPC target from a non-forwarder container on the transit network unexpectedly succeeded:\n%s", out)
+	}
+}
 
 // wgConnectURL is testdata/wireguard-scenario/manifests.yaml's own
 // debezium Provider connectPort — deliberately not cdc_integration_test.go's

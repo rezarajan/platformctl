@@ -1009,6 +1009,13 @@ type tunnelStub struct{ stubProvider }
 
 func (tunnelStub) SupportsTunnelChaining() []string { return []string{"tcp"} }
 
+// viaStub is a ConnectionCapableProvider that also implements
+// reconciler.ViaConsumingProvider (docs/planning/08 I1) — stands in for
+// `proxy`, the realizing provider that actually consumes spec.via.
+type viaStub struct{ connStub }
+
+func (viaStub) ConsumesVia() bool { return true }
+
 func viaManifests(viaTarget string) []resource.Envelope {
 	return []resource.Envelope{
 		envelope("Provider", "edge", map[string]any{
@@ -1039,27 +1046,33 @@ func typedResolver(byType map[string]reconciler.Provider) ProviderResolver {
 	}
 }
 
-// TestConnectionViaNotConsumedRefused: spec.via passes the structural +
-// tunnel-capability checks but is consumed by no realizing provider yet
-// (docs/planning/08 I1) — validate must refuse rather than let apply
-// realize a plain forwarder while the manifest claims confined egress
-// (a silent security failure). This test inverts when I1 lands: replace
-// the refusal assertion with the realization contract.
-func TestConnectionViaNotConsumedRefused(t *testing.T) {
+// TestConnectionViaRealized: spec.via passes the structural, tunnel-
+// capability, and pairing checks when the Connection's realizing provider
+// implements reconciler.ViaConsumingProvider (docs/planning/08 I1, closing
+// docs/adr/023's Scope deviation) — validate accepts it, since apply will
+// actually route the forwarder's egress through the named tunnel rather
+// than realizing an unconsumed, silently-inert field.
+func TestConnectionViaRealized(t *testing.T) {
 	impls := map[string]reconciler.Provider{
-		"proxy":     connStub{stubProvider{"proxy"}},
+		"proxy":     viaStub{connStub{stubProvider{"proxy"}}},
 		"wireguard": tunnelStub{stubProvider{"wireguard"}},
 	}
-	err := Check(viaManifests("vpc-tunnel"), typedResolver(impls))
-	if err == nil {
-		t.Fatal("validate accepted a Connection whose spec.via no provider consumes")
+	if err := Check(viaManifests("vpc-tunnel"), typedResolver(impls)); err != nil {
+		t.Fatalf("validate rejected a Connection whose via-capable Provider is consumed by a via-consuming realizing provider: %v", err)
 	}
-	if !strings.Contains(err.Error(), "spec.via is not consumed by any provider yet (docs/planning/08 I1)") {
-		t.Errorf("unexpected error: %v", err)
+
+	// The pairing check: a realizing provider that is connection-capable
+	// but NOT via-consuming fails with the documented message shape, even
+	// though the named tunnel itself is perfectly valid.
+	impls["proxy"] = connStub{stubProvider{"proxy"}}
+	err := Check(viaManifests("vpc-tunnel"), typedResolver(impls))
+	if err == nil || !strings.Contains(err.Error(), "does not support spec.via (provider implements no via-consuming capability)") {
+		t.Errorf("want via-consuming pairing error, got: %v", err)
 	}
 
 	// A via naming a non-tunnel-capable Provider fails the capability
 	// check first, with the documented message shape.
+	impls["proxy"] = viaStub{connStub{stubProvider{"proxy"}}}
 	impls["wireguard"] = connStub{stubProvider{"wireguard"}}
 	err = Check(viaManifests("vpc-tunnel"), typedResolver(impls))
 	if err == nil || !strings.Contains(err.Error(), "does not support tunnel chaining") {

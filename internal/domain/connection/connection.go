@@ -201,6 +201,17 @@ func (c Connection) ExternalAddress() (string, bool) {
 	return net.JoinHostPort(c.Host, strconv.Itoa(c.Port)), true
 }
 
+// ViaFactName is the published-endpoint-fact name a tunnel Provider uses
+// (in its own Provider-kind status) to publish the per-Connection dial
+// address a via-consuming provider (docs/planning/08 I1) reads back as
+// reconciler.Request.TunnelFacts.Internal — a single shared convention so
+// the publishing side (the tunnel Provider) and the reading side (the
+// engine, resolving TunnelFacts for the via'd Connection's own reconcile)
+// never have to be told the other's key by hand (docs/adr/015).
+func ViaFactName(namespace, name string) string {
+	return "via:" + resource.NormalizeNamespace(namespace) + "/" + name
+}
+
 func refName(spec map[string]any, field string) string {
 	ref, ok := spec[field].(map[string]any)
 	if !ok {

@@ -498,11 +498,11 @@ func checkResourceCapabilities(envelopes []resource.Envelope, idx manifestIndex,
 				return fmt.Errorf("Connection %q: Provider %q (type: %s)\ndoes not support connection scheme %q (supported: %s)", e.Metadata.Name, *c.ProviderRef, provType, c.Scheme, joinSorted(schemes))
 			}
 			if c.Via != nil {
-				// A structural + capability check only (docs/adr/023's
-				// Scope section): the named Provider must exist and be
-				// tunnel-capable. Not resolveProviderImpl (that closure's
-				// error message names "providerRef" — this is a different
-				// field), so a dedicated lookup with its own error text.
+				// A structural + capability check: the named Provider must
+				// exist and be tunnel-capable. Not resolveProviderImpl
+				// (that closure's error message names "providerRef" — this
+				// is a different field), so a dedicated lookup with its
+				// own error text.
 				viaRef := resource.RefFromSpec(e.Spec, "via")
 				viaProvEnv, ok := idx.resolveKind(e, viaRef, "Provider")
 				if !ok || viaProvEnv.Kind != "Provider" {
@@ -519,13 +519,17 @@ func checkResourceCapabilities(envelopes []resource.Envelope, idx manifestIndex,
 				if _, ok := viaImpl.(reconciler.TunnelCapableProvider); !ok {
 					return fmt.Errorf("Connection %q: via %q (type: %s)\ndoes not support tunnel chaining (provider implements no tunnel capability)", e.Metadata.Name, *c.Via, viaProv.Type)
 				}
-				// No realizing provider consumes spec.via yet (docs/planning/08
-				// I1): a Connection that validated with via set would apply as a
-				// plain, non-tunneled forwarder — a silent security failure for
-				// a field whose whole meaning is confined egress. Refuse until
-				// I1 lands (validate-time completeness, docs/adr/011); this
-				// error is deleted by I1 itself.
-				return fmt.Errorf("Connection %q: spec.via is not consumed by any provider yet (docs/planning/08 I1) — the Connection would be realized WITHOUT the tunnel; remove spec.via until I1 ships rather than rely on an egress control that is not enforced", e.Metadata.Name)
+				// The pairing check (docs/planning/08 I1, closing
+				// docs/adr/023's Scope deviation): the Connection's OWN
+				// realizing provider (impl, already resolved above) must
+				// also know how to consume spec.via — otherwise it would
+				// silently apply as a plain, unconsumed forwarder, the
+				// same silent-egress-failure risk the pre-I1 refusal
+				// existed to prevent, now caught by pairing the two
+				// capabilities instead of blanket-refusing every via.
+				if _, ok := impl.(reconciler.ViaConsumingProvider); !ok {
+					return fmt.Errorf("Connection %q: Provider %q (type: %s)\ndoes not support spec.via (provider implements no via-consuming capability)", e.Metadata.Name, *c.ProviderRef, provType)
+				}
 			}
 		}
 	}

@@ -38,9 +38,16 @@
 // authenticated session to preserve the way a database connection does.
 //
 // Implements ConnectionCapableProvider (scheme: tcp) and
-// TunnelCapableProvider (Connection.spec.via's structural capability — not
-// yet consumed by any realizing provider; see docs/adr/023's "Scope"
-// section).
+// TunnelCapableProvider (Connection.spec.via names this Provider as the
+// egress leg a second, via-consuming provider's own Connection chains
+// through — docs/planning/08 I1, closing docs/adr/023's Scope deviation).
+// reconcileInstance additionally ensures one "via tunnel" container per
+// via'd Connection it services (reconcileViaTunnels) — the SAME wg-quick/
+// DNAT-forwarder machinery reconcileConnection uses for a Connection this
+// Provider realizes directly, just named and networked differently (see
+// reconcileViaTunnels's doc comment) and published as an engine-readable
+// fact (internal/domain/connection.ViaFactName) rather than dialed by
+// naming.RuntimeObjectName convention.
 package wireguard
 
 import (
@@ -48,6 +55,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +65,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
+	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
@@ -238,11 +247,179 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	if err := req.Runtime.EnsureNetwork(ctx, runtime.NetworkSpec{Name: tc.peerNetwork, Labels: labels}); err != nil {
 		return st, err
 	}
+
+	viaFacts, err := p.reconcileViaTunnels(ctx, req, cfg, tc, name)
+	if err != nil {
+		return st, err
+	}
+
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTunnelSurfaceReady}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	st.ProviderState = map[string]any{"peerNetwork": tc.peerNetwork}
+	if len(viaFacts) > 0 {
+		st.ProviderState[endpoint.Key] = endpoint.List(viaFacts).ToState()
+	}
 	return st, nil
+}
+
+// reconcileViaTunnels ensures one tunnel container per managed Connection
+// whose spec.via names this Provider (docs/planning/08 I1, closing
+// docs/adr/023's Scope deviation): unlike this Provider's own
+// directly-realized Connections (reconcileConnection above, one container
+// per Connection, named after it so consumers like debezium can dial it by
+// naming.RuntimeObjectName), a via'd Connection is realized by a DIFFERENT
+// provider (proxy) — the only consumer of a via-tunnel container's name is
+// that provider's own forwarder, which learns it via the engine-published
+// connection.ViaFactName endpoint fact (ADR 015), never by re-deriving a
+// naming convention. That frees this container to use a name
+// naming.RuntimeObjectName never returns (viaTunnelName's own "-via-tunnel"
+// suffix) without colliding with the forwarder container itself or with any
+// Connection this Provider realizes directly. Reuses the exact same
+// wg-quick config and DNAT-forwarder entrypoint script reconcileConnection
+// already uses; the settledness check differs deliberately
+// (waitViaTunnelServing, not waitTunnelServing/probeTunnelServing): those
+// verify reachability from THIS PROCESS's own host-audience vantage point
+// (runtime.WithReachable/EnsureReachable) — the right bar for a Connection
+// this Provider realizes directly, which platformctl itself dials to
+// confirm health. A via tunnel is never dialed by this process or
+// published to the host at all (blast-minimized: Audience: internal only,
+// transit network only) — its consumer is proxy's forwarder, a container
+// on the transit network, so the correct settledness vantage point is
+// runtime.ProbeReachable(transit network, ...) (ADR 015's in-network
+// reachability contract, docs/planning/08 C10), exactly the vantage point
+// the real consumer has.
+
+func (p *Provider) reconcileViaTunnels(ctx context.Context, req reconciler.Request, cfg provider.Provider, tc tunnelConfig, providerName string) ([]endpoint.Endpoint, error) {
+	var viaConns []resource.Envelope
+	for _, env := range req.Resources {
+		if env.Kind != "Connection" {
+			continue
+		}
+		c, err := connection.FromEnvelope(env)
+		if err != nil || c.External || c.Via == nil {
+			continue
+		}
+		viaRef := resource.RefFromSpec(env.Spec, "via")
+		if viaRef.Key(env.Metadata.Namespace, "Provider") != req.Provider.Key() {
+			continue
+		}
+		viaConns = append(viaConns, env)
+	}
+	if len(viaConns) == 0 {
+		return nil, nil
+	}
+	sort.Slice(viaConns, func(i, j int) bool { return viaConns[i].Key().String() < viaConns[j].Key().String() })
+
+	privateKey, err := resolvePrivateKey(cfg, req.Secrets, providerName)
+	if err != nil {
+		return nil, err
+	}
+	wgConf := buildWireGuardConfig(tc, privateKey)
+
+	facts := make([]endpoint.Endpoint, 0, len(viaConns))
+	for _, env := range viaConns {
+		c, err := connection.FromEnvelope(env)
+		if err != nil {
+			return nil, err
+		}
+		name := viaTunnelName(env)
+		script := buildEntrypointScript(c.Port, c.Target)
+		labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", providerName, providerName)
+		_, err = req.Runtime.EnsureContainer(ctx, runtime.ContainerSpec{
+			Name:       name,
+			Image:      image(cfg),
+			Entrypoint: []string{"/bin/sh", entrypointPath},
+			Networks:   []string{tc.peerNetwork},
+			Files: []runtime.FileMount{
+				{Path: wgConfPath, Content: []byte(wgConf), Mode: 0o600},
+				{Path: entrypointPath, Content: []byte(script), Mode: 0o500},
+			},
+			// Audience: internal — never published to the host (blast-
+			// minimized): only a container on the transit network (proxy's
+			// forwarder) ever dials this.
+			Ports: []runtime.PortBinding{{ContainerPort: c.Port, Audience: runtime.AudienceInternal}},
+			Security: &runtime.SecurityContext{
+				CapAdd: []string{"NET_ADMIN"},
+			},
+			Sysctls: map[string]string{"net.ipv4.ip_forward": "1"},
+			HealthCheck: &runtime.HealthCheck{
+				Test:     []string{"CMD-SHELL", "wg show wg0 >/dev/null 2>&1"},
+				Interval: 2 * time.Second,
+				Timeout:  5 * time.Second,
+				Retries:  30,
+			},
+			Labels: labels,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("via tunnel for Connection %q: %w", env.Metadata.Name, err)
+		}
+		if err := req.Runtime.WaitHealthy(ctx, name, 60*time.Second); err != nil {
+			return nil, fmt.Errorf("via tunnel for Connection %q: %w", env.Metadata.Name, err)
+		}
+		// Ready means serving (docs/planning/01 NFR-11, docs/planning/11 B1
+		// finding 1) from the REAL consumer's own vantage point — see this
+		// function's doc comment on why that is ProbeReachable, not
+		// waitTunnelServing/WithReachable here.
+		if err := waitViaTunnelServing(ctx, req.Runtime, tc.peerNetwork, name, c.Port); err != nil {
+			return nil, fmt.Errorf("via tunnel for Connection %q: %w", env.Metadata.Name, err)
+		}
+		facts = append(facts, endpoint.Endpoint{
+			Name:     connection.ViaFactName(env.Metadata.Namespace, env.Metadata.Name),
+			Scheme:   c.Scheme,
+			Internal: fmt.Sprintf("%s:%d", name, c.Port),
+			Insecure: true,
+		})
+	}
+	return facts, nil
+}
+
+// waitViaTunnelServing bounds a via tunnel's Ready determination to a
+// genuinely serving container from the vantage point that matters: a
+// container attached to network (the transit network) can dial name:port
+// right now (runtime.ProbeReachable, ADR 015's in-network reachability
+// contract) — the exact vantage point the real consumer (proxy's
+// forwarder, also transit-network-attached) has. A healthy tunnel passes
+// on the first attempt; on timeout, fails honestly with the last observed
+// state instead of trusting the container healthcheck alone
+// (docs/planning/11 B1 finding 1's discipline, applied to the via path).
+func waitViaTunnelServing(ctx context.Context, rt runtime.ContainerRuntime, network, name string, port int) error {
+	target := fmt.Sprintf("%s:%d", name, port)
+	deadline := time.Now().Add(tunnelSettleTimeout)
+	var lastReason string
+	for {
+		ctr, found, err := rt.Inspect(ctx, name)
+		if err != nil {
+			return err
+		}
+		switch {
+		case !found || !ctr.Healthy:
+			lastReason = "via tunnel container not healthy"
+		default:
+			if perr := rt.ProbeReachable(ctx, network, target); perr != nil {
+				lastReason = fmt.Sprintf("unreachable from the transit network: %v", perr)
+			} else {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("via tunnel %q did not settle to a serving state within %s (last observed: %s)", name, tunnelSettleTimeout, lastReason)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(tunnelSettlePoll):
+		}
+	}
+}
+
+// viaTunnelName derives a via-tunnel container's name from the via'd
+// Connection it serves — deliberately NOT naming.RuntimeObjectName(res)
+// (see reconcileViaTunnels's doc comment on why that identity would
+// collide with the forwarder container proxy realizes for the same
+// Connection).
+func viaTunnelName(connEnv resource.Envelope) string {
+	return naming.RuntimeObjectName(connEnv) + "-via-tunnel"
 }
 
 // reconcileConnection runs the Connection's own tunnel container: named
@@ -429,6 +606,24 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 		cfg, err := provider.FromEnvelope(req.Provider)
 		if err != nil {
 			return err
+		}
+		// Via-tunnel containers (docs/planning/08 I1) must detach before
+		// RemoveNetwork below — it refuses while anything is still
+		// attached to the transit network (runtime.ContainerRuntime's own
+		// documented contract).
+		for _, env := range req.Resources {
+			if env.Kind != "Connection" {
+				continue
+			}
+			c, err := connection.FromEnvelope(env)
+			if err != nil || c.External || c.Via == nil {
+				continue
+			}
+			viaRef := resource.RefFromSpec(env.Spec, "via")
+			if viaRef.Key(env.Metadata.Namespace, "Provider") != req.Provider.Key() {
+				continue
+			}
+			_ = req.Runtime.Remove(ctx, viaTunnelName(env))
 		}
 		if tc, err := parseConfig(cfg); err == nil {
 			_ = req.Runtime.RemoveNetwork(ctx, tc.peerNetwork)
