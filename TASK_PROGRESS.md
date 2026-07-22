@@ -86,10 +86,17 @@ step 0 (this file + WIP commits per increment). Documentation-only task; no Go c
 
 ## Verification results
 
-- Link check script (grep relative markdown links in touched files + `test -f` each target):
-  ran clean, see commit body.
-- `platformctl validate examples/cdc-attendance/` → "14 resource(s) valid" (unchanged, exit 0) —
-  sanity check that no code was touched.
+- Link check script (extract every `](...)` relative link from
+  docs/onboarding/{users,developers}.md, docs/positioning/terraform.md, README.md,
+  docs/README.md; resolve each against its file's directory; `test -e` each target) — ran
+  clean, zero broken links. Caught and fixed one bad self-anchor
+  (`README.md#-quickstart` → `README.md#quickstart`, matching the existing
+  `(#architecture)` convention already used in README.md for its own emoji headings).
+- `platformctl validate examples/cdc-attendance/` → "14 resource(s) valid" (unchanged, exit 0),
+  re-run after all doc edits — sanity check that no code was touched.
+- Final line counts: docs/onboarding/users.md 235, docs/onboarding/developers.md 157,
+  docs/positioning/terraform.md 165, README's new Terraform section ~42 lines — all within the
+  requested ranges.
 
 ## Deviations
 

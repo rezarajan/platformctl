@@ -16,7 +16,7 @@ DAGs, Spark jobs) is someone else's job (docs/planning/01-product-requirements.m
 
 ## Install & your first pipeline
 
-Follow the [README quickstart](../../README.md#-quickstart) for prerequisites (Go 1.22+, a
+Follow the [README quickstart](../../README.md#quickstart) for prerequisites (Go 1.22+, a
 running Docker daemon) and the `just build` step — this page doesn't repeat that. Once you have
 a `platformctl` binary, the fastest way to a running pipeline is two commands:
 
