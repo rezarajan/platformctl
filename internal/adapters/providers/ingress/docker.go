@@ -286,6 +286,16 @@ func reconcileConnectionDocker(ctx context.Context, req reconciler.Request, cfg 
 		}
 	}
 
+	// Ready means serving (docs/planning/01 NFR-11), not just "the admin API
+	// accepted the route write" — a route can be written and still 502
+	// (upstream unreachable) or point at a host Caddy hasn't finished
+	// applying yet (docs/planning/11 B1 finding 2). Settle to the SAME
+	// dial-through-route check probeConnectionDocker verifies before
+	// declaring Ready.
+	if err := waitRouteServing(ctx, req.Runtime, proxyName, host, isTLS); err != nil {
+		return st, fmt.Errorf("Connection %q: %w", connName, err)
+	}
+
 	// Observed binding, not intent — the shared proxy's actually-published
 	// port, so the endpoint URL this reports is dialable, not guessed.
 	proxyState, found, err := req.Runtime.Inspect(ctx, proxyName)
@@ -328,6 +338,61 @@ func reconcileConnectionDocker(ctx context.Context, req reconciler.Request, cfg 
 		}.ToState(),
 	}
 	return st, nil
+}
+
+// routeSettleTimeout/routeSettlePoll bound reconcileConnectionDocker's
+// Ready determination to a genuinely serving route — the redpanda
+// waitTopicSettled pattern (docs/planning/11 B1 findings 1-3). Vars, not
+// consts: tests shrink them instead of waiting out a real 45s timeout to
+// exercise the honest-failure path.
+var (
+	routeSettleTimeout = 45 * time.Second
+	routeSettlePoll    = 2 * time.Second
+)
+
+// waitRouteServing bounds reconcileConnectionDocker's Ready determination
+// to the SAME check probeConnectionDocker uses for Ready — a
+// dial-through-route to the upstream (probeThroughRoute/
+// probeThroughRouteTLS), not just the admin API accepting the route write.
+// A healthy route passes on the first attempt (zero added latency); on
+// timeout, reconcile fails honestly with the last observed error instead of
+// setting Ready from the route write alone (docs/planning/11 B1 finding 2).
+func waitRouteServing(ctx context.Context, rt runtime.ContainerRuntime, proxyName, host string, isTLS bool) error {
+	containerPort := httpContainerPort
+	if isTLS {
+		containerPort = httpsContainerPort
+	}
+	deadline := time.Now().Add(routeSettleTimeout)
+	var lastErr error
+	for {
+		lastErr = probeRouteOnce(ctx, rt, proxyName, containerPort, host, isTLS)
+		if lastErr == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("route for host %q did not settle to a serving state within %s: %w", host, routeSettleTimeout, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(routeSettlePoll):
+		}
+	}
+}
+
+// probeRouteOnce is one attempt of waitRouteServing's poll: reach the
+// shared proxy's published http/https port and dial through the route,
+// exactly like probeConnectionDocker does.
+func probeRouteOnce(ctx context.Context, rt runtime.ContainerRuntime, proxyName string, containerPort int, host string, isTLS bool) error {
+	addr, closeAddr, err := providerkit.ReachableAddr(ctx, rt, proxyName, containerPort)
+	if err != nil {
+		return err
+	}
+	defer closeAddr()
+	if isTLS {
+		return probeThroughRouteTLS(ctx, addr, host)
+	}
+	return probeThroughRoute(ctx, addr, host)
 }
 
 func destroyConnectionDocker(ctx context.Context, req reconciler.Request, cfg provider.Provider) error {

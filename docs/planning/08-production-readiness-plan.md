@@ -2558,6 +2558,83 @@ unless a dependency is stated.
   ingress controller) — no false-Ready flap, and a serving probe would
   hardcode assumptions about which ingress controller the cluster runs;
   revisit if a live K8s ingress flake ever surfaces (B1 finding 4).
+- **Done (2026-07-22):** wireguard's `reconcileConnection` extracted
+  Probe's Connection-case check into shared `probeTunnelServing`
+  (container health + `handshakeAge` + `dialUpstream`), added
+  `waitTunnelServing` (a `tunnelSettleTimeout`/`tunnelSettlePoll`-bounded
+  poll, vars not consts so tests can shrink them) before setting Ready;
+  ingress-docker's `reconcileConnectionDocker` gained `waitRouteServing`
+  (reuses `probeThroughRoute`/`probeThroughRouteTLS` via
+  `routeSettleTimeout`/`routeSettlePoll`) before Ready; proxy's
+  `reconcileConnection` gained `waitForwarderServing` (reuses
+  `probeThroughForwarder` via `forwarderSettleTimeout`/
+  `forwarderSettlePoll`) before Ready, plus a real container `HealthCheck`
+  (a self-dial through the socat listener). No new status reasons: a
+  settle-timeout returns a bare error naming the last observed state,
+  mirroring how redpanda's own `waitTopicSettled` surfaces `(st, err)`
+  rather than a new Ready=False reason. Unit tests added per provider
+  (wireguard_test.go, proxy_test.go — neither existed before —
+  ingress/route_settle_test.go) proving reconcile fails honestly when the
+  upstream never answers; e2e `drift` immediately after `apply` asserted
+  zero-drift in wireguard_integration_test.go and
+  ingress_integration_test.go (NFR-11). `go test ./...` exit 0; gofmt/vet
+  clean; `test-impact.sh --base main` selected lakehouse+ingress+wireguard
+  (see TASK_PROGRESS.md for the sweep log).
+- **Done, follow-up (2026-07-22) — ordering gap the settle-poll exposed:**
+  the first I4 sweep failed the ingress (and lakehouse-K8s) suites for a
+  REAL pre-existing gap, not a settle-poll bug: a managed Connection's
+  `spec.target` is a plain "host:port" string, so `graph.Build` created
+  no dependency edge to the in-set resource the host names — Connection
+  "minio" (target `ing-test-minio:9000`) reconciled at level [4/6] while
+  Provider "ing-test-minio" waited at [6/6]; ordering was arbitrary and
+  only survived before I4 because reconcile set Ready blind. Fix (in
+  `internal/domain/graph`): for each managed (external: false)
+  Connection, the target's host part now resolves against every in-set
+  resource's runtime object name (`naming.RuntimeObjectName`; metadata
+  name indexed too against future divergence) in the Connection's own
+  namespace, adding a Connection→upstream edge — the D8 warehouseRef
+  precedent, differing only in resolving a plain host string instead of
+  a NameRef. Deliberately lenient where refFields is strict: a host
+  matching nothing is a genuinely external address (the entire point of
+  managed Connections) and adds no edge and no error; a self-naming
+  target adds no self-edge; an edge that closes a loop is NOT silently
+  skipped — the existing cycle detection reports it (a Connection whose
+  upstream depends back on it is a design error the user must see).
+  Ordering visibly changes in: ingress-scenario (nessie→ing-test-nessie,
+  minio→ing-test-minio — the observed failure), ingress-k8s-scenario,
+  ingress-tls-scenario (nessie-provided/nessie-selfsigned→ing-tls-nessie;
+  internal-upstream's target is an out-of-set test fixture, correctly no
+  edge), ingress-tls-k8s-scenario (all three Connections→
+  ingk8stls-nessie). examples/ + blueprint templates: every Connection
+  target there is an external placeholder host — no edges, no ordering
+  change. Unit tests: graph_test.go TestManagedConnectionTarget* (+
+  external/no-match/self-edge/cycle negative pins).
+- **Done, follow-up 2 (2026-07-22) — K8s settle bar matches Probe's:**
+  round-2 sweep was 15/16 green; the one K8s failure
+  (TestLakehouseExampleOnKubernetes, Connection/orders-db: "forwarder has
+  no published host address yet" for the full 45s) exposed that proxy's
+  `waitForwarderServing` treated an empty `ctr.HostAddr` as a wait state
+  — but on Kubernetes under the default ClusterIP/port-forward access
+  mode, Inspect NEVER reports a HostIP/HostPort (only NodePort/
+  LoadBalancer Services get one), so the address could never appear.
+  Proxy's Probe guards its own dial-through with `if addr != ""` and
+  skips it in exactly this case; the fix makes the settle poll mirror
+  that guard verbatim — on a runtime with no published host binding, the
+  serving bar is container health, the same as Probe's. Deliberately NOT
+  a per-attempt port-forward dial: that would make reconcile STRICTER
+  than Probe (breaking I4's symmetry in the opposite direction) and would
+  wrongly fail Connections whose target is a genuinely external,
+  unresolvable-from-the-cluster host (the lakehouse example's placeholder
+  upstream) — serving means "the forwarder accepts and forwards";
+  upstream reachability on such runtimes stays Probe/drift's job, as
+  before I4. Docker behavior unchanged (address exists immediately;
+  dial-through always runs — its suites stayed green). Unit pin:
+  proxy_test.go TestReconcileConnectionReadyWhenRuntimePublishesNoHostAddress
+  (a no-host-addr fake wrapper simulating the K8s Inspect shape).
+  Targeted re-run of only the failed lakehouse suite (not a full
+  re-sweep; 15 green suites' content-scope unchanged except proxy —
+  coordinator-authorized deviation, see TASK_PROGRESS.md) launched under
+  the shared flock with the minted minimal-RBAC kubeconfig.
 
 ### I5: Duplication debt with drift risk (B4 findings 2+3)
 
