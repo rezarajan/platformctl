@@ -169,6 +169,33 @@ func deleteTopic(ctx context.Context, dialMap map[string]string, seeds []string,
 	return nil
 }
 
+// countJoinedBrokersMinView asks EVERY seed individually for its broker
+// list and returns the minimum view. ListBrokers is answered by whichever
+// one broker the client picks, and Kafka metadata propagation between
+// brokers is eventually consistent — observed live (doc 11, wave-3 gate):
+// after a heal, reconcile's client hit a broker already seeing 3/3 while
+// the immediately-following drift probe's fresh client hit one still
+// seeing 2/3. "Settled" for a broker SET therefore means every member's
+// own view agrees — a bar no subsequent same-instant probe can disagree
+// with, from any vantage. A seed that errors counts as view 0 (not
+// settled), which is exactly right mid-rejoin.
+func countJoinedBrokersMinView(ctx context.Context, dialMap map[string]string, seeds []string) int {
+	minView := -1
+	for _, seed := range seeds {
+		v, err := countJoinedBrokers(ctx, dialMap, []string{seed})
+		if err != nil {
+			return 0
+		}
+		if minView < 0 || v < minView {
+			minView = v
+		}
+	}
+	if minView < 0 {
+		return 0
+	}
+	return minView
+}
+
 // countJoinedBrokers reports how many brokers are currently members of the
 // cluster per the admin metadata — the "all brokers joined" half of the C2
 // probe (docs/adr/017 §a.6); per-ordinal container presence is the other

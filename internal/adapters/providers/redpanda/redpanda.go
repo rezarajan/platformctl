@@ -839,7 +839,10 @@ func waitClusterFormed(ctx context.Context, rt runtime.ContainerRuntime, name st
 		joined := 0
 		dialMap, seeds, closeAll, err := clusterDial(ctx, rt, name, n)
 		if err == nil {
-			joined, err = countJoinedBrokers(ctx, dialMap, seeds)
+			// Minimum view across EVERY member, not one client's answer —
+			// see countJoinedBrokersMinView: Ready must mean a bar no
+			// same-instant probe can disagree with from another vantage.
+			joined = countJoinedBrokersMinView(ctx, dialMap, seeds)
 			closeAll()
 		}
 		last = err

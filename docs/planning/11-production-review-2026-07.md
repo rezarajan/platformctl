@@ -358,3 +358,15 @@ static. Dimensions, each producing findings verified before fixing:
   ingress TLS, monitoring, governance, backup), and a
   write-your-own-provider recipe naming providerkit + conformance +
   fragments. TestREADMECLISurfaceInSync green.
+- 2026-07-22: wave-3 gate caught the LAST heal-window sibling:
+  BrokerNotJoined(2!=3) drift right after a heal apply that had waited
+  for membership — waitClusterFormed asked ONE broker's metadata view
+  (kadm ListBrokers routes to a single broker) while drift's fresh
+  client asked another still catching up; Kafka metadata propagation is
+  eventually consistent BETWEEN brokers. Fix: waitClusterFormed now
+  requires the MINIMUM view across every member (per-seed clients) ≥ n
+  — a settle bar no same-instant probe can disagree with from any
+  vantage; an erroring member counts as view 0 (correct mid-rejoin).
+  Probe stays a point-in-time observation. Live proof run queued. The
+  heal-window class is now closed at reconcile-membership, reconcile-
+  topic, probe-transport, and test-client layers.
