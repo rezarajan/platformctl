@@ -5,8 +5,10 @@ package graph
 
 import (
 	"fmt"
+	"net"
 	"sort"
 
+	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 )
 
@@ -70,6 +72,14 @@ func Build(envelopes []resource.Envelope) (*Graph, error) {
 
 	// Index by namespace/name for cross-kind ref resolution.
 	byName := make(map[string][]resource.Key)
+	// byRuntimeName resolves a managed Connection's target host (a plain
+	// string, not a NameRef) to the in-set resource whose runtime object
+	// it names — see the Connection-target block below. RuntimeObjectName
+	// is the identity function today, so this index currently mirrors
+	// byName; kept separate (and indexed under BOTH names when they ever
+	// diverge) so a future naming-convention change cannot silently break
+	// target-host resolution.
+	byRuntimeName := make(map[string][]resource.Key)
 	for _, e := range envelopes {
 		k := e.Key()
 		if _, dup := g.Nodes[k]; dup {
@@ -77,6 +87,11 @@ func Build(envelopes []resource.Envelope) (*Graph, error) {
 		}
 		g.Nodes[k] = e
 		byName[nameIndexKey(k.Namespace, k.Name)] = append(byName[nameIndexKey(k.Namespace, k.Name)], k)
+		rn := naming.RuntimeObjectName(e)
+		byRuntimeName[nameIndexKey(k.Namespace, rn)] = append(byRuntimeName[nameIndexKey(k.Namespace, rn)], k)
+		if rn != k.Name {
+			byRuntimeName[nameIndexKey(k.Namespace, k.Name)] = append(byRuntimeName[nameIndexKey(k.Namespace, k.Name)], k)
+		}
 	}
 
 	for _, e := range envelopes {
@@ -177,6 +192,43 @@ func Build(envelopes []resource.Envelope) (*Graph, error) {
 				return nil, fmt.Errorf("%s: metadata.observers entry %q does not resolve to a Provider in namespace %q", from, obs.Name, target.Namespace)
 			}
 			g.Edges[from] = append(g.Edges[from], target)
+		}
+		// A MANAGED Connection's spec.target is a plain "host:port" string,
+		// not a NameRef — but when the host part names another in-set
+		// resource's runtime object (e.g. target "ing-test-minio:9000"
+		// naming Provider "ing-test-minio"'s container), the Connection
+		// genuinely depends on it: since doc 08 I4, its realizing provider
+		// verifies the upstream answers through the entrypoint before
+		// setting Ready, so a Connection reconciled before its upstream
+		// exists settle-polls against nothing and honestly fails (found
+		// live, 2026-07-22: Connection "minio" reconciled at level [4/6]
+		// while Provider "ing-test-minio" waited at [6/6] — the ordering
+		// was arbitrary before this edge existed). warehouseRef (D8) is the
+		// precedent for an edge derived from a spec field; this one differs
+		// only in resolving a plain host string against runtime object
+		// names (via byRuntimeName) instead of a NameRef. Deliberately
+		// lenient where refFields is strict: a host matching nothing is NOT
+		// an error — it's a genuinely external address ("10.13.13.10:5432",
+		// "db.example.com:5432"), the entire reason managed Connections
+		// exist. A self-naming target adds no self-edge; a target host that
+		// closes a loop is NOT silently skipped — the ordinary cycle
+		// detection below reports it, because a Connection whose upstream
+		// depends back on that Connection is a design error the user must
+		// see, not route around.
+		if e.Kind == "Connection" {
+			external, _ := e.Spec["external"].(bool)
+			targetStr, _ := e.Spec["target"].(string)
+			if !external && targetStr != "" {
+				host := targetStr
+				if h, _, err := net.SplitHostPort(targetStr); err == nil {
+					host = h
+				}
+				for _, to := range byRuntimeName[nameIndexKey(e.Metadata.Namespace, host)] {
+					if to != from {
+						g.Edges[from] = append(g.Edges[from], to)
+					}
+				}
+			}
 		}
 	}
 

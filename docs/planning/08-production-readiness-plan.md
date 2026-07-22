@@ -2580,6 +2580,35 @@ unless a dependency is stated.
   ingress_integration_test.go (NFR-11). `go test ./...` exit 0; gofmt/vet
   clean; `test-impact.sh --base main` selected lakehouse+ingress+wireguard
   (see TASK_PROGRESS.md for the sweep log).
+- **Done, follow-up (2026-07-22) — ordering gap the settle-poll exposed:**
+  the first I4 sweep failed the ingress (and lakehouse-K8s) suites for a
+  REAL pre-existing gap, not a settle-poll bug: a managed Connection's
+  `spec.target` is a plain "host:port" string, so `graph.Build` created
+  no dependency edge to the in-set resource the host names — Connection
+  "minio" (target `ing-test-minio:9000`) reconciled at level [4/6] while
+  Provider "ing-test-minio" waited at [6/6]; ordering was arbitrary and
+  only survived before I4 because reconcile set Ready blind. Fix (in
+  `internal/domain/graph`): for each managed (external: false)
+  Connection, the target's host part now resolves against every in-set
+  resource's runtime object name (`naming.RuntimeObjectName`; metadata
+  name indexed too against future divergence) in the Connection's own
+  namespace, adding a Connection→upstream edge — the D8 warehouseRef
+  precedent, differing only in resolving a plain host string instead of
+  a NameRef. Deliberately lenient where refFields is strict: a host
+  matching nothing is a genuinely external address (the entire point of
+  managed Connections) and adds no edge and no error; a self-naming
+  target adds no self-edge; an edge that closes a loop is NOT silently
+  skipped — the existing cycle detection reports it (a Connection whose
+  upstream depends back on it is a design error the user must see).
+  Ordering visibly changes in: ingress-scenario (nessie→ing-test-nessie,
+  minio→ing-test-minio — the observed failure), ingress-k8s-scenario,
+  ingress-tls-scenario (nessie-provided/nessie-selfsigned→ing-tls-nessie;
+  internal-upstream's target is an out-of-set test fixture, correctly no
+  edge), ingress-tls-k8s-scenario (all three Connections→
+  ingk8stls-nessie). examples/ + blueprint templates: every Connection
+  target there is an external placeholder host — no edges, no ordering
+  change. Unit tests: graph_test.go TestManagedConnectionTarget* (+
+  external/no-match/self-edge/cycle negative pins).
 
 
 
