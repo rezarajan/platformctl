@@ -19,10 +19,10 @@ fresh session resumes from this file + `git log` alone.
 
 ## Phase 0 — close the in-flight wave (precondition)
 
-- [ ] C9 merge (commit `57c4d39` ready; gate = agent's 18-suite sweep,
+- [x] C9 merge (commit `57c4d39` ready; gate = agent's 18-suite sweep,
       log task `b57tylbfz`, running as of goal-set). Closes Stage C →
       owner decision: KubernetesRuntime GA + v1.3.0.
-- [ ] D8 merge (branch `worktree-agent-a91e4af8eee00bb01` @ `3f63b8d`,
+- [x] D8 merge (branch `worktree-agent-a91e4af8eee00bb01` @ `3f63b8d`,
       reviewed; targeted gate after merge).
 
 ## Phase A — docs review: gaps in scope/requirements (in progress)
@@ -78,3 +78,9 @@ static. Dimensions, each producing findings verified before fixing:
   verified: doc 01 NFR table (NFR-1..10) has no settledness/async
   invariant — amendment pending Phase A completion (single batch).
   Full-docs inventory pass delegated (in flight).
+- 2026-07-22: Phase 0 closed. C9 merged at e69f1b4 (STAGE C COMPLETE;
+  18-suite sweep 0 failed at its exact content-state). D8 merged at
+  5b91048 (both-append with C9's PrometheusURL; targeted trino+lakehouse
+  gate running, ledger-recorded on green). Owner decisions now open:
+  KubernetesRuntime GA + v1.3.0 tag. Phase B unblocked once the D8 gate
+  is green.
