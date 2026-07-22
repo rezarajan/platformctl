@@ -764,6 +764,55 @@ var Catalog = []CatalogEntry{
 		},
 	},
 	{
+		Token: ReasonCertHealthy, Area: "ingress", Kind: "reason",
+		Meaning:  "A https Connection's certificate is loaded (Docker: Caddy's tls app; Kubernetes: the Ingress's referenced Secret) and structurally valid — parses, not expired, SAN matches the route's host, and (self-signed) chains to the Provider's own CA.",
+		Causes:   healthyCauses,
+		Remedies: healthyRemedies,
+	},
+	{
+		Token: ReasonCertMissing, Area: "ingress", Kind: "reason",
+		Meaning: "A https Connection has no certificate loaded yet — Docker: no matching @id in Caddy's tls app; Kubernetes: the referenced Secret does not exist, including a not-yet-issued cert-manager Secret, which is expected to converge rather than error.",
+		Causes: []string{
+			"First reconcile has not completed yet.",
+			"cert-manager has not issued the referenced Secret yet (Kubernetes secretName mode).",
+			"The tls.secretRef names a SecretReference whose backend has no cert/key material.",
+		},
+		Remedies: []string{
+			"Re-run `platformctl apply` once issuance/material is available; check `platformctl status` for convergence.",
+			"For cert-manager mode, inspect the Certificate/Order objects with kubectl to see why issuance is pending.",
+		},
+	},
+	{
+		Token: ReasonCertInvalid, Area: "ingress", Kind: "reason", Prefix: true,
+		Meaning: "A certificate is loaded but fails structural validation — unparsable, expired, SAN mismatch with the route's host, or (self-signed) not chaining to the Provider's current CA; the failing check is appended after the prefix.",
+		Causes: []string{
+			"The certificate expired (Probe fails Ready 24h before expiry to force reissue on the next apply).",
+			"The route's host changed after the certificate was issued (SAN mismatch).",
+			"The Provider's self-signed CA was regenerated while an old leaf remained loaded.",
+		},
+		Remedies: []string{
+			"Provide a fresh cert/key via the tls.secretRef, or re-run `platformctl apply` to reissue self-signed leaves.",
+			"`platformctl explain <the-full-printed-reason>` — the appended detail names the failing check.",
+		},
+	},
+	{
+		Token: ReasonCertConfigDrift, Area: "ingress", Kind: "reason",
+		Meaning: "A provided (secretRef) certificate's live value no longer matches the manifest-derived one — rotated out-of-band or the SecretReference changed; value-drift is reported (unlike RouteConfigDrift's names-only) because a provided cert's desired content is fully deterministic.",
+		Causes: []string{
+			"The certificate was replaced out-of-band through the mediating runtime or admin API.",
+			"The SecretReference's backing material was rotated; the manifest now derives a different cert.",
+		},
+		Remedies: []string{
+			"Run `platformctl apply` to converge the loaded certificate to the manifest-derived value.",
+		},
+	},
+	{
+		Token: ReasonCAProvisioned, Area: "ingress", Kind: "reason",
+		Meaning:  "The ingress provider generated its Provider-scoped self-signed local CA (first reconcile with tls.selfSigned Connections) or found the persisted one; the CA's public certificate is published in providerState and named by inventory so tools can trust it.",
+		Causes:   healthyCauses,
+		Remedies: []string{"Nothing to fix — informational. Retrieve the CA location via `platformctl inventory -o json` (certificateAuthorities) to add it to a client trust store."},
+	},
+	{
 		Token: ReasonRouteHealthy, Area: "ingress", Kind: "reason",
 		Meaning:  "The Connection's route answers through the entrypoint (Docker: dialed through Caddy with the route's Host header; Kubernetes: the Ingress object matches spec).",
 		Causes:   healthyCauses,

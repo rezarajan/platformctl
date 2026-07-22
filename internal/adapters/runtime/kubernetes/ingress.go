@@ -20,7 +20,7 @@ import (
 
 func buildIngress(spec runtimeport.IngressSpec) *networkingv1.Ingress {
 	pathType := networkingv1.PathTypePrefix
-	return &networkingv1.Ingress{
+	ing := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      spec.Name,
 			Namespace: spec.Namespace,
@@ -52,6 +52,14 @@ func buildIngress(spec runtimeport.IngressSpec) *networkingv1.Ingress {
 			},
 		},
 	}
+	// TLSSecretName (docs/planning/08 C8): the Secret must already exist —
+	// either materialized by this same provider (EnsureTLSSecret) or
+	// referenced by name only (a cert-manager-managed spec.tls.secretName).
+	// This adapter never creates it as a side effect of EnsureIngress.
+	if spec.TLSSecretName != "" {
+		ing.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{spec.Host}, SecretName: spec.TLSSecretName}}
+	}
+	return ing
 }
 
 // EnsureIngress creates or updates the named Ingress — idempotent, matching
@@ -131,6 +139,9 @@ func ingressState(ing *networkingv1.Ingress) runtimeport.IngressState {
 			st.Address = lb.Hostname
 			break
 		}
+	}
+	if len(ing.Spec.TLS) > 0 {
+		st.TLSSecretName = ing.Spec.TLS[0].SecretName
 	}
 	return st
 }

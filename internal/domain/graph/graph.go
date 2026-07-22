@@ -122,6 +122,28 @@ func Build(envelopes []resource.Envelope) (*Graph, error) {
 				g.Edges[from] = append(g.Edges[from], to)
 			}
 		}
+		// tls.secretRef (Connection kind, docs/planning/08 C8) is nested one
+		// level under spec.tls, so the top-level refFields pass above (which
+		// already handles the bare Connection.spec.secretRef field) can't see
+		// it — same resolve/validate treatment, scoped narrowly like
+		// configRefFields above rather than a general nested-ref mechanism.
+		if tlsBlock, ok := e.Spec["tls"].(map[string]any); ok {
+			ref := resource.RefFromSpec(tlsBlock, "secretRef")
+			if ref.Name != "" {
+				if err := validateRef(from, "tls.secretRef", ref); err != nil {
+					return nil, err
+				}
+				targets := filterKinds(byName[nameIndexKey(ref.NamespaceOr(e.Metadata.Namespace), ref.Name)], allowedKinds("secretRef"))
+				if len(targets) == 0 {
+					return nil, fmt.Errorf("%s: spec.tls.secretRef %q does not resolve to a SecretReference in namespace %q", from, ref.Name, ref.NamespaceOr(e.Metadata.Namespace))
+				}
+				to := targets[0]
+				if len(targets) > 1 {
+					return nil, fmt.Errorf("%s: spec.tls.secretRef %q is ambiguous in namespace %q (matches %d resources)", from, ref.Name, ref.NamespaceOr(e.Metadata.Namespace), len(targets))
+				}
+				g.Edges[from] = append(g.Edges[from], to)
+			}
+		}
 		// secretRefs (Provider kind) create edges to SecretReferences.
 		if refs, ok := e.Spec["secretRefs"].([]any); ok {
 			for _, r := range refs {

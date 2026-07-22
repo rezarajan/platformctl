@@ -9,11 +9,11 @@ import (
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 )
 
-func TestSupportedConnectionSchemesIsHTTPOnly(t *testing.T) {
+func TestSupportedConnectionSchemesIsHTTPAndHTTPS(t *testing.T) {
 	p := New()
 	schemes := p.SupportedConnectionSchemes()
-	if len(schemes) != 1 || schemes[0] != "http" {
-		t.Fatalf("SupportedConnectionSchemes() = %v, want exactly [\"http\"] (https is C8's seam, docs/adr/018 scope note)", schemes)
+	if len(schemes) != 2 || schemes[0] != "http" || schemes[1] != "https" {
+		t.Fatalf(`SupportedConnectionSchemes() = %v, want exactly ["http", "https"] (docs/planning/08 C8)`, schemes)
 	}
 }
 

@@ -1,8 +1,7 @@
 // Package ingress realizes managed Connection resources with spec.scheme:
-// http — the HTTP-routing sibling of the proxy provider's tcp scheme, on the
-// same Connection seam docs/adr/002 designated for it. Implements
-// ConnectionCapableProvider (scheme: "http" only — https is C8's seam, see
-// docs/adr/018's scope note).
+// http or https — the HTTP-routing sibling of the proxy provider's tcp
+// scheme, on the same Connection seam docs/adr/002 designated for it.
+// Implements ConnectionCapableProvider ("http", "https").
 //
 // Two structurally different realizations, chosen per Provider's
 // spec.runtime.type (docs/adr/018 "Layering" section — a domain-layer field
@@ -13,14 +12,22 @@
 //     Per-Connection routes reconcile via Caddy's admin API (docker.go) —
 //     never through ContainerSpec.Files, which would restart the shared
 //     container on every unrelated Connection's change (docs/adr/018
-//     Decision 3).
+//     Decision 3). TLS certificates (docs/planning/08 C8, tls.go/caddy.go)
+//     follow the identical discipline: loaded via the admin API, never via
+//     ContainerSpec.Files.
 //   - Kubernetes: one networking.k8s.io/v1 Ingress object per Connection
 //     (kubernetes.go), via the runtime.IngressCapableRuntime capability. No
 //     shared container: the cluster's own ingress controller does the
-//     proxying.
+//     proxying. TLS is Ingress.spec.tls referencing a kubernetes.io/tls
+//     Secret (provided, self-signed, or a referenced-only cert-manager
+//     Secret).
 //
-// TLS is explicitly out of scope (C8); every endpoint this provider
-// publishes is honestly Insecure: true.
+// A Connection declaring scheme: https requires spec.tls (see
+// docs/domain/connection's TLS type) and the TLSTermination feature gate
+// (checked by engine.resolveRequest via registry.RequireGate — this
+// provider never checks gates itself). Every endpoint this provider
+// publishes is honestly Insecure: true for http, false for https —
+// docs/planning/07 §2.5's standing rule.
 package ingress
 
 import (
@@ -57,11 +64,12 @@ func New() *Provider { return &Provider{} }
 
 func (p *Provider) Type() string { return "ingress" }
 
-// SupportedConnectionSchemes implements ConnectionCapableProvider. Only
-// "http" — a Connection declaring "https" fails the standard capability
-// error at validate until C8 adds TLS termination to this provider
-// (docs/adr/018 scope note).
-func (p *Provider) SupportedConnectionSchemes() []string { return []string{"http"} }
+// SupportedConnectionSchemes implements ConnectionCapableProvider.
+// docs/planning/08 C8 adds "https": a Connection declaring scheme: https
+// terminates TLS at this provider's entrypoint (Connection.spec.tls),
+// behind the TLSTermination gate (registry.RequireGate, checked by
+// engine.resolveRequest — see docs/adr/018 addendum).
+func (p *Provider) SupportedConnectionSchemes() []string { return []string{"http", "https"} }
 
 func containerName(provEnv resource.Envelope) string { return naming.RuntimeObjectName(provEnv) }
 

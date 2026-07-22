@@ -934,6 +934,73 @@ entrypoints, is observable, and its data is recoverable. This is where
   against its CA; self-signed path works and inventory names the CA
   location; plaintext upstream is unreachable from outside when TLS mode is
   on (the entrypoint is the only route).
+- **Merged 2026-07-22.** Shipped: `Connection.spec.tls: {secretRef |
+  selfSigned | secretName}` (exactly one, requires `scheme: https`),
+  `SupportedConnectionSchemes()` → `["http", "https"]`. Docker: a second
+  Caddy HTTP-app server (`srv1`, container-internal :443) with
+  `tls_connection_policies` — found live, not by reading docs, that
+  `automatic_https.disable: true` alone does **not** enable TLS on a
+  listener; an explicit (even empty) policy is required — hosts every
+  `https` route; certificates load exclusively through Caddy's admin API
+  (`/config/apps/tls/certificates/load_pem`, `@id`-tagged like routes),
+  never `ContainerSpec.Files` (a spec-hash-triggered container replace on
+  every cert rotation would reproduce Decision 3's restart-blast-radius
+  problem for the whole shared proxy — the label itself is a one-way hash
+  and doesn't leak plaintext, a separate finding recorded in docs/adr/018's
+  addendum). The Provider-scoped local CA is the one exception: it
+  persists via `ContainerSpec.Files` using the exact read-before-
+  regenerate pattern `postgres`'s superuser-password rotation established,
+  because it changes as rarely as the bootstrap config itself. Kubernetes:
+  `Ingress.spec.tls` referencing a `kubernetes.io/tls` Secret, via a new
+  `IngressCapableRuntime.EnsureTLSSecret`/`GetTLSSecret`/`RemoveTLSSecret`
+  capability — no new RBAC verb needed (`secrets` was already granted
+  cluster-wide since A1, confirmed by inspection before writing any
+  Secret-handling code). `secretName` (cert-manager) is referenced only —
+  never created/updated/deleted by platformctl; a not-yet-issued Secret
+  reports `Ready: false`/`CertMissing`, not an error, converging on the
+  next `apply` once it exists (the same eventually-consistent posture
+  `SchemaRegistryURL`/`CatalogFacts` already have for a not-yet-published
+  upstream fact). Gate `TLSTermination` registered Alpha/disabled,
+  independent of `IngressProvider`'s own gate; enforced by a new
+  `registry.Registry.RequireGate` choke point in `engine.resolveRequest`
+  (no existing choke point fit a manifest-declared per-*resource* field —
+  mirrors `HighAvailability`'s own admitted-imperfect backstop-at-point-
+  of-use pattern rather than inventing a second gating mechanism).
+  `platformctl inventory` gained `certificateAuthorities` in `-o json/yaml`
+  (the CA's public certificate only — never the private key) plus a
+  human-readable pointer to it; https URL rendering needed no extra code
+  (already generic via `Endpoint.Scheme`/`Insecure`). Verified live:
+  `TestIngressTLSEndToEnd` (`cmd/platformctl/ingress_tls_integration_test.go`)
+  against real Docker — provided-secretRef cert verifies against an
+  independently test-generated CA (`resp.TLS.VerifiedChains`); self-signed
+  path verified against the CA the provider itself published via
+  `inventory -o json` (not a CA the test invented); a helper upstream
+  created out-of-band with `Audience: internal` (zero host port) is
+  reachable only through the entrypoint (`HostAddr` confirmed empty before
+  and after apply); idempotent re-apply (shared proxy container ID
+  unchanged); drift on a hand-mangled TLS route heals; clean destroy — all
+  green (8.6–8.8s), alongside the full pre-existing `TestIngress*` Docker
+  suite with no regression. `TestIngressTLSKubernetesEndToEnd`
+  (`cmd/platformctl/ingress_tls_kubernetes_integration_test.go`) against a
+  real cluster **under a minted minimal-RBAC kubeconfig** (doc 06 §8 rule
+  4) — secretRef materializes a Secret holding the provided cert/key
+  verbatim; the self-signed leaf cert chain-verifies (`crypto/x509`)
+  against the Provider's own published CA Secret (the same object-level
+  verification bar C7's `TestIngressKubernetesEndToEnd` already
+  established for this runtime, not a live ingress-nginx round-trip — a
+  deliberate scope match, not a shortcut); a cert-manager-style Connection
+  converges from `Ready: false` to healthy once its Secret is simulated
+  out-of-band; idempotent re-apply; drift heal; clean destroy — all green
+  (~59–61s), alongside the full `TestIngress*` suite under the same minted
+  kubeconfig with no regression, no leftover namespace. **Deferred**
+  (explicit, not silently missing): a live end-to-end HTTPS round-trip
+  through a real cluster ingress controller (this task's K8s leg verifies
+  object/Secret correctness, matching C7's own established scope for this
+  runtime); proactive certificate-expiry warnings between applies (Probe's
+  structural check already fails Ready 24h before expiry, forcing reissue
+  on the next `apply`, but there is no signal between applies — acceptable
+  for Alpha/dev use, a production TLS story routes through
+  `secretRef`/`secretName` rotation lifecycles it doesn't own).
 
 ### C9: Monitoring stack provider
 

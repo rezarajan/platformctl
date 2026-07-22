@@ -851,10 +851,24 @@ func newInventoryCmd(a *app) *cobra.Command {
 			}
 			rows := [][]string{{"COMPONENT", "ENDPOINT", "SCHEME", "HOST (from your machine)", "IN-NETWORK", "CREDENTIALS", "SECURITY"}}
 			data := []invRow{}
+			// cas collects every self-signed local CA a TLSTermination-
+			// enabled ingress Provider has published (docs/planning/08 C8):
+			// the CA's public certificate only, keyed by the Provider that
+			// owns it, so a tool can trust exactly the right one when more
+			// than one ingress Provider exists. Never the private key —
+			// providerState never carries it (docs/planning/03 §8.2.2).
+			var cas []caEntry
 			for _, e := range envelopes {
 				rs, ok := st.Resources[e.Key()]
 				if !ok {
 					continue
+				}
+				if e.Kind == "Provider" {
+					if tlsState, ok := rs.Provider["tls"].(map[string]any); ok {
+						if caCert, ok := tlsState["caCert"].(string); ok && caCert != "" {
+							cas = append(cas, caEntry{Provider: e.Key().String(), CACert: caCert})
+						}
+					}
 				}
 				for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
 					host := ep.Host
@@ -880,19 +894,35 @@ func newInventoryCmd(a *app) *cobra.Command {
 			}
 			if len(data) == 0 {
 				if isStructured(a.output) {
-					return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, inventoryOutput{Endpoints: data}, nil)
+					return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, inventoryOutput{Endpoints: data, CertificateAuthorities: cas}, nil)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "no service endpoints recorded — apply the platform first")
+				printSelfSignedCANotes(cmd.OutOrStdout(), cas)
 				return nil
 			}
 			if isStructured(a.output) {
-				return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, inventoryOutput{Endpoints: data}, nil)
+				return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, inventoryOutput{Endpoints: data, CertificateAuthorities: cas}, nil)
 			}
-			return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, data, rows)
+			if err := cliutil.WriteOutput(cmd.OutOrStdout(), a.output, data, rows); err != nil {
+				return err
+			}
+			printSelfSignedCANotes(cmd.OutOrStdout(), cas)
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&forTool, "for", "", "render a paste-ready config snippet for a tool: "+toolNames())
 	return cmd
+}
+
+// printSelfSignedCANotes names *where* to find each self-signed CA's public
+// certificate (docs/planning/08 C8 accept: "inventory names the CA
+// location") in the human-readable inventory path — never the PEM material
+// itself inline; -o json/yaml already embeds that for programmatic use
+// (inventoryOutput.CertificateAuthorities). A no-op when cas is empty.
+func printSelfSignedCANotes(w io.Writer, cas []caEntry) {
+	for _, ca := range cas {
+		fmt.Fprintf(w, "\nself-signed CA for %s: run `platformctl inventory -o json` and read .certificateAuthorities[] for the PEM (also in state: `platformctl state inspect -o json` -> resources[%q].providerState.tls.caCert)\n", ca.Provider, ca.Provider)
+	}
 }
 
 // credentialRefs maps each resource to the SecretReference(s) holding its
@@ -1098,6 +1128,19 @@ type driftOutput struct {
 
 type inventoryOutput struct {
 	Endpoints any `json:"endpoints" yaml:"endpoints"`
+	// CertificateAuthorities publishes every self-signed local CA an
+	// ingress Provider owns (docs/planning/08 C8) — public certificate
+	// only, so a tool consuming `-o json` can add it to a trust store
+	// directly. omitempty: absent entirely when no Connection uses
+	// tls.selfSigned.
+	CertificateAuthorities []caEntry `json:"certificateAuthorities,omitempty" yaml:"certificateAuthorities,omitempty"`
+}
+
+// caEntry is one published self-signed CA's public certificate, keyed by
+// the ingress Provider that owns it.
+type caEntry struct {
+	Provider string `json:"provider" yaml:"provider"`
+	CACert   string `json:"caCert" yaml:"caCert"`
 }
 
 type toolConfigOutput struct {

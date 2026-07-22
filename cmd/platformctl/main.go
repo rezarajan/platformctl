@@ -138,6 +138,13 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// TrinoProvider/JDBCSinkProvider posture (design note 006), not the
 	// Phase 6.5 enabled-Alpha precedent.
 	gates.Register("IngressProvider", featuregate.Alpha, false)
+	// docs/planning/08 C8, docs/adr/018 addendum: TLS termination on the
+	// same ingress provider's Connection seam (Connection.spec.tls).
+	// Alpha/disabled, independent of IngressProvider itself — a Connection
+	// can decline TLS and stay plaintext HTTP even once IngressProvider
+	// graduates, so this needs its own off switch rather than riding
+	// IngressProvider's gate.
+	gates.Register("TLSTermination", featuregate.Alpha, false)
 	// docs/planning/08 D10 / docs/adr/006-compute-engines.md: the trino
 	// compute-engine provider. Alpha/disabled — unlike NessieProvider/
 	// OpenLineageProvider's enabled-Alpha Phase 6.5 precedent, a query

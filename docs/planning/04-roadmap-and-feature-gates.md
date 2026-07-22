@@ -416,6 +416,7 @@ GA. Phase 7 closes with Stage B's exit criteria held (docs/planning/08 §4).
 | `TrinoProvider` | 08 Stage D (D10) | Alpha | disabled | Beta after real-use soak; defaults off (unlike the enabled-Alpha Phase 6.5 precedent) because a query engine accepting arbitrary SQL from whoever can reach its coordinator port is a meaningfully different risk profile — docs/adr/006-compute-engines.md |
 | `JDBCSinkProvider` | 08 Stage D (D3) | Alpha | disabled | Beta after real-use soak; defaults off, matching the IngressProvider/TrinoProvider posture (a new provider exposing a new capability surface — writes into a database — defaults off until soaked) |
 | `IngestProvider` | 08 Stage D (D4) | Alpha | disabled | Beta after real-use soak; same posture as `JDBCSinkProvider` |
+| `TLSTermination` | 08 Stage C (C8) | Alpha | disabled | Beta after real-use soak; independent of `IngressProvider`'s own gate (a Connection can stay plaintext even once ingress routing graduates) — see docs/adr/018 addendum |
 
 Gates planned by the production-readiness backlog (`HighAvailability`,
 `IngressProvider`, `TLSTermination`, `MonitoringStackProvider`,

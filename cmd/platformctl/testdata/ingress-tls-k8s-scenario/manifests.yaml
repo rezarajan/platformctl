@@ -1,0 +1,66 @@
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: ingk8stls-provided-cert
+spec: {backend: env, keys: [cert, key]}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: ingk8stls-nessie
+spec:
+  type: nessie
+  runtime:
+    type: kubernetes
+    network: datascape-ingk8stls-test-ns
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: ingk8stls-edge
+spec:
+  type: ingress
+  runtime:
+    type: kubernetes
+    network: datascape-ingk8stls-test-ns
+  configuration: {domain: localhost}
+  secretRefs: [ingk8stls-provided-cert]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: nessie-provided
+spec:
+  providerRef: {name: ingk8stls-edge}
+  scheme: https
+  port: 443
+  target: ingk8stls-nessie:19120
+  tls:
+    secretRef: {name: ingk8stls-provided-cert}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: nessie-selfsigned
+spec:
+  providerRef: {name: ingk8stls-edge}
+  scheme: https
+  port: 443
+  target: ingk8stls-nessie:19120
+  tls:
+    selfSigned: true
+---
+# References a pre-existing kubernetes.io/tls Secret by name (simulating a
+# cert-manager-issued one — platformctl only ever reads it, per the
+# referencing-only rule).
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: nessie-certmanager
+spec:
+  providerRef: {name: ingk8stls-edge}
+  scheme: https
+  port: 443
+  target: ingk8stls-nessie:19120
+  tls:
+    secretName: ingk8stls-external-issued

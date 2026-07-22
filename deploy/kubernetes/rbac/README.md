@@ -65,7 +65,7 @@ cluster, to prove it's actually sufficient — not just documented as such.
 | `poddisruptionbudgets.policy` | get, create, update, delete | applied automatically whenever `Replicas > 1` (docs/adr/004) |
 | `services` | get, create, update, delete, list | `EnsureContainer`'s Service (DNS/addressing) + `EnsureReachable`'s `node-port`/`load-balancer` modes |
 | `persistentvolumeclaims` | get, create, update, delete, list | `EnsureVolume`/`RemoveVolume` |
-| `secrets` | get, create, update, delete | `ContainerSpec.Files`/`ImagePullAuth`, and the `KubernetesSecretBackend` SecretStore adapter |
+| `secrets` | get, create, update, delete | `ContainerSpec.Files`/`ImagePullAuth`, the `KubernetesSecretBackend` SecretStore adapter, and (no new verbs needed — confirmed before C8 shipped) `IngressCapableRuntime`'s `EnsureTLSSecret`/`GetTLSSecret`/`RemoveTLSSecret` (docs/planning/08 C8, docs/adr/018 addendum): a Connection's TLS leaf certificate and the ingress provider's own local CA, both `kubernetes.io/tls`-shaped |
 | `pods` | get, list, create, delete | Finding a Deployment's live pod (logs, exec, port-forward); create/delete for `ProbeReachable`'s ephemeral probe pod fallback (docs/planning/08 C10) |
 | `pods/log` | get | `Logs` |
 | `pods/exec` | create | `ReadFile`'s live-path fallback, `ProbeReachable`'s exec-dial fast path |

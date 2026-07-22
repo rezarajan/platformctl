@@ -1,0 +1,73 @@
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: ing-tls-provided-cert
+spec: {backend: env, keys: [cert, key]}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: ing-tls-nessie
+spec:
+  type: nessie
+  runtime: {type: docker, network: datascape-ingtls-net}
+  configuration: {port: 19720}
+---
+# The shared HTTPS-capable entrypoint (docs/planning/08 C8, docs/adr/018
+# addendum): the same Caddy container C7 introduced, now also terminating
+# TLS on a second published port. secretRefs lists the provided-cert
+# SecretReference so the engine resolves it into Request.Secrets for this
+# Provider's own reconcile — the exact plumbing debezium's Connection-
+# secretRef already established, mirrored here for Connection.spec.tls.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: ing-tls-edge
+spec:
+  type: ingress
+  runtime: {type: docker, network: datascape-ingtls-net}
+  configuration: {port: 19721, httpsPort: 19722, adminPort: 19723, domain: localhost}
+  secretRefs: [ing-tls-provided-cert]
+---
+# Option 1: operator-provided cert+key (test supplies both via env,
+# generated against a CA the test also holds, so it can verify the served
+# chain against that exact CA).
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: nessie-provided
+spec:
+  providerRef: {name: ing-tls-edge}
+  scheme: https
+  port: 443
+  target: ing-tls-nessie:19120
+  tls:
+    secretRef: {name: ing-tls-provided-cert}
+---
+# Option 2: provider-managed local CA + per-host leaf cert.
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: nessie-selfsigned
+spec:
+  providerRef: {name: ing-tls-edge}
+  scheme: https
+  port: 443
+  target: ing-tls-nessie:19120
+  tls:
+    selfSigned: true
+---
+# Routes to a helper upstream the test creates out-of-band with NO
+# published host port (Audience: internal only) — proves the plaintext
+# upstream is unreachable from outside the entrypoint when TLS mode is on.
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: internal-upstream
+spec:
+  providerRef: {name: ing-tls-edge}
+  scheme: https
+  port: 443
+  target: ingtls-internal-upstream:80
+  tls:
+    selfSigned: true

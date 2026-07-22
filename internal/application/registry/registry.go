@@ -56,6 +56,19 @@ func (r *Registry) RegisterRuntime(typeName string, ctor RuntimeConstructor) {
 	r.runtimes[typeName] = ctor
 }
 
+// RequireGate reports a clear error when the named feature gate is disabled
+// or unknown — a thin public wrapper so a manifest-declared field with no
+// natural provider-construction or runtime-call choke point of its own
+// (docs/planning/08 C8's Connection.spec.tls: not a distinct provider type
+// like IngressProvider/BackupRestore, not a CLI-flag behavior like
+// DriftDetection/ParallelReconciliation) still has exactly one place to
+// enforce its gate, mirroring HighAvailability's own admitted-imperfect
+// backstop-at-point-of-use pattern (haGuardRuntime.EnsureContainer below)
+// rather than inventing a second gating mechanism.
+func (r *Registry) RequireGate(name string) error {
+	return r.gates.Require(name)
+}
+
 func (r *Registry) Provider(typeName string) (reconciler.Provider, error) {
 	ctor, ok := r.providers[typeName]
 	if !ok {
@@ -149,6 +162,39 @@ func (g *haGuardRuntime) RemoveIngress(ctx context.Context, namespace, name stri
 		return fmt.Errorf("ingress provider: runtime does not implement IngressCapableRuntime (expected on a Kubernetes-runtime Provider)")
 	}
 	return ic.RemoveIngress(ctx, namespace, name)
+}
+
+// EnsureTLSSecret/GetTLSSecret/RemoveTLSSecret (docs/planning/08 C8) get the
+// identical explicit-delegation treatment as EnsureIngress/GetIngress/
+// RemoveIngress above, for the identical reason (docs/adr/018 addendum): an
+// embedded runtime.ContainerRuntime *interface* only promotes that
+// interface's own declared method set, never a concrete implementation's
+// extra methods — so without these three, a provider's own
+// req.Runtime.(runtime.IngressCapableRuntime) assertion would fail for
+// every runtime obtained through this registry, including a real
+// Kubernetes adapter that genuinely implements them.
+func (g *haGuardRuntime) EnsureTLSSecret(ctx context.Context, namespace, name string, certPEM, keyPEM []byte, labels map[string]string) error {
+	ic, ok := g.ContainerRuntime.(runtime.IngressCapableRuntime)
+	if !ok {
+		return fmt.Errorf("ingress provider: runtime does not implement IngressCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return ic.EnsureTLSSecret(ctx, namespace, name, certPEM, keyPEM, labels)
+}
+
+func (g *haGuardRuntime) GetTLSSecret(ctx context.Context, namespace, name string) ([]byte, []byte, bool, error) {
+	ic, ok := g.ContainerRuntime.(runtime.IngressCapableRuntime)
+	if !ok {
+		return nil, nil, false, fmt.Errorf("ingress provider: runtime does not implement IngressCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return ic.GetTLSSecret(ctx, namespace, name)
+}
+
+func (g *haGuardRuntime) RemoveTLSSecret(ctx context.Context, namespace, name string) error {
+	ic, ok := g.ContainerRuntime.(runtime.IngressCapableRuntime)
+	if !ok {
+		return fmt.Errorf("ingress provider: runtime does not implement IngressCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return ic.RemoveTLSSecret(ctx, namespace, name)
 }
 
 func joinKeys[V any](m map[string]V) string {

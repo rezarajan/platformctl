@@ -228,6 +228,40 @@ const (
 	// proxy's own ReasonUpstreamUnreachable (same package, different
 	// constant) even though the concept mirrors it exactly.
 	ReasonIngressUpstreamUnreachable = "IngressUpstreamUnreachable"
+
+	// --- TLS termination (docs/planning/08 C8, docs/adr/018 addendum) ---
+	// ReasonCertHealthy: a https Connection's certificate is loaded
+	// (Docker: Caddy's tls app; Kubernetes: the Ingress's referenced
+	// Secret) and structurally valid — parses, not expired, SAN matches
+	// the route's host, and (self-signed only) chains to the Provider's
+	// own CA.
+	ReasonCertHealthy = "CertHealthy"
+	// ReasonCertMissing: a https Connection has no certificate loaded yet
+	// (Docker: no matching @id in Caddy's tls app; Kubernetes: the
+	// referenced Secret does not exist — including a not-yet-issued
+	// cert-manager Secret, which is expected to converge, not an error).
+	ReasonCertMissing = "CertMissing"
+	// ReasonCertInvalid: a certificate is loaded but fails structural
+	// validation — unparsable, expired, SAN does not match the route's
+	// host, or (self-signed) does not chain to the Provider's current CA.
+	// The dynamic detail (which check failed) is appended at the call
+	// site, mirroring ReasonConnectorState's stable-prefix convention.
+	ReasonCertInvalid = "CertInvalid"
+	// ReasonCertConfigDrift: a provided (secretRef) certificate's live
+	// loaded content no longer matches the SecretReference's current
+	// value (e.g. rotated out-of-band, or the SecretReference itself
+	// changed) — drifted *value*, not names, unlike RouteConfigDrift,
+	// because a provided cert's desired content is fully deterministic
+	// (unlike a freshly-generated self-signed leaf cert, which is
+	// structurally checked instead via ReasonCertInvalid/ReasonCertHealthy
+	// so an unchanged manifest never reports drift merely because
+	// regenerating would produce different random serial numbers).
+	ReasonCertConfigDrift = "CertConfigDrift"
+	// ReasonCAProvisioned: the self-signed local CA was generated (first
+	// self-signed Connection on this Provider) or already existed and was
+	// reused unchanged — an informational condition, never Ready-blocking
+	// on its own.
+	ReasonCAProvisioned = "CAProvisioned"
 )
 
 // --- trino (compute-engine provider; docs/planning/08 D10) -----------------

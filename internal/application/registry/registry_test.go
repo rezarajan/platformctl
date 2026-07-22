@@ -65,7 +65,8 @@ func TestRuntime_HighAvailabilityGate_AllowsMultiReplicaWhenEnabled(t *testing.T
 // exception only allows fake/localfile/env/noop as test doubles).
 type ingressCapableFake struct {
 	*fakeruntime.Runtime
-	ensured bool
+	ensured    bool
+	tlsSecrets map[string][2][]byte
 }
 
 func (f *ingressCapableFake) EnsureIngress(ctx context.Context, spec runtime.IngressSpec) (runtime.IngressState, error) {
@@ -79,6 +80,32 @@ func (f *ingressCapableFake) GetIngress(ctx context.Context, namespace, name str
 
 func (f *ingressCapableFake) RemoveIngress(ctx context.Context, namespace, name string) error {
 	f.ensured = false
+	return nil
+}
+
+// EnsureTLSSecret/GetTLSSecret/RemoveTLSSecret (docs/planning/08 C8): the
+// same bare-bones-but-real-behavior fake as the three Ingress methods
+// above, so TestRuntime_PromotesIngressCapableRuntime can cover the C8
+// addition to IngressCapableRuntime with the identical reproduction shape
+// ADR 018's addendum already established.
+func (f *ingressCapableFake) EnsureTLSSecret(ctx context.Context, namespace, name string, certPEM, keyPEM []byte, labels map[string]string) error {
+	if f.tlsSecrets == nil {
+		f.tlsSecrets = map[string][2][]byte{}
+	}
+	f.tlsSecrets[namespace+"/"+name] = [2][]byte{certPEM, keyPEM}
+	return nil
+}
+
+func (f *ingressCapableFake) GetTLSSecret(ctx context.Context, namespace, name string) ([]byte, []byte, bool, error) {
+	v, ok := f.tlsSecrets[namespace+"/"+name]
+	if !ok {
+		return nil, nil, false, nil
+	}
+	return v[0], v[1], true, nil
+}
+
+func (f *ingressCapableFake) RemoveTLSSecret(ctx context.Context, namespace, name string) error {
+	delete(f.tlsSecrets, namespace+"/"+name)
 	return nil
 }
 
@@ -136,5 +163,23 @@ func TestRuntime_PromotesIngressCapableRuntime(t *testing.T) {
 	}
 	if _, err := plainIC.EnsureIngress(ctx, runtime.IngressSpec{Name: "route-y"}); err == nil {
 		t.Fatal("EnsureIngress against a runtime whose underlying adapter is not ingress-capable should error, got nil")
+	}
+
+	// TLS-secret trio: the same promotion must hold for the C8 addition.
+	if err := ic.EnsureTLSSecret(ctx, "ns", "tls-x", []byte("cert"), []byte("key"), nil); err != nil {
+		t.Fatalf("EnsureTLSSecret: %v", err)
+	}
+	cert, key, found, err := ic.GetTLSSecret(ctx, "ns", "tls-x")
+	if err != nil || !found || string(cert) != "cert" || string(key) != "key" {
+		t.Fatalf("GetTLSSecret: cert=%q key=%q found=%v err=%v", cert, key, found, err)
+	}
+	if err := ic.RemoveTLSSecret(ctx, "ns", "tls-x"); err != nil {
+		t.Fatalf("RemoveTLSSecret: %v", err)
+	}
+	if _, _, found, _ := ic.GetTLSSecret(ctx, "ns", "tls-x"); found {
+		t.Error("tls secret still present after RemoveTLSSecret")
+	}
+	if err := plainIC.EnsureTLSSecret(ctx, "ns", "tls-y", []byte("c"), []byte("k"), nil); err == nil {
+		t.Fatal("EnsureTLSSecret against a non-ingress-capable runtime should error, got nil")
 	}
 }

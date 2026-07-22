@@ -15,3 +15,7 @@ A first-class, non-secret description of how to reach a system: address here, cr
 | `spec.scheme` | string | no | Transport scheme; the realizing provider must declare it in SupportedConnectionSchemes(). Default: tcp. |
 | `spec.secretRef` | object `{name}` | no | Optional SecretReference carrying credentials for whatever answers at this connection. |
 | `spec.target` | string | no | Managed only: host:port the entrypoint forwards to — the one place that knows where the system actually lives. |
+| `spec.tls` | object | no | Terminates TLS at the entrypoint (docs/planning/08 C8). Only meaningful together with scheme: https on a managed (non-external) Connection. Exactly one of secretRef, selfSigned, or secretName. |
+| `spec.tls.secretName` | string | no | Kubernetes only: references an existing kubernetes.io/tls Secret by name (e.g. cert-manager-managed). platformctl only ever reads this Secret. |
+| `spec.tls.secretRef` | object `{name}` | no | SecretReference carrying the cert+key PEM material (keys: cert, key). Must also appear in the realizing Provider's spec.secretRefs for the engine to resolve it (mirrors spec.secretRef's own plumbing). |
+| `spec.tls.selfSigned` | boolean | no | The provider provisions a local CA plus a per-host leaf certificate for dev use. The CA's public certificate is published in providerState so tools can trust it. |

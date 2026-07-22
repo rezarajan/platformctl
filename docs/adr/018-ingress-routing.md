@@ -304,3 +304,119 @@ new capabilities for free.
 - docs/planning/03-resource-model-reference.md §8.2 (`Connection`).
 - docs/planning/08-production-readiness-plan.md §5 C7 (this task) and C8
   (TLS, the next task on this seam).
+
+## Addendum (2026-07-22) — C8: TLS termination and certificate handling
+
+`Connection.spec.tls: {secretRef | selfSigned | secretName}` (exactly one),
+requiring `scheme: https` — see docs/planning/03 §8.2.2 for the manifest
+shape. `SupportedConnectionSchemes()` grows to `["http", "https"]`.
+
+### The `ContainerSpec.Files`/spec-hash question, resolved by inspection
+
+C8's task text asked whether `Files` content leaking into the spec-hash
+label was a real risk. Read `internal/adapters/runtime/docker/image.go`'s
+`specHash`: it is `sha256(json.Marshal(spec))` — **one-way**, so the label
+itself never leaks plaintext material. The real reason certificates never
+go through `ContainerSpec.Files` is the *other* half of Decision 3's
+reasoning, extended: a content **change** changes the hash, and per
+`ensureOneContainer` a hash mismatch **replaces the container**. For a
+per-Connection leaf certificate that would reproduce exactly the
+restart-blast-radius problem Decision 3 already solved for routes — one
+Connection's cert rotation would restart the shared proxy and drop every
+other Connection's live traffic. So: certificates load exclusively through
+Caddy's admin API (`/config/apps/tls/certificates/load_pem`, `@id`-tagged
+exactly like routes), never via `Files`. The **Provider-scoped local CA**
+keypair is the one exception, and only because it is Provider-scoped, not
+per-Connection: it changes as rarely as the bootstrap config itself (only
+when genuinely missing), so it persists via `Files` using the identical
+read-existing-before-regenerate pattern `postgres`'s superuser-password
+rotation already established (`rt.ReadFile` before ever calling
+`EnsureContainer` with new content) — never Caddy's own concern, since
+Caddy only ever receives already-signed leaf certificates via the admin
+API, never the CA private key itself.
+
+### Caddy TLS admin-API shape — found live, not by reading docs
+
+A real `caddy:2.9.1` container was used to work out the exact JSON shape
+before writing any Go, because two things could not have been predicted by
+reasoning about the docs alone:
+
+1. A server's `automatic_https: {disable: true}` does **not** make it speak
+   TLS — it only suppresses ACME/on-demand issuance and the automatic
+   HTTP→HTTPS redirect. A listener with only that setting still speaks
+   plain HTTP; `curl` failed with "wrong version number" until an explicit
+   `tls_connection_policies: [{}]` (one empty policy — "select a cert by
+   SNI from whatever is manually loaded") was added to the server. This is
+   what actually turns a listener into a TLS terminator.
+2. `GET /id/<id>` on an **unknown certificate** `@id` returns **404** —
+   routes return 400 for the identical "no such object" case (already
+   documented above, Decision 3). Both mean "does not exist right now";
+   `getCert`/`getRoute` (`internal/adapters/providers/ingress/caddy.go`)
+   each treat their own status code correctly.
+3. `GET` on a **loaded** certificate's `@id` echoes the private key back in
+   plaintext — Caddy's admin API is a genuinely read-write config surface,
+   not a write-only secret store. This is not a new exposure: the admin
+   endpoint's trust boundary (shared network, unauthenticated) was already
+   documented in `caddy.go` before C8 for the identical reason Kafka
+   Connect/nessie/prometheus's REST APIs carry credentials in-band.
+
+Concretely: a second Caddy HTTP-app server (`srv1`, container-internal port
+443 — Caddy's own default `https_port`, so its listener-recognition logic
+needs no override) hosts every `https`-scheme Connection's route, with
+`tls_connection_policies` set once at bootstrap; `srv0` (plain HTTP,
+container-internal port 80) is unchanged since C7.
+
+### Kubernetes: `Ingress.spec.tls` + a new `IngressCapableRuntime` capability
+
+`runtime.IngressCapableRuntime` (Kubernetes-only, per this ADR's own
+"Layering" section above) gains `EnsureTLSSecret`/`GetTLSSecret`/
+`RemoveTLSSecret` — a plain `kubernetes.io/tls`-shaped Secret (`tls.crt`/
+`tls.key`), reused for both a Connection's own leaf certificate (referenced
+by `IngressSpec.TLSSecretName`) and the Provider-scoped local CA (never
+referenced by any `Ingress`, stored purely for `GetTLSSecret` to read back
+before regenerating — the Kubernetes-side equivalent of Docker's
+`ContainerSpec.Files`/`ReadFile` persistence). **No new RBAC verb**:
+`deploy/kubernetes/rbac/role.yaml`'s `secrets` entry already grants
+`get/create/update/delete` cluster-wide (needed since A1/`ContainerSpec.
+Files`) — confirmed by inspection before writing any Secret-handling code,
+not assumed.
+
+`spec.tls.secretName` (cert-manager) is referenced only: the Ingress
+object's `spec.tls[].secretName` points at it, `GetTLSSecret` reads it to
+report readiness, and `RemoveTLSSecret` is never called for it — mirroring
+this whole design's "integration = referencing, not operating" rule for
+external tooling (docs/planning/08 C8 task text). A not-yet-issued
+cert-manager Secret is `Ready: false` / `CertMissing`, not an error — the
+same eventually-consistent posture the `SchemaRegistryURL`/`CatalogFacts`
+patterns already have for a not-yet-published upstream fact.
+
+### Gate: `TLSTermination`, independent of `IngressProvider`
+
+Registered separately (`cmd/platformctl/main.go`) because a Connection can
+stay plaintext even after `IngressProvider` itself graduates — TLS is a
+per-Connection opt-in, not a property of the provider type. No existing
+enforcement choke point fit a manifest-declared per-*resource* field (not a
+distinct provider type like `IngressProvider`/`BackupRestore`; not a
+CLI-flag behavior like `DriftDetection`/`ParallelReconciliation`): a new
+`registry.Registry.RequireGate` public method is the one choke point every
+`Reconcile`/`Probe`/`Destroy` call for a TLS-declared Connection passes
+through (`engine.resolveRequest`) — deliberately mirroring
+`HighAvailability`'s own admitted-imperfect backstop-at-point-of-use
+pattern (`haGuardRuntime.EnsureContainer`) rather than inventing a second
+gating mechanism.
+
+### Follow-ups (non-blocking)
+
+- `Provider(type: ingress).spec.configuration.ingressClassName` (already
+  named as a C7 follow-up) would also let a multi-controller cluster pick
+  which controller serves a TLS-terminated `Ingress` — no new interaction
+  with this addendum's shape.
+- The self-signed leaf certificate's validity window (90 days,
+  `internal/adapters/providers/ingress/tls.go`) has no rotation *warning*
+  surfaced anywhere yet — Probe's structural check
+  (`certValidForHost`/`certChainsToCA`) already fails Ready 24h before
+  expiry, which forces a `Reconcile` to reissue on the next `apply`, but
+  there is no proactive "your CA/cert expires soon" signal between applies.
+  Acceptable for Alpha/dev use; a real production TLS story routes through
+  `secretRef`/`secretName` (an operator- or cert-manager-owned rotation
+  lifecycle) rather than this provider's own reissue-on-apply behavior.

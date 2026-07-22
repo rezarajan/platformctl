@@ -1207,6 +1207,20 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 		provEnv = pe
 	}
 
+	// TLSTermination gate (docs/planning/08 C8): Connection.spec.tls has no
+	// natural provider-construction or runtime-call choke point of its own
+	// (unlike IngressProvider itself, which gates at Registry.Provider
+	// below) — this is the one place every Reconcile/Probe/Destroy call for
+	// a TLS-declared Connection passes through, mirroring HighAvailability's
+	// own backstop-at-point-of-use pattern (registry.haGuardRuntime).
+	if env.Kind == "Connection" {
+		if conn, cerr := connection.FromEnvelope(env); cerr == nil && conn.TLS != nil {
+			if gerr := e.Registry.RequireGate("TLSTermination"); gerr != nil {
+				return nil, reconciler.Request{}, fmt.Errorf("%s: %w", env.Key(), gerr)
+			}
+		}
+	}
+
 	p, err := provider.FromEnvelope(provEnv)
 	if err != nil {
 		return nil, reconciler.Request{}, err
