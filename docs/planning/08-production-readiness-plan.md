@@ -2558,6 +2558,28 @@ unless a dependency is stated.
   ingress controller) — no false-Ready flap, and a serving probe would
   hardcode assumptions about which ingress controller the cluster runs;
   revisit if a live K8s ingress flake ever surfaces (B1 finding 4).
+- **Done (2026-07-22):** wireguard's `reconcileConnection` extracted
+  Probe's Connection-case check into shared `probeTunnelServing`
+  (container health + `handshakeAge` + `dialUpstream`), added
+  `waitTunnelServing` (a `tunnelSettleTimeout`/`tunnelSettlePoll`-bounded
+  poll, vars not consts so tests can shrink them) before setting Ready;
+  ingress-docker's `reconcileConnectionDocker` gained `waitRouteServing`
+  (reuses `probeThroughRoute`/`probeThroughRouteTLS` via
+  `routeSettleTimeout`/`routeSettlePoll`) before Ready; proxy's
+  `reconcileConnection` gained `waitForwarderServing` (reuses
+  `probeThroughForwarder` via `forwarderSettleTimeout`/
+  `forwarderSettlePoll`) before Ready, plus a real container `HealthCheck`
+  (a self-dial through the socat listener). No new status reasons: a
+  settle-timeout returns a bare error naming the last observed state,
+  mirroring how redpanda's own `waitTopicSettled` surfaces `(st, err)`
+  rather than a new Ready=False reason. Unit tests added per provider
+  (wireguard_test.go, proxy_test.go — neither existed before —
+  ingress/route_settle_test.go) proving reconcile fails honestly when the
+  upstream never answers; e2e `drift` immediately after `apply` asserted
+  zero-drift in wireguard_integration_test.go and
+  ingress_integration_test.go (NFR-11). `go test ./...` exit 0; gofmt/vet
+  clean; `test-impact.sh --base main` selected lakehouse+ingress+wireguard
+  (see TASK_PROGRESS.md for the sweep log).
 
 
 

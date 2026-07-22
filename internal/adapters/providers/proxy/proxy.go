@@ -111,12 +111,30 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 		},
 		Networks: []string{providerkit.Network(cfg)},
 		Ports:    []runtime.PortBinding{{HostPort: conn.Port, ContainerPort: conn.Port, Audience: runtime.AudienceHost}},
-		Labels:   connLabels,
+		// A real healthcheck, not just "container Running" (docs/planning/11
+		// B1 finding 3): dial socat's own listener from inside the
+		// container. connect-timeout bounds a hung attempt so the
+		// healthcheck itself can't wedge.
+		HealthCheck: &runtime.HealthCheck{
+			Test:     []string{"CMD-SHELL", fmt.Sprintf("socat -u OPEN:/dev/null TCP:127.0.0.1:%d,connect-timeout=2 || exit 1", conn.Port)},
+			Interval: 2 * time.Second,
+			Timeout:  5 * time.Second,
+			Retries:  30,
+		},
+		Labels: connLabels,
 	})
 	if err != nil {
 		return st, err
 	}
 	if err := rt.WaitHealthy(ctx, name, 60*time.Second); err != nil {
+		return st, err
+	}
+	// Ready means serving (docs/planning/01 NFR-11), not just "the container
+	// is Running" — socat accepting on its listen port says nothing about
+	// whether spec.target actually answers (docs/planning/11 B1 finding 3).
+	// Settle to the SAME dial-through-forwarder check Probe verifies before
+	// declaring Ready.
+	if err := waitForwarderServing(ctx, rt, name, conn); err != nil {
 		return st, err
 	}
 
@@ -220,4 +238,63 @@ func probeThroughForwarder(addr string) error {
 		return nil // session held open past the deadline — upstream accepted
 	}
 	return fmt.Errorf("session closed immediately: %w", err)
+}
+
+// forwarderSettleTimeout/forwarderSettlePoll bound reconcileConnection's
+// Ready determination to a genuinely serving forwarder — the redpanda
+// waitTopicSettled pattern (docs/planning/11 B1 findings 1-3). Vars, not
+// consts: tests shrink them instead of waiting out a real 45s timeout to
+// exercise the honest-failure path.
+var (
+	forwarderSettleTimeout = 45 * time.Second
+	forwarderSettlePoll    = 2 * time.Second
+)
+
+// waitForwarderServing bounds reconcileConnection's Ready determination to
+// the SAME check Probe uses — probeThroughForwarder, a dial-through the
+// socat forwarder to the upstream, not just the container reporting
+// healthy. A healthy forwarder passes on the first attempt (zero added
+// latency); on timeout, reconcile fails honestly with the last observed
+// state instead of setting Ready from container health alone
+// (docs/planning/11 B1 finding 3).
+func waitForwarderServing(ctx context.Context, rt runtime.ContainerRuntime, name string, conn connection.Connection) error {
+	deadline := time.Now().Add(forwarderSettleTimeout)
+	var lastErr error
+	var lastReason string
+	for {
+		ctr, found, err := rt.Inspect(ctx, name)
+		if err != nil {
+			return err
+		}
+		switch {
+		case !found || !ctr.Healthy:
+			lastErr = nil
+			lastReason = "forwarder container not healthy"
+		default:
+			addr := ctr.HostAddr(conn.Port)
+			switch {
+			case addr == "":
+				lastErr = nil
+				lastReason = "forwarder has no published host address yet"
+			default:
+				if perr := probeThroughForwarder(addr); perr != nil {
+					lastErr = perr
+					lastReason = fmt.Sprintf("upstream %s unreachable through forwarder: %v", conn.Target, perr)
+				} else {
+					return nil
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return fmt.Errorf("forwarder %q did not settle to a serving state within %s: %w", name, forwarderSettleTimeout, lastErr)
+			}
+			return fmt.Errorf("forwarder %q did not settle to a serving state within %s (last observed: %s)", name, forwarderSettleTimeout, lastReason)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(forwarderSettlePoll):
+		}
+	}
 }

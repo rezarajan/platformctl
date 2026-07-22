@@ -83,6 +83,17 @@ func TestIngressRoutingEndToEnd(t *testing.T) {
 		t.Fatalf("apply failed (code %d): %v\n%s", code, err, out)
 	}
 
+	// NFR-11 acceptance bar (docs/planning/01, I4 doc 08 §7.8): Ready means
+	// serving NOW — an immediate drift probe right after apply must report
+	// clean. Before I4, a Connection's route could reach Ready as soon as
+	// the admin API accepted the route write, without ever having dialed
+	// through the route the way Probe does — this would have shown up here
+	// as drift immediately after a "clean" apply (docs/planning/11 B1
+	// finding 2).
+	if report, driftCode := runDrift(t, manifests, stateFile, gate); driftCode != 0 {
+		t.Fatalf("drift immediately after apply reports changes (NFR-11 violation): %+v", report)
+	}
+
 	// Accept: nessie REST reachable via http://nessie.localhost:<port>
 	// through the Docker proxy — the routed Host, not nessie's own
 	// container port, which is never published to the host at all.

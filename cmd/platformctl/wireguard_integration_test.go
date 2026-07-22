@@ -106,6 +106,17 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 	}
 	t.Logf("apply took %s", time.Since(start).Round(time.Second))
 
+	// NFR-11 acceptance bar (docs/planning/01, I4 doc 08 §7.8): Ready means
+	// serving NOW — an immediate drift probe right after apply must report
+	// clean. Before I4, the wireguard Connection could reach Ready from the
+	// tunnel container's own healthcheck (wg0 exists) alone, without ever
+	// having dialed the upstream through the forwarder the way Probe does —
+	// this would have shown up here as drift immediately after a "clean"
+	// apply (docs/planning/11 B1 finding 1).
+	if report, driftCode := runDrift(t, manifests, stateFile, "--feature-gates=TunnelProvider=true"); driftCode != 0 {
+		t.Fatalf("drift immediately after apply reports changes (NFR-11 violation): %+v", report)
+	}
+
 	out, err, code = run(t, "status", manifests, "--state-file", stateFile, "--feature-gates=TunnelProvider=true")
 	if err != nil || code != 0 {
 		t.Fatalf("status failed (code %d): %v\n%s", code, err, out)

@@ -327,6 +327,15 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 	if err := rt.WaitHealthy(ctx, name, 60*time.Second); err != nil {
 		return st, err
 	}
+	// Ready means serving (docs/planning/01 NFR-11), not just "the container
+	// reports its own healthcheck passing" — wg0 existing says nothing about
+	// whether the peer has actually handshaked or the upstream answers
+	// through the forwarder rule (docs/planning/11 B1 finding 1, CONFIRMED,
+	// the redpanda-93fbf14 signature). Settle to the SAME signal Probe
+	// verifies before declaring Ready.
+	if err := waitTunnelServing(ctx, rt, name, conn, tc); err != nil {
+		return st, err
+	}
 
 	host, port := conn.Endpoint(name)
 	hostAddr := ctrState.HostAddr(conn.Port)
@@ -457,30 +466,22 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		}
 		name := naming.RuntimeObjectName(res)
 
-		ctr, found, err := rt.Inspect(ctx, name)
+		tss, err := probeTunnelServing(ctx, rt, name, conn, tc)
 		if err != nil {
 			return st, err
 		}
-		if !found || !ctr.Healthy {
+		if !tss.found || !tss.healthy {
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonTunnelDown}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonTunnelDown}, now)
 			return st, nil
 		}
-
-		age, handshaked := handshakeAge(ctx, rt, name)
-		staleThreshold := time.Duration(tc.keepalive*handshakeStaleFactor) * time.Second
-		stale := !handshaked || age > staleThreshold
-
-		dialErr := runtime.WithReachable(ctx, rt, name, conn.Port, runtime.ReachableOptions{Timeout: 10 * time.Second}, func(ctx context.Context, addr string) error {
-			return dialUpstream(addr)
-		})
-		if dialErr != nil {
-			msg := fmt.Sprintf("tunnel forwarder is up but upstream %s is unreachable through it: %v", conn.Target, dialErr)
+		if tss.dialErr != nil {
+			msg := fmt.Sprintf("tunnel forwarder is up but upstream %s is unreachable through it: %v", conn.Target, tss.dialErr)
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonTunnelUpstreamUnreachable, Message: msg}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonTunnelUpstreamUnreachable, Message: msg}, now)
 			return st, nil
 		}
-		if stale {
+		if tss.stale {
 			// The dial succeeded despite a stale handshake reading —
 			// WireGuard's own roaming/NAT-traversal behavior can show this
 			// while the tunnel is still functionally up (docs/adr/023
@@ -494,6 +495,95 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		return st, nil
 	default:
 		return st, fmt.Errorf("wireguard provider cannot probe kind %s", res.Kind)
+	}
+}
+
+// tunnelServingState is the shared "ready means serving" signal for a
+// wireguard Connection — forwarder container health, handshake recency, and
+// a dial-through-forwarder to the upstream. Both Probe and
+// reconcileConnection's settle poll (waitTunnelServing) evaluate this exact
+// signal, via probeTunnelServing, never a weaker one (docs/planning/11 B1
+// findings 1-3).
+type tunnelServingState struct {
+	found   bool
+	healthy bool
+	stale   bool
+	dialErr error
+}
+
+// probeTunnelServing is the single check both Probe and
+// reconcileConnection's settle poll evaluate: container health, handshake
+// recency (handshakeAge), and dialUpstream through the forwarder — the same
+// three signals Probe has always verified, now extracted so reconcile can
+// require them too instead of settling for the container healthcheck alone.
+func probeTunnelServing(ctx context.Context, rt runtime.ContainerRuntime, name string, conn connection.Connection, tc tunnelConfig) (tunnelServingState, error) {
+	ctr, found, err := rt.Inspect(ctx, name)
+	if err != nil {
+		return tunnelServingState{}, err
+	}
+	if !found || !ctr.Healthy {
+		return tunnelServingState{found: found}, nil
+	}
+	age, handshaked := handshakeAge(ctx, rt, name)
+	staleThreshold := time.Duration(tc.keepalive*handshakeStaleFactor) * time.Second
+	stale := !handshaked || age > staleThreshold
+	dialErr := runtime.WithReachable(ctx, rt, name, conn.Port, runtime.ReachableOptions{Timeout: tunnelReachableTimeout, Interval: tunnelReachableInterval}, func(ctx context.Context, addr string) error {
+		return dialUpstream(addr)
+	})
+	return tunnelServingState{found: true, healthy: true, stale: stale, dialErr: dialErr}, nil
+}
+
+// tunnelSettleTimeout/tunnelSettlePoll bound reconcileConnection's Ready
+// determination to a genuinely serving tunnel — the redpanda
+// waitTopicSettled pattern (docs/planning/11 B1 findings 1-3).
+// tunnelReachableTimeout/tunnelReachableInterval bound each individual
+// probeTunnelServing dial attempt's own internal WithReachable retry
+// (unchanged from Probe's prior behavior — 10s/1s, generous enough for a
+// K8s port-forward to establish). All four are vars, not consts: tests
+// shrink them instead of waiting out real minutes-scale wall time (a down
+// upstream would otherwise burn a full tunnelReachableTimeout on every one
+// of the settle-poll's own attempts) to exercise the honest-failure path.
+var (
+	tunnelSettleTimeout     = 45 * time.Second
+	tunnelSettlePoll        = 2 * time.Second
+	tunnelReachableTimeout  = 10 * time.Second
+	tunnelReachableInterval = time.Second
+)
+
+// waitTunnelServing re-runs probeTunnelServing until it reports a genuinely
+// serving tunnel (found, healthy, non-stale handshake, and a successful
+// dial through the forwarder to the upstream) — the SAME signal Probe
+// verifies, bounded by tunnelSettleTimeout. A healthy tunnel passes on the
+// first attempt (zero added latency); on timeout, reconcile fails honestly
+// with the last observed state instead of setting Ready from the container
+// healthcheck alone (docs/planning/11 B1 finding 1, the redpanda-93fbf14
+// signature).
+func waitTunnelServing(ctx context.Context, rt runtime.ContainerRuntime, name string, conn connection.Connection, tc tunnelConfig) error {
+	deadline := time.Now().Add(tunnelSettleTimeout)
+	var lastReason string
+	for {
+		tss, err := probeTunnelServing(ctx, rt, name, conn, tc)
+		if err != nil {
+			return err
+		}
+		switch {
+		case !tss.found || !tss.healthy:
+			lastReason = "forwarder container not healthy"
+		case tss.dialErr != nil:
+			lastReason = fmt.Sprintf("upstream %s unreachable through tunnel: %v", conn.Target, tss.dialErr)
+		case tss.stale:
+			lastReason = "handshake not yet recent"
+		default:
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("tunnel %q did not settle to a serving state within %s (last observed: %s)", name, tunnelSettleTimeout, lastReason)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(tunnelSettlePoll):
+		}
 	}
 }
 
