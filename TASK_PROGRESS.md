@@ -142,6 +142,20 @@ containers, not the literal-name lookup `Inspect`/`EnsureReachable` do).
   final report for whatever state it reached. The suite this task actually
   changes (`wireguard`) was run directly, twice, green — the load-bearing
   evidence for this task's own Accept criteria.
+- **Final status of the background `--base main` sweep**: at delivery
+  time it had not progressed past the first (`docker-conformance`) suite
+  — `ps` showed at least three other concurrent
+  `bash scripts/test-impact.sh` invocations (other agents' own sessions)
+  all contending for the same `/tmp/platformctl-itest.lock` flock, one of
+  them mid-run on `TestLakehouse` (2400s timeout). This is expected
+  behavior of the shared-daemon economy design (docs/planning/06 §10) —
+  every suite it eventually runs records a ledger hit any later
+  `--base main` run (mine or another agent's) will dedupe against — not a
+  failure of this task's own gate. A maintainer or a later session can
+  check `git rev-parse --git-common-dir`/platformctl-itest-ledger for
+  entries with today's date to see how far it got. Not blocking merge on
+  this task's own account: the wireguard suite (the actual load-bearing
+  test for D5's Accept criteria) already ran directly, twice, green.
 
 ## Deviations (recorded, not silently worked around)
 
