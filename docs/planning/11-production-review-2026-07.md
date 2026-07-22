@@ -66,3 +66,15 @@ static. Dimensions, each producing findings verified before fixing:
 - 2026-07-22: goal set; this file created. Phase 0 sweep running
   (redpanda green 93.7s at C9 state). Phase A register seeded from wave
   knowledge; full docs pass starting.
+- 2026-07-22: A2 verified and PROMOTED to code gap (production-blocking
+  for the owner's cloud-DB scenario): `sslmode=disable` is hardcoded in
+  internal/adapters/providers/postgres/sql.go:27 (admin connection),
+  internal/adapters/providers/debezium/debezium.go:620 (preflight; the
+  connector config sets no database.sslmode at all), and
+  internal/adapters/providers/jdbcsink/jdbcsink.go:657; the mysql/mariadb
+  paths declare no TLS parameter either. No provider can reach a
+  TLS-requiring database (all cloud-managed engines). Sequenced as doc 08
+  I2. A1 (consume Connection.spec.via) sequenced as doc 08 I1. A4
+  verified: doc 01 NFR table (NFR-1..10) has no settledness/async
+  invariant — amendment pending Phase A completion (single batch).
+  Full-docs inventory pass delegated (in flight).

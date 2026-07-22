@@ -2312,6 +2312,97 @@ ADRs and is not restated.
   config-drift bar applied to mediator state).
 - **Gate:** `MediatedConnections` (Alpha, disabled).
 
+## 7.8 Stage I — Production-review remediations (doc 11, 2026-07 owner review)
+
+Findings from docs/planning/11-production-review-2026-07.md promoted to
+sequenced tasks. Stage I tasks are independent of Stage H ordering
+unless a dependency is stated.
+
+### I1: Consume `Connection.spec.via` — VPC-behind-VPN egress, blast-minimized (ADR 023 completion)
+
+- **Size:** M. **Depends:** D5 (merged). **Why:** the owner's named
+  production scenario — a database reachable only through a VPN into a
+  VPC — is exactly the `via` seam ADR 023 left schema-complete but
+  unconsumed. Zero-trust framing: only the Connection's own forwarder
+  may egress through the tunnel; nothing else on the shared network
+  gains a route (blast-minimized).
+- **Do:** the proxy (connection-capable) provider realizes a managed
+  Connection whose `spec.via` names a tunnel-capable Provider by (1)
+  resolving the tunnel Provider's published endpoint fact (ADR 015
+  discipline — engine-resolved from state, never provider-constructed),
+  (2) attaching ONLY the Connection's forwarder container to the tunnel
+  transit network (the wireguard container's DNAT surface), never the
+  consumer workloads, and (3) probing reachability of `spec.target`
+  through the tunnel before Ready (settledness bar, I3). Drift: a
+  forwarder found attached to networks beyond [shared, transit] is
+  drift (excess attachment = widened blast radius). Destroy detaches
+  before removal. Validate-time: `via` naming a non-tunnel-capable
+  provider already errors (D5); add the pairing error when `via` is set
+  on a Connection whose realizing provider is not via-capable —
+  capability-interface message format per doc 02 §4.2.
+- **Accept:** extend the D5 e2e: a consumer on the shared network can
+  reach the private DB ONLY through the via'd Connection entrypoint;
+  direct dial of the tunnel network from a non-forwarder container
+  fails (negative proof); CDC RUNNING through the via'd Connection;
+  key rotation mid-stream recovers; destroy leaves no transit
+  attachments.
+- **Gate:** reuses `TunnelProvider` (Alpha, disabled) — no new gate.
+
+### I2: Outbound database TLS — reach TLS-requiring (cloud-managed) databases
+
+- **Size:** M. **Depends:** none (independent of I1). **Why:**
+  `sslmode=disable` is hardcoded at
+  internal/adapters/providers/postgres/sql.go:27,
+  internal/adapters/providers/debezium/debezium.go:620 (preflight; the
+  Debezium connector config sets no `database.sslmode` at all), and
+  internal/adapters/providers/jdbcsink/jdbcsink.go:657; mysql/mariadb
+  DSNs carry no tls parameter. Every cloud-managed engine (RDS, Cloud
+  SQL, Azure Database) requires or defaults to TLS — the owner's
+  simplest production scenario cannot connect today, and plaintext is
+  silently used everywhere else.
+- **Do:** declare TLS posture once on the consumption seam and thread
+  it to every consumer: `Connection.spec.tls` gains an external-side
+  meaning via a new `spec.tls.mode` for `external: true` Connections
+  (`require` | `verify-ca` | `verify-full`, plus optional
+  `caSecretRef` for private/RDS CA bundles; absent = current plaintext
+  behavior, preserving back-compat for local dev). Domain validation:
+  external+tls requires mode (the existing exactly-one-of applies only
+  to managed termination). Consumers updated: postgres admin conn,
+  debezium preflight AND connector properties (`database.sslmode`,
+  `database.ssl.*` for mysql), jdbcsink JDBC URL, mysql/mariadb DSNs
+  (`tls=` param with a registered custom CA config when caSecretRef is
+  set). CA material resolves through the existing secretRefs discipline
+  (named SecretReference, listed in the realizing provider's
+  spec.secretRefs; never logged, fingerprint only). Schema + doc 03
+  §8.2 in the same commit; explain-catalog entries for new failure
+  reasons (CA parse failure, verify failure).
+- **Accept:** e2e against a TLS-required Postgres (server cert from a
+  test CA): connect refused without tls declared (the real error
+  surfaced, not swallowed), succeeds with `verify-full` + caSecretRef;
+  CDC RUNNING against the TLS DB; negative: wrong CA fails with a
+  named reason at preflight (validate-time completeness, ADR 011 —
+  never mid-apply). Unit: DSN/property construction for all four
+  consumers, all modes.
+- **Gate:** new `ExternalDatabaseTLS` (Alpha, enabled — additive
+  opt-in field; absent field = unchanged behavior).
+
+### I3: Settledness NFR + async-correctness audit backlog
+
+- **Size:** S (doc) + audit findings sized separately. **Depends:**
+  none. **Why:** the "Ready means settled and serving" invariant exists
+  only as F3 folklore + point fixes (93fbf14); doc 01's NFR table
+  (NFR-1..10) never states it, so nothing holds new providers to it.
+- **Do:** add NFR-11 (Settledness): "A resource reported Ready answers
+  its declared protocol at that moment, and a probe immediately after
+  apply returns no drift; wait loops poll condition-based with an
+  overall deadline and never sleep-fixed-duration-and-assume" — doc 01
+  NFR table + doc 02 engineering-rules section (additive). Phase B's B1
+  audit (doc 11) then verifies every provider against NFR-11; each
+  violation becomes a fix task referencing it.
+- **Accept:** NFR-11 present in docs 01+02; B1 audit report cites it
+  per finding.
+
+
 ## 8. New feature gates introduced by this plan
 
 Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
