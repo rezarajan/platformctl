@@ -335,7 +335,7 @@ func SpecHash(e resource.Envelope) (string, error) {
 func observerNames(e resource.Envelope) []string {
 	names := make([]string, 0, len(e.Metadata.Observers))
 	for _, o := range e.Metadata.Observers {
-		names = append(names, resource.NameRef{Name: o.Name, Namespace: o.Namespace}.NamespaceOr(e.Metadata.Namespace)+"/"+o.Name)
+		names = append(names, resource.NameRef(o).NamespaceOr(e.Metadata.Namespace)+"/"+o.Name)
 	}
 	sort.Strings(names)
 	return names

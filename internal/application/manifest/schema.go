@@ -96,7 +96,7 @@ func validateAgainstSchema(raw map[string]any) error {
 	if err != nil {
 		return err
 	}
-	name, _ := raw["metadata"].(map[string]any)["name"]
+	name := raw["metadata"].(map[string]any)["name"]
 	if err := sch.Validate(doc); err != nil {
 		return fmt.Errorf("%s %q: schema validation failed: %w", kind, name, err)
 	}

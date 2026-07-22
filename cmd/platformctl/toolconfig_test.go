@@ -198,7 +198,7 @@ func TestToolConfigMultipleDatabases(t *testing.T) {
 	ordersPortIdx := strings.Index(out, "-p 15432")
 	billingIdx := strings.Index(out, "billing-pg")
 	billingPortIdx := strings.Index(out, "-p 15433")
-	if !(ordersIdx < ordersPortIdx && ordersPortIdx < billingIdx) {
+	if !(ordersIdx < ordersPortIdx && ordersPortIdx < billingIdx) { //nolint:staticcheck // QF1001: De Morgan's form reads worse for this "stays in order" assertion
 		t.Errorf("orders-pg section did not stay before its own port and before the billing section:\n%s", out)
 	}
 	if billingIdx > billingPortIdx {

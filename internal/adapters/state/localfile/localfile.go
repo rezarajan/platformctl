@@ -57,13 +57,13 @@ func (s *Store) Save(_ context.Context, st state.State) error {
 		return fmt.Errorf("create temp state file: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after successful rename
+	defer func() { _ = os.Remove(tmpName) }() // no-op after successful rename
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close() // a different error is already being returned; this is best-effort cleanup
 		return fmt.Errorf("write temp state file: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close() // a different error is already being returned; this is best-effort cleanup
 		return fmt.Errorf("sync temp state file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -97,14 +97,14 @@ func (s *Store) Lock(_ context.Context) (func() error, error) {
 		return nil, fmt.Errorf("open lock file %s: %w", lockPath, err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
+		_ = f.Close() // a different error is already being returned; this is best-effort cleanup
 		return nil, fmt.Errorf("state file %s is locked by another platformctl process (lock: %s); if that process died, remove the lock file and retry", s.Path, lockPath)
 	}
 	// Record holder PID for stale-lock diagnosis.
 	_ = f.Truncate(0)
 	_, _ = fmt.Fprintf(f, "%d\n", os.Getpid())
 	return func() error {
-		defer f.Close()
+		defer func() { _ = f.Close() }() // the lock file carries no buffered writes by this point (Unlock below is the meaningful op)
 		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
 			return fmt.Errorf("unlock %s: %w", lockPath, err)
 		}

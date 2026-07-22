@@ -189,7 +189,6 @@ func Write(patch Patch) (filesWritten []string, envKeysAppended []string, err er
 		if openErr != nil {
 			return nil, nil, fmt.Errorf("opening %s: %w", envPath, openErr)
 		}
-		defer f.Close()
 		var b strings.Builder
 		fmt.Fprintf(&b, "\n# appended by platformctl %s; fill in real values (docs/planning/08 E9)\n", patch.Command)
 		for _, a := range pending {
@@ -200,7 +199,15 @@ func Write(patch Patch) (filesWritten []string, envKeysAppended []string, err er
 			envKeysAppended = append(envKeysAppended, a.Key)
 		}
 		if _, writeErr := f.WriteString(b.String()); writeErr != nil {
+			_ = f.Close() // a different error is already being returned; this is best-effort cleanup
 			return nil, nil, fmt.Errorf("appending to %s: %w", envPath, writeErr)
+		}
+		// Check the final Close, not just the write: matches
+		// localfile.go's convention (docs/planning/11 B4) — a failed
+		// Close after a successful Write can still mean the data never
+		// made it to disk.
+		if err := f.Close(); err != nil {
+			return nil, nil, fmt.Errorf("closing %s: %w", envPath, err)
 		}
 	}
 

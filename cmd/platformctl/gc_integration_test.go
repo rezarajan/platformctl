@@ -87,7 +87,7 @@ func TestGCPlanAndApply(t *testing.T) {
 	}
 
 	// Refuses without the destructive flag; nothing removed.
-	_, err, code = run(t, "gc", "apply", "--state-file", stateFile)
+	_, err, _ = run(t, "gc", "apply", "--state-file", stateFile)
 	if err == nil {
 		t.Fatal("gc apply accepted without --yes-i-understand-this-is-destructive")
 	}

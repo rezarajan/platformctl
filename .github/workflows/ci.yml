@@ -38,6 +38,16 @@ jobs:
             echo "files need gofmt:" && echo "$out" && exit 1
           fi
 
+      # docs/planning/11 follow-up: .golangci.yml (v2 config, repo root) is
+      # tuned to this repo's real conventions (see the config's own
+      # comments and .claude/rules/go-style.md) — pin the action's version
+      # in lockstep with any local `go run .../golangci-lint@<version>`
+      # invocation so CI and a developer's machine agree on findings.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.12.2
+
       - name: Build
         run: CGO_ENABLED=0 go build -trimpath -buildvcs=false ./cmd/platformctl
 

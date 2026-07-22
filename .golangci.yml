@@ -1,0 +1,132 @@
+# golangci-lint v2 config (docs/planning/11 follow-up; .claude/rules/go-style.md).
+#
+# Tuned to this repo's REAL conventions rather than golangci-lint's
+# defaults — every exclusion below cites the convention it protects.
+# Run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags:
+    - integration
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - errcheck
+
+  settings:
+    staticcheck:
+      # Deliberately NOT "all" — staticcheck's default set already excludes
+      # opt-in stylistic checks this repo doesn't follow (ST1000 package
+      # doc comments, ST1003 initialisms, ST1021/ST1022 doc-comment shape);
+      # "all" would turn those on repo-wide for no reason tied to this
+      # task. Just subtract the one default-set check that fights a real
+      # convention here.
+      checks:
+        # ST1005 ("error strings should not be capitalized") conflicts with
+        # a deliberate, repo-wide convention: every domain validation error
+        # starts with the resource Kind, capitalized, e.g.
+        #   fmt.Errorf("Binding %q: spec.mode must be one of: ...", name)
+        #   fmt.Errorf("Dataset %q: spec.providerRef is required", name)
+        # (see internal/domain/*/*.go) — this is load-bearing for how CLI
+        # output and drift/explain messages read, not an oversight.
+        # Disabling it repo-wide rather than /nolint-ing every call site
+        # (there are 100+) is the honest reflection of a settled ADR-011
+        # validation-error-format decision, not a lint dodge.
+        - -ST1005
+
+    errcheck:
+      # Everything else stays checked, including os.File writes (e.g.
+      # internal/adapters/state/localfile) — this list is deliberately
+      # narrow and each entry is safe *categorically*, not just in the one
+      # place it was first noticed:
+      exclude-functions:
+        # CLI/HTTP output writes: fmt.Fprint(f|ln)? to a cobra command's
+        # OutOrStdout(), a tabwriter, an in-memory strings/bytes buffer, or
+        # an http.ResponseWriter. A broken pipe on stdout or a disconnected
+        # HTTP client is not actionable by the caller, and writes to an
+        # in-memory buffer never actually error. (internal/cliutil,
+        # internal/application/archview, cmd/platformctl/{explain,lint,
+        # backup,root,compose_shared}.go, internal/cliutil/progress.go)
+        - fmt.Fprintln
+        - fmt.Fprintf
+        - fmt.Fprint
+
+        # database/sql pool/cursor teardown: the meaningful errors from a
+        # write (Exec/QueryContext/Commit) are already checked at the call
+        # site: database/sql does not buffer committed writes behind
+        # Close(), so a Close() error here is a resource-release signal,
+        # never a lost-write signal.
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        # Same reasoning for pgx (postgres/sql.go, providerkit/tls.go):
+        # writes are already acknowledged via Exec/QueryRow before Close.
+        - (*github.com/jackc/pgx/v5.Conn).Close
+
+        # io.ReadCloser closes: HTTP response bodies (kafkaconnect, grafana,
+        # caddy, nessie, openlineage, prometheus, redpanda, trino, vault)
+        # and Docker/Kubernetes log/exec/image streams (runtime/docker,
+        # runtime/kubernetes) — every one of these is drained for reading
+        # only; matching the interface type (not a concrete type) means
+        # this can never shadow a write-path close, since nothing that
+        # writes is statically typed as io.ReadCloser.
+        - (io.ReadCloser).Close
+
+        # net.Conn closes used only for a bounded reachability probe (a
+        # short dial + read-deadline check, never a write): proxy's
+        # probeThroughForwarder, wireguard's dialUpstream, engine's
+        # probeTCPReachable. Go surfaces real transmission errors from
+        # Write()/Read(), not Close(); matching the interface type again
+        # keeps this from reaching any write-carrying connection.
+        - (net.Conn).Close
+
+        # minio read-object stream close (internal/adapters/state/s3):
+        # GetObject's *Object is read via io.ReadAll before Close; nothing
+        # is buffered client-side waiting on this Close.
+        - (*github.com/minio/minio-go/v7.Object).Close
+
+  exclusions:
+    rules:
+      # Test files: table-driven test cleanup (`ln.Close()`, `conn.Close()`,
+      # `os.Unsetenv()` in t.Cleanup/defer, etc.) is inconsequential by
+      # construction — a leaked test fixture fails the *next* assertion or
+      # t.Cleanup, it doesn't corrupt anything durable. Scoped to errcheck
+      # only: staticcheck/govet/unused/ineffassign findings in tests still
+      # fire (and are fixed at the call site, not blanket-exempted) because
+      # those catch real bugs in test logic, not just noisy cleanup.
+      - path: _test\.go$
+        linters:
+          - errcheck
+
+      # The 43-hit-and-growing `close<X>()`/`closeFn()` local-closure
+      # convention returned alongside a resolved address by
+      # EnsureReachable/ReachableURLs/remoteClient-style helpers across
+      # every provider (docs/planning/11 B4 audit; docs/planning/08 I5
+      # dedup'd the underlying machinery into providerkit/runtime-probe).
+      # These closures tear down a reachability probe or port-forward
+      # tunnel, never a data connection — the actual read/write already
+      # completed and had its own error checked before this call. Because
+      # it's a local `func() error` variable (not a named method), errcheck
+      # can't be told via exclude-functions; matching the call-site source
+      # text is the only mechanism available, so it's scoped tightly to
+      # the "close*"/"closeFn" naming convention actually used, not to
+      # "any unnamed error return".
+      - linters:
+          - errcheck
+        source: '^\s*(defer\s+)?close[A-Za-z]*\(\)\s*$'
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  # This is a hygiene-adoption pass: the point is to see the WHOLE picture
+  # once, not the first 50/3-per-message truncation golangci-lint applies
+  # by default — CI should never silently hide the 51st finding.
+  max-issues-per-linter: 0
+  max-same-issues: 0

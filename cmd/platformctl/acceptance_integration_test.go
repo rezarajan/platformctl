@@ -69,7 +69,7 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 	// registry), which sits behind the Alpha SchemaRegistrySupport gate —
 	// exactly what README.md#run-it tells a user to pass.
 	const gate = "SchemaRegistrySupport=true"
-	runG := func(args ...string) (string, error, int) {
+	runG := func(args ...string) (string, error, int) { //nolint:staticcheck // ST1008: mirrors run()'s established (stdout, err, exitCode) shape
 		return run(t, append(args, "--feature-gates", gate)...)
 	}
 	start := time.Now()

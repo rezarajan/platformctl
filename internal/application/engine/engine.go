@@ -1701,7 +1701,7 @@ func (e *Engine) resolveSchemaRegistryURL(env resource.Envelope, byKey map[resou
 }
 
 func (e *Engine) resolveLineageEndpoint(ctx context.Context, observer resource.ObserverRef, defaultNamespace string, byKey map[resource.Key]resource.Envelope, st *state.State) (lineage.LineageEndpoint, error) {
-	ref := resource.NameRef{Name: observer.Name, Namespace: observer.Namespace}
+	ref := resource.NameRef(observer)
 	provEnv, ok := byKey[ref.Key(defaultNamespace, "Provider")]
 	if !ok {
 		return lineage.LineageEndpoint{}, fmt.Errorf("observer %q does not resolve to a Provider in namespace %q", observer.Name, ref.NamespaceOr(defaultNamespace))

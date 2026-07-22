@@ -15,7 +15,7 @@ import (
 
 // run executes the CLI with args and returns stdout, the error, and the exit
 // code that main() would produce.
-func run(t *testing.T, args ...string) (string, error, int) {
+func run(t *testing.T, args ...string) (string, error, int) { //nolint:staticcheck // ST1008: established (stdout, err, exitCode) shape used at 128+ call sites; reordering is a repo-wide churn out of scope here
 	t.Helper()
 	root := newRootCmd(defaultWiring)
 	var out bytes.Buffer
