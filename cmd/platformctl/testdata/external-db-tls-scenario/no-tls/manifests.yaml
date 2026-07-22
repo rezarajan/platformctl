@@ -1,0 +1,91 @@
+# I2 negative case: the out-of-band Postgres (datascape-tlsdb-outofband-pg,
+# started by the test with ssl=on and no plaintext pg_hba.conf rule) is
+# declared here WITHOUT spec.tls — the pre-I2 plaintext preflight dial must
+# be refused by the server with the real error surfaced (docs/planning/08
+# I2 accept criteria), never swallowed into a generic timeout.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: tlsdb-conn
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: tlsdb-conn-obj
+spec:
+  external: true
+  host: 172.28.61.10
+  port: 5432
+  secretRef:
+    name: tlsdb-conn
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-tlsdb-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-tlsdb-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19795
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-tlsdb-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape-tlsdb-net
+  configuration:
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
+    connectPort: 18795
+    bootstrapServers: datascape-tlsdb-rp:29092
+  secretRefs: [tlsdb-conn]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: tlsdb-students
+spec:
+  engine: postgres
+  external: true
+  connectionRef:
+    name: tlsdb-conn-obj
+  postgres:
+    database: attendance
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: tlsdb-events
+spec:
+  providerRef:
+    name: datascape-tlsdb-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: tlsdb-students-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: tlsdb-students
+  targetRef:
+    name: tlsdb-events
+  providerRef:
+    name: datascape-tlsdb-dbz
+  options:
+    tables: [students]
+    snapshotMode: initial

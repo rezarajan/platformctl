@@ -46,8 +46,15 @@ type Connection struct {
 	TLS *TLS
 }
 
-// TLS is Connection.spec.tls's decoded shape — exactly one of SecretRef,
-// SelfSigned, or SecretName is set (validated below).
+// TLS is Connection.spec.tls's decoded shape. On a managed connection,
+// exactly one of SecretRef, SelfSigned, or SecretName is set — the
+// entrypoint-termination shape (docs/planning/08 C8, validated below). On an
+// external connection, Mode (required) plus an optional CASecretRef declare
+// the outbound TLS posture used to reach a TLS-requiring database
+// (docs/planning/08 I2, docs/adr/025) — SecretRef/SelfSigned/SecretName are
+// meaningless there (nothing terminates TLS on Datascape's side of an
+// external connection). The two shapes are mutually exclusive by
+// construction: a Connection is either managed or external, never both.
 type TLS struct {
 	// SecretRef names a SecretReference carrying the cert+key PEM material
 	// (keys: "cert", "key"). Resolves through Request.Secrets only when the
@@ -68,7 +75,26 @@ type TLS struct {
 	// platformctl only ever reads this Secret, never creates, updates, or
 	// deletes it.
 	SecretName *string
+	// Mode is the external-only outbound TLS posture: one of TLSModeRequire,
+	// TLSModeVerifyCA, TLSModeVerifyFull. Required when spec.tls is declared
+	// on an external Connection; spec.tls absent entirely preserves the
+	// historical plaintext behavior (back-compat).
+	Mode string
+	// CASecretRef is the external-only optional SecretReference holding a CA
+	// bundle PEM under key "ca" (e.g. an RDS/private CA), used to verify the
+	// server certificate under TLSModeVerifyCA/TLSModeVerifyFull. Resolves
+	// through Request.Secrets only when the realizing consumer Provider's
+	// own spec.secretRefs also lists this name (same discipline as
+	// SecretRef above). Never resolved by this package.
+	CASecretRef *string
 }
+
+// External-connection TLS modes (docs/planning/03 §8.2.4, docs/adr/025).
+const (
+	TLSModeRequire    = "require"
+	TLSModeVerifyCA   = "verify-ca"
+	TLSModeVerifyFull = "verify-full"
+)
 
 // FromEnvelope decodes a Connection from a validated Envelope.
 func FromEnvelope(e resource.Envelope) (Connection, error) {
@@ -107,6 +133,12 @@ func FromEnvelope(e resource.Envelope) (Connection, error) {
 		if v, ok := raw["secretName"].(string); ok && v != "" {
 			t.SecretName = &v
 		}
+		if v, ok := raw["mode"].(string); ok && v != "" {
+			t.Mode = v
+		}
+		if ref := refName(raw, "caSecretRef"); ref != "" {
+			t.CASecretRef = &ref
+		}
 		c.TLS = t
 	}
 	return c, c.validate(e.Metadata.Name)
@@ -122,9 +154,6 @@ func (c Connection) validate(name string) error {
 		}
 		if c.Target != "" {
 			return fmt.Errorf("Connection %q: spec.target is only meaningful on managed connections (an external connection is consumed as-is)", name)
-		}
-		if c.TLS != nil {
-			return fmt.Errorf("Connection %q: spec.tls is only meaningful on managed connections (TLS terminates at the entrypoint; an external connection has none)", name)
 		}
 		if c.Via != nil {
 			return fmt.Errorf("Connection %q: spec.via is only meaningful on managed connections (an external connection is consumed as-is)", name)
@@ -143,12 +172,45 @@ func (c Connection) validate(name string) error {
 	return nil
 }
 
-// validateTLS enforces the spec.tls/spec.scheme pairing and the
-// exactly-one-of shape (docs/planning/03 §8.2.2). Which of the three modes
-// is actually usable on a given runtime (secretName is Kubernetes-only) is
-// checked by the realizing provider, not here — domain has no runtime-type
-// access.
+// validateTLS enforces spec.tls's shape, which differs by lifecycle: a
+// managed connection pairs spec.tls with scheme: https and the
+// exactly-one-of entrypoint-termination shape (docs/planning/03 §8.2.2); an
+// external connection's spec.tls declares an outbound TLS posture
+// (docs/planning/03 §8.2.4, docs/adr/025) independent of scheme. Which of
+// the managed modes is actually usable on a given runtime (secretName is
+// Kubernetes-only) is checked by the realizing provider, not here — domain
+// has no runtime-type access.
 func (c Connection) validateTLS(name string) error {
+	if c.External {
+		return c.validateExternalTLS(name)
+	}
+	return c.validateManagedTLS(name)
+}
+
+// validateExternalTLS enforces the external-only mode-shape: spec.tls absent
+// preserves plaintext (back-compat); declared, it requires spec.tls.mode and
+// forbids the managed-only entrypoint-termination fields.
+func (c Connection) validateExternalTLS(name string) error {
+	if c.TLS == nil {
+		return nil
+	}
+	switch c.TLS.Mode {
+	case TLSModeRequire, TLSModeVerifyCA, TLSModeVerifyFull:
+	case "":
+		return fmt.Errorf("Connection %q: spec.tls.mode is required on an external connection (%s, %s, or %s)", name, TLSModeRequire, TLSModeVerifyCA, TLSModeVerifyFull)
+	default:
+		return fmt.Errorf("Connection %q: spec.tls.mode must be one of %s, %s, %s, got %q", name, TLSModeRequire, TLSModeVerifyCA, TLSModeVerifyFull, c.TLS.Mode)
+	}
+	if c.TLS.SecretRef != nil || c.TLS.SelfSigned || c.TLS.SecretName != nil {
+		return fmt.Errorf("Connection %q: spec.tls.secretRef/selfSigned/secretName terminate TLS at a managed entrypoint and are not meaningful on an external connection; use spec.tls.mode and, optionally, spec.tls.caSecretRef", name)
+	}
+	return nil
+}
+
+// validateManagedTLS enforces the pre-I2 managed-connection shape: scheme
+// https requires spec.tls, and spec.tls must set exactly one of secretRef,
+// selfSigned, or secretName.
+func (c Connection) validateManagedTLS(name string) error {
 	if c.TLS == nil {
 		if c.Scheme == "https" {
 			return fmt.Errorf("Connection %q: scheme https requires spec.tls to be declared (secretRef, selfSigned, or secretName)", name)
@@ -157,6 +219,9 @@ func (c Connection) validateTLS(name string) error {
 	}
 	if c.Scheme != "https" {
 		return fmt.Errorf("Connection %q: spec.tls is declared but scheme is %q (must be https)", name, c.Scheme)
+	}
+	if c.TLS.Mode != "" || c.TLS.CASecretRef != nil {
+		return fmt.Errorf("Connection %q: spec.tls.mode/caSecretRef reach a TLS-requiring database over an external connection and are not meaningful on a managed connection", name)
 	}
 	set := 0
 	if c.TLS.SecretRef != nil {

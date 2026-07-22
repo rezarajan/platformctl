@@ -225,6 +225,38 @@ Remedies:
 
 - None required.
 
+## database-tls
+
+### `DatabaseTLSCAInvalid` (reason)
+
+An external Connection's spec.tls.caSecretRef resolved, but its "ca" key did not parse as a PEM-encoded certificate — the database dial failed before a TLS handshake was even attempted.
+
+Likely causes:
+
+- The SecretReference's "ca" key holds something other than a PEM-encoded certificate (wrong key, truncated copy-paste, DER instead of PEM).
+- The CA bundle is a private key or a leaf certificate instead of a CA certificate.
+
+Remedies:
+
+- Confirm the secret's "ca" key holds a full `-----BEGIN CERTIFICATE-----` PEM block (the CA's public certificate, never a private key).
+- For a cloud-managed database, re-download the vendor's published CA bundle (e.g. AWS RDS's regional bundle) rather than hand-copying it.
+
+### `DatabaseTLSVerifyFailed` (reason)
+
+The TLS handshake to an external database completed, but certificate verification failed under spec.tls.mode verify-ca/verify-full: the presented certificate does not chain to a trusted CA, or (verify-full only) its hostname does not match the dialed address.
+
+Likely causes:
+
+- spec.tls.caSecretRef names the wrong CA, or the database's certificate was reissued by a different CA.
+- spec.tls.mode is verify-full but the Connection's host does not match any name on the certificate (e.g. a private DNS alias not covered by the vendor's certificate).
+- No caSecretRef was declared and the database's certificate is not signed by a CA in the consuming process's system trust store.
+
+Remedies:
+
+- Confirm spec.tls.caSecretRef holds the CA that actually signed the database's current certificate.
+- Under verify-full, dial the Connection's exact declared host — not an IP or an unrelated alias — or relax to verify-ca if hostname verification isn't required.
+- platformctl explain DatabaseTLSVerifyFailed once more detail is captured in the condition Message (the underlying TLS library error is always surfaced verbatim).
+
 ## lineage
 
 ### `LineageEndpointDeclaredNotConsumed` (reason)

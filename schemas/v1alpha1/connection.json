@@ -20,11 +20,13 @@
         "secretRef": { "$ref": "meta.json#/$defs/nameRef", "description": "Optional SecretReference carrying credentials for whatever answers at this connection." },
         "tls": {
           "type": "object",
-          "description": "Terminates TLS at the entrypoint (docs/planning/08 C8). Only meaningful together with scheme: https on a managed (non-external) Connection. Exactly one of secretRef, selfSigned, or secretName.",
+          "description": "On a managed (non-external) Connection with scheme: https, terminates TLS at the entrypoint (docs/planning/08 C8) — exactly one of secretRef, selfSigned, or secretName. On an external Connection, declares the outbound TLS posture used to reach a TLS-requiring database (docs/planning/08 I2, docs/adr/025) via mode (required) and an optional caSecretRef; absent spec.tls on an external Connection preserves the historical plaintext behavior.",
           "properties": {
-            "secretRef": { "$ref": "meta.json#/$defs/nameRef", "description": "SecretReference carrying the cert+key PEM material (keys: cert, key). Must also appear in the realizing Provider's spec.secretRefs for the engine to resolve it (mirrors spec.secretRef's own plumbing)." },
-            "selfSigned": { "type": "boolean", "description": "The provider provisions a local CA plus a per-host leaf certificate for dev use. The CA's public certificate is published in providerState so tools can trust it." },
-            "secretName": { "type": "string", "minLength": 1, "description": "Kubernetes only: references an existing kubernetes.io/tls Secret by name (e.g. cert-manager-managed). platformctl only ever reads this Secret." }
+            "secretRef": { "$ref": "meta.json#/$defs/nameRef", "description": "Managed only: SecretReference carrying the cert+key PEM material (keys: cert, key). Must also appear in the realizing Provider's spec.secretRefs for the engine to resolve it (mirrors spec.secretRef's own plumbing)." },
+            "selfSigned": { "type": "boolean", "description": "Managed only: the provider provisions a local CA plus a per-host leaf certificate for dev use. The CA's public certificate is published in providerState so tools can trust it." },
+            "secretName": { "type": "string", "minLength": 1, "description": "Managed only, Kubernetes only: references an existing kubernetes.io/tls Secret by name (e.g. cert-manager-managed). platformctl only ever reads this Secret." },
+            "mode": { "type": "string", "enum": ["require", "verify-ca", "verify-full"], "description": "External only: the outbound TLS posture used to reach the database. Required when spec.tls is declared on an external Connection." },
+            "caSecretRef": { "$ref": "meta.json#/$defs/nameRef", "description": "External only: optional SecretReference holding a CA bundle PEM under key \"ca\" (e.g. an RDS/private CA), used to verify the server certificate under mode verify-ca/verify-full. Must also appear in the consuming Provider's spec.secretRefs for the engine to resolve it." }
           },
           "additionalProperties": false
         },

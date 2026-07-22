@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -20,7 +21,17 @@ import (
 // a "host:port" this process can dial right now (docs/planning/08 B8: from
 // Provider.reachableAddr/runtime.EnsureReachable — MySQL's wire protocol has
 // no broker-style redirect, so this can be used directly for a whole call).
-func dsnAddr(addr, user, pass, db string) string {
+//
+// tlsPosture is always nil today: this Provider only ever administers a
+// self-hosted, same-network MySQL/MariaDB instance it created itself, which
+// has no external Connection to resolve an outbound TLS posture from
+// (docs/planning/08 I2's mode field is external-Connection-only) — the
+// parameter exists so this DSN builder no longer carries an unconditionally
+// bare (TLS-less) DSN, and so it's independently unit-testable across every
+// mode the moment a future caller has one to pass. Non-nil registers a
+// go-sql-driver TLS config and references it via the "tls" DSN param — the
+// driver's own documented mechanism (there is no inline-PEM query param).
+func dsnAddr(addr, user, pass, db string, tlsPosture *providerkit.DatabaseTLS) string {
 	cfg := godriver.NewConfig()
 	cfg.User = user
 	cfg.Passwd = pass
@@ -28,7 +39,25 @@ func dsnAddr(addr, user, pass, db string) string {
 	cfg.Addr = addr
 	cfg.DBName = db
 	cfg.Timeout = 10 * time.Second
+	if tlsPosture != nil {
+		if tlsCfg, err := tlsPosture.TLSConfig(hostOnly(addr)); err == nil {
+			name := "platformctl-" + addr + "-" + tlsPosture.Mode
+			if regErr := godriver.RegisterTLSConfig(name, tlsCfg); regErr == nil {
+				cfg.TLSConfig = name
+			}
+		}
+	}
 	return cfg.FormatDSN()
+}
+
+// hostOnly strips the port off a "host:port" address for use as a TLS
+// ServerName — verify-full's hostname check must never include the port.
+func hostOnly(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
 }
 
 func open(conn string) (*sql.DB, error) {

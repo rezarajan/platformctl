@@ -147,6 +147,14 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// graduates, so this needs its own off switch rather than riding
 	// IngressProvider's gate.
 	gates.Register("TLSTermination", featuregate.Alpha, false)
+	// docs/planning/08 I2, docs/adr/025: outbound TLS to a TLS-requiring
+	// external database (Connection.spec.tls.mode on an external
+	// Connection) — the client-side sibling of TLSTermination above.
+	// Alpha/enabled: an additive opt-in field (absent spec.tls.mode leaves
+	// every consumer's plaintext dial byte-for-byte unchanged), so unlike
+	// TLSTermination there is no new attack surface to soak disabled-by-
+	// default — declining the field is itself the off switch.
+	gates.Register("ExternalDatabaseTLS", featuregate.Alpha, true)
 	// docs/planning/08 D10 / docs/adr/006-compute-engines.md: the trino
 	// compute-engine provider. Alpha/disabled — unlike NessieProvider/
 	// OpenLineageProvider's enabled-Alpha Phase 6.5 precedent, a query

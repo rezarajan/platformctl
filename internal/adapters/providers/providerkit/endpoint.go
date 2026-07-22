@@ -36,6 +36,12 @@ type EndpointResolution struct {
 	// takes precedence over the Provider-level fallback in
 	// ResolveEndpointCredentials.
 	ConnectionSecretRef string
+	// TLS is the Source's Connection's own spec.tls (docs/planning/08 I2),
+	// non-nil only when that Connection is external and declares one —
+	// nil for a managed Connection, a Connection with no spec.tls, or no
+	// Connection at all. Resolve into a usable posture with
+	// ResolveDatabaseTLS.
+	TLS *connection.TLS
 }
 
 // ResolveEndpoint resolves a Source's database address and preflight-dial
@@ -78,6 +84,9 @@ func ResolveEndpoint(req reconciler.Request, src source.Source, srcEnv resource.
 			}
 			if conn.SecretRef != nil {
 				res.ConnectionSecretRef = *conn.SecretRef
+			}
+			if conn.External && conn.TLS != nil {
+				res.TLS = conn.TLS
 			}
 		}
 	}

@@ -419,6 +419,7 @@ GA. Phase 7 closes with Stage B's exit criteria held (docs/planning/08 §4).
 | `TLSTermination` | 08 Stage C (C8) | Alpha | disabled | Beta after real-use soak; independent of `IngressProvider`'s own gate (a Connection can stay plaintext even once ingress routing graduates) — see docs/adr/018 addendum |
 | `TunnelProvider` | 08 Stage D (D5) | Alpha | disabled | Beta after real-use soak; defaults off — a new provider granting `NET_ADMIN` and opening a routed path into a private network is a meaningfully different risk profile from the Phase 6.5 enabled-Alpha precedent — docs/adr/023-wireguard-tunnel.md |
 | `DesignLints` | 08 Stage H (H1) | Alpha | enabled | Beta once blueprints + examples are lint-clean for a release (docs/adr/020-design-lints.md) — read-only reporting, so it defaults on; the gate switches `validate`'s one-line summary off, not the `lint` command itself |
+| `ExternalDatabaseTLS` | 08 Stage I (I2) | Alpha | enabled | Beta after real-use soak; enabled-by-default because it's a purely additive opt-in field (`Connection.spec.tls.mode` on an external Connection) — absent, every consumer's plaintext dial is byte-for-byte unchanged, so there is no new attack surface to soak disabled — docs/adr/025-cloud-iam-database-auth.md |
 
 Gates planned by the production-readiness backlog (`HighAvailability`,
 `IngressProvider`, `TLSTermination`, `MonitoringStackProvider`,

@@ -104,7 +104,7 @@ func ensureExporter(ctx context.Context, rt runtime.ContainerRuntime, namespace,
 	if err != nil {
 		return endpoint.Endpoint{}, err
 	}
-	adminConn := connStringAddr(addr, adminUser, adminPass, "postgres")
+	adminConn := connStringAddr(addr, adminUser, adminPass, "postgres", nil)
 	closeErr := closeAddr()
 	if err := ensureMonitoringUser(ctx, adminConn, monitorUser, monitorPass); err != nil {
 		return endpoint.Endpoint{}, err

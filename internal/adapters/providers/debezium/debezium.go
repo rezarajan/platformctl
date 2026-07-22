@@ -5,23 +5,18 @@ package debezium
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"hash/fnv"
 	"net"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	// Registers the MySQL database/sql driver for connector preflight.
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/jackc/pgx/v5"
-
 	"github.com/rezarajan/platformctl/internal/adapters/kafkaconnect"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/domain/binding"
+	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
@@ -177,6 +172,14 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 				"CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE": "false",
 			},
 			Ports: connectPorts(cfg, name, workers),
+			// CA trust files (docs/planning/08 I2): every secretRef this
+			// Provider declares that resolved a "ca" key is mounted here,
+			// regardless of which (if any) currently-known Binding's
+			// Connection.spec.tls.caSecretRef names it — see
+			// providerkit.CATrustDir's doc comment for why the worker's own
+			// secretRefs list is the right source of truth at this
+			// Provider-level (not Binding-level) reconcile.
+			Files: providerkit.CATrustFileMounts(cfg, req.Secrets),
 			HealthCheck: &runtime.HealthCheck{
 				Test:     []string{"CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"},
 				Interval: 3 * time.Second,
@@ -246,6 +249,12 @@ type desiredConnector struct {
 	preflightConnectionName string
 	credsUser               string
 	credsPass               string
+	// tlsPosture is the Source's Connection's outbound TLS posture
+	// (docs/planning/08 I2) — nil preserves the pre-I2 plaintext preflight
+	// dial byte-for-byte; connector-level properties are set directly on
+	// config by applyTLSConfig instead (a live Debezium connector reads
+	// them from its own JSON config, not from this Go process's dial).
+	tlsPosture *providerkit.DatabaseTLS
 }
 
 func buildDesiredConnector(req reconciler.Request) (desiredConnector, error) {
@@ -306,6 +315,15 @@ func buildDesiredConnector(req reconciler.Request) (desiredConnector, error) {
 		return d, fmt.Errorf("Binding %q: debezium Provider %q has no resolved credentials — declare the Connection's secretRef or configuration.replicationSecretRef in spec.secretRefs", res.Metadata.Name, naming.RuntimeObjectName(req.Provider))
 	}
 
+	// Outbound TLS posture (docs/planning/08 I2): nil when the Source's
+	// Connection is managed or declares no spec.tls — the pre-I2 plaintext
+	// preflight/connector byte-for-byte unchanged.
+	tlsPosture, err := providerkit.ResolveDatabaseTLS(req, cfg, ep)
+	if err != nil {
+		return d, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
+	}
+	d.tlsPosture = tlsPosture
+
 	topicPrefix := b.TargetRef // topics become <EventStream name>.<schema>.<table>
 	connectorName := res.Metadata.Name
 
@@ -360,6 +378,7 @@ func buildDesiredConnector(req reconciler.Request) (desiredConnector, error) {
 	if mode, ok := b.Options["snapshotMode"].(string); ok && mode != "" {
 		config["snapshot.mode"] = mode
 	}
+	applyTLSConfig(config, src.Engine, tlsPosture)
 
 	d.name = connectorName
 	d.config = config
@@ -387,7 +406,7 @@ func (p *Provider) reconcileConnector(ctx context.Context, req reconciler.Reques
 	}
 
 	if d.preflightHost != "" {
-		if err := verifyDatabaseConnection(ctx, d.engine, d.preflightHost, d.preflightPort, d.dbName, d.credsUser, d.credsPass); err != nil {
+		if err := providerkit.VerifyDatabaseConnection(ctx, d.engine, d.preflightHost, d.preflightPort, d.dbName, d.credsUser, d.credsPass, d.tlsPosture); err != nil {
 			return st, fmt.Errorf("Binding %q: database connection preflight failed before registering connector: %w", res.Metadata.Name, err)
 		}
 	} else if d.preflightConnectionName != "" {
@@ -397,7 +416,7 @@ func (p *Provider) reconcileConnector(ctx context.Context, req reconciler.Reques
 		}
 		host, port, ok := hostPort(addr)
 		if ok {
-			err = verifyDatabaseConnection(ctx, d.engine, host, port, d.dbName, d.credsUser, d.credsPass)
+			err = providerkit.VerifyDatabaseConnection(ctx, d.engine, host, port, d.dbName, d.credsUser, d.credsPass, d.tlsPosture)
 		}
 		closeAddr()
 		if !ok {
@@ -557,38 +576,48 @@ func hostPort(address string) (string, int, bool) {
 	return host, port, true
 }
 
-func verifyDatabaseConnection(ctx context.Context, engine, host string, port int, dbName, user, pass string) error {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
+// applyTLSConfig sets the Debezium connector's outbound TLS properties for
+// tlsPosture (docs/planning/08 I2) — nil leaves config untouched, the pre-I2
+// plaintext behavior. The Postgres connector wraps pgjdbc directly and
+// accepts sslmode/sslrootcert verbatim (libpq's own vocabulary, matching
+// connection.TLSModeRequire/VerifyCA/VerifyFull exactly) — the CA bundle a
+// worker-level reconcile already mounted (providerkit.CATrustFileMounts) is
+// referenced by its fixed, deterministic path. The MySQL/MariaDB connector
+// is Debezium's own binlog client (not JDBC): its database.ssl.mode enum
+// differs (required/verify_ca/verify_identity), and Debezium documents
+// verify_ca/verify_identity as needing a Java truststore, not a raw PEM —
+// out of scope here (recorded, not designed, mirroring docs/adr/025's own
+// posture on IAM auth): database.ssl.mode is always set (require alone
+// needs no CA and is therefore fully functional end-to-end), but
+// verify_ca/verify_identity fall back to the JVM's own default trust store
+// rather than a caSecretRef-provided one.
+func applyTLSConfig(config map[string]string, engine string, tlsPosture *providerkit.DatabaseTLS) {
+	if tlsPosture == nil {
+		return
+	}
 	switch engine {
 	case "postgres":
-		u := url.URL{
-			Scheme: "postgres",
-			User:   url.UserPassword(user, pass),
-			Host:   host + ":" + strconv.Itoa(port),
-			Path:   "/" + dbName,
+		config["database.sslmode"] = tlsPosture.Mode
+		if tlsPosture.CASecretRefName != "" {
+			config["database.sslrootcert"] = providerkit.CAFilePath(tlsPosture.CASecretRefName)
 		}
-		q := u.Query()
-		q.Set("sslmode", "disable")
-		u.RawQuery = q.Encode()
-		conn, err := pgx.Connect(ctx, u.String())
-		if err != nil {
-			return fmt.Errorf("connect to postgres %s:%d/%s as %q: %w", host, port, dbName, user, err)
-		}
-		defer conn.Close(ctx)
-		return nil
 	case "mysql", "mariadb":
-		db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?timeout=10s", user, pass, host, port, dbName))
-		if err != nil {
-			return fmt.Errorf("connect to mysql %s:%d/%s as %q: %w", host, port, dbName, user, err)
-		}
-		defer db.Close()
-		if err := db.PingContext(ctx); err != nil {
-			return fmt.Errorf("connect to mysql %s:%d/%s as %q: %w", host, port, dbName, user, err)
-		}
-		return nil
+		config["database.ssl.mode"] = mysqlSSLMode(tlsPosture.Mode)
+	}
+}
+
+// mysqlSSLMode maps our libpq-derived mode vocabulary to Debezium's own
+// database.ssl.mode enum for its MySQL/MariaDB connector.
+func mysqlSSLMode(mode string) string {
+	switch mode {
+	case connection.TLSModeRequire:
+		return "required"
+	case connection.TLSModeVerifyCA:
+		return "verify_ca"
+	case connection.TLSModeVerifyFull:
+		return "verify_identity"
 	default:
-		return nil
+		return "preferred"
 	}
 }
 
