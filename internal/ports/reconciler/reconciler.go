@@ -124,6 +124,26 @@ type Request struct {
 	// endpoint), Resource.Kind != "Provider", or the request is not for a
 	// provider that reads it.
 	PrometheusURL string
+	// WarehouseFacts resolves Catalog.spec.warehouseRef (docs/planning/08
+	// D8) into the facts a catalog-realizing provider needs to configure its
+	// own default warehouse — the referenced Dataset's bucket/prefix (static
+	// spec fields) plus the Dataset's own realizing (s3/minio) Provider's
+	// published "s3" endpoint fact and credential SecretReference *name*.
+	// The same published-facts-only discipline CatalogFacts above already
+	// established (ADR 015): the engine resolves this from state, never
+	// constructed by a provider itself. Populated only for a Catalog-kind
+	// Resource declaring spec.warehouseRef; nil when warehouseRef is unset,
+	// Resource.Kind != "Catalog", or the referenced Dataset/its realizing
+	// Provider has not published its "s3" endpoint fact yet in this state —
+	// a provider reading this field must treat nil as "not resolved yet",
+	// never construct a substitute. graph.Build orders a warehouseRef'd
+	// Dataset (and, transitively via the Dataset's own providerRef edge,
+	// that Dataset's realizing Provider) strictly before the Catalog naming
+	// it, so in practice this is always non-nil by the time a Catalog with a
+	// valid warehouseRef reconciles within the same apply — unlike
+	// CatalogFacts's optional warehouseProviderRef case, which has no such
+	// graph edge and can genuinely need a second apply.
+	WarehouseFacts *WarehouseFacts
 }
 
 // CatalogFacts is Request.CatalogFacts's payload — see its doc comment.
@@ -139,6 +159,24 @@ type CatalogFacts struct {
 	// credentials (its own configuration.rootSecretRef, or the first entry
 	// of its spec.secretRefs) — a graph fact, never a resolved value; the
 	// trino provider looks this name up in its own Request.Secrets.
+	S3SecretRef string
+}
+
+// WarehouseFacts is Request.WarehouseFacts's payload — see its doc comment.
+type WarehouseFacts struct {
+	// Bucket/Prefix are the referenced Dataset's own spec.bucket/spec.prefix
+	// fields, verbatim (static — no state read needed for these two).
+	Bucket string
+	Prefix string
+	// S3Internal is the Dataset's realizing S3/MinIO Provider's published
+	// "s3" endpoint fact's in-network address ("host:port", no scheme) —
+	// same shape as CatalogFacts.S3Internal.
+	S3Internal string
+	// S3SecretRef is the SecretReference *name* holding that Provider's
+	// credentials — a graph fact, never a resolved value; a provider
+	// consuming this looks the name up in its own Request.Secrets (which
+	// requires that name to also be listed in its own spec.secretRefs, the
+	// same convention CatalogFacts.S3SecretRef documents).
 	S3SecretRef string
 }
 

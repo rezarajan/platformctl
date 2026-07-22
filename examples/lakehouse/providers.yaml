@@ -15,6 +15,11 @@ spec:
   secretRefs: [lake-minio-root]
 ---
 # Realizes Catalog(engine: nessie) — see catalog-and-connections.yaml.
+# secretRefs lists lake-minio-root (docs/planning/08 D8) so the engine can
+# resolve the warehouse Dataset's realizing Provider's credential values for
+# the Catalog's warehouseRef-derived warehouse config — the same "must also
+# be listed in spec.secretRefs" convention s3's rootSecretRef and D10's
+# warehouseS3SecretRef already use.
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
@@ -23,6 +28,7 @@ spec:
   type: nessie
   runtime: {type: docker}
   configuration: {port: 19121}
+  secretRefs: [lake-minio-root]
 ---
 # Marquez + its dedicated metadata store (a Postgres internal to the
 # provider, never published to the host); publishes its endpoint so

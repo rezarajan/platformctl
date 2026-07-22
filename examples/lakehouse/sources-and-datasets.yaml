@@ -33,7 +33,9 @@ spec:
   postgres: {database: orders}
 ---
 # The Iceberg warehouse bucket Dagster materializes assets into, cataloged
-# by lakehouse-catalog.
+# by lakehouse-catalog via its spec.warehouseRef (docs/planning/08 D8) —
+# nessie derives the warehouse location and S3 endpoint/credentials from
+# this Dataset's bucket/prefix and lake-minio's published endpoint fact.
 apiVersion: datascape.io/v1alpha1
 kind: Dataset
 metadata:

@@ -306,7 +306,106 @@ are additive.
    ordinal-set shape) and scales 2->3, proving a genuine in-place
    scale-up within that shape; the coordinator never restarts either way.
 
+## Implementation notes (D8, added post-implementation)
+
+D8 (`Catalog.spec.warehouseRef`) was the D10-context deviation this note's
+Implementation notes section 2 recorded as not-yet-implemented — it has now
+landed. This section records D8's own reconciliation design and the one
+deviation it required, per doc 08 §2.1's "a deviation you cannot avoid is a
+finding, not a judgment call" rule.
+
+**The reconciliation-ordering problem.** `Catalog` already depends on its
+`providerRef` (the `nessie` Provider) — so `nessie`'s own Provider-kind
+reconcile, which boots the container, necessarily runs *before* any
+`Catalog` referencing it. But `warehouseRef` lives on the `Catalog`, naming
+a `Dataset` — information only available *after* the `Catalog` resolves its
+own dependency. Nessie's Iceberg REST personality needs its default-
+warehouse and S3-credential config baked in as container env at *create*
+time (Quarkus config; no REST endpoint exists to set it dynamically, per
+D10's own live-caught findings above) — a genuine chicken-and-egg between
+"when the container is built" and "when the facts needed to configure it
+are known."
+
+**Resolution.** `warehouseRef` is a genuine top-level graph edge (`internal/
+domain/graph/graph.go`'s plain `refFields`, kind-checked to `Dataset` —
+*not* `configRefFields`, D10's nested-under-`spec.configuration` mechanism;
+the task text's original prediction that a `Catalog`-side warehouse field
+would need graph work turned out true only for the ordinary top-level ref
+path, not new engine-block introspection). `Dataset` already carries its
+own `providerRef` edge to its realizing Provider, so by the time a `Catalog`
+with `warehouseRef` reconciles, both the `Dataset` and its realizing
+(s3/minio) Provider have already reconciled and published state — in the
+same `apply`. A new engine seam, `resolveWarehouseFacts`
+(`internal/application/engine/engine.go`), mirrors `resolveCatalogFacts`'s
+published-facts-only discipline (ADR 015) but scoped to Catalog-kind
+requests, producing `reconciler.Request.WarehouseFacts`.
+
+`nessie`'s `reconcileCatalog` (the Catalog-kind step, which — unlike the
+Provider-kind step that first booted the container — runs *after* the
+warehouseRef chain is resolved) computes the desired warehouse env from
+`WarehouseFacts` (skipped outright when the Provider already sets an
+explicit `configuration.defaultWarehouseLocation` — the pre-D8 explicit
+path always wins, additive coexistence, no removal) and calls
+`providerkit.EnsureInstance` **again**, with the identical Image/Network/
+Ports but corrected Env. No new drift-fingerprint bookkeeping was written
+for this: `EnsureContainer`'s pre-existing spec-hash idempotency
+(`internal/adapters/runtime/docker`'s `specHash`/`specGenLabel`) is the
+entire mechanism — the first Catalog reconcile after `warehouseRef` is
+introduced (or its resolved facts change) recreates the container once;
+every later reconcile with unchanged facts is a zero-Docker-API-call no-op,
+the same bar CLAUDE.md's "every `Ensure*` runtime method must be
+idempotent" conformance rule already sets for every other provider.
+`Probe` was deliberately **not** extended to detect out-of-band drift of
+this derived config — recorded as a follow-up below; the pre-D8 explicit-
+config path had no such detection either, so this is not a regression.
+
+**Trino's resolution order (recorded per the task's explicit instruction).**
+`resolveCatalogFacts`'s warehouse-backing S3/MinIO Provider resolution now
+tries, in order: (1) the referenced `Catalog`'s own `warehouseRef` chain
+(`Catalog` -> `Dataset` -> the `Dataset`'s realizing Provider) — canonical
+once the `Catalog` declares it; (2) the trino Provider's own
+`configuration.warehouseProviderRef` disambiguator (D10, unchanged,
+becomes unnecessary once (1) applies but is not removed); (3) the sole
+S3/MinIO-typed Provider in the manifest's namespace, auto-inferred (D10,
+unchanged). `warehouseProviderRef` continues to work standalone (a
+`Catalog` with no `warehouseRef` behaves exactly as it did pre-D8) —
+D8 is purely additive to D10's own mechanism. A shared `resolveDatasetS3Facts`
+helper (Dataset -> its realizing Provider -> published `"s3"` fact +
+credential SecretReference name) backs both `resolveWarehouseFacts` and
+this precedence chain, so the two features share one state-reading tail
+rather than two independent implementations.
+
+**Verification.** `internal/domain/graph`: ordering (`Dataset` before
+`Catalog`) and the negative-path "does not resolve to any resource" shape
+for a `warehouseRef` naming a non-`Dataset` kind. `internal/application/
+engine`: `WarehouseFacts` resolves within a single `Apply` (no eventual-
+consistency window, unlike `CatalogFacts`'s optional
+`warehouseProviderRef` case, thanks to the real graph edge); a fake-provider
+test proves the warehouseRef-chain-first precedence over
+`warehouseProviderRef` even when both are set to different targets.
+`internal/adapters/providers/nessie`: `warehouseFactsEnv`'s derived env
+shape, the explicit-override-wins skip, and the recreate-once-then-
+idempotent proof (`MutationCount` unchanged on a second identical call)
+against the fake runtime. Live on Docker: `examples/lakehouse` now wires
+its pre-existing (previously unwired) `warehouse` Dataset via
+`Catalog.spec.warehouseRef` with no Provider-level
+`defaultWarehouseLocation` at all (`TestLakehouse`); `cmd/platformctl/
+testdata/trino-scenario` replaces its former explicit
+`defaultWarehouseLocation`/`warehouseS3*` fields with a dedicated
+`trn-warehouse` Dataset + `warehouseRef`, keeping `warehouseProviderRef`
+set to the identical target to prove the two mechanisms coexist without
+conflict (`TestTrinoComputeEngineEndToEnd`) — see that test's own run log
+for timing and any further live findings.
+
 ## Follow-ups (non-blocking)
+
+- **`nessie`'s derived-warehouse-config drift detection**: `Probe` does not
+  check the Catalog-kind `warehouseRef`-derived env against the live
+  container for out-of-band drift (an operator manually restarting Nessie
+  with different env would go undetected until the next spec change forces
+  a reconcile). Not a regression — the pre-D8 explicit-config path never
+  had this either — but a natural next increment now that D8 established
+  the derivation.
 
 - **Nessie Iceberg REST Catalog table-write credentials**: root-cause and
   fix the `STATIC`-auth `CREATE TABLE` failure (or the

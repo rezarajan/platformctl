@@ -1211,6 +1211,128 @@ func TestResolveCatalogFactsFromCatalogRef(t *testing.T) {
 	}
 }
 
+// fakeNessieLikeProvider stands in for nessie: its Catalog-kind reconcile
+// records whatever req.WarehouseFacts the engine resolved (docs/planning/08
+// D8).
+type fakeNessieLikeProvider struct {
+	noop.Provider
+	got *reconciler.WarehouseFacts
+}
+
+func (p *fakeNessieLikeProvider) Type() string { return "fakenessie" }
+
+func (p *fakeNessieLikeProvider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	if req.Resource.Kind == "Catalog" {
+		p.got = req.WarehouseFacts
+	}
+	return p.Provider.Reconcile(ctx, req)
+}
+
+// TestResolveWarehouseFactsFromWarehouseRef covers docs/planning/08 D8's
+// engine wiring end to end: Catalog.spec.warehouseRef is a real top-level
+// graph edge (Catalog -> Dataset, unlike CatalogFacts's optional
+// warehouseProviderRef case above), so the Dataset and its realizing
+// S3/MinIO Provider are always already reconciled and published by the time
+// the Catalog reconciles — a single Apply suffices, no second-apply
+// eventual-consistency window like TestResolveCatalogFactsFromCatalogRef's
+// auto-inferred warehouse case.
+func TestResolveWarehouseFactsFromWarehouseRef(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	minio := &fakeWarehouseProvider{internalAddr: "lake-minio:9000"}
+	nessie := &fakeNessieLikeProvider{}
+	reg.RegisterProvider("s3", func() reconciler.Provider { return minio }, "")
+	reg.RegisterProvider("fakenessie", func() reconciler.Provider { return nessie }, "")
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+
+	eng := newTestEngine(t, reg)
+	envelopes := []resource.Envelope{
+		envelope("Provider", "lake-minio", map[string]any{"type": "s3", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Provider", "catalog-svc", map[string]any{"type": "fakenessie", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Dataset", "warehouse", map[string]any{
+			"providerRef": map[string]any{"name": "lake-minio"},
+			"bucket":      "lake",
+			"prefix":      "iceberg/",
+			"format":      "parquet",
+		}),
+		envelope("Catalog", "lakehouse-catalog", map[string]any{
+			"engine":       "nessie",
+			"providerRef":  map[string]any{"name": "catalog-svc"},
+			"warehouseRef": map[string]any{"name": "warehouse"},
+		}),
+	}
+	applyAll(t, eng, envelopes)
+
+	if nessie.got == nil {
+		t.Fatal("WarehouseFacts is nil, want it resolved in the same apply")
+	}
+	if nessie.got.Bucket != "lake" || nessie.got.Prefix != "iceberg/" {
+		t.Errorf("Bucket/Prefix = %q/%q, want %q/%q", nessie.got.Bucket, nessie.got.Prefix, "lake", "iceberg/")
+	}
+	if nessie.got.S3Internal != "lake-minio:9000" {
+		t.Errorf("S3Internal = %q, want %q", nessie.got.S3Internal, "lake-minio:9000")
+	}
+}
+
+// TestResolveCatalogFactsPrefersWarehouseRefOverWarehouseProviderRef covers
+// docs/planning/08 D8's recorded resolution order: once the Catalog a trino
+// Provider's catalogRef names itself declares warehouseRef, that chain wins
+// over the trino Provider's own (still fully supported, unremoved)
+// configuration.warehouseProviderRef disambiguator.
+func TestResolveCatalogFactsPrefersWarehouseRefOverWarehouseProviderRef(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	cat := &fakeCatalogProvider{internalAddr: "catalog-svc:19120/iceberg"}
+	preferred := &fakeWarehouseProvider{internalAddr: "preferred-minio:9000"}
+	other := &fakeWarehouseProvider{internalAddr: "other-minio:9000"}
+	trino := &fakeTrinoLikeProvider{}
+	reg.RegisterProvider("fakecatalog", func() reconciler.Provider { return cat }, "")
+	reg.RegisterProvider("s3-preferred", func() reconciler.Provider { return preferred }, "")
+	reg.RegisterProvider("s3-other", func() reconciler.Provider { return other }, "")
+	reg.RegisterProvider("faketrino", func() reconciler.Provider { return trino }, "")
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+
+	eng := newTestEngine(t, reg)
+	infra := []resource.Envelope{
+		envelope("Provider", "catalog-svc", map[string]any{"type": "fakecatalog", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Provider", "minio-preferred", map[string]any{"type": "s3-preferred", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Provider", "minio-other", map[string]any{"type": "s3-other", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Dataset", "warehouse", map[string]any{
+			"providerRef": map[string]any{"name": "minio-preferred"},
+			"bucket":      "lake", "prefix": "iceberg/", "format": "parquet",
+		}),
+		envelope("Catalog", "lakehouse-catalog", map[string]any{
+			"engine":       "nessie",
+			"providerRef":  map[string]any{"name": "catalog-svc"},
+			"warehouseRef": map[string]any{"name": "warehouse"},
+		}),
+	}
+	applyAll(t, eng, infra)
+
+	all := append(append([]resource.Envelope{}, infra...),
+		envelope("Provider", "lake-trino", map[string]any{
+			"type":    "faketrino",
+			"runtime": map[string]any{"type": "fake"},
+			"configuration": map[string]any{
+				"catalogRef":           map[string]any{"name": "lakehouse-catalog"},
+				"warehouseProviderRef": map[string]any{"name": "minio-other"},
+			},
+		}))
+	applyAll(t, eng, all)
+
+	if trino.got == nil {
+		t.Fatal("CatalogFacts is nil, want it resolved")
+	}
+	if trino.got.S3Internal != "preferred-minio:9000" {
+		t.Errorf("S3Internal = %q, want the warehouseRef chain's %q, not warehouseProviderRef's %q",
+			trino.got.S3Internal, "preferred-minio:9000", "other-minio:9000")
+	}
+}
+
 // TestExternalConnectionInNetworkReachability covers docs/planning/08 C10:
 // an external Connection consumed by an in-network Binding (here, a CDC
 // Binding whose sourceRef is the external Source declaring the

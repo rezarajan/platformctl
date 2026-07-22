@@ -32,7 +32,15 @@ const (
 )
 
 // TestTrinoComputeEngineEndToEnd covers docs/planning/08 D10's accept list
-// against real Docker, literally:
+// against real Docker, literally, and now also D8's "trino e2e still green
+// (its resolution-order change)" accept item: testdata/trino-scenario's
+// Catalog carries spec.warehouseRef (a dedicated trn-warehouse Dataset) with
+// no Provider-level configuration.defaultWarehouseLocation at all — nessie's
+// warehouse config is derived entirely through the D8 path — while the
+// trino Provider's own warehouseProviderRef stays set to the identical
+// target, proving the two mechanisms coexist without conflict (see docs/
+// adr/006's "Implementation notes (D8, added post-implementation)" section
+// for the recorded resolution order and reconciliation design).
 //
 //   - a trino Provider + catalogRef to the lakehouse Catalog reaches Ready;
 //   - a query through the coordinator returns rows tied to the D2 CDC->

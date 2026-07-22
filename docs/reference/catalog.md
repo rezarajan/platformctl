@@ -12,4 +12,5 @@ A table/metadata catalog (Iceberg REST, Hive Metastore, Glue, ...) as a provider
 | `spec.engine` | string | yes | Open-ended catalog engine discriminator (nessie, hive, glue, ...). Names the sibling engine-specific block; the realizing provider must declare it in SupportedCatalogEngines(). |
 | `spec.external` | boolean | no | The catalog service lives outside the platform; Datascape never creates or deletes it. |
 | `spec.providerRef` | object `{name}` | no | The catalog-capable Provider realizing this catalog. Required unless external. |
+| `spec.warehouseRef` | object `{name}` | no | A Dataset holding this Catalog's warehouse location (docs/planning/08 D8). Kind-checked to Dataset and graph-ordered before this Catalog. Optional; a realizing provider that knows how to derive warehouse config from a Dataset (nessie) uses it automatically. An engine-specific explicit override on the realizing Provider (e.g. nessie's Provider(type: nessie).spec.configuration.defaultWarehouseLocation) always wins when also set. |
 | `spec.<other>` | object | no | Engine-specific block named after spec.engine (e.g. nessie: {defaultBranch}). |
