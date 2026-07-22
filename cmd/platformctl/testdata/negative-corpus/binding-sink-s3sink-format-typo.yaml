@@ -1,0 +1,69 @@
+# Class: Binding options fragment — enum typo (docs/planning/08 E5, D1/D2).
+# format must be one of json|avro|protobuf; "avroo" (typo) must fail at
+# validate rather than surfacing as a cryptic Connect converter-class error.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: broker
+spec:
+  type: redpanda
+  runtime: {type: fake}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lake
+spec:
+  type: s3
+  runtime: {type: fake}
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: sink-creds
+spec:
+  backend: env
+  keys: [accessKey, secretKey]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: sink
+spec:
+  type: s3sink
+  runtime: {type: fake}
+  configuration:
+    image: "datascape-s3sink-connect:local"
+    bootstrapServers: "broker:29092"
+    credentialsSecretRef: sink-creds
+  secretRefs: [sink-creds]
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: attendance-events
+spec:
+  providerRef: {name: broker}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: attendance-raw
+spec:
+  providerRef: {name: lake}
+  bucket: raw
+  prefix: attendance/
+  format: json
+  deletionPolicy: retain
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: events-to-raw
+spec:
+  mode: sink
+  sourceRef: {name: attendance-events}
+  targetRef: {name: attendance-raw}
+  providerRef: {name: sink}
+  options:
+    format: avroo

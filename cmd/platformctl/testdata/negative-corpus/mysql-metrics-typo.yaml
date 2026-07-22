@@ -1,0 +1,20 @@
+# Class: Provider configuration fragment — enum typo (mysql/mariadb-shared
+# fragment, docs/planning/08 E5).
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: my-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: db
+spec:
+  type: mysql
+  runtime: {type: fake}
+  configuration:
+    metrics: "yes"
+  secretRefs: [my-root]

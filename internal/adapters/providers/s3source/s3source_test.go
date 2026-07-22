@@ -266,19 +266,13 @@ func TestValidateBindingOptionsEndpointShape(t *testing.T) {
 	}
 }
 
-func TestValidateSpecCredentialsSecretRefRequired(t *testing.T) {
-	p := New()
-	cfg := provider.Provider{
-		Configuration: map[string]any{
-			"image":            "datascape-s3source-connect:local",
-			"bootstrapServers": "broker:29092",
-		},
-	}
-	if err := p.ValidateSpec(cfg); err == nil {
-		t.Error("missing credentialsSecretRef accepted, want an error")
-	}
-}
-
+// TestValidateSpecCredentialsSecretRefMustBeDeclared covers the cross-field
+// half that stays Go-side (docs/planning/08 E5): credentialsSecretRef's own
+// required-ness is now schemas/v1alpha1/fragments/provider/s3source.json's
+// job (a static JSON Schema fragment CAN express plain required-ness — see
+// cmd/platformctl's negative-test corpus), but a value that IS set must
+// still be resolvable against spec.secretRefs, which needs the sibling
+// field's contents and so cannot move into the fragment.
 func TestValidateSpecCredentialsSecretRefMustBeDeclared(t *testing.T) {
 	p := New()
 	cfg := provider.Provider{
@@ -293,6 +287,10 @@ func TestValidateSpecCredentialsSecretRefMustBeDeclared(t *testing.T) {
 	}
 }
 
+// TestValidateSpecWorkers: workers' own positive-integer shape is now
+// schemas/v1alpha1/fragments/provider/s3source.json's job (docs/planning/08
+// E5) — see cmd/platformctl's negative-test corpus; this only covers that
+// every legal value still passes.
 func TestValidateSpecWorkers(t *testing.T) {
 	p := New()
 	base := map[string]any{
@@ -304,12 +302,6 @@ func TestValidateSpecWorkers(t *testing.T) {
 		cfg := provider.Provider{Configuration: merge(base, "workers", v), SecretRefs: []string{"creds"}}
 		if err := p.ValidateSpec(cfg); err != nil {
 			t.Errorf("workers %v rejected: %v", v, err)
-		}
-	}
-	for _, v := range []any{0, -1, "two", 1.5} {
-		cfg := provider.Provider{Configuration: merge(base, "workers", v), SecretRefs: []string{"creds"}}
-		if err := p.ValidateSpec(cfg); err == nil {
-			t.Errorf("workers %v (%T) accepted, want an error", v, v)
 		}
 	}
 }

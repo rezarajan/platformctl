@@ -451,11 +451,9 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 	} else if len(cfg.SecretRefs) == 0 {
 		return fmt.Errorf("spec.secretRefs must name at least one SecretReference (the root credentials; configuration.rootSecretRef selects one explicitly)")
 	}
-	if v, ok := cfg.Configuration["metrics"]; ok {
-		s, _ := v.(string)
-		if s != "enabled" && s != "disabled" {
-			return fmt.Errorf("spec.configuration.metrics must be \"enabled\" or \"disabled\", got %v", v)
-		}
-	}
+	// metrics' enum shape (docs/planning/08 E5) is now enforced by
+	// schemas/v1alpha1/fragments/provider/mysql.json (shared by mariadb),
+	// composed into manifest.Validate ahead of this method in every real
+	// CLI path (ADR 011's loadAndValidate order).
 	return catalogFor(cfg).ValidateConfig(cfg.Configuration)
 }

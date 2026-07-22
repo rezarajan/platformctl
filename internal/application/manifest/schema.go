@@ -112,3 +112,7 @@ func compiledMustLoad() map[string]map[string]*jsonschema.Schema {
 	}
 	return c
 }
+
+// fragment.go composes these embedded schemas with the provider-owned
+// fragments (docs/planning/08 E5) registered in schemas.ProviderConfigFragments/
+// SourceEngineFragments/CatalogEngineFragments/BindingOptionsFragments.

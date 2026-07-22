@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/source/postgres.json",
+  "title": "Source(engine: postgres).spec.postgres",
+  "description": "Shape-only fragment (docs/planning/08 E5, docs/planning/03 §5): database is required — omitting it previously failed only at reconcile time (\"Source %q: spec.postgres.database is required\"), a validate-time-completeness gap this fragment closes (ADR 011).",
+  "type": "object",
+  "properties": {
+    "database": { "type": "string", "minLength": 1 },
+    "schema": { "type": "string", "minLength": 1 }
+  },
+  "required": ["database"],
+  "additionalProperties": false
+}

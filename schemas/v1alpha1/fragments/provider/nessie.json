@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/provider/nessie.json",
+  "title": "Provider(type: nessie).spec.configuration",
+  "description": "Shape-only fragment (docs/planning/08 E5). All fields optional: a Catalog's warehouseRef (docs/planning/08 D8) can derive warehouse config without any of these being set. warehouseS3SecretRef's spec.secretRefs membership remains a cross-field rule (no SpecValidator implemented yet for this provider — first coverage from this fragment).",
+  "type": "object",
+  "properties": {
+    "image": { "type": "string", "minLength": 1 },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "defaultWarehouseLocation": { "type": "string", "minLength": 1 },
+    "warehouseS3Endpoint": { "type": "string", "minLength": 1 },
+    "warehouseS3SecretRef": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}

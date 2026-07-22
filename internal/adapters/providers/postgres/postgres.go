@@ -483,11 +483,11 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 	if ref, _ := cfg.Configuration["replicationSecretRef"].(string); ref != "" && !cfg.HasSecretRef(ref) {
 		return fmt.Errorf("configuration.replicationSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
 	}
-	if v, ok := cfg.Configuration["metrics"]; ok {
-		s, _ := v.(string)
-		if s != "enabled" && s != "disabled" {
-			return fmt.Errorf("spec.configuration.metrics must be \"enabled\" or \"disabled\", got %v", v)
-		}
-	}
+	// metrics' enum shape (docs/planning/08 E5) is now enforced by
+	// schemas/v1alpha1/fragments/provider/postgres.json, composed into
+	// manifest.Validate ahead of this method in every real CLI path
+	// (ADR 011's loadAndValidate order); the remaining checks above/below
+	// are cross-field (need spec.secretRefs or the version catalog, not
+	// expressible in a static JSON Schema fragment).
 	return catalog.ValidateConfig(cfg.Configuration)
 }

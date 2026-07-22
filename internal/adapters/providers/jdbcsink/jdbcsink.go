@@ -793,29 +793,23 @@ func connectorConfigDrift(ctx context.Context, req reconciler.Request, urls []st
 // unconditional requirement): a target Source with its own external
 // Connection secretRef needs no provider-level fallback at all — mirrors
 // debezium's identical treatment of replicationSecretRef.
+// ValidateSpec implements reconciler.SpecValidator. image's required-ness
+// and workers' positive-integer shape (docs/planning/08 E5) are now
+// schemas/v1alpha1/fragments/provider/jdbcsink.json's job, composed into
+// manifest.Validate ahead of this method in every real CLI path (ADR 011's
+// loadAndValidate order) — bootstrapServers stays a Go-side check
+// (graph-inferable from an in-manifest redpanda Provider, docs/planning/08
+// E2, so it must NOT be schema-required), and credentialsSecretRef's
+// spec.secretRefs membership plus the connectPort/workers mutual exclusion
+// remain cross-field checks a static JSON Schema fragment cannot express.
 func (p *Provider) ValidateSpec(cfg provider.Provider) error {
-	if v, _ := cfg.Configuration["image"].(string); v == "" {
-		return fmt.Errorf("spec.configuration.image is required (a Connect image carrying the JDBC sink plugin; no stock image ships one)")
-	}
 	if v, _ := cfg.Configuration["bootstrapServers"].(string); v == "" {
 		return fmt.Errorf("spec.configuration.bootstrapServers is required (the Kafka address the Connect worker joins)")
 	}
 	if ref, _ := cfg.Configuration["credentialsSecretRef"].(string); ref != "" && !cfg.HasSecretRef(ref) {
 		return fmt.Errorf("configuration.credentialsSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
 	}
-	if v, declared := cfg.Configuration["workers"]; declared {
-		n, ok := -1, false
-		switch t := v.(type) {
-		case int:
-			n, ok = t, true
-		case float64:
-			if t == float64(int(t)) {
-				n, ok = int(t), true
-			}
-		}
-		if !ok || n < 1 {
-			return fmt.Errorf("spec.configuration.workers must be a positive integer, got %v", v)
-		}
+	if _, declared := cfg.Configuration["workers"]; declared {
 		if _, pinned := cfg.Configuration["connectPort"]; pinned {
 			return fmt.Errorf("spec.configuration.connectPort cannot be combined with spec.configuration.workers: each worker's host port is auto-assigned")
 		}

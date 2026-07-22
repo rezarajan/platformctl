@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/provider/wireguard.json",
+  "title": "Provider(type: wireguard).spec.configuration",
+  "description": "Shape-only fragment (docs/planning/08 E5, docs/adr/023). peerNetwork/peerPublicKey/peerEndpoint/address/allowedIPs are unconditionally required (no fallback — parseConfig's identical check moves here). privateKeySecretRef's spec.secretRefs-membership-or-nonempty-secretRefs fallback remains a SpecValidator cross-field rule.",
+  "type": "object",
+  "properties": {
+    "image": { "type": "string", "minLength": 1 },
+    "peerNetwork": { "type": "string", "minLength": 1 },
+    "peerPublicKey": { "type": "string", "minLength": 1 },
+    "peerEndpoint": { "type": "string", "minLength": 1 },
+    "address": { "type": "string", "minLength": 1 },
+    "allowedIPs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1
+    },
+    "keepalive": { "type": "integer", "minimum": 1 },
+    "privateKeySecretRef": { "type": "string", "minLength": 1 }
+  },
+  "required": ["peerNetwork", "peerPublicKey", "peerEndpoint", "address", "allowedIPs"],
+  "additionalProperties": false
+}

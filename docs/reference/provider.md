@@ -18,3 +18,198 @@ Declares a technology (spec.type) and where it runs (spec.runtime). The provider
 | `spec.runtime.type` | `docker` \| `fake` \| `kubernetes` \| `external` \| `terraform` | yes | docker and fake (testing) are implemented. kubernetes is a real, Beta adapter behind the KubernetesRuntime feature gate (enabled by default as of docs/planning/08 Stage B close) — see runtime.access and the deploy/kubernetes/rbac/ manifests for what running against a real cluster needs. external/terraform are accepted for forward compatibility and rejected at registry construction as planned-but-unavailable. |
 | `spec.secretRefs` | array of string | no | Names of SecretReference resources resolved by the engine and passed to the provider. |
 | `spec.type` | string | yes | Provider implementation to construct. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections, scheme tcp), prometheus (managed monitoring stack, gate MonitoringStackProvider, docs/planning/08 C9), ingress (realizes managed Connections, scheme http — HTTP hostname routing; gate IngressProvider, docs/planning/08 C7, docs/adr/018) — plus noop/container for testing. Open-ended: unknown types fail at registry construction, not schema validation. Technology providers realize the provider-agnostic kinds; the model speaks Catalog/Connection, never a technology's name. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections), prometheus (managed monitoring stack, gate MonitoringStackProvider, docs/planning/08 C9), trino (compute-engine coordinator + workers, gate TrinoProvider, docs/planning/08 D10), grafana (managed Grafana provisioned with a Prometheus datasource + starter dashboard, gate MonitoringStackProvider, docs/planning/08 C9 completion) — plus noop/container for testing. jdbcsink (realizes Binding(mode: sink, targetRef: Source) — a JDBC database sink over Confluent's kafka-connect-jdbc, gate JDBCSinkProvider, docs/planning/08 D3) and s3source (realizes Binding(mode: ingest) — an S3 object-store source over Aiven's s3-source-connector, gate IngestProvider, docs/planning/08 D4) are the ADR 001/009 sink-into-Source and ingest capability seams made real; both Alpha/disabled by default. wireguard (realizes managed Connections, scheme tcp — a tunnel initiator dialing an externally-operated WireGuard peer; NET_ADMIN required; gate TunnelProvider, docs/planning/08 D5, docs/adr/023) takes required configuration.peerNetwork (the Docker network the peer's UDP endpoint is reachable on), configuration.peerPublicKey, configuration.peerEndpoint (host:port), configuration.address (this tunnel's own CIDR on the WireGuard point-to-point subnet), configuration.allowedIPs (the private subnet(s) routed through the tunnel), an optional configuration.keepalive (seconds, default 25), and configuration.privateKeySecretRef (a SecretReference key "privateKey", must also be listed in spec.secretRefs — file-mounted only, never env/state/inspect). A Connection realized by a wireguard Provider must set spec.target to an IP:port pair (not a hostname — iptables --to-destination does not resolve DNS names). |
+
+## Provider configuration reference (by `spec.type`)
+
+This table is generated from each provider's own JSON-Schema fragment (`schemas/v1alpha1/fragments/provider/`) — the shape-only rules enforced on `spec.configuration` at `validate` time, in addition to the cross-field rules a provider's `SpecValidator` still checks (docs/planning/08 E5).
+
+### debezium
+
+Shape-only fragment (docs/planning/08 E5): bootstrapServers is intentionally NOT required here — it is graph-inferable from an in-manifest redpanda Provider (docs/planning/08 E2) and that fallback, plus replicationSecretRef's spec.secretRefs membership, remain SpecValidator cross-field rules. The connectPort/workers mutual exclusion also remains a SpecValidator rule.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.bootstrapServers` | string | no |  |
+| `spec.configuration.connectPort` | integer | no |  |
+| `spec.configuration.image` | string | no |  |
+| `spec.configuration.replicationSecretRef` | string | no |  |
+| `spec.configuration.workers` | integer | no |  |
+
+### grafana
+
+Shape-only fragment (docs/planning/08 E5): the adminSecretRef-or-nonempty-secretRefs fallback and its spec.secretRefs membership remain SpecValidator cross-field rules; prometheusRef's graph resolution (ambiguous-when-unset-and-multiple) is a compatibility/engine concern, not schema shape.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.adminSecretRef` | string | no |  |
+| `spec.configuration.image` | string | no |  |
+| `spec.configuration.port` | integer | no |  |
+| `spec.configuration.prometheusRef` | object `{name}` | no |  |
+
+### ingress
+
+Shape-only fragment (docs/planning/08 E5). port/adminPort are Docker-runtime-only (ignored on Kubernetes, docs/planning/08 C7) — a runtime-conditional refusal, if ever added, would be a SpecValidator/engine concern, not schema shape.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.adminPort` | integer | no |  |
+| `spec.configuration.domain` | string | no |  |
+| `spec.configuration.image` | string | no |  |
+| `spec.configuration.port` | integer | no |  |
+
+### jdbcsink
+
+Shape-only fragment (docs/planning/08 E5). image is unconditionally required (no stock image ships the JDBC sink plugin). bootstrapServers is intentionally NOT required here — it is graph-inferable from an in-manifest redpanda Provider (docs/planning/08 E2). credentialsSecretRef is optional (falls back to the sink Binding's target Source's own Connection secretRef) but, when set, its spec.secretRefs membership and the connectPort/workers mutual exclusion remain SpecValidator cross-field rules.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.bootstrapServers` | string | no |  |
+| `spec.configuration.connectPort` | integer | no |  |
+| `spec.configuration.credentialsSecretRef` | string | no |  |
+| `spec.configuration.image` | string | yes |  |
+| `spec.configuration.workers` | integer | no |  |
+
+### mariadb, mysql
+
+Shape-only fragment (docs/planning/08 E5): shared by both the mysql and mariadb provider types (same adapter, per-type image/profile catalog). The rootSecretRef-or-nonempty-secretRefs fallback and *SecretRef spec.secretRefs-membership checks remain SpecValidator cross-field rules.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.image` | string | no |  |
+| `spec.configuration.metrics` | `enabled` \| `disabled` | no |  |
+| `spec.configuration.port` | integer | no |  |
+| `spec.configuration.replicationSecretRef` | string | no |  |
+| `spec.configuration.rootSecretRef` | string | no |  |
+| `spec.configuration.version` | string | no |  |
+
+### minio, s3
+
+Shape-only fragment (docs/planning/08 E5): shared by both the s3 and minio provider types (same adapter). The rootSecretRef-or-nonempty-secretRefs fallback, *SecretRef spec.secretRefs-membership checks, and the nodes/port mutual exclusion remain SpecValidator cross-field rules; nodes 2-3 is refused there too (no supported MinIO topology between standalone and erasure-coded).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.image` | string | no |  |
+| `spec.configuration.imagePullSecretRef` | string | no |  |
+| `spec.configuration.nodes` | integer | no |  |
+| `spec.configuration.port` | integer | no |  |
+| `spec.configuration.rootSecretRef` | string | no |  |
+
+### nessie
+
+Shape-only fragment (docs/planning/08 E5). All fields optional: a Catalog's warehouseRef (docs/planning/08 D8) can derive warehouse config without any of these being set. warehouseS3SecretRef's spec.secretRefs membership remains a cross-field rule (no SpecValidator implemented yet for this provider — first coverage from this fragment).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.defaultWarehouseLocation` | string | no |  |
+| `spec.configuration.image` | string | no |  |
+| `spec.configuration.port` | integer | no |  |
+| `spec.configuration.warehouseS3Endpoint` | string | no |  |
+| `spec.configuration.warehouseS3SecretRef` | string | no |  |
+
+### openlineage
+
+Shape-only fragment (docs/planning/08 E5). No SpecValidator implemented for this provider today — first coverage from this fragment.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.apiPort` | integer | no |  |
+| `spec.configuration.image` | string | no |  |
+
+### postgres
+
+Shape-only fragment (docs/planning/08 E5): the superuserSecretRef-or-nonempty-secretRefs fallback and *SecretRef spec.secretRefs-membership checks remain SpecValidator cross-field rules.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.image` | string | no |  |
+| `spec.configuration.metrics` | `enabled` \| `disabled` | no |  |
+| `spec.configuration.port` | integer | no |  |
+| `spec.configuration.replicationSecretRef` | string | no |  |
+| `spec.configuration.storage` | object | no |  |
+| `spec.configuration.storage.class` | string | no |  |
+| `spec.configuration.storage.size` | string | no |  |
+| `spec.configuration.superuserSecretRef` | string | no |  |
+| `spec.configuration.version` | string | no |  |
+
+### prometheus
+
+Shape-only fragment (docs/planning/08 E5).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.image` | string | no |  |
+| `spec.configuration.port` | integer | no |  |
+| `spec.configuration.scrapeInterval` | string | no |  |
+
+### proxy
+
+Shape-only fragment (docs/planning/08 E5). No SpecValidator implemented for this provider today — first coverage from this fragment.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.image` | string | no |  |
+
+### redpanda
+
+Shape-only fragment (docs/planning/08 E5): mutual-exclusion rules between brokers and the host-port pins, and between brokers and schemaRegistry, remain SpecValidator checks (cross-field, not expressed here).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.adminPort` | integer | no |  |
+| `spec.configuration.brokers` | integer | no |  |
+| `spec.configuration.image` | string | no |  |
+| `spec.configuration.kafkaPort` | integer | no |  |
+| `spec.configuration.schemaRegistry` | `enabled` \| `disabled` | no |  |
+| `spec.configuration.schemaRegistryPort` | integer | no |  |
+
+### s3sink
+
+Shape-only fragment (docs/planning/08 E5). image and credentialsSecretRef are unconditionally required (no fallback, no stock image ships the S3 sink plugin). bootstrapServers is intentionally NOT required here — it is graph-inferable from an in-manifest redpanda Provider (docs/planning/08 E2). credentialsSecretRef's spec.secretRefs membership and the connectPort/workers mutual exclusion remain SpecValidator cross-field rules.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.bootstrapServers` | string | no |  |
+| `spec.configuration.connectPort` | integer | no |  |
+| `spec.configuration.credentialsSecretRef` | string | yes |  |
+| `spec.configuration.image` | string | yes |  |
+| `spec.configuration.workers` | integer | no |  |
+
+### s3source
+
+Shape-only fragment (docs/planning/08 E5). image and credentialsSecretRef are unconditionally required (no fallback — a Dataset has no Connection of its own, so this provider is the only possible credential source). bootstrapServers is intentionally NOT required here — it is graph-inferable from an in-manifest redpanda Provider (docs/planning/08 E2). credentialsSecretRef's spec.secretRefs membership and the connectPort/workers mutual exclusion remain SpecValidator cross-field rules.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.bootstrapServers` | string | no |  |
+| `spec.configuration.connectPort` | integer | no |  |
+| `spec.configuration.credentialsSecretRef` | string | yes |  |
+| `spec.configuration.image` | string | yes |  |
+| `spec.configuration.workers` | integer | no |  |
+
+### trino
+
+Shape-only fragment (docs/planning/08 E5): catalogRef/warehouseProviderRef graph resolution remains an engine/SpecValidator concern (not required, since a manifest declaring exactly one Catalog/S3-or-MinIO Provider infers them).
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.catalogRef` | object `{name}` | no |  |
+| `spec.configuration.image` | string | no |  |
+| `spec.configuration.port` | integer | no |  |
+| `spec.configuration.warehouseProviderRef` | object `{name}` | no |  |
+| `spec.configuration.workers` | integer | no |  |
+
+### wireguard
+
+Shape-only fragment (docs/planning/08 E5, docs/adr/023). peerNetwork/peerPublicKey/peerEndpoint/address/allowedIPs are unconditionally required (no fallback — parseConfig's identical check moves here). privateKeySecretRef's spec.secretRefs-membership-or-nonempty-secretRefs fallback remains a SpecValidator cross-field rule.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.address` | string | yes |  |
+| `spec.configuration.allowedIPs` | array of string | yes |  |
+| `spec.configuration.image` | string | no |  |
+| `spec.configuration.keepalive` | integer | no |  |
+| `spec.configuration.peerEndpoint` | string | yes |  |
+| `spec.configuration.peerNetwork` | string | yes |  |
+| `spec.configuration.peerPublicKey` | string | yes |  |
+| `spec.configuration.privateKeySecretRef` | string | no |  |
+

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/provider/s3sink.json",
+  "title": "Provider(type: s3sink).spec.configuration",
+  "description": "Shape-only fragment (docs/planning/08 E5). image and credentialsSecretRef are unconditionally required (no fallback, no stock image ships the S3 sink plugin). bootstrapServers is intentionally NOT required here — it is graph-inferable from an in-manifest redpanda Provider (docs/planning/08 E2). credentialsSecretRef's spec.secretRefs membership and the connectPort/workers mutual exclusion remain SpecValidator cross-field rules.",
+  "type": "object",
+  "properties": {
+    "image": { "type": "string", "minLength": 1 },
+    "bootstrapServers": { "type": "string", "minLength": 1 },
+    "connectPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "credentialsSecretRef": { "type": "string", "minLength": 1 },
+    "workers": { "type": "integer", "minimum": 1 }
+  },
+  "required": ["image", "credentialsSecretRef"],
+  "additionalProperties": false
+}

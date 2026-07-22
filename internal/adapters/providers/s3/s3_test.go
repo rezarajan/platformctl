@@ -89,11 +89,9 @@ func TestValidateSpecNodesTopology(t *testing.T) {
 			t.Errorf("ValidateSpec rejected nodes: %v: %v", n, err)
 		}
 	}
-	cfg := base
-	cfg.Configuration = map[string]any{"rootSecretRef": "root", "nodes": float64(0)}
-	if err := p.ValidateSpec(cfg); err == nil {
-		t.Error("ValidateSpec accepted nodes: 0")
-	}
+	// nodes' own positive-integer shape (nodes: 0 and below) is now
+	// schemas/v1alpha1/fragments/provider/s3.json's job (docs/planning/08
+	// E5) — see cmd/platformctl's negative-test corpus.
 }
 
 // TestValidateSpecNodesRefusesPortPin mirrors redpanda's identical

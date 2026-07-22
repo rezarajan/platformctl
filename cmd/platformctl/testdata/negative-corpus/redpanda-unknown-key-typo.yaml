@@ -1,0 +1,15 @@
+# Class: Provider configuration fragment — unknown-key typo protection
+# (docs/planning/08 E5 Accept: "the single most common user error class").
+# "kafkaPrt" (missing the "o") is silently ignored by the open
+# additionalProperties:true core schema; the redpanda fragment's
+# additionalProperties:false catches it at validate instead of leaving the
+# broker on an unexpected auto-allocated port.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: broker
+spec:
+  type: redpanda
+  runtime: {type: fake}
+  configuration:
+    kafkaPrt: 19092

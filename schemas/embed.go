@@ -40,3 +40,74 @@ var PolicyKindFiles = map[string]map[string]string{
 		"Policy": "policy/v1alpha1/policy.json",
 	},
 }
+
+// FragmentFS embeds the provider-owned JSON-Schema fragments (docs/planning/
+// 08 E5): each fragment validates one open-ended, discriminator-keyed block
+// that the core Kind schemas above deliberately leave open
+// (additionalProperties: true/an open engine block) — Provider
+// spec.configuration (keyed by spec.type), Source/Catalog spec.<engine>
+// (keyed by spec.engine), and Binding spec.options (keyed by
+// "<mode>-<providerType>"). Composed into validation by
+// internal/application/manifest (never by the core schemas above — the core
+// Kind shape and its provider-specific interior stay independently
+// evolvable) and rendered into docs/reference by docsgen. A provider without
+// a registered fragment here simply gets no fragment-level check (the
+// pre-E5 behavior; ValidateSpec/ValidateBindingOptions Go code still runs
+// regardless).
+//
+//go:embed v1alpha1/fragments/provider/*.json v1alpha1/fragments/source/*.json v1alpha1/fragments/catalog/*.json v1alpha1/fragments/binding/*.json
+var FragmentFS embed.FS
+
+// ProviderConfigFragments maps a Provider's spec.type to its
+// spec.configuration fragment's path within FragmentFS. mysql/mariadb (one
+// adapter, two provider types) and s3/minio (ditto) intentionally share one
+// file, exactly like their RegisterProvider constructors in
+// cmd/platformctl/main.go share one constructor. noop/container (test-only,
+// never a "shipped provider" per provider.json's own description) have no
+// fragment and never will.
+var ProviderConfigFragments = map[string]string{
+	"redpanda":    "v1alpha1/fragments/provider/redpanda.json",
+	"postgres":    "v1alpha1/fragments/provider/postgres.json",
+	"mysql":       "v1alpha1/fragments/provider/mysql.json",
+	"mariadb":     "v1alpha1/fragments/provider/mysql.json",
+	"debezium":    "v1alpha1/fragments/provider/debezium.json",
+	"s3":          "v1alpha1/fragments/provider/s3.json",
+	"minio":       "v1alpha1/fragments/provider/s3.json",
+	"s3sink":      "v1alpha1/fragments/provider/s3sink.json",
+	"jdbcsink":    "v1alpha1/fragments/provider/jdbcsink.json",
+	"s3source":    "v1alpha1/fragments/provider/s3source.json",
+	"nessie":      "v1alpha1/fragments/provider/nessie.json",
+	"openlineage": "v1alpha1/fragments/provider/openlineage.json",
+	"proxy":       "v1alpha1/fragments/provider/proxy.json",
+	"prometheus":  "v1alpha1/fragments/provider/prometheus.json",
+	"grafana":     "v1alpha1/fragments/provider/grafana.json",
+	"ingress":     "v1alpha1/fragments/provider/ingress.json",
+	"trino":       "v1alpha1/fragments/provider/trino.json",
+	"wireguard":   "v1alpha1/fragments/provider/wireguard.json",
+}
+
+// SourceEngineFragments maps a Source's spec.engine to its spec.<engine>
+// block's fragment path within FragmentFS.
+var SourceEngineFragments = map[string]string{
+	"postgres": "v1alpha1/fragments/source/postgres.json",
+	"mysql":    "v1alpha1/fragments/source/mysql.json",
+	"mariadb":  "v1alpha1/fragments/source/mariadb.json",
+}
+
+// CatalogEngineFragments maps a Catalog's spec.engine to its spec.<engine>
+// block's fragment path within FragmentFS.
+var CatalogEngineFragments = map[string]string{
+	"nessie": "v1alpha1/fragments/catalog/nessie.json",
+}
+
+// BindingOptionsFragments maps a Binding's "<spec.mode>-<providerRef's
+// resolved spec.type>" to its spec.options fragment's path within
+// FragmentFS. Only fires when providerRef resolves cleanly to a Provider in
+// the same manifest set (an unresolvable ref is left to
+// application/compatibility's own clearer, graph-aware error).
+var BindingOptionsFragments = map[string]string{
+	"cdc-debezium":    "v1alpha1/fragments/binding/cdc-debezium.json",
+	"sink-s3sink":     "v1alpha1/fragments/binding/sink-s3sink.json",
+	"sink-jdbcsink":   "v1alpha1/fragments/binding/sink-jdbcsink.json",
+	"ingest-s3source": "v1alpha1/fragments/binding/ingest-s3source.json",
+}

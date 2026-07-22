@@ -1,0 +1,71 @@
+# Class: Binding options fragment — unknown-key typo protection
+# (docs/planning/08 E5, D4; gate IngestProvider, enabled by the test
+# harness). "convertor" (typo for "converter") is silently ignored by the
+# open core Binding schema; the ingest-s3source fragment's
+# additionalProperties:false catches it at validate.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: broker
+spec:
+  type: redpanda
+  runtime: {type: fake}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lake
+spec:
+  type: s3
+  runtime: {type: fake}
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: src-creds
+spec:
+  backend: env
+  keys: [accessKey, secretKey]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: ssrc
+spec:
+  type: s3source
+  runtime: {type: fake}
+  configuration:
+    image: "datascape-s3source-connect:local"
+    bootstrapServers: "broker:29092"
+    credentialsSecretRef: src-creds
+  secretRefs: [src-creds]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: landing
+spec:
+  providerRef: {name: lake}
+  bucket: landing
+  prefix: raw/
+  format: jsonl
+  deletionPolicy: retain
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: landing-events
+spec:
+  providerRef: {name: broker}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: landing-to-events
+spec:
+  mode: ingest
+  sourceRef: {name: landing}
+  targetRef: {name: landing-events}
+  providerRef: {name: ssrc}
+  options:
+    convertor: "org.apache.kafka.connect.json.JsonConverter"

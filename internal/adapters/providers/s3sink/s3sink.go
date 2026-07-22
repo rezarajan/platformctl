@@ -588,38 +588,23 @@ func connectorConfigDrift(ctx context.Context, req reconciler.Request, urls []st
 // ValidateSpec implements SpecValidator: this provider exists only to run
 // sink connectors, so everything a connector registration needs is required
 // up front — at validate, never as a half-applied platform.
+// ValidateSpec implements reconciler.SpecValidator. image and
+// credentialsSecretRef's own required-ness (docs/planning/08 E5) are now
+// schemas/v1alpha1/fragments/provider/s3sink.json's job, composed into
+// manifest.Validate ahead of this method in every real CLI path (ADR 011's
+// loadAndValidate order) — bootstrapServers stays a Go-side check
+// (graph-inferable from an in-manifest redpanda Provider, docs/planning/08
+// E2, so it must NOT be schema-required), and credentialsSecretRef's
+// spec.secretRefs membership plus the connectPort/workers mutual exclusion
+// remain cross-field checks a static JSON Schema fragment cannot express.
 func (p *Provider) ValidateSpec(cfg provider.Provider) error {
-	if v, _ := cfg.Configuration["image"].(string); v == "" {
-		return fmt.Errorf("spec.configuration.image is required (a Connect image carrying the S3 sink plugin; no stock image ships one)")
-	}
 	if v, _ := cfg.Configuration["bootstrapServers"].(string); v == "" {
 		return fmt.Errorf("spec.configuration.bootstrapServers is required (the Kafka address the Connect worker joins)")
 	}
-	ref, _ := cfg.Configuration["credentialsSecretRef"].(string)
-	if ref == "" {
-		return fmt.Errorf("spec.configuration.credentialsSecretRef is required (the SecretReference carrying object-store credentials)")
-	}
-	if !cfg.HasSecretRef(ref) {
+	if ref, _ := cfg.Configuration["credentialsSecretRef"].(string); ref != "" && !cfg.HasSecretRef(ref) {
 		return fmt.Errorf("configuration.credentialsSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
 	}
-	// workers > 1 (docs/planning/08 C3) requires the HighAvailability gate
-	// (enforced at validate by cmd/platformctl's checkHighAvailabilityGate);
-	// this check only guards the value's own shape, mirroring redpanda's/
-	// debezium's ValidateSpec split between gate-independent shape checks
-	// here and gate enforcement in loadAndValidate.
-	if v, declared := cfg.Configuration["workers"]; declared {
-		n, ok := -1, false
-		switch t := v.(type) {
-		case int:
-			n, ok = t, true
-		case float64:
-			if t == float64(int(t)) {
-				n, ok = int(t), true
-			}
-		}
-		if !ok || n < 1 {
-			return fmt.Errorf("spec.configuration.workers must be a positive integer, got %v", v)
-		}
+	if _, declared := cfg.Configuration["workers"]; declared {
 		// Host-port pin cannot be combined with the replica-set shape:
 		// every ordinal's host port is auto-assigned (connectPorts,
 		// mirroring docs/adr/017 §a.4's identical refusal for redpanda's

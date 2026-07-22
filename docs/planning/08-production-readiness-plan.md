@@ -1727,7 +1727,7 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
 **Stage exit criteria:**
 - [x] `platformctl init cdc-to-lake && platformctl apply` reaches Ready on
       a machine with only Docker installed, no manifest editing.
-- [ ] Every schema-legal misconfiguration class in the negative-test corpus
+- [x] Every schema-legal misconfiguration class in the negative-test corpus
       fails at `validate`, not apply.
 - [ ] A third-party provider can be built from the provider-author guide +
       conformance suite alone (proven by an example provider PR that
@@ -1822,6 +1822,51 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
   generated docs show per-provider option tables; unknown-key warnings on
   provider config blocks (typo protection — the single most common user
   error class).
+- **Done (2026-07-22):** Fragments live under
+  `schemas/v1alpha1/fragments/{provider,source,catalog,binding}/*.json`
+  (embedded via `schemas.FragmentFS` + four discriminator maps), composed
+  into validation in Go
+  (`internal/application/manifest/fragment.go`/`manifest.go`) rather than
+  via `$ref`/`if-then` chains inside the core Kind schemas — the core
+  schemas (`provider.json`/`source.json`/`catalog.json`/`binding.json`) are
+  UNCHANGED, so a provider's fragment and the core Kind shape stay
+  independently evolvable and no adapter package needs to depend on the
+  schema compiler. 16 provider-configuration fragments (every shipped
+  provider type except noop/container, which `provider.json`'s own
+  description already excludes from "shipped"; mysql/mariadb and s3/minio
+  share one file each), 3 Source engine fragments (postgres, mysql,
+  mariadb), 1 Catalog engine fragment (nessie), 4 Binding options fragments
+  (cdc-debezium, sink-s3sink, sink-jdbcsink, ingest-s3source — the shipped
+  `BindingOptionsValidator` implementers). `docsgen` renders a
+  "configuration/engine/options reference" section per Kind from the
+  fragments (`docs/reference/{provider,source,catalog,binding}.md`,
+  `TestGeneratedReferenceInSync` green). `docs/planning/03` §4.1/§5.2/§7.1/
+  §8.1.1 record the layout additively. Redundant standalone shape checks
+  (type/enum/range, no longer reachable via any real CLI path ahead of
+  `SpecValidator`/`BindingOptionsValidator`) removed from redpanda,
+  postgres, mysql, debezium, s3, s3sink, jdbcsink, s3source — cross-field
+  rules a static JSON Schema fragment cannot express (a value that must
+  equal something in a sibling field/array, e.g. every `*SecretRef` ∈
+  `spec.secretRefs`, or `bootstrapServers`'s graph-inferred fallback,
+  docs/planning/08 E2) stay Go-side by design, documented at each call
+  site; the remaining providers' shape checks were left in place as
+  defense-in-depth for direct/non-manifest callers (documented, not an
+  oversight — see TASK_PROGRESS.md for the exact scoping). Negative-test
+  corpus: `cmd/platformctl/testdata/negative-corpus/` (19 fixtures) +
+  `cmd/platformctl/negative_corpus_test.go` (`TestNegativeCorpus`,
+  table-driven, one subtest per fixture) — green. Two real reconcile-time-
+  only gaps found and closed (not manifest bugs; every shipped example/
+  testdata manifest already sets the field, so this is purely tightening,
+  not a behavior change): `Source.spec.{postgres,mysql,mariadb}.database`
+  was previously unchecked at validate, failing only at reconcile
+  (`"Source %q: spec.<engine>.database is required"`); now required by the
+  Source-engine fragments (`source-*-missing-database.yaml` in the
+  corpus). Verified: `gofmt -l .` empty; `go build`/`go vet`, plain and
+  `-tags integration`, clean; unfiltered `go test ./... ; echo
+  true-exit=$?` = 0; every existing testdata/blueprint/example manifest
+  (including `examples/cdc-attendance`, `examples/lakehouse`, and every
+  `internal/application/blueprint` template exercised by
+  `cmd/platformctl/init_test.go`) still validates green, unedited.
 
 ### E6: Provider author contract — guide, conformance suite, exemplars
 

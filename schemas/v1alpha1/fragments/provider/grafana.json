@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/provider/grafana.json",
+  "title": "Provider(type: grafana).spec.configuration",
+  "description": "Shape-only fragment (docs/planning/08 E5): the adminSecretRef-or-nonempty-secretRefs fallback and its spec.secretRefs membership remain SpecValidator cross-field rules; prometheusRef's graph resolution (ambiguous-when-unset-and-multiple) is a compatibility/engine concern, not schema shape.",
+  "type": "object",
+  "properties": {
+    "image": { "type": "string", "minLength": 1 },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "adminSecretRef": { "type": "string", "minLength": 1 },
+    "prometheusRef": { "$ref": "https://datascape.io/schemas/v1alpha1/meta.json#/$defs/nameRef" }
+  },
+  "additionalProperties": false
+}

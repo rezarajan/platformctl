@@ -1,0 +1,22 @@
+# Class: Provider configuration fragment — required field missing.
+# image is unconditionally required (no stock Connect image ships the S3
+# sink plugin, docs/planning/08 D2).
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: sink-creds
+spec:
+  backend: env
+  keys: [accessKey, secretKey]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: sink
+spec:
+  type: s3sink
+  runtime: {type: fake}
+  configuration:
+    bootstrapServers: "broker:29092"
+    credentialsSecretRef: sink-creds
+  secretRefs: [sink-creds]

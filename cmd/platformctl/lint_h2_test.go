@@ -93,6 +93,7 @@ spec:
   engine: postgres
   providerRef: {name: db}
   deletionPolicy: retain
+  postgres: {database: attendance}
 ---
 apiVersion: datascape.io/v1alpha1
 kind: Source
@@ -102,6 +103,7 @@ spec:
   engine: postgres
   providerRef: {name: db}
   deletionPolicy: retain
+  postgres: {database: attendance}
 `,
 			"streams.yaml": `
 apiVersion: datascape.io/v1alpha1
@@ -176,6 +178,7 @@ spec:
   engine: postgres
   providerRef: {name: db1}
   deletionPolicy: retain
+  postgres: {database: attendance}
 ---
 apiVersion: datascape.io/v1alpha1
 kind: Source
@@ -185,6 +188,7 @@ spec:
   engine: postgres
   providerRef: {name: db2}
   deletionPolicy: retain
+  postgres: {database: attendance}
 `,
 			"streams.yaml": `
 apiVersion: datascape.io/v1alpha1
@@ -250,6 +254,7 @@ spec:
   engine: postgres
   providerRef: {name: db}
   deletionPolicy: retain
+  postgres: {database: attendance}
 ---
 apiVersion: datascape.io/v1alpha1
 kind: EventStream

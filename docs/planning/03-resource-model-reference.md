@@ -636,6 +636,23 @@ D10. `warehouseProviderRef` is not removed and remains fully functional on
 its own — it simply becomes redundant once the `Catalog` in question declares
 `warehouseRef`.
 
+### 4.1 `spec.configuration` schema fragments (docs/planning/08 E5)
+
+Each shipped provider type ships a JSON-Schema fragment for its own
+`spec.configuration` shape: `schemas/v1alpha1/fragments/provider/<type>.json`
+(mysql/mariadb and s3/minio — one adapter, two provider types each — share
+one file). `internal/application/manifest` composes the right fragment in
+by `spec.type` during `Validate`, in addition to the core `provider.json`
+schema (which stays open, `additionalProperties: true`, so a new provider
+type never needs a core schema change). The fragment enforces shape only
+(field types, enums, ranges, `additionalProperties: false` for typo
+protection) — cross-field rules that need a value from elsewhere in the
+spec (a `*SecretRef` that must also appear in `spec.secretRefs`,
+`bootstrapServers`'s graph-inferred fallback) remain the provider's
+`SpecValidator` Go code. Generated reference tables: `docs/reference/
+provider.md`'s "Provider configuration reference" section
+(`platformctl docs build`). noop/container (test-only) have no fragment.
+
 ## 5. Kind: `Source`
 
 Represents a data origin. The `spec.engine` discriminator pairs with an engine-named nested
@@ -703,6 +720,20 @@ Source's `connectionRef`; see `examples/lakehouse/sources-and-datasets.yaml`'s
 `orders` Source for the shipped example). See
 `docs/adr/005-database-ha-posture.md` for the full decision and what
 would change if a replication-capable managed mode is ever added.
+
+### 5.2 `spec.<engine>` schema fragments (docs/planning/08 E5)
+
+Each engine's nested block ships a JSON-Schema fragment:
+`schemas/v1alpha1/fragments/source/<engine>.json` (`postgres`, `mysql`,
+`mariadb` today). `manifest.Validate` composes it in by `spec.engine`.
+`database` is required in all three — previously checked only at reconcile
+time (`"Source %q: spec.<engine>.database is required"`), an apply-time-only
+gap this closes (ADR 011). `postgres` additionally allows an optional
+`schema`; `mysql`'s documented `serverId` field (§5's hypothetical example
+above) is accepted for forward compatibility but not read by any provider —
+Debezium derives its own stable replication server id from the connector
+name. Generated reference: `docs/reference/source.md`'s "Source engine
+reference" section.
 
 ## 6. Kind: `EventStream`
 
@@ -1046,6 +1077,25 @@ topic/partition/offset/exception as headers, the only way to diagnose a poison r
 fact). `debezium` never sees `deadLetter` — it is CDC-only (`Source`→`EventStream`), and
 `deadLetter` is refused outside `mode: sink` at validate.
 
+### 7.1 `spec.options` schema fragments (docs/planning/08 E5)
+
+A Binding's `spec.options` fragment is keyed by
+`"<spec.mode>-<providerRef's resolved spec.type>"` — the shape a given
+mode/provider pairing actually accepts, since the same mode makes different
+demands of different providers (mirroring §7's own capability-check split).
+Shipped: `schemas/v1alpha1/fragments/binding/{cdc-debezium,sink-s3sink,
+sink-jdbcsink,ingest-s3source}.json`. `manifest.Validate` resolves
+`providerRef` to a `Provider` in the same manifest set first (an
+unresolvable ref is left to `application/compatibility`'s own graph-aware
+error, never duplicated here) and only then composes the matching fragment
+in, if one is registered — a pairing with no fragment yet is checked solely
+by that provider's `BindingOptionsValidator` Go code. `deadLetter` is
+accepted in every sink-mode fragment (its own `{stream, tolerance}` shape is
+already enforced unconditionally by `binding.FromEnvelope` regardless of
+provider) purely so `additionalProperties: false` doesn't reject it.
+Generated reference: `docs/reference/binding.md`'s "Binding options
+reference" section.
+
 ## 8. Kind: `Dataset`
 
 ```yaml
@@ -1203,6 +1253,14 @@ the referenced `Catalog` itself declares `warehouseRef`: `resolveCatalogFacts`
 now prefers the referenced `Catalog`'s own `warehouseRef` chain first,
 falling back to `warehouseProviderRef`, then to auto-inferring the sole
 S3/MinIO Provider in the namespace, in that order.
+
+### 8.1.1 `spec.<engine>` schema fragments (docs/planning/08 E5)
+
+Exactly like `Source` (§5.2): each catalog engine's nested block ships a
+fragment, `schemas/v1alpha1/fragments/catalog/<engine>.json` (`nessie`
+today — `defaultBranch`, optional, defaults to `"main"`). `manifest.Validate`
+composes it in by `spec.engine`. Generated reference: `docs/reference/
+catalog.md`'s "Catalog engine reference" section.
 
 ## 8.2 Kind: `Connection`
 

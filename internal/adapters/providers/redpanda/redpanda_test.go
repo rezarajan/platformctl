@@ -76,8 +76,11 @@ func TestSchemaRegistryEnabled(t *testing.T) {
 	}
 }
 
-// TestValidateSpecSchemaRegistry: a typo'd schemaRegistry value fails at
-// validate, never as a half-applied platform.
+// TestValidateSpecSchemaRegistry: schemaRegistry's enum shape itself
+// (docs/planning/08 E5) is now schemas/v1alpha1/fragments/provider/
+// redpanda.json's job (see cmd/platformctl's negative-test corpus) — this
+// only covers that ValidateSpec still accepts every legal value (nothing
+// here rejects a legal manifest) and stays a no-op for the field otherwise.
 func TestValidateSpecSchemaRegistry(t *testing.T) {
 	p := New()
 	for _, v := range []string{"enabled", "disabled"} {
@@ -85,10 +88,6 @@ func TestValidateSpecSchemaRegistry(t *testing.T) {
 		if err := p.ValidateSpec(cfg); err != nil {
 			t.Errorf("ValidateSpec rejected valid value %q: %v", v, err)
 		}
-	}
-	cfg := provider.Provider{Configuration: map[string]any{"schemaRegistry": "yes"}}
-	if err := p.ValidateSpec(cfg); err == nil {
-		t.Error("ValidateSpec accepted an invalid schemaRegistry value")
 	}
 	// Unset is valid (registry stays off).
 	if err := p.ValidateSpec(provider.Provider{Configuration: map[string]any{}}); err != nil {
@@ -234,21 +233,18 @@ func TestReconcileBrokerRegistryEnabledPublishesPort(t *testing.T) {
 }
 
 // TestValidateSpecBrokers covers docs/adr/017 §a.4/§a.8's SpecValidator
-// half: brokers must be a positive integer, host-port pins and the schema
-// registry are refused alongside it. (The HighAvailability gate itself is
-// enforced by cmd/platformctl's checkHighAvailabilityGate, not here.)
+// half: host-port pins and the schema registry are refused alongside a
+// declared brokers count. (brokers' own positive-integer shape is now
+// schemas/v1alpha1/fragments/provider/redpanda.json's job, docs/planning/08
+// E5 — see cmd/platformctl's negative-test corpus. The HighAvailability
+// gate itself is enforced by cmd/platformctl's checkHighAvailabilityGate,
+// not here.)
 func TestValidateSpecBrokers(t *testing.T) {
 	p := New()
 	for _, v := range []any{1, 3, float64(3)} {
 		cfg := provider.Provider{Configuration: map[string]any{"brokers": v}}
 		if err := p.ValidateSpec(cfg); err != nil {
 			t.Errorf("ValidateSpec rejected valid brokers %v: %v", v, err)
-		}
-	}
-	for _, v := range []any{0, -1, float64(1.5), "three", true} {
-		cfg := provider.Provider{Configuration: map[string]any{"brokers": v}}
-		if err := p.ValidateSpec(cfg); err == nil {
-			t.Errorf("ValidateSpec accepted invalid brokers %v", v)
 		}
 	}
 	for _, key := range []string{"kafkaPort", "adminPort", "schemaRegistryPort"} {

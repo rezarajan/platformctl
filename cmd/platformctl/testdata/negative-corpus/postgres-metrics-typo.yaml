@@ -1,0 +1,20 @@
+# Class: Provider configuration fragment — enum typo.
+# metrics accepts only "enabled"|"disabled" (docs/planning/08 C9 completion).
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: pg-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: db
+spec:
+  type: postgres
+  runtime: {type: fake}
+  configuration:
+    metrics: "on"
+  secretRefs: [pg-root]

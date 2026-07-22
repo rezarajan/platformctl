@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/source/mysql.json",
+  "title": "Source(engine: mysql).spec.mysql",
+  "description": "Shape-only fragment (docs/planning/08 E5, docs/planning/03 §5): database is required — omitting it previously failed only at reconcile time, a validate-time-completeness gap this fragment closes (ADR 011). serverId is documentation-only (docs/planning/03 §5's hypothetical example); Debezium's own connector derives a stable server id from the connector name (debezium.serverID), never read from this block.",
+  "type": "object",
+  "properties": {
+    "database": { "type": "string", "minLength": 1 },
+    "serverId": { "type": "integer", "minimum": 1 }
+  },
+  "required": ["database"],
+  "additionalProperties": false
+}

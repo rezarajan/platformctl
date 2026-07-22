@@ -1,0 +1,22 @@
+# Class: Catalog engine-block fragment — unknown-key typo protection
+# (docs/planning/08 E5, D10). "defaultBrnach" (typo) is silently ignored by
+# the open core Catalog schema; the nessie engine-block fragment's
+# additionalProperties:false catches it at validate instead of the catalog
+# silently starting on branch "main" when the user meant to override it.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: catalog-svc
+spec:
+  type: nessie
+  runtime: {type: fake}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Catalog
+metadata:
+  name: lakehouse-catalog
+spec:
+  engine: nessie
+  providerRef: {name: catalog-svc}
+  nessie:
+    defaultBrnach: main
