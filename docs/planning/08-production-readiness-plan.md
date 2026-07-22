@@ -1805,6 +1805,26 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
   TUI-confinement archtest proven by a fixture violation.
 - **Gate:** none (file-generation only, the init precedent — recorded in
   ADR 024).
+- **Done (2026-07-22):** `internal/application/compose` (headless engine:
+  LoadTolerant, candidates, patch/collision/idempotency, the five
+  composites, wire, expose); `platformctl add source|pipeline|sink|
+  catalog|monitoring`, `wire <mode>`, `expose <Kind>/<name>`
+  (cmd/platformctl); huh/v2 prompt helpers confined to internal/cliutil,
+  proven by internal/archtest's charm-confinement test (fixture violation,
+  not committed). Owner-scenario integration test
+  (`TestComposeOwnerScenario`) ran live on Docker: init → engine-level
+  reuse-candidate assertion → add pipeline (reusing broker+sink worker,
+  `--sink-prefix other/`) → expose Source/app-db --scheme tcp → validates
+  green → applies to Ready → zero-drift plan → idempotent re-add →
+  destroy clean. Lint-clean is deferred-pending-H1: `internal/application/
+  lint` has not merged into this tree as of this task.
+- **Done addendum (2026-07-22, at the E9→main merge, H1 already merged):**
+  lint-clean closed — the generators gained explicit
+  `deletionPolicy: retain` on emitted Dataset/Source (DL020 flagged them;
+  ADR 024's co-evolution bar makes that a composition bug, fixed in the
+  merge). Verified with the real binary: init → add pipeline (reuse
+  broker + sink, prefix override) → validate green, `lint` reports zero
+  findings, re-add still proposes no changes.
 
 ### E10: Visual composer (optional; spin-off candidate)
 
