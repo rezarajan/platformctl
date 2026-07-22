@@ -383,3 +383,19 @@ static. Dimensions, each producing findings verified before fixing:
   RUNNING-through-loss, worker restarts are reconcile-driven, so fast
   reassignment is the correct posture. Live connect-ha-dlq proof (both
   runtimes) queued.
+- 2026-07-22: FINAL GATE: 24 selected, 18 ran, 4 deduped (targeted
+  proofs honored by the ledger), 2 failed — both root-caused and fixed:
+  (1) TestLockReclaimsAfterExpiry: MY lease renewal made "skip release"
+  no longer model a dead holder (a live holder now correctly renews
+  forever) — the store gained a stopRenewal seam and the test simulates
+  death properly (renewal goroutine gone, lease left to expire).
+  (2) TestIngressTLSEndToEnd: E5's ingress fragment omitted httpsPort —
+  a field exercised ONLY by integration testdata, invisible to E5's
+  examples/blueprints sweep. Fragment fixed; a systematic
+  used-keys-vs-fragments sweep over ALL testdata+examples+blueprints
+  confirmed this was the only gap (the one other hit is the negative
+  corpus's intentional typo fixture doing its job). Both suites re-proof
+  queued. Blind-spot lesson: fragment completeness must be checked
+  against every manifest the repo ships, not just examples — a unit
+  test doing the sweep would make this class impossible (small
+  follow-up, noted).

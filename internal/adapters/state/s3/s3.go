@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -48,6 +49,11 @@ type Store struct {
 	prefix   string
 	holder   string
 	leaseTTL time.Duration
+
+	// renewMu/renewStop track the current lock's renewal loop so release
+	// (and the test seam simulating holder death) can stop it exactly once.
+	renewMu   sync.Mutex
+	renewStop chan struct{}
 }
 
 func New(cfg Config) (*Store, error) {
@@ -214,6 +220,9 @@ func (s *Store) Lock(ctx context.Context) (func() error, error) {
 // fixed-TTL behavior, never anything worse.
 func (s *Store) withRenewal(mine lease) func() error {
 	stop := make(chan struct{})
+	s.renewMu.Lock()
+	s.renewStop = stop
+	s.renewMu.Unlock()
 	go renewLoop(s.leaseTTL/3, stop, func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -237,8 +246,21 @@ func (s *Store) withRenewal(mine lease) func() error {
 	})
 	release := s.releaseFunc(mine)
 	return func() error {
-		close(stop)
+		s.stopRenewal()
 		return release()
+	}
+}
+
+// stopRenewal stops the current renewal loop, exactly once. Split out so
+// the integration test can simulate a DEAD holder — a real death takes
+// the renewal goroutine with it, leaving the lease to expire; skipping
+// release alone no longer models that now that live holders renew.
+func (s *Store) stopRenewal() {
+	s.renewMu.Lock()
+	defer s.renewMu.Unlock()
+	if s.renewStop != nil {
+		close(s.renewStop)
+		s.renewStop = nil
 	}
 }
 

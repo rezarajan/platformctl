@@ -172,7 +172,7 @@ capability-checked at `validate`:
 
 ```
 Source(postgres) ──Binding(cdc)──▶ EventStream ──Binding(sink)──▶ Dataset(bucket/prefix)
-      │                 │               │                │                │
+      │                 │               │                  │                │
   Provider(postgres) Provider(debezium) Provider(redpanda) Provider(s3sink) Provider(minio)
                                                              SecretReference(env) ⤴
 

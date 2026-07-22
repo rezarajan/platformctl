@@ -48,12 +48,13 @@ Shape-only fragment (docs/planning/08 E5): the adminSecretRef-or-nonempty-secret
 
 ### ingress
 
-Shape-only fragment (docs/planning/08 E5). port/adminPort are Docker-runtime-only (ignored on Kubernetes, docs/planning/08 C7) — a runtime-conditional refusal, if ever added, would be a SpecValidator/engine concern, not schema shape.
+Shape-only fragment (docs/planning/08 E5). port/adminPort are Docker-runtime-only (ignored on Kubernetes, docs/planning/08 C7) — a runtime-conditional refusal, if ever added, would be a SpecValidator/engine concern, not schema shape. httpsPort is the TLS listener's host-published port (docs/planning/08 C8) — missed by E5's fragment (found live at the day's closing gate, doc 11: the field is exercised only by the ingress-tls integration scenario, which examples/blueprints validation could not catch).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec.configuration.adminPort` | integer | no |  |
 | `spec.configuration.domain` | string | no |  |
+| `spec.configuration.httpsPort` | integer | no |  |
 | `spec.configuration.image` | string | no |  |
 | `spec.configuration.port` | integer | no |  |
 

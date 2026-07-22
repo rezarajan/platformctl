@@ -1431,6 +1431,13 @@ spec:
   `Insecure` fields every other endpoint already uses — no separate
   rendering path).
 - Gate `TLSTermination` (Alpha, disabled) — doc 04 §12.
+**Fragment note (2026-07-22):** the ingress provider fragment gained
+`httpsPort` (integer, 1–65535 — the TLS listener's host-published port,
+C8), closing an E5 fragment gap found live: the field is exercised only
+by the ingress-tls integration scenario, which the examples/blueprints
+validation sweep could not see. The systematic used-keys-vs-fragment
+sweep that found it also confirmed no other gap exists (doc 11).
+
 ### 8.2.3 Tunnel-mediated connections (the `wireguard` provider, docs/planning/08 D5, docs/adr/023)
 
 A third realization of the `Connection` shape: a `wireguard`-typed

@@ -144,7 +144,7 @@ func TestLockReclaimsAfterExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Lock: %v", err)
 	}
-	_ = unlock // deliberately never called — simulates a holder that died
+	_ = unlock // release is deliberately never called
 
 	if _, err := second.Lock(ctx); err == nil {
 		t.Fatal("second Lock succeeded while first's lease is still live")
@@ -152,7 +152,11 @@ func TestLockReclaimsAfterExpiry(t *testing.T) {
 		t.Errorf("lock-held error does not name the holder: %v", err)
 	}
 
-	time.Sleep(1500 * time.Millisecond) // let first's 1s lease expire
+	// Simulate the holder DYING: a live holder renews its lease (doc 11
+	// production review), so merely skipping release would keep the lease
+	// alive forever — correctly. Death takes the renewal goroutine too.
+	first.stopRenewal()
+	time.Sleep(1500 * time.Millisecond) // let first's 1s lease expire un-renewed
 
 	unlock2, err := second.Lock(ctx)
 	if err != nil {
