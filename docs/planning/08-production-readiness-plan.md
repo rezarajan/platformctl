@@ -2706,6 +2706,34 @@ unless a dependency is stated.
   be unconditional.
 - **Gate:** none (evidence for an existing gate's graduation).
 
+### I7: Connect-worker HA (`workers > 1`) is broken on Kubernetes (I6 finding 1)
+
+- **Size:** M. **Depends:** none. **Why:** found live by I6:
+  `providerkit.ReachableURLs` addresses worker-set members per-ordinal
+  (`runtime.OrdinalName` → `EnsureReachable("<name>-<i>")`), but ordinal-
+  named objects exist only for the StatefulSet shape
+  (`StableIdentity: true` — redpanda brokers, minio nodes). debezium and
+  s3sink `workers > 1` opt into the Deployment shape (ADR 004), which
+  never creates ordinal-named objects — so EVERY ordinal fails to
+  resolve and a Binding on a `workers: 2` Provider FAILS HARD AT APPLY
+  on Kubernetes ("no member of %q (N ordinals) is currently reachable").
+  Docker is unaffected (containers are literally ordinal-named there).
+- **Do (decide first, one ADR-004 addendum):** either (a) ordinal-free
+  addressing for Deployment-shaped sets on K8s — resolve the set's
+  Service/pods instead of synthetic ordinal names (Connect workers are
+  interchangeable; any-member addressing is semantically right for a
+  rebalancing group), or (b) Connect worker sets switch to the
+  StatefulSet shape (heavier: stable identity is not otherwise needed).
+  Lean (a); record the decision. Fix providerkit.ReachableURLs (or a
+  runtime-aware branch in it), add the K8s workers>1 leg to the I6 DLQ
+  test (upgrade it to 2 workers; assert worker-kill → task rebalance —
+  the C3 assertion), extend the connect-ha-dlq suite evidence.
+- **Accept:** the upgraded K8s test green twice (worker kill mid-stream,
+  pipeline continues, DLQ still works); Docker connect-ha-dlq suite
+  unchanged-green; unconditional KubernetesRuntime GA no longer needs a
+  workers>1 carve-out.
+- **Gate:** none (bug fix under existing gates).
+
 
 
 

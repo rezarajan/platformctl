@@ -205,3 +205,41 @@ static. Dimensions, each producing findings verified before fixing:
   k8s_preflight that fails fast with the re-mint pointer when
   KUBECONFIG can't authenticate. Notable non-issue: v1.1.0 tag absent
   (v1.0.0 → v1.2.0) — historical numbering, not an error.
+- 2026-07-22: I4+I5 merged-state evidence COMPLETE: k8s-adapter 363.0s,
+  cdc green (incl. K8s example leg), redpanda green 81.6s — all
+  ledger-recorded at the merged content-state. One load-flake observed
+  and cleared on retry: TestRedpandaHAKubernetesEndToEnd's
+  produce-during-kill window (bounded 90s, NFR-11-compliant shape)
+  exceeded deadline once at host load 3.9 with four agents compiling
+  (failing run 140.7s vs green 81.6s). Not a regression (suite green at
+  both branch states; neither I4's graph edge nor I5's resolution dedup
+  touches this scenario). If it recurs under normal load, review the
+  window budget as its own task — do not ad-hoc bump it.
+- 2026-07-22: I6 reported. Chaos-on-K8s GREEN TWICE (66.6s/63.9s test
+  time) — mid-apply-kill recoverability proven on Kubernetes. MAJOR
+  FINDING (live-reproduced): C3 Connect-worker HA `workers > 1` fails
+  hard at apply on Kubernetes — ordinal addressing vs Deployment shape
+  mismatch (doc 08 I7 sequenced with the fix decision framed as an ADR
+  004 addendum; Docker unaffected). The K8s DLQ test is single-worker
+  by necessity: proves D6 DLQ + Deployment self-heal, NOT C3's
+  second-worker claim. GA brief updated: unconditional KubernetesRuntime
+  GA requires either a workers>1-on-K8s carve-out in release notes or
+  I7 fixed first. DLQ runs 1+2 executing in I6's detached script; merge
+  gate transcribes timings.
+- 2026-07-22: I2 reported — WAVE 2 CODE-COMPLETE (all four agents).
+  Outbound DB TLS shipped: tls.mode require/verify-ca/verify-full +
+  caSecretRef on external Connections (absent = plaintext back-compat);
+  debezium postgres full support, jdbcsink full support both engines,
+  providerkit TLS seam with CA bundles file-mounted into workers;
+  ExternalDatabaseTLS gate (Alpha/enabled). Honest scope boundaries
+  recorded (debezium-mysql Java truststore; admin conns never dial
+  external DBs). e2e green twice incl. wrong-CA negative. All four
+  branches staged behind GPG; merge order on unlock: I1 → I2 → H3 → I6.
+- 2026-07-22: ORCHESTRATOR CWD INCIDENT (recorded for honesty): during
+  the I1 diff review a `cd` into its worktree persisted; the I7/doc-11
+  edits and a COMMIT_MSG.txt overwrite landed in the agent's worktree
+  instead of main. Fully recovered: worktree restored to the agent's
+  state (doc 11 restored, my I7 section stripped, its commit message
+  reconstructed from report+TASK_PROGRESS), edits re-applied on main.
+  No commits were lost (GPG lapse prevented any wrong commit). Lesson:
+  worktree inspection uses `git -C`/absolute paths, never `cd`.
