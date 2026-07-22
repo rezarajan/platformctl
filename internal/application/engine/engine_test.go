@@ -726,7 +726,7 @@ func TestConnectionDialAddressUsesPublishedFactNotResourceName(t *testing.T) {
 	const runtimeObjectName = "orders-db-fwd" // deliberately NOT "orders-db"
 	if _, err := fakeRT.EnsureContainer(ctx, runtime.ContainerSpec{
 		Name:  runtimeObjectName,
-		Image: "alpine/socat:1.8.0.3",
+		Image: "alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e",
 		Ports: []runtime.PortBinding{{HostPort: 15432, ContainerPort: 5432, Audience: runtime.AudienceHost}},
 	}); err != nil {
 		t.Fatalf("EnsureContainer: %v", err)
@@ -997,6 +997,112 @@ func TestResolveMetricsTargetsFromPublishedEndpoints(t *testing.T) {
 	}
 }
 
+// fakePrometheusEndpointProvider stands in for prometheus: its Provider-kind
+// reconcile publishes a "prometheus" endpoint fact and reports type
+// "prometheus" (docs/planning/08 C9 completion) — the type check
+// resolvePrometheusURL uses to auto-infer the sole candidate, mirroring
+// fakeWarehouseProvider's "reports type s3" pattern above.
+type fakePrometheusEndpointProvider struct {
+	noop.Provider
+	internalAddr string
+}
+
+func (p *fakePrometheusEndpointProvider) Type() string { return "prometheus" }
+
+func (p *fakePrometheusEndpointProvider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	st, err := p.Provider.Reconcile(ctx, req)
+	if err != nil || req.Resource.Kind != "Provider" {
+		return st, err
+	}
+	st.ProviderState = map[string]any{
+		endpoint.Key: endpoint.List{{Name: "prometheus", Scheme: "http", Internal: p.internalAddr}}.ToState(),
+	}
+	return st, nil
+}
+
+// fakeGrafanaConsumerProvider stands in for grafana: it records whatever
+// req.PrometheusURL the engine resolved for its own Provider reconcile.
+type fakeGrafanaConsumerProvider struct {
+	noop.Provider
+	gotURL string
+}
+
+func (p *fakeGrafanaConsumerProvider) Type() string { return "fakegrafana" }
+
+func (p *fakeGrafanaConsumerProvider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	if req.Resource.Kind == "Provider" {
+		p.gotURL = req.PrometheusURL
+	}
+	return p.Provider.Reconcile(ctx, req)
+}
+
+// TestResolvePrometheusURLFromPublishedEndpoint covers docs/planning/08 C9
+// completion's grafana wiring: a prometheus Provider reconciled first (its
+// "prometheus" endpoint fact published in state), then a grafana Provider
+// with no explicit configuration.prometheusRef — the engine infers the
+// sole prometheus-typed Provider and resolves its already-published
+// endpoint fact (ADR 015 — never constructed).
+func TestResolvePrometheusURLFromPublishedEndpoint(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	prom := &fakePrometheusEndpointProvider{internalAddr: "http://prom-test:9090"}
+	graf := &fakeGrafanaConsumerProvider{}
+	reg.RegisterProvider("prometheus", func() reconciler.Provider { return prom }, "")
+	reg.RegisterProvider("fakegrafana", func() reconciler.Provider { return graf }, "")
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+
+	eng := newTestEngine(t, reg)
+	infra := []resource.Envelope{
+		envelope("Provider", "prom-test", map[string]any{"type": "prometheus", "runtime": map[string]any{"type": "fake"}}),
+	}
+	applyAll(t, eng, infra)
+
+	all := append(append([]resource.Envelope{}, infra...),
+		envelope("Provider", "graf-test", map[string]any{"type": "fakegrafana", "runtime": map[string]any{"type": "fake"}}))
+	applyAll(t, eng, all)
+
+	if graf.gotURL != "http://prom-test:9090" {
+		t.Errorf("PrometheusURL = %q, want %q", graf.gotURL, "http://prom-test:9090")
+	}
+}
+
+// TestResolvePrometheusURLAmbiguousLeavesUnresolved: two prometheus-typed
+// Providers and no explicit configuration.prometheusRef on the grafana
+// Provider resolves to "" — the engine never guesses between ambiguous
+// candidates (mirrors resolveCatalogFacts's warehouseProviderRef
+// ambiguity rule).
+func TestResolvePrometheusURLAmbiguousLeavesUnresolved(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	prom := &fakePrometheusEndpointProvider{internalAddr: "http://prom-shared:9090"}
+	graf := &fakeGrafanaConsumerProvider{}
+	// Both resources share one registered "prometheus" constructor — the
+	// point of this test is candidate COUNT (two Provider resources
+	// declaring type: prometheus), not per-instance dispatch identity.
+	reg.RegisterProvider("prometheus", func() reconciler.Provider { return prom }, "")
+	reg.RegisterProvider("fakegrafana", func() reconciler.Provider { return graf }, "")
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+
+	eng := newTestEngine(t, reg)
+	infra := []resource.Envelope{
+		envelope("Provider", "prom1", map[string]any{"type": "prometheus", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Provider", "prom2", map[string]any{"type": "prometheus", "runtime": map[string]any{"type": "fake"}}),
+	}
+	applyAll(t, eng, infra)
+
+	all := append(append([]resource.Envelope{}, infra...),
+		envelope("Provider", "graf-test", map[string]any{"type": "fakegrafana", "runtime": map[string]any{"type": "fake"}}))
+	applyAll(t, eng, all)
+
+	if graf.gotURL != "" {
+		t.Errorf("PrometheusURL = %q, want \"\" (ambiguous — two candidates, no explicit ref)", graf.gotURL)
+	}
+}
+
 // fakeCatalogProvider stands in for nessie: its Catalog-kind reconcile
 // publishes an "iceberg-rest" endpoint fact (docs/planning/08 D10).
 type fakeCatalogProvider struct {
@@ -1197,7 +1303,7 @@ func TestExternalConnectionInNetworkReachability(t *testing.T) {
 		eng, fakeRT, envelopes, port := newFixture(t)
 		if _, err := fakeRT.EnsureContainer(context.Background(), runtime.ContainerSpec{
 			Name:     "127.0.0.1",
-			Image:    "postgres:16",
+			Image:    "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20",
 			Networks: []string{"app-net"},
 			Ports:    []runtime.PortBinding{{ContainerPort: port, Audience: runtime.AudienceInternal}},
 		}); err != nil {
@@ -1220,7 +1326,7 @@ func TestExternalConnectionInNetworkReachability(t *testing.T) {
 		// listener setup).
 		if _, err := fakeRT.EnsureContainer(context.Background(), runtime.ContainerSpec{
 			Name:     "127.0.0.1",
-			Image:    "postgres:16",
+			Image:    "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20",
 			Networks: []string{"app-net"},
 		}); err != nil {
 			t.Fatalf("EnsureContainer: %v", err)

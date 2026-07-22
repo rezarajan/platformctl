@@ -451,3 +451,49 @@ func TestPrometheusInventorySnippetIsValidYAML(t *testing.T) {
 		t.Errorf("prometheus.ParseScrapeConfig rejected the rendered snippet: %v", err)
 	}
 }
+
+// TestGatherToolFactsFallsBackToInternalForMetrics covers docs/planning/08
+// C9 completion: the postgres/mysql exporter sidecars publish their
+// "metrics" endpoint fact as Audience: internal — no ep.Host at all, by
+// design (the exporter is never host-published). gatherToolFacts's
+// blanket "skip when ep.Host == \"\"" rule (every other endpoint kind)
+// would otherwise silently drop them from `inventory --for prometheus`;
+// the metrics case falls back to ep.Internal instead, so a bring-your-own
+// Prometheus joined to the same runtime network can still be configured
+// against them.
+func TestGatherToolFactsFallsBackToInternalForMetrics(t *testing.T) {
+	pgExporter := resource.Envelope{}
+	pgExporter.Kind = "Provider"
+	pgExporter.Metadata.Name = "local-pg"
+	pgExporter.Spec = map[string]any{"type": "postgres", "runtime": map[string]any{"type": "docker"}}
+
+	st := state.State{Version: state.CurrentVersion, Resources: map[resource.Key]state.ResourceState{
+		pgExporter.Key(): {Provider: map[string]any{
+			"endpoints": []any{
+				// No "host" key at all — the exact shape an Audience:
+				// internal-only fact publishes (endpoint.List.ToState()
+				// omits empty Host entirely).
+				map[string]any{"name": "metrics", "scheme": "http", "internal": "http://local-pg-exporter:9187/metrics", "insecure": true},
+			},
+		}},
+	}}
+
+	f := gatherToolFacts([]resource.Envelope{pgExporter}, st, nil)
+	if len(f.metrics) != 1 {
+		t.Fatalf("metrics facts = %+v, want exactly 1 (fell back to ep.Internal)", f.metrics)
+	}
+	if f.metrics[0].host != "local-pg-exporter:9187" {
+		t.Errorf("metrics[0].host = %q, want %q", f.metrics[0].host, "local-pg-exporter:9187")
+	}
+	if f.metrics[0].path != "/metrics" {
+		t.Errorf("metrics[0].path = %q, want %q", f.metrics[0].path, "/metrics")
+	}
+
+	var buf bytes.Buffer
+	if err := renderToolConfig(&buf, "prometheus", f); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "local-pg-exporter:9187") {
+		t.Errorf("rendered scrape config missing the internal-only exporter target:\n%s", buf.String())
+	}
+}

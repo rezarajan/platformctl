@@ -1,0 +1,141 @@
+# docs/planning/08 C9 completion integration scenario, full tier:
+# plus-prometheus/manifests.yaml's redpanda+EventStream+minio+postgres+
+# mysql+prometheus, plus the grafana Provider added on top — applied
+# against the SAME state file as the prior two tiers. By the time this
+# apply's engine reconciles the grafana Provider, the prometheus Provider's
+# own "prometheus" endpoint fact is already published in state from the
+# prior plus-prometheus/ apply, so Request.PrometheusURL resolves and the
+# datasource is provisioned on grafana's first-ever reconcile — the same
+# infra-before-consumer sequencing testdata/prometheus-scenario's own
+# infra/combined split uses.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: mon-minio-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: mon-pg-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: mon-mysql-root
+spec:
+  backend: env
+  keys: [password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mon-redpanda
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-mon-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19430
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: mon-events
+spec:
+  providerRef:
+    name: mon-redpanda
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mon-minio
+spec:
+  type: minio
+  runtime:
+    type: docker
+    network: datascape-mon-net
+  configuration:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    port: 19431
+    rootSecretRef: mon-minio-root
+  secretRefs: [mon-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mon-postgres
+spec:
+  type: postgres
+  runtime:
+    type: docker
+    network: datascape-mon-net
+  configuration:
+    version: "16"
+    port: 19432
+    superuserSecretRef: mon-pg-admin
+    metrics: enabled
+  secretRefs: [mon-pg-admin]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mon-mysql
+spec:
+  type: mysql
+  runtime:
+    type: docker
+    network: datascape-mon-net
+  configuration:
+    version: "8.4"
+    port: 19433
+    rootSecretRef: mon-mysql-root
+    metrics: enabled
+  secretRefs: [mon-mysql-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mon-prometheus
+spec:
+  type: prometheus
+  runtime:
+    type: docker
+    network: datascape-mon-net
+  configuration:
+    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
+    port: 19434
+    scrapeInterval: "2s"
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: mon-grafana-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mon-grafana
+spec:
+  type: grafana
+  runtime:
+    type: docker
+    network: datascape-mon-net
+  configuration:
+    port: 19435
+    prometheusRef:
+      name: mon-prometheus
+  secretRefs: [mon-grafana-admin]

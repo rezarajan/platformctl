@@ -154,6 +154,50 @@ func ensureReplicationUser(ctx context.Context, adminConn, user, pass string) er
 	return nil
 }
 
+// ensureMonitoringUser provisions (or repassword-syncs) the dedicated
+// least-privilege monitoring user the mysqld_exporter sidecar
+// authenticates as (docs/planning/08 C9 completion) — mysqld_exporter's own
+// documented minimum grant set (PROCESS, REPLICATION CLIENT, SELECT on
+// *.*), deliberately narrower than the replication user's REPLICATION
+// SLAVE grant. This credential is entirely platform-generated (never a
+// user-declared SecretReference), so no try-desired/try-previous rotation
+// state machine is needed the way the root credential's externally-supplied
+// value requires — the root connection can simply (re)set it
+// unconditionally.
+func ensureMonitoringUser(ctx context.Context, adminConn, user, pass string) error {
+	db, err := open(adminConn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	account := quoteIdent(user) + "@'%'"
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE USER IF NOT EXISTS %s IDENTIFIED BY %s", account, quoteString(pass))); err != nil {
+		return fmt.Errorf("create monitoring user %q: %w", user, err)
+	}
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("ALTER USER %s IDENTIFIED BY %s", account, quoteString(pass))); err != nil {
+		return fmt.Errorf("update monitoring user %q: %w", user, err)
+	}
+	if _, err := db.ExecContext(ctx, "GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO "+account); err != nil {
+		return fmt.Errorf("grant monitoring privileges to %q: %w", user, err)
+	}
+	return nil
+}
+
+// parseMyCnfPassword extracts the "password = ..." value from a [client]
+// my.cnf stanza — the exact, minimal format ensureExporter itself writes
+// (metrics.go), so this only ever needs to parse this package's own output
+// back (liveMonitorPassword's read-back-for-idempotency call site), not
+// arbitrary my.cnf syntax.
+func parseMyCnfPassword(cnf string) string {
+	const prefix = "password = "
+	for _, line := range strings.Split(cnf, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix)
+		}
+	}
+	return ""
+}
+
 func verifyBinlog(ctx context.Context, adminConn string) error {
 	db, err := open(adminConn)
 	if err != nil {

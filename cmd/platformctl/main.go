@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/rezarajan/platformctl/internal/adapters/providers/debezium"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/grafana"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/ingress"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/jdbcsink"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/mysql"
@@ -128,9 +129,9 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// intent).
 	gates.Register("BackupRestore", featuregate.Alpha, false)
 	// docs/planning/08 C9: the prometheus provider (managed monitoring
-	// stack). Alpha/disabled — core slice only (postgres/mysql sidecar
-	// exporters and a standalone grafana provider are explicit deferrals,
-	// see the C9 status note).
+	// stack), plus its C9-completion follow-up — postgres/mysql metrics
+	// exporter sidecars and the grafana provider, all gated by this same
+	// gate (it guards the monitoring stack as a class). Alpha/disabled.
 	gates.Register("MonitoringStackProvider", featuregate.Alpha, false)
 	// docs/planning/08 C7, docs/adr/018: the ingress provider (HTTP routing
 	// on the Connection seam). Alpha/disabled — a new provider exposing a
@@ -194,6 +195,11 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	reg.RegisterProvider("openlineage", func() reconciler.Provider { return openlineage.New() }, "OpenLineageProvider")
 	reg.RegisterProvider("proxy", func() reconciler.Provider { return proxy.New() }, "ProxyProvider")
 	reg.RegisterProvider("prometheus", func() reconciler.Provider { return prometheus.New() }, "MonitoringStackProvider")
+	// docs/planning/08 C9 completion: the grafana provider reuses the
+	// existing MonitoringStackProvider gate rather than a new one — it
+	// gates the monitoring stack as a class, not each provider in it
+	// separately.
+	reg.RegisterProvider("grafana", func() reconciler.Provider { return grafana.New() }, "MonitoringStackProvider")
 	reg.RegisterProvider("ingress", func() reconciler.Provider { return ingress.New() }, "IngressProvider")
 	reg.RegisterProvider("trino", func() reconciler.Provider { return trino.New() }, "TrinoProvider")
 	reg.RegisterProvider("wireguard", func() reconciler.Provider { return wireguard.New() }, "TunnelProvider")

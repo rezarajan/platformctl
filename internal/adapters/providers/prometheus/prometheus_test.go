@@ -130,7 +130,7 @@ func TestValidateSpec(t *testing.T) {
 		{"valid scrapeInterval", map[string]any{"scrapeInterval": "30s"}, false},
 		{"empty scrapeInterval", map[string]any{"scrapeInterval": ""}, true},
 		{"wrong type scrapeInterval", map[string]any{"scrapeInterval": 30}, true},
-		{"valid image", map[string]any{"image": "prom/prometheus:v2.55.1"}, false},
+		{"valid image", map[string]any{"image": "prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3"}, false},
 		{"empty image", map[string]any{"image": ""}, true},
 	}
 	p := New()

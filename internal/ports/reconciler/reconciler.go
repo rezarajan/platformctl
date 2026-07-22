@@ -111,6 +111,19 @@ type Request struct {
 	// referenced Catalog/warehouse Provider has not published its endpoint
 	// yet in this state.
 	CatalogFacts *CatalogFacts
+	// PrometheusURL is the resolved prometheus Provider's own published
+	// "prometheus" endpoint fact's in-network address (docs/planning/08 C9
+	// completion) — a grafana Provider's datasource-provisioning input,
+	// resolved the same published-fact-only way SchemaRegistryURL is (ADR
+	// 015): the grafana provider never constructs this address itself. The
+	// engine resolves it from an explicit configuration.prometheusRef, or
+	// (when unset) the sole prometheus-typed Provider in the manifest's
+	// namespace — mirroring resolveCatalogFacts's warehouseProviderRef
+	// inference. Empty when unresolved (0 or >1 candidates with no explicit
+	// ref, or the referenced/inferred Provider has not yet published its
+	// endpoint), Resource.Kind != "Provider", or the request is not for a
+	// provider that reads it.
+	PrometheusURL string
 }
 
 // CatalogFacts is Request.CatalogFacts's payload — see its doc comment.

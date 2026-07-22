@@ -75,6 +75,40 @@ func ensureSuperuserCredentials(ctx context.Context, adminConn, user, pass strin
 	return nil
 }
 
+// ensureMonitoringUser provisions (or repassword-syncs) the dedicated
+// least-privilege monitoring role the postgres_exporter sidecar
+// authenticates as (docs/planning/08 C9 completion) — `pg_monitor`, the
+// predefined role (PG10+) granting SELECT on monitoring views/functions
+// with no table data access and no superuser bit, deliberately narrower
+// than the replication role's pg_read_all_data. The admin connection can
+// simply (re)set the password unconditionally: this credential is entirely
+// platform-generated (never a user-declared SecretReference), so no
+// try-desired/try-previous rotation state machine is needed the way the
+// superuser's externally-supplied credential requires.
+func ensureMonitoringUser(ctx context.Context, adminConn, user, pass string) error {
+	c, err := connect(ctx, adminConn)
+	if err != nil {
+		return err
+	}
+	defer c.Close(ctx)
+	var count int
+	if err := c.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname = $1`, user).Scan(&count); err != nil {
+		return fmt.Errorf("check monitoring role %q: %w", user, err)
+	}
+	quotedUser := pgx.Identifier{user}.Sanitize()
+	if count == 0 {
+		if _, err := c.Exec(ctx, fmt.Sprintf(`CREATE ROLE %s WITH LOGIN PASSWORD '%s'`, quotedUser, escapeLiteral(pass))); err != nil {
+			return fmt.Errorf("create monitoring role %q: %w", user, err)
+		}
+	} else if _, err := c.Exec(ctx, fmt.Sprintf(`ALTER ROLE %s WITH LOGIN PASSWORD '%s'`, quotedUser, escapeLiteral(pass))); err != nil {
+		return fmt.Errorf("update monitoring role %q: %w", user, err)
+	}
+	if _, err := c.Exec(ctx, fmt.Sprintf(`GRANT pg_monitor TO %s`, quotedUser)); err != nil {
+		return fmt.Errorf("grant pg_monitor to %q: %w", user, err)
+	}
+	return nil
+}
+
 func ensureDatabase(ctx context.Context, adminConn, name string) error {
 	exists, err := databaseExists(ctx, adminConn, name)
 	if err != nil {

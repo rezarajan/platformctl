@@ -1140,6 +1140,80 @@ Remedies:
 - platformctl drift <path> to see the exact observed vs. wanted catalog config.
 - platformctl apply <path> to regenerate and reconcile it.
 
+## metrics-exporter
+
+### `ExporterHealthy` (reason)
+
+The opt-in (configuration.metrics: enabled) postgres_exporter/mysqld_exporter sidecar container is up and healthy alongside its database instance.
+
+Likely causes:
+
+- N/A — this reason indicates a healthy or successful state, not a problem.
+
+Remedies:
+
+- None required.
+
+### `ExporterUnhealthy` (reason)
+
+configuration.metrics is enabled but the exporter sidecar container is missing or unhealthy — the database instance itself may still be fine (its own health is reported separately as InstanceHealthy/InstanceUnhealthy).
+
+Likely causes:
+
+- The exporter container was removed or stopped out-of-band.
+- The exporter cannot authenticate: the platform-managed monitoring role/user was altered or dropped directly in the database.
+- The exporter container is still starting (can be transient just after apply).
+
+Remedies:
+
+- docker logs <instance>-exporter for the exporter's own failure detail.
+- platformctl apply <path> to recreate the exporter and re-provision its monitoring role.
+
+## grafana
+
+### `DatasourceUnhealthy` (reason)
+
+Grafana is up but its provisioned Prometheus datasource's own health check (Grafana's /api/datasources/uid/:uid/health) failed — Grafana cannot reach the prometheus Provider it was provisioned to query.
+
+Likely causes:
+
+- The prometheus Provider's container is down or unreachable on the shared network.
+- The prometheus Provider was re-created at a different address after grafana's last reconcile.
+
+Remedies:
+
+- platformctl status <path> to check the prometheus Provider's own Ready condition first.
+- platformctl apply <path> to re-provision the datasource from the currently-published endpoint fact.
+
+### `DashboardMissing` (reason)
+
+The starter dashboard's file-based provisioning is expected but Grafana's own API does not report it (GET /api/dashboards/uid/... is not 200) — provisioning failed or the dashboard was removed out-of-band.
+
+Likely causes:
+
+- The dashboard was deleted through Grafana's UI/API (provisioned dashboards can still be removed by an admin).
+- Grafana's provisioning scan failed at startup (malformed provisioning file — should not happen with generated content).
+
+Remedies:
+
+- docker logs <grafana-container> for provisioning errors.
+- platformctl apply <path> to re-reconcile; if the file content changed, the container is recreated with corrected provisioning.
+
+### `PrometheusUnresolved` (reason)
+
+No prometheus Provider's published endpoint fact could be resolved for grafana's datasource — configuration.prometheusRef is unset with zero or more than one candidate prometheus Provider in the namespace, or the resolved one has not reconciled/published its endpoint yet. The same next-apply-converges caveat as prometheus's own scrape targets: no graph edge orders grafana after prometheus.
+
+Likely causes:
+
+- The prometheus Provider has not been applied yet (fresh single apply — converges on the next apply).
+- More than one prometheus Provider exists and configuration.prometheusRef does not name one explicitly.
+- No prometheus Provider exists in the manifest at all.
+
+Remedies:
+
+- platformctl apply <path> again once the prometheus Provider is Ready (its endpoint fact publishes on its first successful reconcile).
+- Set configuration.prometheusRef: {name: <prometheus-provider>} to disambiguate when several exist.
+
 ## prometheus
 
 ### `ScrapeTargetsIncomplete` (reason)

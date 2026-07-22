@@ -1,0 +1,105 @@
+# docs/planning/08 C9 completion integration scenario, infra tier: a
+# redpanda broker (+ EventStream), a minio store, and postgres+mysql
+# Providers with configuration.metrics: enabled (the exporter sidecars) —
+# each publishing a "metrics" endpoint fact (docs/planning/08 C9). Applied
+# first so those facts are already in state by the time plus-prometheus/
+# (same state file) reconciles the prometheus Provider, and full/ (same
+# state file again) reconciles grafana on top of that — mirroring the
+# recorded convergence caveat (no graph edge orders these Providers
+# relative to each other) the same way testdata/prometheus-scenario's own
+# infra/combined split does. Distinct ports from every other scenario
+# (19430-19435).
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: mon-minio-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: mon-pg-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: mon-mysql-root
+spec:
+  backend: env
+  keys: [password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mon-redpanda
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-mon-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19430
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: mon-events
+spec:
+  providerRef:
+    name: mon-redpanda
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mon-minio
+spec:
+  type: minio
+  runtime:
+    type: docker
+    network: datascape-mon-net
+  configuration:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    port: 19431
+    rootSecretRef: mon-minio-root
+  secretRefs: [mon-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mon-postgres
+spec:
+  type: postgres
+  runtime:
+    type: docker
+    network: datascape-mon-net
+  configuration:
+    version: "16"
+    port: 19432
+    superuserSecretRef: mon-pg-admin
+    metrics: enabled
+  secretRefs: [mon-pg-admin]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mon-mysql
+spec:
+  type: mysql
+  runtime:
+    type: docker
+    network: datascape-mon-net
+  configuration:
+    version: "8.4"
+    port: 19433
+    rootSecretRef: mon-mysql-root
+    metrics: enabled
+  secretRefs: [mon-mysql-root]

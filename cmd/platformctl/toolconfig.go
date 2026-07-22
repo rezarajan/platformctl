@@ -100,6 +100,36 @@ func gatherToolFacts(envelopes []resource.Envelope, st state.State, creds map[re
 			}
 		case "Provider":
 			for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
+				if ep.Name == "metrics" {
+					// docs/planning/08 C9 completion: the postgres/mysql
+					// exporter sidecars publish Audience: internal only (no
+					// ep.Host at all, by design — they are not meant to be
+					// host-reachable) — falls back to ep.Internal so
+					// `inventory --for prometheus` still surfaces them,
+					// rather than silently dropping every internal-only
+					// target the way the blanket ep.Host == "" skip below
+					// would. This is still a legitimate "bring-your-own
+					// Prometheus" target: a Prometheus container joined to
+					// the same runtime network (not necessarily this host)
+					// can dial the in-network address directly. ep.Host
+					// carries a full URL (scheme + host:port + path, unlike
+					// every other endpoint name below's bare "host:port"),
+					// and so does ep.Internal (see redpanda/s3/postgres/
+					// mysql's own "metrics" endpoint construction) — split
+					// it into prometheus.ScrapeTarget's shape.
+					addr := ep.Host
+					if addr == "" {
+						addr = ep.Internal
+					}
+					if u, err := url.Parse(addr); err == nil && u.Host != "" {
+						path := u.Path
+						if path == "" {
+							path = "/metrics"
+						}
+						f.metrics = append(f.metrics, metricsEndpoint{component: e.Key(), host: u.Host, path: path})
+					}
+					continue
+				}
 				if ep.Host == "" {
 					continue
 				}
@@ -118,18 +148,6 @@ func gatherToolFacts(envelopes []resource.Envelope, st state.State, creds map[re
 					dbIndex[e.Key()] = len(f.mysql)
 					dbFamily[e.Key()] = "mysql"
 					f.mysql = append(f.mysql, dbEndpoint{component: e.Key(), host: ep.Host, credsRef: creds[e.Key()]})
-				case "metrics":
-					// ep.Host carries a full URL (scheme + host:port + path,
-					// unlike every other endpoint name above's bare
-					// "host:port") — split it into prometheus.ScrapeTarget's
-					// shape.
-					if u, err := url.Parse(ep.Host); err == nil && u.Host != "" {
-						path := u.Path
-						if path == "" {
-							path = "/metrics"
-						}
-						f.metrics = append(f.metrics, metricsEndpoint{component: e.Key(), host: u.Host, path: path})
-					}
 				}
 			}
 		}
@@ -385,15 +403,21 @@ func renderKafka(w io.Writer, f toolFacts) {
 
 // renderPrometheus renders a scrape_configs snippet for a bring-your-own
 // Prometheus (docs/planning/08 C9) — one job per Provider's published
-// "metrics" endpoint, from a host-published address (this Prometheus is
-// assumed to run outside the platform's own runtime network, the same
-// audience every other renderer in this file targets). It calls the exact
-// same prometheus.RenderScrapeConfig the managed `prometheus` provider
-// itself uses to generate its own in-network scrape config — "the same
-// facts" means literally the same renderer, not two hand-synced templates.
+// "metrics" endpoint, preferring a host-published address (this Prometheus
+// is assumed to usually run outside the platform's own runtime network,
+// the same audience every other renderer in this file targets) but
+// falling back to the in-network address for an Audience: internal-only
+// fact (docs/planning/08 C9 completion: the postgres/mysql exporter
+// sidecars never publish a host address at all) — still dialable by a
+// bring-your-own Prometheus joined to the same runtime network, just not
+// from an arbitrary external host (gatherToolFacts's fallback). It calls
+// the exact same prometheus.RenderScrapeConfig the managed `prometheus`
+// provider itself uses to generate its own in-network scrape config — "the
+// same facts" means literally the same renderer, not two hand-synced
+// templates.
 func renderPrometheus(w io.Writer, f toolFacts) {
 	note(w, "prometheus.yml scrape_configs — bring-your-own Prometheus.",
-		"Targets are host-published addresses, reachable from wherever this Prometheus runs; the managed `prometheus` provider (gate MonitoringStackProvider) generates the in-network equivalent of this same config from the same facts.")
+		"Targets are host-published addresses where available; an Audience: internal-only target (e.g. a postgres/mysql metrics exporter) renders its in-network address instead — reachable only by a Prometheus joined to the same runtime network, not an arbitrary external host. The managed `prometheus` provider (gate MonitoringStackProvider) generates the in-network equivalent of this same config from the same facts.")
 	if len(f.metrics) == 0 {
 		note(w, "no metrics endpoints recorded — apply the platform first")
 		return

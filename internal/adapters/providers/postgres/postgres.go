@@ -29,7 +29,7 @@ var catalog = versionprofile.Catalog{
 	Profiles: map[string]versionprofile.Profile{
 		"16": {Version: "16", Image: "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20", DataMount: "/var/lib/postgresql/data"},
 		"17": {Version: "17", Image: "postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d", DataMount: "/var/lib/postgresql/data"},
-		"18": {Version: "18", Image: "postgres:18@sha256:32ca0af8e77bfb8c6610c488e4691f83f972a3e9e64d3b02facf3ab111ad5500", DataMount: "/var/lib/postgresql"},
+		"18": {Version: "18", Image: "postgres:18@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a", DataMount: "/var/lib/postgresql"},
 	},
 }
 
@@ -176,6 +176,20 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 		return st, err
 	}
 
+	// Metrics sidecar (docs/planning/08 C9 completion): opt-in, additive —
+	// absent/disabled leaves everything above byte-for-byte unchanged. A
+	// second, independent container (ADR 004), never a replica.
+	endpoints := endpoint.List{
+		{Name: "postgres", Scheme: "postgres", Host: ctrState.HostAddr(5432), Internal: name + ":5432", Insecure: true},
+	}
+	if metricsEnabled(cfg) {
+		metricsEP, err := ensureExporter(ctx, rt, req.Provider.Metadata.Namespace, network, name, user, pass)
+		if err != nil {
+			return st, err
+		}
+		endpoints = append(endpoints, metricsEP)
+	}
+
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonInstanceHealthy}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
@@ -187,9 +201,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 		"containerId":  ctrState.ID,
 		"hostAddr":     hostAddr,
 		"internalAddr": internalAddr,
-		endpoint.Key: endpoint.List{
-			{Name: "postgres", Scheme: "postgres", Host: hostAddr, Internal: internalAddr, Insecure: true},
-		}.ToState(),
+		endpoint.Key:   endpoints.ToState(),
 	}
 	return st, nil
 }
@@ -320,6 +332,11 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 	name := naming.RuntimeObjectName(req.Provider)
 	switch res.Kind {
 	case "Provider":
+		// Removed unconditionally — Remove is idempotent-to-absence, and
+		// the exporter may never have existed (metrics never enabled).
+		if err := rt.Remove(ctx, exporterName(name)); err != nil {
+			return err
+		}
 		if err := rt.Remove(ctx, name); err != nil {
 			return err
 		}
@@ -382,6 +399,11 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		if !found || !ctrState.Healthy {
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonInstanceUnhealthy}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonInstanceUnhealthy}, now)
+			return st, nil
+		}
+		if metricsEnabled(cfg) && !probeExporter(ctx, rt, name) {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonExporterUnhealthy}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonExporterUnhealthy}, now)
 			return st, nil
 		}
 		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonInstanceHealthy}, now)
@@ -460,6 +482,12 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 	}
 	if ref, _ := cfg.Configuration["replicationSecretRef"].(string); ref != "" && !cfg.HasSecretRef(ref) {
 		return fmt.Errorf("configuration.replicationSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
+	}
+	if v, ok := cfg.Configuration["metrics"]; ok {
+		s, _ := v.(string)
+		if s != "enabled" && s != "disabled" {
+			return fmt.Errorf("spec.configuration.metrics must be \"enabled\" or \"disabled\", got %v", v)
+		}
 	}
 	return catalog.ValidateConfig(cfg.Configuration)
 }

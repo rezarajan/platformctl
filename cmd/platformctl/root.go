@@ -265,6 +265,33 @@ func (a *app) checkSchemaRegistryGate(envelopes []resource.Envelope) error {
 	return nil
 }
 
+// checkMonitoringMetricsGate covers docs/planning/08 C9's completion:
+// MonitoringStackProvider is Alpha/disabled by default, so a postgres/mysql/
+// mariadb Provider declaring configuration.metrics: enabled (the exporter
+// sidecar) must fail fast at validate with the gate's standard disabled
+// message — exactly like checkSchemaRegistryGate. The grafana provider
+// itself needs no separate check here: it is registered under this same
+// gate in application/registry, so Registry.Provider("grafana") already
+// enforces it at the normal provider-construction choke point.
+func (a *app) checkMonitoringMetricsGate(envelopes []resource.Envelope) error {
+	for _, e := range envelopes {
+		if e.Kind != "Provider" {
+			continue
+		}
+		t, _ := e.Spec["type"].(string)
+		if t != "postgres" && t != "mysql" && t != "mariadb" {
+			continue
+		}
+		cfg, _ := e.Spec["configuration"].(map[string]any)
+		if v, _ := cfg["metrics"].(string); v == "enabled" {
+			if err := a.gates.Require("MonitoringStackProvider"); err != nil {
+				return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("%s declares spec.configuration.metrics: enabled: %w", e.Key(), err))
+			}
+		}
+	}
+	return nil
+}
+
 // replicaFieldsGuardedByHighAvailability lists every
 // spec.configuration.<field> that opts a Provider into ADR 004's
 // Replicas > 1 shape and therefore requires the HighAvailability gate:
@@ -372,6 +399,9 @@ func (a *app) loadAndValidate(path string) ([]resource.Envelope, *graph.Graph, e
 		return nil, nil, err
 	}
 	if err := a.checkHighAvailabilityGate(envelopes); err != nil {
+		return nil, nil, err
+	}
+	if err := a.checkMonitoringMetricsGate(envelopes); err != nil {
 		return nil, nil, err
 	}
 	if err := a.kubernetesPreflight(envelopes); err != nil {
