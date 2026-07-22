@@ -1,0 +1,122 @@
+# D5 integration scenario (docs/planning/08 D5, docs/adr/023): a CDC Binding
+# against a database that lives in an isolated "VPC" Docker network,
+# reachable only through a wireguard-realized Connection. The VPC network,
+# the WireGuard responder (the VPC's own gateway), and the database itself
+# are raw, unmanaged test fixtures stood up by
+# wireguard_integration_test.go — nothing in this file creates them; see
+# that test for the topology. Host ports: Kafka 19199, Connect 18189,
+# tunnel Connection 25599.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: wg-tunnel-key
+spec:
+  backend: env
+  keys: [privateKey]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: wg-db-creds
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: wg-tunnel
+spec:
+  type: wireguard
+  runtime:
+    type: docker
+    network: datascape-wg-net
+  secretRefs: [wg-tunnel-key]
+  configuration:
+    privateKeySecretRef: wg-tunnel-key
+    peerNetwork: datascape-wg-transit
+    peerPublicKey: 8GY91qw8rgMR8ffTDuhSccmObRV4GkNMT2YbqYXLHwI=
+    peerEndpoint: wg-responder:51820
+    address: 10.99.0.2/32
+    allowedIPs: [10.13.13.10/32]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: wg-orders-db-conn
+spec:
+  providerRef:
+    name: wg-tunnel
+  scheme: tcp
+  port: 25599
+  target: 10.13.13.10:5432
+  secretRef:
+    name: wg-db-creds
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-wg-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-wg-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19199
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-wg-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape-wg-net
+  configuration:
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
+    connectPort: 18189
+    bootstrapServers: datascape-wg-rp:29092
+  secretRefs: [wg-db-creds]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: wg-orders-db
+spec:
+  engine: postgres
+  external: true
+  connectionRef:
+    name: wg-orders-db-conn
+  postgres:
+    database: ordersdb
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: wg-orders-events
+spec:
+  providerRef:
+    name: datascape-wg-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: wg-orders-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: wg-orders-db
+  targetRef:
+    name: wg-orders-events
+  providerRef:
+    name: datascape-wg-dbz
+  options:
+    tables: [orders]
+    snapshotMode: initial
