@@ -1,38 +1,31 @@
 // Package wireguard realizes managed Connection resources whose upstream is
 // only reachable through a WireGuard tunnel (docs/adr/002's addendum,
-// docs/adr/023). Provider(type: wireguard) is the tunnel *initiator*: one
-// container joining configuration.peerNetwork, dialing an externally
+// docs/adr/023). Provider(type: wireguard) anchors the shared network and
+// configuration defaults; each Connection realized by it gets its own
+// tunnel container (one per Connection, mirroring proxy's "one socat
+// forwarder container per route" — every existing ConnectionCapableProvider
+// in this codebase creates one runtime object named after the Connection
+// itself, never after the Provider, and other providers (debezium's
+// Connection-address resolution) depend on that naming to work at all — see
+// this file's reconcileConnection doc comment): the container is the tunnel
+// *initiator*, joining configuration.peerNetwork and dialing an externally
 // operated WireGuard peer (the "responder" — never provisioned by this
-// provider; docs/adr/023 Decision 7), and routing configuration.allowedIPs
+// provider; docs/adr/023 Decision 7), routing configuration.allowedIPs
 // through it. NET_ADMIN is required: the container creates and manages its
 // own wg0 interface and iptables NAT/forward rules — a real, broad
 // capability grant, scoped by the ordinary boundary every container
 // capability grant in this codebase relies on: a Linux network namespace,
 // one per container (docs/adr/023 Decision 2).
 //
-// A managed Connection realized by this provider (providerRef naming a
-// wireguard Provider, scheme tcp) gets a forwarder: one iptables PREROUTING
-// DNAT rule (spec.port -> spec.target, reachable via the tunnel's routed
-// AllowedIPs) baked into the SAME shared container's boot script — not a
+// The forwarder itself is one iptables PREROUTING DNAT rule (spec.port ->
+// spec.target, reachable via the tunnel's routed AllowedIPs) baked into the
+// SAME container's boot script alongside the wg-quick config — not a
 // second socat/nc process. The pinned image ships neither, and installing
 // one at apply time would break image pinning (scripts/pinned-images.txt);
 // iptables is already required for the tunnel's own routing (docs/adr/023
 // Decision 4). spec.target must be an IP:port pair reachable via
 // configuration.allowedIPs — unlike proxy's Connection.Target, iptables
 // --to-destination does not resolve DNS names.
-//
-// Every Connection naming this Provider is discovered by scanning
-// reconciler.Request.Resources (the full validated resource set, regardless
-// of reconcile order — see that field's own doc comment) during the
-// Provider's own reconcile; the container's boot script is spec-hashed, so
-// any Connection add/remove/edit (including a private-key rotation)
-// recreates it — the identical trade-off docs/adr/018 documents for
-// prometheus's scrape config, chosen for the same reason: this provider is
-// the sole consumer of that config, and a tunnel's own connection count is
-// expected to be small. reconcileConnection (the Connection-kind call) does
-// no container work at all — the shared container already carries its rule
-// by the time a Connection's own reconcile runs (Providers reconcile before
-// their dependents in the engine's topological order).
 //
 // The private key is resolved from a SecretReference and placed only in the
 // wg-quick config file mounted via runtime.FileMount — never Env
@@ -55,7 +48,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -65,7 +57,6 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
-	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
@@ -211,67 +202,13 @@ func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (statu
 	}
 }
 
-// forwardRule is one Connection's DNAT rule, baked into the shared
-// container's boot script.
-type forwardRule struct {
-	port   int
-	target string
-}
-
-// connectionsForProvider scans req.Resources for every managed Connection
-// whose providerRef names providerEnv (docs/adr/023's "why the DNAT rules
-// live in the Provider-kind boot script" note) — sorted by resource Key so
-// the generated script is byte-deterministic regardless of Go's randomized
-// map iteration order, which idempotency (a second EnsureContainer call
-// with the same content must make zero API calls) depends on.
-func connectionsForProvider(providerEnv resource.Envelope, resources map[resource.Key]resource.Envelope) ([]forwardRule, error) {
-	providerKey := providerEnv.Key()
-	var keys []resource.Key
-	byKey := map[resource.Key]resource.Envelope{}
-	for k, e := range resources {
-		if e.Kind != "Connection" {
-			continue
-		}
-		ref := resource.RefFromSpec(e.Spec, "providerRef")
-		if ref.Name == "" || ref.Key(e.Metadata.Namespace, "Provider") != providerKey {
-			continue
-		}
-		keys = append(keys, k)
-		byKey[k] = e
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
-	rules := make([]forwardRule, 0, len(keys))
-	for _, k := range keys {
-		c, err := connection.FromEnvelope(byKey[k])
-		if err != nil {
-			return nil, err
-		}
-		if c.External {
-			continue
-		}
-		rules = append(rules, forwardRule{port: c.Port, target: c.Target})
-	}
-	return rules, nil
-}
-
-// checkNoDuplicatePorts rejects two Connections naming the same wireguard
-// Provider with the same spec.port — since every such Connection's
-// forwarder rule lives on the one shared container, two rules publishing
-// the same host port would collide at container-create time with an
-// opaque Docker error; this fails with a clear one instead.
-func checkNoDuplicatePorts(rules []forwardRule) error {
-	seen := map[int]bool{}
-	for _, r := range rules {
-		if seen[r.port] {
-			return fmt.Errorf("more than one Connection declares spec.port %d — every Connection realized by the same wireguard Provider needs a distinct port", r.port)
-		}
-		seen[r.port] = true
-	}
-	return nil
-}
-
+// reconcileInstance: the wireguard Provider has no central container of its
+// own — like proxy, its Provider resource only anchors the shared network
+// and the configuration every Connection's tunnel container inherits.
+// req.Provider is re-parsed (parseConfig) and req.Secrets re-resolved
+// (resolvePrivateKey) per Connection reconcile too, not cached here — this
+// provider holds no cross-call state (docs/planning/08 F5).
 func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request) (status.Status, error) {
-	rt := req.Runtime
 	st := status.Status{}
 	cfg, err := provider.FromEnvelope(req.Provider)
 	if err != nil {
@@ -282,24 +219,62 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	if err != nil {
 		return st, fmt.Errorf("Provider %q (type: wireguard): %w", name, err)
 	}
-	privateKey, err := resolvePrivateKey(cfg, req.Secrets, name)
-	if err != nil {
-		return st, err
-	}
-	rules, err := connectionsForProvider(req.Provider, req.Resources)
-	if err != nil {
-		return st, err
-	}
-	if err := checkNoDuplicatePorts(rules); err != nil {
-		return st, fmt.Errorf("Provider %q (type: wireguard): %w", name, err)
-	}
-
 	platformNetwork := providerkit.Network(cfg)
 	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", name, name)
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: platformNetwork, Labels: labels}); err != nil {
+	if err := req.Runtime.EnsureNetwork(ctx, runtime.NetworkSpec{Name: platformNetwork, Labels: labels}); err != nil {
 		return st, err
 	}
-	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: tc.peerNetwork, Labels: labels}); err != nil {
+	if err := req.Runtime.EnsureNetwork(ctx, runtime.NetworkSpec{Name: tc.peerNetwork, Labels: labels}); err != nil {
+		return st, err
+	}
+	now := time.Now()
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTunnelSurfaceReady}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
+	st.ProviderState = map[string]any{"peerNetwork": tc.peerNetwork}
+	return st, nil
+}
+
+// reconcileConnection runs the Connection's own tunnel container: named
+// after the Connection (naming.RuntimeObjectName(res)) — not the Provider —
+// so it answers exactly where every consumer expects a managed Connection
+// to answer (connection.Connection.Endpoint's contract: "managed: its own
+// name"). debezium's Source-Connection resolution
+// (internal/adapters/providers/debezium, read-only reference) calls
+// naming.RuntimeObjectName on the Connection envelope and dials that name
+// directly via runtime.EnsureReachable/WithReachable — a container named
+// after this Provider instead would silently break that resolution for
+// every existing and future ConnectionCapableProvider consumer, which is
+// why this mirrors proxy's per-Connection-container shape exactly rather
+// than the single-shared-container design a first draft of this provider
+// used (docs/adr/023 records the correction).
+func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	res, rt := req.Resource, req.Runtime
+	st := status.Status{}
+	conn, err := connection.FromEnvelope(res)
+	if err != nil {
+		return st, err
+	}
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return st, err
+	}
+	providerName := naming.RuntimeObjectName(req.Provider)
+	tc, err := parseConfig(cfg)
+	if err != nil {
+		return st, fmt.Errorf("Provider %q (type: wireguard): %w", providerName, err)
+	}
+	privateKey, err := resolvePrivateKey(cfg, req.Secrets, providerName)
+	if err != nil {
+		return st, err
+	}
+
+	name := naming.RuntimeObjectName(res)
+	platformNetwork := providerkit.Network(cfg)
+	providerLabels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Provider", providerName, providerName)
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: platformNetwork, Labels: providerLabels}); err != nil {
+		return st, err
+	}
+	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: tc.peerNetwork, Labels: providerLabels}); err != nil {
 		return st, err
 	}
 	networks := []string{platformNetwork}
@@ -308,12 +283,8 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	}
 
 	wgConf := buildWireGuardConfig(tc, privateKey)
-	script := buildEntrypointScript(rules)
-
-	ports := make([]runtime.PortBinding, 0, len(rules))
-	for _, r := range rules {
-		ports = append(ports, runtime.PortBinding{HostPort: r.port, ContainerPort: r.port, Audience: runtime.AudienceHost})
-	}
+	script := buildEntrypointScript(conn.Port, conn.Target)
+	connLabels := runtime.ManagedLabels(res.Metadata.Namespace, res.Kind, name, name)
 
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
 		Name:       name,
@@ -324,7 +295,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 			{Path: wgConfPath, Content: []byte(wgConf), Mode: 0o600},
 			{Path: entrypointPath, Content: []byte(script), Mode: 0o500},
 		},
-		Ports: ports,
+		Ports: []runtime.PortBinding{{HostPort: conn.Port, ContainerPort: conn.Port, Audience: runtime.AudienceHost}},
 		Security: &runtime.SecurityContext{
 			CapAdd: []string{"NET_ADMIN"},
 		},
@@ -337,7 +308,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 			Timeout:  5 * time.Second,
 			Retries:  30,
 		},
-		Labels: labels,
+		Labels: connLabels,
 	})
 	if err != nil {
 		return st, err
@@ -346,18 +317,20 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 		return st, err
 	}
 
-	// DriftDetected is Probe's job, not Reconcile's (matching every other
-	// provider in this codebase — proxy/postgres/ingress never set it from
-	// their own Reconcile path): a stale handshake right after a fresh
-	// EnsureContainer is expected (the background poller may not have
-	// written its first line yet) and does not block Ready here.
+	host, port := conn.Endpoint(name)
+	hostAddr := ctrState.HostAddr(conn.Port)
 	now := time.Now()
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTunnelSurfaceReady}, now)
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTunnelUp}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	// Never the private key, never Env — only host/observed facts.
 	st.ProviderState = map[string]any{
 		"containerId": ctrState.ID,
-		"peerNetwork": tc.peerNetwork,
+		"internal":    fmt.Sprintf("%s:%d", host, port),
+		"host":        hostAddr,
+		"target":      conn.Target,
+		endpoint.Key: endpoint.List{
+			{Name: "forward", Scheme: conn.Scheme, Host: hostAddr, Internal: fmt.Sprintf("%s:%d", host, port), Insecure: true, RuntimeName: name, ContainerPort: conn.Port, Audience: runtime.AudienceHost},
+		}.ToState(),
 	}
 	return st, nil
 }
@@ -391,20 +364,17 @@ func buildWireGuardConfig(tc tunnelConfig, privateKey string) string {
 }
 
 // buildEntrypointScript renders the container's boot script: bring up the
-// tunnel, install one DNAT+MASQUERADE forwarder rule per Connection
+// tunnel, install this Connection's DNAT+MASQUERADE forwarder rule
 // (docs/adr/023 Decision 4), and background a handshake-status poller
 // (docs/adr/023 Decision 6 — no ContainerRuntime exec primitive exists, so
 // Probe reads this file back via runtime.ReadFile instead of running `wg
-// show` itself). rules is already sorted (connectionsForProvider) so this
-// output is byte-deterministic — required for EnsureContainer idempotency.
-func buildEntrypointScript(rules []forwardRule) string {
+// show` itself).
+func buildEntrypointScript(port int, target string) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\nset -e\n")
 	b.WriteString("mkdir -p /var/run/datascape\n")
 	fmt.Fprintf(&b, "wg-quick up %s\n", wgConfPath)
-	for _, r := range rules {
-		fmt.Fprintf(&b, "iptables -t nat -A PREROUTING -p tcp --dport %d -j DNAT --to-destination %s\n", r.port, r.target)
-	}
+	fmt.Fprintf(&b, "iptables -t nat -A PREROUTING -p tcp --dport %d -j DNAT --to-destination %s\n", port, target)
 	b.WriteString("iptables -t nat -A POSTROUTING -o wg0 -j MASQUERADE\n")
 	fmt.Fprintf(&b, "( while true; do wg show wg0 latest-handshakes > %s 2>/dev/null || true; sleep 5; done ) &\n", handshakeStatePath)
 	b.WriteString("exec sleep infinity\n")
@@ -433,49 +403,9 @@ func handshakeAge(ctx context.Context, rt runtime.ContainerRuntime, name string)
 	return time.Since(time.Unix(sec, 0)), true
 }
 
-// reconcileConnection publishes the Connection's own Ready condition and
-// endpoint fact — no container mutation: the shared tunnel container
-// already carries this Connection's forwarder rule by the time this runs
-// (docs/adr/023's "why the DNAT rules live in the Provider-kind boot
-// script" note).
-func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Request) (status.Status, error) {
-	res, rt := req.Resource, req.Runtime
-	st := status.Status{}
-	conn, err := connection.FromEnvelope(res)
-	if err != nil {
-		return st, err
-	}
-	tunnelName := naming.RuntimeObjectName(req.Provider)
-	ctr, found, err := rt.Inspect(ctx, tunnelName)
-	if err != nil {
-		return st, err
-	}
-	now := time.Now()
-	if !found || !ctr.Healthy {
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonTunnelDown}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonTunnelDown}, now)
-		return st, nil
-	}
-	hostAddr := ctr.HostAddr(conn.Port)
-	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTunnelUp}, now)
-	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
-	st.ProviderState = map[string]any{
-		"tunnelContainerId": ctr.ID,
-		"target":            conn.Target,
-		endpoint.Key: endpoint.List{
-			{Name: "forward", Scheme: conn.Scheme, Host: hostAddr, Internal: fmt.Sprintf("%s:%d", tunnelName, conn.Port), Insecure: true, RuntimeName: tunnelName, ContainerPort: conn.Port, Audience: runtime.AudienceHost},
-		}.ToState(),
-	}
-	return st, nil
-}
-
 func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 	switch req.Resource.Kind {
 	case "Provider":
-		name := naming.RuntimeObjectName(req.Resource)
-		if err := req.Runtime.Remove(ctx, name); err != nil {
-			return err
-		}
 		cfg, err := provider.FromEnvelope(req.Provider)
 		if err != nil {
 			return err
@@ -486,8 +416,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 		_ = req.Runtime.RemoveNetwork(ctx, providerkit.Network(cfg))
 		return nil
 	case "Connection":
-		// No container of its own — see reconcileConnection's doc comment.
-		return nil
+		return req.Runtime.Remove(ctx, naming.RuntimeObjectName(req.Resource))
 	default:
 		return fmt.Errorf("wireguard provider cannot destroy kind %s", req.Resource.Kind)
 	}
@@ -497,46 +426,41 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
 	now := time.Now()
-	cfg, err := provider.FromEnvelope(req.Provider)
-	if err != nil {
-		return st, err
-	}
-	tc, err := parseConfig(cfg)
-	if err != nil {
-		return st, err
-	}
-	tunnelName := naming.RuntimeObjectName(req.Provider)
-
-	ctr, found, err := rt.Inspect(ctx, tunnelName)
-	if err != nil {
-		return st, err
-	}
-	if !found || !ctr.Healthy {
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonTunnelDown}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonTunnelDown}, now)
-		return st, nil
-	}
-
-	age, handshaked := handshakeAge(ctx, rt, tunnelName)
-	staleThreshold := time.Duration(tc.keepalive*handshakeStaleFactor) * time.Second
-	stale := !handshaked || age > staleThreshold
-
 	switch res.Kind {
 	case "Provider":
-		if stale {
-			st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTunnelSurfaceReady}, now)
-			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonHandshakeStale}, now)
-			return st, nil
-		}
 		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTunnelSurfaceReady}, now)
 		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
 		return st, nil
 	case "Connection":
+		cfg, err := provider.FromEnvelope(req.Provider)
+		if err != nil {
+			return st, err
+		}
+		tc, err := parseConfig(cfg)
+		if err != nil {
+			return st, err
+		}
 		conn, err := connection.FromEnvelope(res)
 		if err != nil {
 			return st, err
 		}
-		dialErr := runtime.WithReachable(ctx, rt, tunnelName, conn.Port, runtime.ReachableOptions{Timeout: 10 * time.Second}, func(ctx context.Context, addr string) error {
+		name := naming.RuntimeObjectName(res)
+
+		ctr, found, err := rt.Inspect(ctx, name)
+		if err != nil {
+			return st, err
+		}
+		if !found || !ctr.Healthy {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonTunnelDown}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonTunnelDown}, now)
+			return st, nil
+		}
+
+		age, handshaked := handshakeAge(ctx, rt, name)
+		staleThreshold := time.Duration(tc.keepalive*handshakeStaleFactor) * time.Second
+		stale := !handshaked || age > staleThreshold
+
+		dialErr := runtime.WithReachable(ctx, rt, name, conn.Port, runtime.ReachableOptions{Timeout: 10 * time.Second}, func(ctx context.Context, addr string) error {
 			return dialUpstream(addr)
 		})
 		if dialErr != nil {

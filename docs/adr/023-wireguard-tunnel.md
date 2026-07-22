@@ -134,29 +134,59 @@ more robust under concurrent and long-lived connections than a userspace
 relay would be, which matters for the Accept scenario's sustained CDC
 replication connection.
 
-**Why the DNAT rules live in the Provider-kind boot script, not a live
-per-Connection reconcile call.** `ContainerRuntime` has no "run a command
-inside an already-running container" port method (unlike Caddy's
-admin-API-based route reconciliation in `docs/adr/018`, which exists
-because Caddy ships one) — adding one would be a much larger, cross-cutting
-port change (Docker/Kubernetes/fake adapters, the conformance suite) out of
-proportion to this task. Instead, `reconcileInstance` (the Provider-kind
-call) reads `req.Resources` — already the full validated resource set,
-regardless of reconcile order (`internal/ports/reconciler.Request`'s own
-doc comment) — for every Connection whose `providerRef` names this
-Provider, and bakes one DNAT/MASQUERADE pair per such Connection into the
-same boot script as the `wg-quick` config. This is the identical trade-off
-`docs/adr/018` documents for `prometheus`'s scrape config: a full container
-replace on every Connection add/remove/edit, acceptable because — like
-`prometheus` — this provider is the sole consumer of that config and a
-tunnel's own connection count is expected to be small (a handful of
-egress routes into one VPC, not hundreds of independently-churning routes
-the way `ingress`'s HTTP routes could be). `reconcileConnection` (the
-Connection-kind call) does no container work at all — it only publishes
-the Connection's own Ready condition and endpoint fact, since the shared
-container already carries its rule by the time a Connection's own reconcile
-runs (Providers reconcile before their dependents in the engine's
-topological order, the same guarantee every other `providerRef` relies on).
+**One tunnel container per Connection, not one shared container per
+Provider.** `reconcileConnection` (the Connection-kind call) runs its own
+`EnsureContainer`, named `naming.RuntimeObjectName(res)` — the Connection's
+own name — carrying that one Connection's `wg-quick` config and its one
+DNAT/MASQUERADE rule. `reconcileInstance` (the Provider-kind call) only
+anchors the shared platform network and `configuration.peerNetwork`,
+mirroring `proxy`'s own Provider-kind reconcile exactly (no central
+container there either). This is the same shape every existing
+`ConnectionCapableProvider` in this codebase uses (`proxy`: "one socat
+forwarder container per route"; `ingress`: one shared Caddy container is
+the *exception*, justified by Caddy's own admin API — Decision 3 of
+`docs/adr/018` — which this provider's image has no equivalent of).
+
+A first draft of this provider tried the opposite shape — one shared
+container per Provider, with `reconcileInstance` scanning `req.Resources`
+for every Connection naming it and baking all of their DNAT rules into one
+boot script (motivated by `ContainerRuntime` having no "run a command
+inside an already-running container" port method, so a *shared* container's
+rules would need to be fully regenerated and the container recreated on any
+Connection change — the same trade-off `docs/adr/018` documents for
+`prometheus`'s scrape config). **Found wrong before implementation
+finished, by reading `debezium.go`'s Connection resolution
+(`internal/adapters/providers/debezium`, read-only reference) closely**:
+`buildDesiredConnector` resolves a managed Connection's dial address as
+`conn.Endpoint(naming.RuntimeObjectName(connEnv))` and its preflight check
+calls `rt.EnsureReachable(ctx, d.preflightConnectionName, d.preflightPort)`
+with that same Connection-derived name — i.e. every existing consumer of a
+managed Connection expects a *runtime object literally named after the
+Connection* to exist and answer. A shared container named after the
+Provider instead would leave that name unresolvable — not a subtle
+behavioral difference, a hard "container not found" failure the first time
+any real consumer (starting with `debezium`) tried to dial through it. Since
+`ContainerRuntime.Inspect`/`EnsureReachable` look up a container by its
+literal name (not a Docker network alias — `ContainerSpec.Aliases` was
+briefly considered as a fix and rejected: aliases resolve DNS for
+container-to-container traffic, but `Inspect`/`EnsureReachable` do a literal
+name lookup, not a DNS resolution, so an alias would fix data-plane dialing
+while leaving the Ready-gating preflight/probe calls broken), the only
+correct fix was the one-container-per-Connection shape above. Recorded here
+rather than silently fixed because it is exactly the kind of cross-provider
+naming-contract check `docs/planning/08 §2.1` step 2 ("map the task to the
+interfaces it touches... read the doc comments") exists to catch, and is
+worth a future provider author reading before assuming a shared-container
+shape is free to choose.
+
+A real cost of the corrected shape: multiple Connections naming the same
+wireguard Provider each get an *independent* WireGuard session dialing the
+same peer with the *same* static keypair (the Provider-level
+`configuration.privateKeySecretRef`) — WireGuard's own roaming behavior
+means the peer tracks one active endpoint per public key, so two
+simultaneous sessions from the same identity can contend for which one the
+peer routes return traffic to. Not exercised by this task's Accept scenario
+(exactly one Connection); recorded as a follow-up, not fixed here.
 
 ## Decision 5 — a new runtime-port field: `ContainerSpec.Sysctls`
 
@@ -338,6 +368,14 @@ meaningfully different risk profile from `NessieProvider`/`OpenLineageProvider`'
 - OpenZiti-over-WireGuard composition (ADR 022 Ring 2 reaching a
   WireGuard-only-reachable workload) — no design work done here beyond
   naming the relationship; revisit once `MediatedConnection` exists.
+- Multiple Connections against one wireguard Provider each dial the peer
+  independently with the same static keypair (Decision 4's "found wrong
+  before implementation finished" note) — fine for one Connection per
+  Provider (this task's Accept scenario), a real limitation for more than
+  one. A per-Connection derived identity (e.g. a deterministic sub-key, or
+  requiring a distinct `configuration.privateKeySecretRef` per Provider
+  instance and one Provider per Connection) is the natural fix, not
+  designed here.
 
 ## Cross-references
 
