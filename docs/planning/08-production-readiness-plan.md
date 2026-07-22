@@ -1605,6 +1605,42 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
   upgrade-notes check) — mechanical enough for an agent to execute.
 - **Accept:** a tagged release produces downloadable binaries; CI matrix
   green; release checklist committed and exercised once.
+- **Done (2026-07-21):** `.goreleaser.yaml` (linux/darwin x amd64/arm64,
+  `CGO_ENABLED=0 -trimpath`, `-X main.version={{ .Tag }}` — the full
+  `vX.Y.Z` tag, not goreleaser's v-stripped `.Version`, to match
+  `main.go`'s existing default shape) + `.github/workflows/release.yml`
+  (`v*.*.*` tag push → `verify` job re-running the unit job's own checks
+  against the tagged commit → `goreleaser release --clean`). Validated
+  locally (network install, goreleaser v2.17.0): `goreleaser check` clean;
+  `goreleaser release --snapshot --clean` built all four targets,
+  archived, checksummed (64-hex sha256, verified); the produced binary's
+  `--version` printed the stamped tag exactly. Found and removed a
+  `before.hooks: go mod tidy` step from an initial draft — it silently
+  rewrote the working tree's `go.mod`/`go.sum` (pulling in other in-flight
+  branches' indirect test deps as direct requires); a release pipeline
+  must not mutate the tree it's building, so module tidiness stays the
+  unit job's job. CI matrix: confirmed already-shipped legs need no
+  duplication — example-validate covers both `examples/` dirs (unit job)
+  and every blueprint (`TestInitBlueprintValidatesWithNoEdits`, plain
+  `go test ./...`); the A7 machine-output harness
+  (`output_contract_harness_test.go`) likewise runs under plain
+  `go test ./...`; B8's `integration-k8s` and A10's `refresh-digests.yml`
+  already exist. Added: a `Race detector` step (`go test -race ./...`,
+  ~41s measured locally vs ~5.5s plain — scoped to the same
+  non-integration-tagged set) to the `unit` job for the "unit+race" leg;
+  a `schedule: cron: "0 7 * * 1"` trigger on `ci.yml` for the weekly
+  full-matrix soak — no job restructuring needed, since the existing
+  `integration` job's G7 branch already falls through to
+  `test-impact --full` for any non-`pull_request` event and
+  `integration-k8s` has no event gating at all. `docs/releasing.md`
+  written and linked from `docs/README.md`'s Process section; the
+  version-stamp proof re-run standalone with
+  `go build -ldflags "-X main.version=v9.9.9-test"` → `--version` printed
+  `v9.9.9-test` exactly. Not exercised: an actual tag push through GitHub
+  Actions (this is local/config validation only, as the task's own
+  fallback language anticipates for network-gated tools) — the release
+  checklist's step-by-step is otherwise unexercised against a real tag
+  until the next real milestone cut.
 
 ---
 

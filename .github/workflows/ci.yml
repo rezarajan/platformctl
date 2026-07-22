@@ -4,6 +4,18 @@ on:
   push:
     branches: [main]
   pull_request:
+  # docs/planning/08 §7 E8: weekly full-matrix soak. No job below needs an
+  # `if: github.event_name == 'schedule'` guard to get this — the
+  # `integration` job's existing G7 branch already falls through to
+  # `scripts/test-impact.sh --full` for any event that isn't
+  # `pull_request` (schedule included), and `integration-k8s` has no event
+  # gating at all, so adding this trigger alone reproduces "full-matrix
+  # (test-impact --full + the Kubernetes job) once a week" with zero
+  # changes to either job's own logic. Offset by an hour from
+  # refresh-digests.yml's `0 6 * * 1` so the two scheduled workflows don't
+  # contend for the same runner-pool minute.
+  schedule:
+    - cron: "0 7 * * 1" # Monday 07:00 UTC
 
 permissions:
   contents: read
@@ -36,6 +48,14 @@ jobs:
 
       - name: Unit & contract tests
         run: go test ./...
+
+      # docs/planning/08 §7 E8: "unit+race" leg. Scoped to the same set as
+      # "Unit & contract tests" above (no `-tags integration`, so it never
+      # touches adapters needing Docker/K8s) — measured locally at ~41s
+      # wall vs ~5.5s plain, cheap enough to run on every push/PR rather
+      # than only on the weekly soak.
+      - name: Race detector
+        run: go test -race ./...
 
       - name: Validate examples
         run: |

@@ -3,3 +3,4 @@ bin/
 .claude/planning-docs-unlock
 /platformctl
 .claude/agent-model-unlock
+/dist/
