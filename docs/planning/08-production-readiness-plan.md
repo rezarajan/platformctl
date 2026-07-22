@@ -2655,6 +2655,21 @@ unless a dependency is stated.
   cdc + jdbcsink integration suites green (the two consumers of the
   extracted resolution helper).
 - **Gate:** none (refactor).
+- **Done (2026-07-22):** (1) `providerkit.ResolveEndpoint` +
+  `providerkit.ResolveEndpointCredentials`
+  (internal/adapters/providers/providerkit/endpoint.go), called from
+  both debezium.go and jdbcsink.go; diffing the two original ~60-line
+  blocks first found no semantic divergence beyond the expected
+  config-key name and each caller's own error wording — no drift bug.
+  (2) `internal/adapters/runtime/probe` (Image, TCPDialScript, ExecArgs,
+  Command, ctx-aware Dialable) hoisted out of runtime/docker and
+  runtime/kubernetes; kubernetes' `dialable` now shares docker's
+  deadline-capped ctx semantics (the one deliberate behavior change —
+  it previously ignored ctx and hardcoded a 2s dial). Unit tests added
+  for both (`providerkit/endpoint_test.go`,
+  `runtime/probe/probe_test.go`); `scripts/test-impact.sh`'s
+  docker-conformance/k8s-adapter scopes extended to cover the new probe
+  package.
 
 ### I6: KubernetesRuntime GA-parity evidence (B2 gaps 1+2)
 

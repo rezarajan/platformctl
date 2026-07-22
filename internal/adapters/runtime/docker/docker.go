@@ -25,6 +25,7 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 
+	"github.com/rezarajan/platformctl/internal/adapters/runtime/probe"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -690,45 +691,11 @@ func (r *Runtime) EnsureReachable(ctx context.Context, name string, containerPor
 	if addr == "" {
 		return "", nil, fmt.Errorf("container %q publishes no host binding for port %d", name, containerPort)
 	}
-	if !dialable(ctx, addr) {
+	if !probe.Dialable(ctx, addr) {
 		return "", nil, fmt.Errorf("container %q: resolved address %q for port %d is not currently accepting connections", name, addr, containerPort)
 	}
 	return addr, func() error { return nil }, nil
 }
-
-// dialable reports whether a TCP connection to addr succeeds right now,
-// honoring ctx's deadline (bounded to 2s when ctx has none) rather than
-// hanging on an address nothing will ever answer.
-func dialable(ctx context.Context, addr string) bool {
-	timeout := 2 * time.Second
-	if deadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining < timeout {
-			timeout = remaining
-		}
-	}
-	if timeout <= 0 {
-		return false
-	}
-	conn, err := net.DialTimeout("tcp", addr, timeout)
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
-}
-
-// probeImage is a minimal, pinned image (scripts/pinned-images.txt) used for
-// ProbeReachable's transient in-network probe container — the fallback when
-// no existing managed container on the target network can conclusively
-// answer the dial itself (docs/planning/08 C10).
-const probeImage = "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
-
-// tcpDialScript is a portable (BusyBox ash or bash) probe: prefer `nc -z`
-// (a true, no-data connect-and-close scan) and fall back to the /dev/tcp
-// pseudo-device redirection trick for shells with no nc — host/port arrive
-// as $1/$2 (positional args, not string-interpolated) so a target's host
-// component can never be interpreted as shell syntax.
-const tcpDialScript = `nc -z -w3 "$1" "$2" 2>/dev/null || (exec 3<>/dev/tcp/$1/$2) 2>/dev/null`
 
 // ProbeReachable answers "can a container on network reach target right now"
 // from an in-network vantage point — never from this process (docs/planning/08
@@ -776,7 +743,7 @@ func (r *Runtime) execProbeCandidate(ctx context.Context, netName string) (strin
 	return containers[0].ID, true, nil
 }
 
-// execTCPDial execs tcpDialScript inside containerID and reports whether it
+// execTCPDial execs probe.TCPDialScript inside containerID and reports whether it
 // exited zero (dial succeeded). Any exec-layer failure (the container's
 // image has neither nc nor a /dev/tcp-capable shell, the exec API call
 // itself failed, ...) and a genuine connection failure both surface as a
@@ -784,7 +751,7 @@ func (r *Runtime) execProbeCandidate(ctx context.Context, netName string) (strin
 // fall back to the transient probe container for an authoritative answer.
 func (r *Runtime) execTCPDial(ctx context.Context, containerID, host, port string) error {
 	created, err := r.cli.ContainerExecCreate(ctx, containerID, container.ExecOptions{
-		Cmd:          []string{"sh", "-c", tcpDialScript, "sh", host, port},
+		Cmd:          probe.ExecArgs(host, port),
 		AttachStdout: true,
 		AttachStderr: true,
 	})
@@ -817,13 +784,13 @@ func (r *Runtime) execTCPDial(ctx context.Context, containerID, host, port strin
 // from inside it, and always removes the container before returning —
 // docker run's exit code is the answer.
 func (r *Runtime) transientProbe(ctx context.Context, netName, host, port string) error {
-	if err := r.ensureImage(ctx, probeImage, runtime.PullIfNotPresent, nil); err != nil {
+	if err := r.ensureImage(ctx, probe.Image, runtime.PullIfNotPresent, nil); err != nil {
 		return fmt.Errorf("ProbeReachable: pull probe image: %w", err)
 	}
 	name := fmt.Sprintf("datascape-probe-%d", time.Now().UnixNano())
 	cfg := &container.Config{
-		Image: probeImage,
-		Cmd:   []string{"nc", "-z", "-w3", host, port},
+		Image: probe.Image,
+		Cmd:   probe.Command(host, port),
 		Labels: withOwnership(map[string]string{
 			runtime.LabelGeneration: "probe",
 		}),

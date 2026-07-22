@@ -22,7 +22,6 @@ import (
 	"github.com/rezarajan/platformctl/internal/adapters/kafkaconnect"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/domain/binding"
-	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
@@ -284,48 +283,15 @@ func buildDesiredConnector(req reconciler.Request) (desiredConnector, error) {
 	// (external sources — a managed Connection answers at its own name on
 	// the shared network, an external one at its declared host), the
 	// Source's Provider container name, then explicit options overrides.
-	dbHost := ""
-	dbPort := enginePort
-	connSecretRef := ""
-	if src.ProviderRef != nil {
-		dbHost = *src.ProviderRef
-	}
-	if src.External && src.ConnectionRef != nil {
-		connRef := resource.RefFromSpec(srcEnv.Spec, "connectionRef")
-		if connEnv, ok := req.Resources[connRef.Key(srcEnv.Metadata.Namespace, "Connection")]; ok {
-			conn, err := connection.FromEnvelope(connEnv)
-			if err != nil {
-				return d, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
-			}
-			dbHost, dbPort = conn.Endpoint(naming.RuntimeObjectName(connEnv))
-			if conn.External {
-				if addr, ok := conn.ExternalAddress(); ok {
-					if host, port, ok := hostPort(addr); ok {
-						d.preflightHost, d.preflightPort = host, port
-					}
-				}
-			} else {
-				d.preflightConnectionName, d.preflightPort = naming.RuntimeObjectName(connEnv), conn.Port
-			}
-			if conn.SecretRef != nil {
-				connSecretRef = *conn.SecretRef
-			}
-		}
-	}
-	if h, ok := b.Options["databaseHostname"].(string); ok && h != "" {
-		dbHost = h // explicit override
-	}
-	if v, ok := b.Options["databasePort"]; ok {
-		switch n := v.(type) {
-		case int:
-			dbPort = n
-		case float64:
-			dbPort = int(n)
-		}
-	}
-	if dbHost == "" {
+	// Shared byte-for-byte with jdbcsink's mirror-image TARGET-side
+	// resolution (docs/planning/08 I5).
+	ep, ok := providerkit.ResolveEndpoint(req, src, srcEnv, enginePort, b.Options)
+	if !ok {
 		return d, fmt.Errorf("Binding %q: cannot determine database hostname (no providerRef or Connection on Source, and no options.databaseHostname)", res.Metadata.Name)
 	}
+	dbHost, dbPort := ep.Host, ep.Port
+	d.preflightHost, d.preflightPort = ep.PreflightHost, ep.PreflightPort
+	d.preflightConnectionName = ep.PreflightConnectionName
 
 	cfg, err := provider.FromEnvelope(req.Provider)
 	if err != nil {
@@ -335,11 +301,7 @@ func buildDesiredConnector(req reconciler.Request) (desiredConnector, error) {
 	// Credentials: the Connection's secretRef when the Source declares one
 	// (and this provider lists it in spec.secretRefs so the engine resolved
 	// it), else the provider-level replicationSecretRef.
-	replRefName, _ := cfg.Configuration["replicationSecretRef"].(string)
-	creds, ok := req.Secrets[connSecretRef]
-	if !ok {
-		creds, ok = req.Secrets[replRefName]
-	}
+	creds, ok := providerkit.ResolveEndpointCredentials(req, cfg, ep.ConnectionSecretRef, "replicationSecretRef")
 	if !ok {
 		return d, fmt.Errorf("Binding %q: debezium Provider %q has no resolved credentials — declare the Connection's secretRef or configuration.replicationSecretRef in spec.secretRefs", res.Metadata.Name, naming.RuntimeObjectName(req.Provider))
 	}
