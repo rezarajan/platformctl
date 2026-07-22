@@ -73,9 +73,15 @@ func (r *Runtime) pullImage(ctx context.Context, ref string, auth *runtime.Image
 }
 
 // specHash produces a stable fingerprint of a ContainerSpec, stored as a
-// label so EnsureContainer can detect an already-matching container.
-func specHash(spec runtime.ContainerSpec) string {
-	data, _ := json.Marshal(spec)
+// label so EnsureContainer can detect an already-matching container. A
+// marshal failure is propagated, never hashed over: a wrong-but-stable
+// hash would silently break the zero-API-calls idempotency contract
+// (doc 11 B4 finding 5).
+func specHash(spec runtime.ContainerSpec) (string, error) {
+	data, err := json.Marshal(spec)
+	if err != nil {
+		return "", fmt.Errorf("fingerprint container spec %q: %w", spec.Name, err)
+	}
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
 }

@@ -80,7 +80,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// Phase 5 (v1.0.0): the seven phase-1..4 gates graduate to GA.
 	gates.Register("CoreReconciler", featuregate.GA, true)
 	gates.Register("DockerRuntime", featuregate.GA, true)
-	gates.Register("ContainerProvider", featuregate.Alpha, false) // not in the master table; test-only provider
+	gates.Register("ContainerProvider", featuregate.Alpha, false) // doc 04 §12: Phase 0 / Alpha / disabled — test-only placeholder; retirement tracked in 08 E7
 	gates.Register("RedpandaProvider", featuregate.GA, true)
 	gates.Register("PostgresProvider", featuregate.GA, true)
 	gates.Register("DebeziumCDCProvider", featuregate.GA, true)

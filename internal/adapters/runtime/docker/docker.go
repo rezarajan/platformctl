@@ -281,7 +281,10 @@ func aggregateContainerStates(name string, states []runtime.ContainerState) runt
 // pre-existing implementation, unchanged, so that a Replicas <= 1 spec
 // behaves exactly as it always has.
 func (r *Runtime) ensureOneContainer(ctx context.Context, spec runtime.ContainerSpec) (runtime.ContainerState, error) {
-	desiredHash := specHash(spec)
+	desiredHash, err := specHash(spec)
+	if err != nil {
+		return runtime.ContainerState{}, err
+	}
 
 	existing, err := r.cli.ContainerInspect(ctx, spec.Name)
 	if err == nil {
@@ -626,7 +629,13 @@ func (r *Runtime) rawLogs(ctx context.Context, name string, tail int) (string, e
 	defer rc.Close()
 	var buf bytes.Buffer
 	// Container logs arrive stdout/stderr-multiplexed; demux into one stream.
-	_, _ = stdcopy.StdCopy(&buf, &buf, io.LimitReader(rc, 256*1024))
+	// A demux error means the tail is partial — say so rather than passing
+	// truncated logs off as complete (doc 11 B4 finding 4); logs feed
+	// diagnostics (WaitHealthy's failure message), so best-effort + honesty
+	// beats failing the whole call.
+	if _, err := stdcopy.StdCopy(&buf, &buf, io.LimitReader(rc, 256*1024)); err != nil {
+		fmt.Fprintf(&buf, "\n[log stream truncated: %v]", err)
+	}
 	return strings.TrimSpace(buf.String()), nil
 }
 

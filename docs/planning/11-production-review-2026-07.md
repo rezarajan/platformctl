@@ -110,3 +110,20 @@ static. Dimensions, each producing findings verified before fixing:
   Fix wave next: reuse each provider's existing probe fn in reconcile
   before Ready (findings 1-3); finding 4 recorded as deferred with
   reason.
+- 2026-07-22: Phase B4 audit received and first fix batch landed. Fixed
+  directly (this commit): CONFIRMED shell injection in mysql
+  backup/restore — manifest database name was interpolated into the
+  job container's `sh -c` (a container holding root DB + object-store
+  creds); now rides DATASCAPE_BACKUP_DATABASE env var expanded quoted,
+  postgres's pattern, pinned by a hostile-name unit test. Also:
+  specHash marshal errors now propagate in both runtimes (idempotency
+  contract, finding 5); docker log demux truncation is annotated
+  (finding 4); stale ContainerProvider comment fixed (finding 6); three
+  dead functions removed (finding 7); .claude/rules/go-style.md no
+  longer claims a nonexistent .golangci.yml — adopting a tuned lint
+  config is a RECORDED FOLLOW-UP. Remaining B4 findings 2+3 (debezium↔
+  jdbcsink resolution dedup into providerkit; docker↔k8s probe-helper
+  dedup + k8s dialable ctx-awareness) sequenced as doc 08 I5. B4 clean
+  areas: SQL parameterization, secret hygiene (fingerprints only,
+  0600 modes), HTTP client timeouts, atomic state writes, no init()/
+  mutable package state.

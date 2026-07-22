@@ -77,16 +77,6 @@ func connectPorts(cfg provider.Provider, name string, workers int) []runtime.Por
 	return []runtime.PortBinding{{HostPort: connectPort(cfg, name), ContainerPort: 8083, Audience: runtime.AudienceHost}}
 }
 
-// reachableURL returns an "http://host:port" this process can dial right
-// now for the Connect worker's REST API, plus a close func that must always
-// be called. Kafka Connect's REST API is stateless HTTP with no
-// broker-style redirect protocol, so — unlike redpanda's Kafka admin
-// connection — the resolved address can be used directly for one call, no
-// placeholder/dialer-interception trick needed.
-func reachableURL(ctx context.Context, rt runtime.ContainerRuntime, name string) (string, func() error, error) {
-	return providerkit.ReachableURL(ctx, rt, name, 8083)
-}
-
 // workersDeclared reads spec.configuration.workers (docs/planning/08 C3).
 // declared=false (the key absent) selects the pre-C3 single-container
 // shape, byte-for-byte; declared=true (any value >= 1, validated by

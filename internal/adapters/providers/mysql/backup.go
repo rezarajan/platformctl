@@ -37,6 +37,24 @@ func clientCnf(host, user, pass string) []byte {
 // dumpTool/restoreTool pick the engine-native binary name: recent
 // MariaDB images ship mariadb-prefixed client tools, mirroring the same
 // engine-vs-adminTool branch reconcileInstance's healthcheck already uses.
+
+// dbSide builds the mysql/mariadb end of a backup/restore pipeline. The
+// database name rides in an env var and is expanded quoted by the shell —
+// never interpolated into the sh -c text: a manifest-declared database
+// name containing shell metacharacters must not execute inside a job
+// container that holds root DB and object-store credentials (doc 11 B4
+// finding 1 — postgres's PGDATABASE pattern, applied here; pinned by
+// TestDBSideDoesNotInterpolateDatabaseName).
+func dbSide(tool string, cfg provider.Provider, image, dbHost, rootPass, dbName string) dbjob.Side {
+	return dbjob.Side{
+		Image:    image,
+		Networks: []string{providerkit.Network(cfg)},
+		Env:      map[string]string{"DATASCAPE_BACKUP_DATABASE": dbName},
+		Files:    []runtime.FileMount{{Path: clientCnfPath, Content: clientCnf(dbHost, "root", rootPass), Mode: 0o600}},
+		ShellCmd: fmt.Sprintf("%s --defaults-extra-file=%s \"$DATASCAPE_BACKUP_DATABASE\"", tool, clientCnfPath),
+	}
+}
+
 func dumpTool(cfg provider.Provider) string {
 	if mariadb(cfg) {
 		return "mariadb-dump"
@@ -90,14 +108,9 @@ func (p *Provider) Backup(ctx context.Context, req reconciler.Request, dest back
 	}
 
 	spec := dbjob.PipelineSpec{
-		JobName: jobName,
-		Labels:  runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Source", req.Resource.Metadata.Name, jobName),
-		Producer: dbjob.Side{
-			Image:    prof.Image,
-			Networks: []string{providerkit.Network(cfg)},
-			Files:    []runtime.FileMount{{Path: clientCnfPath, Content: clientCnf(dbHost, "root", rootPass), Mode: 0o600}},
-			ShellCmd: fmt.Sprintf("%s --defaults-extra-file=%s %s", dumpTool(cfg), clientCnfPath, dbName),
-		},
+		JobName:  jobName,
+		Labels:   runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Source", req.Resource.Metadata.Name, jobName),
+		Producer: dbSide(dumpTool(cfg), cfg, prof.Image, dbHost, rootPass, dbName),
 		Consumer: dbjob.Side{
 			Image:    dbjob.MCImage,
 			Networks: consumerNetworks,
@@ -178,12 +191,7 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 			Files:    []runtime.FileMount{{Path: dbjob.MCConfigPath, Content: mcConfig, Mode: 0o600}},
 			ShellCmd: fmt.Sprintf("mc cat %s/%s/%s", dbjob.MCAlias, src.Bucket, objectKey),
 		},
-		Consumer: dbjob.Side{
-			Image:    prof.Image,
-			Networks: []string{providerkit.Network(cfg)},
-			Files:    []runtime.FileMount{{Path: clientCnfPath, Content: clientCnf(dbHost, "root", rootPass), Mode: 0o600}},
-			ShellCmd: fmt.Sprintf("%s --defaults-extra-file=%s %s", restoreTool(cfg), clientCnfPath, dbName),
-		},
+		Consumer: dbSide(restoreTool(cfg), cfg, prof.Image, dbHost, rootPass, dbName),
 	}
 	if err := dbjob.RunPipeline(ctx, req.Runtime, spec); err != nil {
 		return fmt.Errorf("Source %q: %s restore: %w", req.Resource.Metadata.Name, cfg.Type, err)

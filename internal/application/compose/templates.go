@@ -47,12 +47,6 @@ func renderDoc(command, explain, kind, name string, specLines []string) string {
 	return b.String()
 }
 
-// renderMultiDoc joins several YAML documents with the "---" separator
-// manifest.Load's multi-document decoder expects.
-func renderMultiDoc(docs ...string) string {
-	return strings.Join(docs, "---\n")
-}
-
 func refBlock(field, name string) []string {
 	return []string{field + ":", "  name: " + name}
 }

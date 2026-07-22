@@ -2559,6 +2559,27 @@ unless a dependency is stated.
   hardcode assumptions about which ingress controller the cluster runs;
   revisit if a live K8s ingress flake ever surfaces (B1 finding 4).
 
+### I5: Duplication debt with drift risk (B4 findings 2+3)
+
+- **Size:** M. **Depends:** none (files disjoint from I4).
+- **Do:** (1) extract debezium's ~60-line Source/Connection endpoint+
+  credential resolution block (mirrored near-verbatim in jdbcsink, keyed
+  `replicationSecretRef` vs `credentialsSecretRef`) into a providerkit
+  helper parameterized by config-key name; both providers call it.
+  (2) Hoist the duplicated ProbeReachable machinery (pinned probe image,
+  dial script, exec-then-ephemeral-probe algorithm) out of
+  runtime/docker and runtime/kubernetes into one shared package, keeping
+  only the transport adapter-specific — and fix the already-drifted
+  divergence: kubernetes' `dialable` ignores ctx and hardcodes a 2s
+  dial; it gets docker's ctx-aware signature (deadline-capped, refuses
+  when expired).
+- **Accept:** behavior-preserving for docker (its ctx semantics are the
+  keeper); unit-covered helper; both runtimes' conformance suites green;
+  cdc + jdbcsink integration suites green (the two consumers of the
+  extracted resolution helper).
+- **Gate:** none (refactor).
+
+
 
 
 ## 8. New feature gates introduced by this plan

@@ -43,7 +43,10 @@ func (r *Runtime) ensureDeployment(ctx context.Context, spec runtimeport.Contain
 	if err != nil {
 		return runtimeport.ContainerState{}, err
 	}
-	desiredHash := specHash(spec)
+	desiredHash, err := specHash(spec)
+	if err != nil {
+		return runtimeport.ContainerState{}, err
+	}
 
 	existing, err := r.clientset.AppsV1().Deployments(ns).Get(ctx, spec.Name, metav1.GetOptions{})
 	if err == nil {
@@ -134,7 +137,10 @@ func (r *Runtime) ensureStatefulSet(ctx context.Context, spec runtimeport.Contai
 	if err != nil {
 		return runtimeport.ContainerState{}, err
 	}
-	desiredHash := specHash(spec)
+	desiredHash, err := specHash(spec)
+	if err != nil {
+		return runtimeport.ContainerState{}, err
+	}
 
 	existing, err := r.clientset.AppsV1().StatefulSets(ns).Get(ctx, spec.Name, metav1.GetOptions{})
 	if err == nil {
@@ -470,8 +476,14 @@ func (r *Runtime) ensureOneService(ctx context.Context, ns, svcName string, spec
 	}
 }
 
-func specHash(spec runtimeport.ContainerSpec) string {
-	data, _ := json.Marshal(spec)
+// A marshal failure is propagated, never hashed over: a wrong-but-stable
+// hash would silently break the zero-API-calls idempotency contract
+// (doc 11 B4 finding 5).
+func specHash(spec runtimeport.ContainerSpec) (string, error) {
+	data, err := json.Marshal(spec)
+	if err != nil {
+		return "", fmt.Errorf("fingerprint container spec %q: %w", spec.Name, err)
+	}
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
 }
