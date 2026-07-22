@@ -119,7 +119,7 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 	// Positive proof: the CDC connector reached RUNNING — through the
 	// tunnel, since Debezium (on datascape-wg-net only) has no other path
 	// to 10.13.13.10.
-	if state := connectorStatus(t, "wg-orders-to-events"); state != "RUNNING" {
+	if state := wgConnectorStatus(t, "wg-orders-to-events"); state != "RUNNING" {
 		t.Errorf("connector state = %q, want RUNNING", state)
 	}
 
@@ -168,7 +168,7 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 	// stays RUNNING (Debezium's own connection survived, or Connect
 	// reconnected on its own — either way, the platform's status must
 	// reflect it) and a fresh dial through the forwarder succeeds.
-	if state := connectorStatus(t, "wg-orders-to-events"); state != "RUNNING" {
+	if state := wgConnectorStatus(t, "wg-orders-to-events"); state != "RUNNING" {
 		t.Errorf("connector state after key rotation = %q, want RUNNING", state)
 	}
 	out, err, code = run(t, "status", manifests, "--state-file", stateFile, "--feature-gates=TunnelProvider=true")
@@ -200,15 +200,26 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 			t.Errorf("orphaned managed container after destroy: %s", m.Name)
 		}
 	}
+	// The shared platform network is fully removable: every container ever
+	// attached to it was platformctl-managed (redpanda/debezium/tunnel),
+	// and all are gone now (RemoveNetwork's own documented refusal — never
+	// cascade-delete, never remove while anything is still attached —
+	// internal/ports/runtime.ContainerRuntime's doc comment).
 	managedNets, err := rt.ListManagedNetworks(ctx)
 	if err != nil {
 		t.Fatalf("list managed networks: %v", err)
 	}
 	for _, n := range managedNets {
-		if n.Name == wgTransitNetwork {
-			t.Errorf("peer network %q still present after destroy", wgTransitNetwork)
+		if n.Name == wgPlatformNetwork {
+			t.Errorf("platform network %q still present after destroy", wgPlatformNetwork)
 		}
 	}
+	// wgTransitNetwork deliberately is NOT asserted gone here: the raw
+	// wg-responder fixture (a stand-in for a VPC operator's own gateway,
+	// never platformctl-managed) is still attached to it — RemoveNetwork
+	// correctly refuses rather than cascade-removing someone else's
+	// container, exactly the behavior this test's own cleanup() (not
+	// platformctl) is responsible for tearing down.
 }
 
 // --- fixture topology names ------------------------------------------------
@@ -250,6 +261,25 @@ const (
 // with the identical tooling, just hand-configured as a server instead of
 // driven by the provider.
 const wireguardImage = "linuxserver/wireguard:1.0.20260223@sha256:2868ae5e3dd9065ea3b1e44b4214b33b02b7ce5ebcb9e4f33e1132b75007f39c"
+
+// wgConnectURL is testdata/wireguard-scenario/manifests.yaml's own
+// debezium Provider connectPort — deliberately not cdc_integration_test.go's
+// cdcConnectURL (18183): that's a different scenario's own Connect worker.
+const wgConnectURL = "http://localhost:18189"
+
+// wgConnectorStatus mirrors connectorStatus (cdc_integration_test.go) but
+// against this scenario's own Connect worker port — connectorStatus itself
+// can't be reused since it hardcodes cdcConnectURL.
+func wgConnectorStatus(t *testing.T, name string) string {
+	t.Helper()
+	var body struct {
+		Connector struct {
+			State string `json:"state"`
+		} `json:"connector"`
+	}
+	getJSON(t, wgConnectURL+"/connectors/"+name+"/status", &body)
+	return body.Connector.State
+}
 
 // mustRun runs an external command, failing the test with its combined
 // output on error — the same shape phase5_integration_test.go's inline
