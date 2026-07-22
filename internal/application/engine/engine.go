@@ -25,6 +25,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/dataset"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
+	"github.com/rezarajan/platformctl/internal/domain/hostport"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
@@ -282,7 +283,17 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 
 	e.report(func(r Reporter) { r.End(len(res.Succeeded), len(res.Failed), len(res.Skipped)) })
 	if len(res.Failed) > 0 {
+		// A host-port auto-allocation collision surfaces at reconcile as a
+		// cryptic bind failure on whichever component ran second — name
+		// both components and the remedy instead (domain/hostport records
+		// every claim; doc 11 production review).
+		if ce := hostport.ConflictError(); ce != nil {
+			return res, fmt.Errorf("%d resource(s) failed to reconcile; %w", len(res.Failed), ce)
+		}
 		return res, fmt.Errorf("%d resource(s) failed to reconcile", len(res.Failed))
+	}
+	if ce := hostport.ConflictError(); ce != nil {
+		return res, ce
 	}
 	return res, nil
 }

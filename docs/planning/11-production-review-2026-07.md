@@ -309,3 +309,52 @@ static. Dimensions, each producing findings verified before fixing:
   owner decisions now fully unblocked — KubernetesRuntime GA (HA
   feature-complete per the owner's bar), v1.3.0,
   ExternalResourceConfiguration GA.
+- 2026-07-22: ORCHESTRATOR FULL-CODEBASE SYSTEMS PASS (owner-requested,
+  personally executed; ~37k LOC surveyed structurally, core seams read
+  in full). VERDICT: the hexagonal architecture is genuinely load-bearing
+  — ports import only domain (archtest-enforced), every cross-runtime
+  behavior sits behind ContainerRuntime + conformance, providers are
+  stateless-per-call. Third-party provider readiness is REAL but gated
+  on one wall (below). Findings and dispositions:
+  (1) FIXED NOW — hostport collisions: FNV auto-allocation over 10k
+  slots had no detection (~50% birthday-collision odds at ~120
+  components; failure surfaced as a cryptic bind error). domain/hostport
+  now records every claim; the engine fails apply with both names + the
+  pin remedy. Determinism untouched.
+  (2) FIXED NOW — S3 state lease: fixed-TTL with no renewal meant an
+  apply outlasting the TTL silently lost its lock mid-run (concurrent
+  writer corruption window). Lease now renews at TTL/3 (ETag-matched so
+  a reclaimed lease is never overwritten; transient failures degrade to
+  the old behavior, never worse). renewLoop unit-pinned.
+  (3) SEQUENCED (I9) — the Request fact-field accretion is the one
+  modularity wall for third-party providers: each new cross-provider
+  fact patches engine+port. Generic facts query specced; E6 must teach
+  the generic form.
+  (4) BUILD-VS-BUY AUDIT: healthy. Real FOSS delegated where it counts
+  (franz-go/kadm, pgx, client-go, official docker SDK, minio-go,
+  santhosh-tekuri/jsonschema, caddy-as-ingress, cobra, goldmark, huh).
+  Deliberate hand-rolls reviewed and ACCEPTED with reasons: vault KV2
+  client (91 lines vs the heavyweight official SDK; env-token only),
+  dbjob FIFO pipeline (sh -c + exit-file protocol is the fragile spot —
+  acceptable while backup is Alpha; NOTE: revisit with a supervised
+  sidecar pattern or restic-class tool if backup targets GA), S3 lease
+  (now renewal-hardened; a future multi-operator posture should adopt a
+  real coordination service rather than extending it further — recorded,
+  ADR 003's own boundary).
+  (5) NFR-4 NOTE: "structured events" are the Reporter interface + logf
+  prose; adopting stdlib log/slog behind the existing seam would make
+  the claim literal (S-size, zero deps) — recorded as a follow-up, not
+  sequenced (CLI UX is the current consumer and is well-served).
+  (6) EDGE-CASE CLASSES swept and confirmed CLOSED by the wave's fixes:
+  settle-vs-probe asymmetry (I4/CI fix), ordering-by-name gaps (I4 graph
+  edge), per-ordinal addressing (I7), forward-staleness (I8), token
+  expiry (preflight guard), spec-hash silent fallback (B4), port
+  collisions + lease expiry (this pass). No further instance of any
+  class found in the survey.
+  (7) README REWRITTEN for current state: capability map grouped by
+  user concern, updated architecture diagram (both runtimes, 16+
+  providers, lint/policy pipeline, connectivity plane, facts), provider
+  maturity table, scenario gallery (cloud DB TLS, auth-proxy, VPN-via,
+  ingress TLS, monitoring, governance, backup), and a
+  write-your-own-provider recipe naming providerkit + conformance +
+  fragments. TestREADMECLISurfaceInSync green.

@@ -12,7 +12,7 @@ of YAML.*
 
 [![CI](https://github.com/rezarajan/platformctl/actions/workflows/ci.yml/badge.svg)](https://github.com/rezarajan/platformctl/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/go-1.22%2B-00ADD8?logo=go&logoColor=white)](go.mod)
-[![Runtime](https://img.shields.io/badge/runtime-Docker-2496ED?logo=docker&logoColor=white)](#architecture)
+[![Runtime](https://img.shields.io/badge/runtime-Docker%20%C2%B7%20Kubernetes-2496ED?logo=docker&logoColor=white)](#%EF%B8%8F-running-against-kubernetes)
 [![Version](https://img.shields.io/badge/release-v1.2.0-blue)](docs/planning/08-production-readiness-plan.md)
 
 </div>
@@ -37,72 +37,71 @@ ok   Binding/student-db-to-events   (create) in 254ms   # Debezium connector: RU
 applied: 14 succeeded, 0 failed, 0 skipped
 ```
 
-## ✨ Highlights
+## ✨ What you get
 
-- **Declarative, diff-driven** — `plan` is computed purely from manifests +
-  recorded state (never live probing), so it is deterministic and
-  reviewable; `apply` reconciles in dependency order and re-applying an
-  unchanged set makes **zero mutating calls**.
-- **A real pipeline, end-to-end** — the provider set covers a working
-  lakehouse: Redpanda, Postgres, MySQL/MariaDB, Debezium CDC, MinIO/S3, a
-  Kafka-Connect S3 sink, Nessie (Iceberg REST catalog), Marquez
-  (OpenLineage backend), Trino (query engine, Alpha), Prometheus (managed
-  monitoring, Alpha), an ingress provider (HTTP routing on the `Connection`
-  seam, Alpha), a JDBC database sink and an S3 ingest source (both
-  Kafka-Connect-based, Alpha), a WireGuard tunnel provider (VPN egress on
-  the `Connection` seam, Alpha), and a proxy surface giving external
-  systems stable platform-owned entrypoints. Rows inserted into Postgres land as
-  schema-carrying Parquet objects in a bucket with nothing hand-wired in
-  between — `examples/cdc-attendance/` ships `Dataset.spec.format: parquet`
-  as its acceptance shape, not just JSON.
-- **Production-shaped HA, not just "the container restarts"** — Redpanda
-  (`configuration.brokers`), Kafka Connect workers behind debezium/s3sink
-  (`configuration.workers`), and MinIO (`configuration.nodes`, 4+ nodes,
-  erasure-coded) all opt into a multi-instance, stable-identity shape
-  behind the `HighAvailability` gate; object storage additionally has a
-  documented external-production posture (a real S3/GCS/R2 endpoint,
-  verified reachable, never created/deleted by platformctl) for teams that
-  don't want to self-host at all.
-- **Dataset lifecycle, dead-letter queues, backup/restore** — a `Dataset`
-  can declare `spec.lifecycle` (object expiry + bucket versioning,
-  reconciled and drift-checked against the live bucket); any sink `Binding`
-  can declare `options.deadLetter` routing poison records to their own
-  `EventStream`; `platformctl backup`/`restore` (Alpha) streams a
-  data-bearing resource's actual contents to and from an object-store
-  destination for postgres, mysql, and s3.
-- **Orchestrator-ready** — `examples/lakehouse/` stands up the
-  infrastructure a Dagster deployment runs against: object store, an
-  Iceberg `Catalog`, a lineage backend, relational stores, and a managed
-  `Connection` giving an external database a stable platform-owned
-  entrypoint (with CDC flowing through it) — every endpoint your
-  orchestrator connects to, documented.
-- **Provider-agnostic resource model** — the manifests speak nouns
-  (`Catalog`, `Connection`, `Source`, `EventStream`, `Dataset`);
-  technologies (Nessie, socat, Postgres, Redpanda) are engines *realizing*
-  them, capability-checked at `validate`.
-- **Capability-checked bindings** — a `Binding(mode: cdc)` against a
-  provider that can't do CDC, or a `sink` to a format the connector can't
-  write, fails at `validate` with a precise error — not at 2 a.m. during
-  `apply`.
-- **Safety in the engine, not in conventions** — external resources are
-  never destroyed without explicit, separate opt-in flags; failed destroys
-  block teardown of their dependencies; unmanaged Docker objects are never
-  touched (everything Datascape owns is labeled).
-- **Built for out-of-band failure** — `drift` probes live infrastructure
-  and records what it finds; `apply` heals drifted resources (a killed
-  container is recreated, a stopped one restarted, a failed connector
-  restarted) while `plan` stays deterministic and never mutates; `destroy`
-  converges even when half the platform is already dead. All of it enforced
-  by a chaos-monkey integration suite in CI.
-- **Secrets stay out of manifests** — `SecretReference` resources resolve
-  through pluggable backends (`env`, `file`, and gated `vault`); specs carry
-  names, never values, and the schemas make a plaintext value unrepresentable.
-- **Lineage-aware by design** — `metadata.observers` forwards a resolved
-  `LineageEndpoint` to providers that consume one (Debezium's native
-  OpenLineage integration), and degrades to an informational condition when
-  they don't.
-- **Feature-gated evolution** — every provider ships behind a gate
-  (`--feature-gates=Name=true|false`), so `main` is always releasable.
+**Build**
+- **Blueprints and lego blocks** — `init` scaffolds a validating platform;
+  `add pipeline|source|sink|catalog|monitoring`, `wire`, and `expose`
+  compose new pieces into an existing set interactively or via flags,
+  reusing what you already have. Composition emits reviewable YAML —
+  it never applies anything behind your back.
+- **A real lakehouse, end-to-end** — 17 technology providers (table below)
+  cover broker, CDC, object store, sinks/sources, catalog, query, lineage,
+  monitoring, and connectivity. Rows inserted into Postgres land as
+  schema-evolved Parquet in a bucket with nothing hand-wired in between.
+- **Deterministic by construction** — `plan` is a pure diff of manifests vs
+  recorded state; re-applying an unchanged set makes **zero mutating
+  calls** (conformance-tested, not aspirational).
+
+**Operate**
+- **Drift-aware, failure-first** — `drift` probes live infrastructure;
+  `apply` heals killed containers, restarted brokers, failed connectors;
+  `destroy` converges even when half the platform is already dead. A
+  chaos suite (Docker **and** Kubernetes) SIGKILLs the CLI mid-apply and
+  requires convergence. "Ready" means *serving right now* — every
+  provider's reconcile runs the same check its probe does (NFR-11).
+- **Production-shaped HA** — multi-broker Redpanda, multi-worker Kafka
+  Connect (both runtimes), erasure-coded multi-node MinIO; dead-letter
+  queues on any sink Binding; `backup`/`restore` for postgres, mysql, s3.
+- **Two runtimes, one model** — the same manifests run on Docker and
+  Kubernetes (`spec.runtime.type` is the only change); a shared
+  conformance suite holds both adapters to identical semantics, and the
+  Kubernetes adapter is exercised in CI on every PR under a
+  minimal-RBAC ServiceAccount, never cluster-admin.
+
+**Connect & secure**
+- **Stable entrypoints** — managed `Connection`s give anything a
+  platform-owned address: TCP proxy, HTTP(S) ingress with TLS
+  termination (operator certs, self-signed CA, or cert-manager), or a
+  **WireGuard tunnel** for databases reachable only inside a VPC —
+  with `spec.via` confining that egress to the Connection's own
+  forwarder (blast-minimized, negatively tested).
+- **Cloud-managed databases** — external Connections declare outbound
+  TLS (`require`/`verify-ca`/`verify-full` + CA bundles via
+  `SecretReference`); Debezium and the JDBC sink dial RDS/Cloud SQL/Azure
+  with real verification. The auth-proxy and VPN topologies are
+  documented walkthroughs, not exercises for the reader.
+- **Secrets stay out of manifests** — `SecretReference` resolves through
+  pluggable backends (`env`, `file`, `kubernetes`, gated `vault`); specs
+  carry names, never values; state and logs carry fingerprints only.
+
+**Govern & extend**
+- **Design lints** — `platformctl lint` runs deterministic best-practice
+  checks (orphaned resources, duplicate capture, replication floors —
+  15 codes, provider-extensible), waivable per-resource *with a recorded
+  reason*. Advisory by design: you stay in charge.
+- **Policy engine** — a separate `--policies` channel enforces
+  organizational rules (deny-wins, exemptions only where a rule permits
+  them); `policy init zero-trust` writes a tailorable starter pack;
+  `policy test` runs in CI.
+- **Capability-checked at validate** — a `Binding(mode: cdc)` against a
+  provider that can't do CDC, an unsupported sink format, a topic
+  replication factor exceeding the broker count: all fail at `validate`
+  with precise errors, not at 2 a.m. during `apply`. Every provider's
+  configuration block is schema-validated from provider-owned fragments.
+- **Feature-gated evolution** — every provider ships behind a gate, so
+  `main` is always releasable; `platformctl explain <anything>` explains
+  every condition, reason, and lint/policy code the tool can emit.
 
 ## 🏗 Architecture
 
@@ -110,68 +109,107 @@ Strict hexagonal layering — the entire design hangs on one invariant:
 **domain and ports never import an adapter.**
 
 ```mermaid
-flowchart LR
-    subgraph CLI["cmd/platformctl"]
-        V[validate] --> P[plan] --> A[apply / destroy / status]
+flowchart TB
+    subgraph CLI["cmd/platformctl — validate · lint · plan · apply · drift · compose (add/wire/expose) · policy · backup · explain"]
+        direction LR
     end
-    subgraph Application["internal/application"]
-        M[manifest] --> G[graph] --> C[compatibility] --> PL[plan] --> E[engine]
+    subgraph APP["internal/application"]
+        M[manifest + schema fragments] --> G[graph] --> C[compatibility] --> L[lint] --> PO[policy] --> PL[plan] --> E[engine]
         R[registry + feature gates]
     end
-    subgraph Ports["internal/ports"]
-        RT[ContainerRuntime]
-        RC[reconciler.Provider]
+    subgraph PORTS["internal/ports (interfaces + conformance suites)"]
+        RC["reconciler.Provider + 19 capability interfaces<br/>(CDC, sink, ingest, catalog, connection, tunnel, backup, lint, …)"]
+        RT["runtime.ContainerRuntime + capabilities<br/>(reachability, ingress, member-set)"]
         ST[StateStore]
         SS[SecretStore]
     end
-    subgraph Adapters["internal/adapters"]
-        D[runtime/docker]
-        RP[redpanda]
-        PG[postgres]
-        DBZ[debezium]
-        S3[s3 / minio]
-        SNK[s3sink]
-        LF[state/localfile]
-        ENV[secrets/env]
+    subgraph ADP["internal/adapters"]
+        direction LR
+        RUN["runtime: docker · kubernetes<br/>+ shared probe pkg"]
+        PROV["providers: redpanda · postgres · mysql · debezium · s3 ·<br/>s3sink · jdbcsink · s3source · nessie · trino · openlineage ·<br/>prometheus · grafana · proxy · ingress · wireguard (+ providerkit)"]
+        STA["state: localfile · s3 (leased)"]
+        SEC["secrets: env · file · kubernetes · vault"]
     end
-    CLI --> Application --> Ports
-    D -.implements.-> RT
-    RP & PG & DBZ & S3 & SNK -.implement.-> RC
-    LF -.implements.-> ST
-    ENV -.implements.-> SS
+    CLI --> APP --> PORTS
+    RUN -.implements.-> RT
+    PROV -.implement.-> RC
+    STA -.implements.-> ST
+    SEC -.implement.-> SS
 ```
 
 | Layer | Rule |
 |---|---|
-| `internal/domain` | Imports nothing else in this repo. Resource kinds, graph, lineage types. |
+| `internal/domain` | Imports nothing else in this repo. Resource kinds, graph, naming, status/explain catalog. |
 | `internal/ports` | Interfaces only (+ conformance suites). Imports `domain`. |
-| `internal/adapters` | Implement ports; may import third-party SDKs. Every adapter passes its port's conformance suite. |
+| `internal/adapters` | Implement ports; may import third-party SDKs. Every runtime adapter passes the shared conformance suite. |
 | `cmd/platformctl`, `application/registry` | The **only** places allowed to import concrete adapters. |
+
+Cross-cutting mechanics worth knowing before reading code:
+
+- **The command pipeline** is `validate → lint → policy → plan → apply`,
+  with `drift` as the read-side probe. Everything a provider could reject
+  at apply time is pushed to `validate` (ADR 011): capability pairing,
+  provider-owned configuration schemas, replication floors, secret
+  preflight.
+- **Providers are stateless per call.** Every method receives one
+  `reconciler.Request` — the resource, the runtime, resolved secrets, the
+  full validated set, and engine-resolved *facts* (published endpoints of
+  other providers: schema registry, catalog, tunnel, metrics targets).
+  Providers never construct another provider's address by convention
+  (ADR 015) — they read what was published.
+- **The connectivity plane**: providers never dial raw addresses; they ask
+  the runtime (`EnsureReachable`/`WithReachable`) and re-resolve per
+  attempt. This is what makes the same provider code correct on Docker
+  (container names) and Kubernetes (services/port-forwards).
+- **"Ready" means serving** (NFR-11): reconcile runs the same serving
+  check probe does, inside a bounded condition-poll — never a fixed sleep,
+  never a weaker proxy signal. Drift immediately after apply is clean.
 
 ### The resource model
 
-Eight kinds, one worked scenario:
+Nine kinds; nouns, not technologies. Engines *realize* kinds and are
+capability-checked at `validate`:
 
 ```
-Source(postgres) ──Binding(mode: cdc)──▶ EventStream ──Binding(mode: sink)──▶ Dataset(bucket/prefix)
-      │                    │                  │                  │                    │
-  Provider(postgres)  Provider(debezium)  Provider(redpanda)  Provider(s3sink)   Provider(minio)
-                                                                          SecretReference(env) ⤴
+Source(postgres) ──Binding(cdc)──▶ EventStream ──Binding(sink)──▶ Dataset(bucket/prefix)
+      │                 │               │                │                │
+  Provider(postgres) Provider(debezium) Provider(redpanda) Provider(s3sink) Provider(minio)
+                                                             SecretReference(env) ⤴
 
-Catalog(engine: nessie)      # a table catalog as a noun — engines realize it
-Connection(port, target)     # a stable entrypoint to a system that lives elsewhere;
-                             # external resources integrate through it (address here,
-                             # credentials in the SecretReference its secretRef names)
+Catalog(engine: nessie, warehouseRef)   # a table catalog as a noun
+Connection(port, target | external)     # a stable entrypoint: proxy, ingress+TLS,
+                                        #   or wireguard tunnel (spec.via);
+                                        #   external: true consumes an address as-is,
+                                        #   with outbound TLS modes for cloud DBs
 ```
 
 `Binding` is the connective tissue: a directed edge whose `mode` names the
-movement mechanism, admitting a *set* of Kind pairings (`cdc`:
-Source→EventStream; `sink`: EventStream→Dataset or EventStream→Source —
-databases are legitimate sinks; `ingest`: Dataset→EventStream — object
-stores are legitimate sources). The referenced provider must declare the
-capability interface matching the pairing — all enforced at `validate`.
-Asset kinds are role-neutral; direction lives in the Binding
-(docs/adr/001-bindings-are-directed-edges.md).
+movement mechanism (`cdc`, `sink`, `ingest`), admitting a set of Kind
+pairings — databases are legitimate sinks, object stores legitimate
+sources (docs/adr/001). Direction lives in the Binding; asset kinds stay
+role-neutral.
+
+### Provider maturity
+
+| GA | Beta | Alpha (gated, off by default unless noted) |
+|---|---|---|
+| redpanda, postgres, debezium, s3/minio, s3sink, mysql/mariadb | Kubernetes runtime | trino, prometheus, grafana, ingress, jdbcsink, s3source, wireguard, nessie/openlineage (lakehouse pair), backup/restore, policy engine; design lints (on) |
+
+### Writing your own provider
+
+The seam is small and the scaffolding is real: implement
+`reconciler.Provider` (three methods — `Reconcile`, `Probe`, `Destroy` —
+plus any capability interfaces you support), ship a JSON-Schema fragment
+for your `configuration` block, register in `cmd/platformctl/main.go`
+behind a feature gate, and add a row to `scripts/test-impact.sh`.
+`providerkit` gives you instance lifecycle, credential/endpoint
+resolution, TLS plumbing, and worker-set probing; the runtime conformance
+suite guarantees your provider behaves identically on Docker and
+Kubernetes if you only talk through the port. Start from
+`internal/adapters/providers/nessie` (small) or `wireguard` (recent,
+demonstrates the full settle/probe discipline);
+[docs/onboarding/developers.md](docs/onboarding/developers.md) is the
+step-by-step.
 
 ## 🚀 Quickstart
 
@@ -234,6 +272,30 @@ Tear it all down (reverse dependency order, labeled objects only):
 ```sh
 bin/platformctl destroy cdc-to-lake --auto-approve
 ```
+
+## 🧭 Beyond the quickstart
+
+Compose instead of hand-writing — every command below emits reviewable
+YAML into your set and never applies anything:
+
+```sh
+platformctl add pipeline --name orders --engine postgres \
+    --broker existing:broker --sink existing:raw-lake --sink-prefix orders/
+platformctl expose Source/orders --scheme tcp     # stable entrypoint
+platformctl lint . && platformctl apply . --auto-approve
+```
+
+Common production shapes, each a documented walkthrough:
+
+| Scenario | Mechanism | Where |
+|---|---|---|
+| CDC from a **cloud-managed DB** (RDS / Cloud SQL / Azure) | External `Connection` + `spec.tls.mode: verify-full` + CA bundle `SecretReference` | docs/planning/03 §8.2.4 |
+| DB behind a **cloud auth proxy** (IAM auth) | Run the cloud's proxy; External Connection at its socket | docs/adr/025 |
+| DB reachable only through a **VPN into a VPC** | `wireguard` Provider + `Connection.spec.via` — egress confined to the forwarder | docs/adr/023 |
+| HTTPS entrypoints with real certs | `ingress` Provider + `Connection.spec.tls` (secretRef / selfSigned / cert-manager) | docs/planning/03 §8.2.2 |
+| Fleet monitoring | `prometheus` + `grafana` Providers — scrape targets resolved from published facts, exporters run least-privilege | docs/planning/08 C9 |
+| Org guardrails | `policy init zero-trust`, tailor, commit; `policy test` in CI | docs/onboarding/users.md §governance |
+| Backup / restore | `platformctl backup Source/db --to s3://…` and back | docs/adr/007 |
 
 ## 🖥 CLI surface
 
@@ -367,6 +429,7 @@ just test              # unit + contract tests (no Docker)
 just test-affected     # impact-mapped, ledger-deduped integration suites for your diff
 just test-integration  # real Docker: the full suite (runtime conformance + every provider e2e)
 just check             # gofmt + go vet (both build-tag variants)
+golangci-lint run      # tuned .golangci.yml, 0 issues enforced in CI
 ```
 
 The integration suite stands up real Postgres, Debezium, Redpanda, and MinIO

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -177,7 +178,7 @@ func (s *Store) Lock(ctx context.Context) (func() error, error) {
 	createOpts := minio.PutObjectOptions{ContentType: "application/json"}
 	createOpts.SetMatchETagExcept("*")
 	if _, err := s.client.PutObject(ctx, s.bucket, s.lockKey(), bytes.NewReader(data), int64(len(data)), createOpts); err == nil {
-		return s.releaseFunc(mine), nil
+		return s.withRenewal(mine), nil
 	} else if !isPreconditionFailed(err) {
 		return nil, fmt.Errorf("acquire state lock s3://%s/%s: %w", s.bucket, s.lockKey(), err)
 	}
@@ -196,7 +197,69 @@ func (s *Store) Lock(ctx context.Context) (func() error, error) {
 	if _, err := s.client.PutObject(ctx, s.bucket, s.lockKey(), bytes.NewReader(data), int64(len(data)), reclaimOpts); err != nil {
 		return nil, fmt.Errorf("reclaim expired state lock s3://%s/%s (lost the race to another process): %w", s.bucket, s.lockKey(), err)
 	}
-	return s.releaseFunc(mine), nil
+	return s.withRenewal(mine), nil
+}
+
+// withRenewal wraps releaseFunc with a background lease-renewal loop
+// (2026-07 production review, doc 11): the lease was previously
+// fixed-TTL with no renewal, so any apply outlasting the TTL silently
+// lost its lock mid-run while continuing to write — another process
+// could then legitimately reclaim the "expired" lease and run
+// concurrently against the same state. The loop re-PUTs the lease with
+// a pushed-out expiry every leaseTTL/3 (ETag-matched, so a lease
+// already reclaimed by someone else is never overwritten); renewal
+// stops when release is called. A renewal failure is retried on the
+// next tick — transient S3 hiccups shorter than the remaining TTL cost
+// nothing, and a persistent failure degrades to exactly the old
+// fixed-TTL behavior, never anything worse.
+func (s *Store) withRenewal(mine lease) func() error {
+	stop := make(chan struct{})
+	go renewLoop(s.leaseTTL/3, stop, func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		current, etag, err := s.readLease(ctx)
+		if err != nil {
+			return err
+		}
+		if current.Holder != mine.Holder || !current.AcquiredAt.Equal(mine.AcquiredAt) {
+			return errLeaseLost // reclaimed — stop renewing, never overwrite
+		}
+		renewed := current
+		renewed.ExpiresAt = time.Now().Add(s.leaseTTL)
+		data, err := json.Marshal(renewed)
+		if err != nil {
+			return err
+		}
+		opts := minio.PutObjectOptions{ContentType: "application/json"}
+		opts.SetMatchETag(etag)
+		_, err = s.client.PutObject(ctx, s.bucket, s.lockKey(), bytes.NewReader(data), int64(len(data)), opts)
+		return err
+	})
+	release := s.releaseFunc(mine)
+	return func() error {
+		close(stop)
+		return release()
+	}
+}
+
+// errLeaseLost tells renewLoop the lease is no longer ours: stop.
+var errLeaseLost = errors.New("lease reclaimed by another holder")
+
+// renewLoop calls renew every interval until stop closes or renew
+// reports the lease lost. Extracted for unit testing.
+func renewLoop(interval time.Duration, stop <-chan struct{}, renew func() error) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			if err := renew(); errors.Is(err, errLeaseLost) {
+				return
+			}
+		}
+	}
 }
 
 // releaseFunc deletes the lock object only if it still holds the lease this

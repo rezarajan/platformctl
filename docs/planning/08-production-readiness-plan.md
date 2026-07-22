@@ -3077,6 +3077,34 @@ Connect-worker HA (workers>1) remains I7's gap.
 
 
 
+### I9: Generalize cross-provider facts on reconciler.Request (systems review, doc 11)
+
+- **Size:** M. **Depends:** none; SHOULD land before any third-party
+  provider program (E6's guide should teach the generic form).
+- **Why:** Request has accreted one bespoke engine-resolved field per
+  cross-provider need (SchemaRegistryURL, KafkaBootstrapServers,
+  MetricsTargets, CatalogFacts, WarehouseFacts, TunnelFacts,
+  PrometheusURL) — each addition patches the engine, the port, and docs.
+  A third-party provider cannot consume a new published fact without
+  modifying core: the exact modularity wall hexagonal layering exists to
+  prevent. The published-fact mechanism (ADR 015) is already general;
+  only its DELIVERY is bespoke.
+- **Do:** add one generic, read-only query surface on Request (e.g.
+  `Facts interface { Endpoint(providerKey resource.Key, factName string)
+  (endpoint.Fact, bool); ByName(factName string) []PublishedFact }`,
+  engine-backed from state at request-build time, snapshot semantics).
+  Existing fields become thin deprecated wrappers over it (behavior
+  identical, byte-for-byte config outputs pinned by existing tests);
+  new consumers use the query. Ordering guarantees stay where they are
+  (graph edges — via/warehouseRef precedent — not the query). Doc 02
+  §4.2 records the pattern; E6's provider guide teaches ONLY the
+  generic form.
+- **Accept:** every existing provider green on unchanged tests; one
+  bespoke field fully migrated end-to-end (TunnelFacts is newest and
+  narrowest) proving the wrapper path; archtest forbids NEW bespoke
+  fact fields on Request (list frozen).
+- **Gate:** none (internal port evolution; Request stays addition-only).
+
 ## 8. New feature gates introduced by this plan
 
 Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
