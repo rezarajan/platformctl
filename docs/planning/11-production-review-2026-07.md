@@ -243,3 +243,17 @@ static. Dimensions, each producing findings verified before fixing:
   reconstructed from report+TASK_PROGRESS), edits re-applied on main.
   No commits were lost (GPG lapse prevented any wrong commit). Lesson:
   worktree inspection uses `git -C`/absolute paths, never `cd`.
+- 2026-07-22: WAVE 2 MERGED. I1 a4a16ef, I2 92ef738, H3 f8507fb, I6
+  f5c725f — all four unit-verified true-exit=0 per merge; I6's four
+  live legs transcribed (chaos-k8s 66.6/63.9s + 164s; dlq-k8s green
+  twice + 269s; impact run 992s ledger-recorded); gate-table and doc 08
+  conflicts both-append composed. Worktrees cleaned (I6's evidence log
+  preserved in session scratchpad). Merged-state gate sweep launched
+  (--base 159b80d). Stage I now: I1-I6 done, I7 open. Stage H: H1-H3
+  done, H4-H6 open. Stage E: E5→E6→E7 now UNBLOCKED (I1/I2 merged).
+  Owner decisions: KubernetesRuntime GA (chaos+DLQ evidence complete;
+  workers>1 carve-out or I7 first), ExternalResourceConfiguration GA,
+  v1.3.0 tag. Note for history: the four agent COMMIT_MSG.txt files
+  were lost to a pipe-masked exit (the documented class, this time by
+  the orchestrator) — messages reconstructed from reports, marked as
+  such in each commit body.
