@@ -1,0 +1,133 @@
+# docs/planning/08 D4 integration scenario: records produced directly to a
+# topic (bypassing CDC — the same "topics.regex matches the bare EventStream
+# name" shortcut connect_ha_dlq_integration_test.go's chdlqProduce uses) are
+# landed in MinIO by the existing s3sink provider, then replayed by
+# s3source into a FRESH topic. Host ports: MinIO 19102, Kafka 19295, s3sink
+# Connect 18289, s3source Connect 18290.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: s3src-minio-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-s3src-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-s3src-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19295
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-s3src-minio
+spec:
+  type: minio
+  runtime:
+    type: docker
+    network: datascape-s3src-net
+  configuration:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    port: 19102
+    rootSecretRef: s3src-minio-root
+  secretRefs: [s3src-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-s3src-sink
+spec:
+  type: s3sink
+  runtime:
+    type: docker
+    network: datascape-s3src-net
+  configuration:
+    image: datascape-s3sink-connect:test
+    connectPort: 18289
+    bootstrapServers: datascape-s3src-rp:29092
+    credentialsSecretRef: s3src-minio-root
+  secretRefs: [s3src-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-s3src-source
+spec:
+  type: s3source
+  runtime:
+    type: docker
+    network: datascape-s3src-net
+  configuration:
+    # Built by s3source_integration_test.go from testdata/s3source-image.
+    image: datascape-s3source-connect:test
+    connectPort: 18290
+    bootstrapServers: datascape-s3src-rp:29092
+    credentialsSecretRef: s3src-minio-root
+  secretRefs: [s3src-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: s3src-origin-events
+spec:
+  providerRef:
+    name: datascape-s3src-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: s3src-lake
+spec:
+  providerRef:
+    name: datascape-s3src-minio
+  bucket: raw-replay
+  prefix: events/
+  format: jsonl
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: s3src-replayed-events
+spec:
+  providerRef:
+    name: datascape-s3src-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: s3src-events-to-lake
+spec:
+  mode: sink
+  sourceRef:
+    name: s3src-origin-events
+  targetRef:
+    name: s3src-lake
+  providerRef:
+    name: datascape-s3src-sink
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: s3src-lake-to-events
+spec:
+  mode: ingest
+  sourceRef:
+    name: s3src-lake
+  targetRef:
+    name: s3src-replayed-events
+  providerRef:
+    name: datascape-s3src-source

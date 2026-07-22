@@ -710,6 +710,77 @@ capability. These pairings are model-complete seams for future providers
 (e.g. a Debezium JDBC sink over the existing Connect-worker pattern), not
 usable features today.
 
+**Update (docs/planning/08 D3/D4, 2026-07-21):** both seams now have
+shipped providers, behind Alpha/disabled feature gates (`JDBCSinkProvider`,
+`IngestProvider`) — the "no shipped provider" text above described the
+state before these tasks landed and is left as historical record (additive
+doc policy). `jdbcsink` implements `DatabaseSinkCapableProvider`
+(`SupportedSinkEngines`: `postgres`, `mysql`) over Confluent's
+kafka-connect-jdbc `JdbcSinkConnector`, realizing `sink` → `Source`.
+`s3source` implements `IngestCapableProvider` (`SupportedIngestFormats`:
+`jsonl`, `avro`, `parquet` — deliberately not the literal `json` value; the
+chosen connector, Aiven's s3-source-connector-for-apache-kafka, has no
+whole-file-JSON-array reader, only a line-delimited `jsonl` one) over
+`io.aiven.kafka.connect.s3.source.S3SourceConnector`, realizing `ingest`.
+Both follow the identical Kafka-Connect-worker pattern debezium/s3sink use
+(`spec.configuration.image` required, no stock image ships the plugin;
+`spec.configuration.workers` for the C3 replica-set shape).
+
+**jdbcsink schema-carrying-format requirement (stronger than every other
+provider in this codebase):** `jdbcsink`'s sink Binding `spec.options.format`
+MUST be `avro` or `protobuf` — unset/`json` is rejected at validate time by
+`ValidateBindingOptions`. This is not a stylistic preference: verified
+against kafka-connect-jdbc's own `FieldsMetadata.extract` (v10.9.6), the
+connector derives value columns, and satisfies `pk.mode: record_key`, only
+from a Struct-typed (schema-carrying) record; a fully schemaless
+(`json`-format) record contributes zero columns and `record_key` throws
+outright. Since Debezium's own `json`-format CDC path
+(`debezium.applyConverterConfig`) hardcodes `schemas.enable=false`
+unconditionally, a realistic CDC → jdbcsink pipeline needs the upstream cdc
+Binding to also declare `options.format: avro` (or `protobuf`), wired
+through the same `SchemaRegistrySupport`-gated registry both connectors
+share. `jdbcsink`'s sink `spec.options` additionally supports: `mode`
+(`insert`, default, or `upsert` → the connector's `insert.mode`); `table`
+(overrides the target table name — the connector's own default,
+`table.name.format: "${topic}"`, names the table after the source
+EventStream/topic, which may need overriding since a topic name may contain
+hyphens, illegal in most unquoted SQL identifiers); `pkFields` (`upsert`
+only — explicit primary-key column names; omitted, the connector's
+`pk.mode: record_key` uses every field of the Kafka record key, the natural
+fit for a CDC-sourced topic whose key already is the source table's primary
+key); `unwrap` (boolean, default false — applies Debezium's own
+`io.debezium.transforms.ExtractNewRecordState` SMT, bundled in every
+debezium/connect-based worker image including this provider's required one,
+so a CDC envelope's `after` state becomes the sink's flat row instead of the
+full `before`/`after`/`op`/`source` envelope); `autoCreate`/`autoEvolve`
+(booleans, default false, pass through to the connector's own DDL
+automation — off by default since the schemaless-vs-schema-carrying
+distinction above already constrains when it is even meaningful).
+`deadLetter` (docs/planning/08 D6) works identically on `jdbcsink`'s sink
+Binding as it does on `s3sink`'s.
+
+**s3source ordering/offset semantics (docs/planning/03, additive per
+docs/planning/08 D4's Accept item):** the connector lists objects under the
+Dataset's bucket/prefix via S3's `ListObjectsV2` API in lexicographical key
+order and tracks progress with a `startAfter`-style cursor persisted to its
+own internal offsets topic (Kafka Connect's standard source-connector offset
+mechanism) — an object already processed by a given connector instance is
+never reprocessed, even across a worker restart. Object naming that is not
+lexicographically monotonic with upload order can be read out of arrival
+order (the connector's own README documents `aws.s3.fetch.buffer.size` as
+the mitigation for slow-to-upload objects arriving after
+lexicographically-later ones; this provider leaves it at the connector's own
+default). `s3source` sets `distribution.type: object_hash` and
+`file.name.template: ".*"` explicitly (both drift-diff-visible, mirroring
+`s3sink`'s explicit `file.compression.type: none`) so it replays every
+object under the Dataset's bucket/prefix regardless of which process wrote
+them, rather than requiring `{{topic}}`/`{{partition}}`/`{{start_offset}}`
+filename placeholders — the natural "replay everything under this
+bucket/prefix" semantics an ingest/backfill Binding wants. The target
+EventStream/topic is set directly via the connector's own `topic` config
+key (an EventStream's resource name IS its Kafka topic name), not inferred
+from a filename placeholder.
+
 A `Binding` that fails either check is rejected at `validate`/`plan` time with a message naming
 the `Binding`, the `Provider`, its type, and what it actually supports — never discovered only
 once `apply` starts touching real infrastructure. Example:
