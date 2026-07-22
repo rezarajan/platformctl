@@ -7,7 +7,9 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/domain/backup"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
+	"github.com/rezarajan/platformctl/internal/domain/graph"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
+	"github.com/rezarajan/platformctl/internal/domain/lint"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -305,6 +307,24 @@ type StreamReplicationValidator interface {
 type LineageAware interface {
 	Provider
 	ConfigureLineage(ctx context.Context, req Request, endpoint lineage.LineageEndpoint) error
+}
+
+// DesignLinter is declared by a provider that contributes technology-
+// specific design-lint findings (docs/adr/020-design-lints.md §5) —
+// mirroring SpecValidator's shape (ADR 009): pure, validate-time, no
+// Request. Codes are namespaced DL-<type>-NNN. LintDesign is called once
+// per distinct provider Type() that implements it (not once per Provider
+// envelope) — envelopes is the full manifest set and g its dependency
+// graph, exactly what the built-in engine (internal/application/lint)
+// itself operates over, so a provider-specific check (e.g. "N Debezium
+// connectors against one Postgres database = N replication slots") can see
+// every relevant resource in one call rather than being told about a
+// single envelope. Implementations must not mutate envelopes/g, must not
+// touch live infrastructure, and must be deterministic for identical input
+// (ADR 020's determinism bar).
+type DesignLinter interface {
+	Provider
+	LintDesign(envelopes []resource.Envelope, g *graph.Graph) []lint.Finding
 }
 
 // BackupCapableProvider is declared by a provider whose realized resource

@@ -1103,3 +1103,171 @@ Remedies:
 - platformctl drift <path> to see the exact observed vs. wanted scrape config.
 - platformctl apply <path> to regenerate and reconcile it.
 
+## lint
+
+### `DL000` (lintCode)
+
+A metadata.annotations["lint.datascape.io/waive"] entry names a lint code but gives no reason. ADR 020 §2 makes a waiver's reason mandatory: an empty one does not suppress the finding it names and is itself flagged as this warning.
+
+Likely causes:
+
+- The annotation value is just a code ("DL010") with no ": reason" suffix.
+- The reason after the colon is blank or only whitespace.
+
+Remedies:
+
+- Add a reason: metadata.annotations["lint.datascape.io/waive"]: "DL010: <why this is intentional>".
+- platformctl lint -o json to see which resource/code the malformed waiver is on.
+
+### `DL001` (lintCode)
+
+Duplicate capture: two or more cdc Bindings share a sourceRef with overlapping effective table sets (unset options.tables means "all", which overlaps everything) — separate replication slots/streams over the same tables.
+
+Likely causes:
+
+- Two Bindings were created independently against the same Source without noticing the overlap.
+- A wide, unset-tables Binding coexists with a narrower one against the same Source.
+
+Remedies:
+
+- Consolidate into one cdc Binding with a wider options.tables list.
+- If the overlap is intentional (e.g. two independent consumers), waive DL001 on each Binding with a reason.
+
+### `DL002` (lintCode)
+
+Sink collision: two or more sink Bindings write the same Dataset bucket+prefix (or the same Source+table for a sink-into-database pairing) — object-key or row collisions between independently-managed connectors.
+
+Likely causes:
+
+- Two sink Bindings were pointed at the same Dataset/table without noticing.
+- A shared landing location is genuinely intended (e.g. two streams merging into one prefix).
+
+Remedies:
+
+- Give each sink Binding its own bucket/prefix or target table.
+- If the shared target is intentional, waive DL002 on each Binding with a reason.
+
+### `DL003` (lintCode)
+
+A resource declares metadata.observers but its own realizing Provider implements no LineageAware capability — the forwarded lineage event is a runtime no-op (see ReasonLineageNotConsumed), predicted here at validate time instead of only discovered live.
+
+Likely causes:
+
+- The realizing Provider's technology has no lineage integration yet.
+- metadata.observers was copied from another manifest without checking the provider type.
+
+Remedies:
+
+- Remove metadata.observers if lineage isn't actually expected for this resource.
+- Point the Binding at a LineageAware-capable Provider (debezium, in v1) if lineage is expected.
+
+### `DL004` (lintCode)
+
+Plaintext boundary: a managed Connection uses a plaintext scheme while its realizing Provider also advertises a TLS-capable scheme ("https") — a safer realization exists but wasn't chosen.
+
+Likely causes:
+
+- The Connection was written before its Provider gained TLS support.
+- Plaintext was chosen for local development and never revisited for a shared/production environment.
+
+Remedies:
+
+- Set spec.scheme to the TLS-capable scheme if this Connection serves non-loopback traffic.
+- If plaintext is intentional (local-only), waive DL004 with a reason.
+
+### `DL010` (lintCode)
+
+Orphaned EventStream: no Binding reads or writes it — inert infrastructure that will be provisioned, billed, and monitored for nothing.
+
+Likely causes:
+
+- The EventStream was scaffolded ahead of the Binding that will use it.
+- A Binding that used to reference it was removed.
+
+Remedies:
+
+- Add the Binding(s) that should read/write it, or remove the EventStream if it's no longer needed.
+- If it's deliberately provisioned ahead of use, waive DL010 with a reason.
+
+### `DL011` (lintCode)
+
+Unreferenced Catalog: no catalogRef/warehouse consumer and no Connection routes to it — inert infrastructure.
+
+Likely causes:
+
+- No compute-engine Provider (e.g. trino) has been wired to consume it yet.
+- The Catalog exists only for `platformctl inventory` to point future tooling at.
+
+Remedies:
+
+- Wire a consumer (a compute-engine Provider's configuration.catalogRef) to it.
+- If it's deliberately provisioned ahead of a consumer, waive DL011 with a reason.
+
+### `DL012` (lintCode)
+
+Unused SecretReference / Connection / Provider: nothing in the manifest set resolves it.
+
+Likely causes:
+
+- The resource was scaffolded ahead of what will consume it.
+- Something that used to reference it was removed.
+- A managed Connection or Provider exists purely for host-side/external tool access, with no in-graph consumer.
+
+Remedies:
+
+- Wire a consumer to it, or remove it if it's no longer needed.
+- If it's deliberately unreferenced in-graph (e.g. a host-access Connection), waive DL012 with a reason.
+
+### `DL013` (lintCode)
+
+Dead-end pipeline: a cdc Binding's EventStream has no downstream sink/ingest Binding — frequently intentional (e.g. consumed directly by an external Kafka client or orchestrator), hence info rather than warning.
+
+Likely causes:
+
+- The capture is consumed by something outside this manifest set (an external Kafka client, an orchestrator).
+- A sink/ingest Binding that used to consume it was removed.
+
+Remedies:
+
+- Add the downstream Binding if delivery within this manifest set is expected.
+- If external consumption is intentional, waive DL013 with a reason.
+
+### `DL014` (lintCode)
+
+Single-replica data path where the HA field exists (spec.configuration.brokers/workers/nodes explicitly set to 1) and the HighAvailability gate is enabled — a single replica has no failover.
+
+Likely causes:
+
+- HighAvailability was enabled platform-wide, but this Provider was left at its single-replica default.
+- A single replica is intentional for this Provider (e.g. a scratch/dev instance).
+
+Remedies:
+
+- Raise the replica count if this Provider should be highly available.
+- If a single replica is intentional, waive DL014 with a reason.
+
+### `DL020` (lintCode)
+
+spec.deletionPolicy is unset on a data-bearing kind (Dataset/Source) — the default is "retain", but explicitness is the best practice for data that can be destroyed.
+
+Likely causes:
+
+- The manifest was written before deletionPolicy was a habit, or copied from an older example.
+
+Remedies:
+
+- Set spec.deletionPolicy explicitly ("retain" or "delete").
+
+### `DL021` (lintCode)
+
+metadata.protect is unset on a data-bearing kind (Dataset/Source) in a manifest set whose plan would also perform an authoritative delete elsewhere (state has a resource no longer in the current set) — plan-aware.
+
+Likely causes:
+
+- The manifest set is mid-refactor: some resources were removed while data-bearing ones nearby were never explicitly protected.
+
+Remedies:
+
+- Set metadata.protect: true on the data-bearing resource if it must never be deleted by an authoritative apply/destroy.
+- If the resource is genuinely safe to delete, no action is needed beyond confirming the authoritative delete is intentional.
+

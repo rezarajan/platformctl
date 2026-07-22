@@ -154,6 +154,11 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	gates.Register("JDBCSinkProvider", featuregate.Alpha, false)
 	gates.Register("IngestProvider", featuregate.Alpha, false)
 
+	// docs/planning/08 H1 (ADR 020): read-only reporting only — the gate
+	// exists to switch `validate`'s one-line design-findings summary off,
+	// not to hide the `lint` command itself, so it defaults enabled.
+	gates.Register("DesignLints", featuregate.Alpha, true)
+
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
 	reg.RegisterProvider("container", func() reconciler.Provider { return placeholder.New() }, "ContainerProvider")
