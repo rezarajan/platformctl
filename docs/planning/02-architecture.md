@@ -304,6 +304,17 @@ Every method is `Ensure*`, not `Create*` — idempotent-by-contract at the inter
 This is what makes NFR-2 enforceable: adapters are required to no-op when actual state already
 matches spec, not just "usually" do so.
 
+**Settledness rule (NFR-11, added by the 2026-07 production review, doc 08 I3/I4):** a
+provider reports `Ready` only when the resource answers its declared protocol *at that
+moment* — reconcile runs the SAME serving check its own `Probe` uses (no weaker proxy
+signal: container-running ≠ serving; membership ≠ leadership), inside a bounded
+condition-poll with an honest timeout error naming the last observed state. Fixed-duration
+sleeps that assume completion are forbidden; correctness must not depend on machine speed.
+The reference implementations: redpanda's `waitTopicSettled`, and the I4 settle-polls in
+wireguard/ingress/proxy (which also demonstrate the runtime-aware bar — where a runtime
+publishes no dial-through address, Probe's own guard on that runtime is the bar, keeping
+reconcile exactly as strict as Probe, never stricter or weaker).
+
 ### 4.2 Provider (reconciler) port and capability interfaces
 
 **Contract revision (docs/planning/08 Stage F, task F5 — 2026-07-20):**

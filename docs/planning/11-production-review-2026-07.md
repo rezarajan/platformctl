@@ -59,7 +59,8 @@ static. Dimensions, each producing findings verified before fixing:
       end-to-end or explicitly documented as gapped
 - [x] B4 coding practices: error wrapping, context propagation,
       goroutine lifecycle/leaks, lint debt beyond golangci defaults
-- [ ] B5 fix waves for confirmed findings, impact-gated per doc 06 §10
+- [x] B5 fix waves for confirmed findings, impact-gated per doc 06 §10
+      (I4 merged 55708ee, I5 merged 5f792b1)
 
 ## Log
 
@@ -176,3 +177,10 @@ static. Dimensions, each producing findings verified before fixing:
   ledger at each branch's content-state — merged-state delta gate:
   docker-conformance + k8s-adapter + ingress + wireguard + lakehouse +
   cdc + jdbcsink minimum, ledger-deduped.
+- 2026-07-22: GPG unlocked; merge queue FLUSHED. I4 merged (55708ee,
+  series re-signed) and I5 merged (5f792b1, suite-map conflict composed
+  by per-row scope union). Merged-state delta gate launched. I3's doc 02
+  half completed (settledness engineering rule §4.1). Next wave: I1
+  (via consumption), I2 (outbound DB TLS), I6 (K8s GA-parity evidence),
+  H3 (policy engine) — E5 deliberately held until I1/I2 merge (it
+  restructures every provider's validation and would conflict).
