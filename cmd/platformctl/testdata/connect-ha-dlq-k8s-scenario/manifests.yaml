@@ -1,0 +1,197 @@
+# I6 (docs/planning/08 §7.8): the Kubernetes leg of
+# TestConnectWorkersHAAndDeadLetterQueue's D6 half — dead-letter queue
+# routing for a sink Binding — mirroring testdata/connect-ha-dlq-scenario's
+# resource shape on runtime: kubernetes. Deliberately single-worker on BOTH
+# Connect providers (no spec.configuration.workers declared), unlike the
+# Docker fixture's workers: 2 debezium: a live probe against this cluster
+# (TASK_PROGRESS.md / the I6 commit's Done-note) found that
+# providerkit.ReachableURLs' per-ordinal addressing
+# (runtime.OrdinalName(name, i) -> EnsureReachable) assumes literal
+# ordinal-named containers, which only the StatefulSet (StableIdentity: true)
+# shape provides on Kubernetes — debezium/s3sink's workers > 1 opts into the
+# Deployment (StableIdentity: false) shape instead (docs/adr/004), a single
+# aggregate object with no per-ordinal address at all. A Binding wired to a
+# workers > 1 debezium Provider therefore fails outright at apply
+# ("no member of ... is currently reachable"), not merely a
+# ProbeConnectWorkerSet drift misreport — this is a real, currently-open
+# production gap (recorded in docs/planning/07's per-runtime-differences
+# section and docs/planning/08 I6's Done-note), not something this test-only
+# task fixes. This scenario proves what IS true on Kubernetes today: D6's
+# dead-letter routing, plus native Deployment self-heal after an out-of-band
+# single-worker kill — not C3's "second worker keeps serving" claim, which
+# has no Kubernetes leg yet.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: chdlqk8s-pg-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: chdlqk8s-pg-repl
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: chdlqk8s-minio-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chdlqk8s-rp
+spec:
+  type: redpanda
+  runtime:
+    type: kubernetes
+    network: datascape-chdlqk8s-test-ns
+    access: node-port
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chdlqk8s-pg
+spec:
+  type: postgres
+  runtime:
+    type: kubernetes
+    network: datascape-chdlqk8s-test-ns
+    access: node-port
+  configuration:
+    version: "16"
+    superuserSecretRef: chdlqk8s-pg-admin
+    replicationSecretRef: chdlqk8s-pg-repl
+  secretRefs: [chdlqk8s-pg-admin, chdlqk8s-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chdlqk8s-dbz
+spec:
+  type: debezium
+  runtime:
+    type: kubernetes
+    network: datascape-chdlqk8s-test-ns
+    access: node-port
+  configuration:
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
+    bootstrapServers: datascape-chdlqk8s-rp:29092
+    replicationSecretRef: chdlqk8s-pg-repl
+  secretRefs: [chdlqk8s-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chdlqk8s-minio
+spec:
+  type: minio
+  runtime:
+    type: kubernetes
+    network: datascape-chdlqk8s-test-ns
+    access: node-port
+  configuration:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    rootSecretRef: chdlqk8s-minio-root
+  secretRefs: [chdlqk8s-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chdlqk8s-s3
+spec:
+  type: s3sink
+  runtime:
+    type: kubernetes
+    network: datascape-chdlqk8s-test-ns
+    access: node-port
+  configuration:
+    image: datascape-s3sink-connect:test
+    bootstrapServers: datascape-chdlqk8s-rp:29092
+    credentialsSecretRef: chdlqk8s-minio-root
+  secretRefs: [chdlqk8s-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: chdlqk8s-students
+spec:
+  engine: postgres
+  providerRef:
+    name: datascape-chdlqk8s-pg
+  postgres:
+    database: attendance
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: chdlqk8s-attendance-events
+spec:
+  providerRef:
+    name: datascape-chdlqk8s-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: chdlqk8s-attendance-events-dlq
+spec:
+  providerRef:
+    name: datascape-chdlqk8s-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: chdlqk8s-attendance-raw
+spec:
+  providerRef:
+    name: datascape-chdlqk8s-minio
+  bucket: raw-events
+  prefix: attendance/
+  format: json
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: chdlqk8s-students-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: chdlqk8s-students
+  targetRef:
+    name: chdlqk8s-attendance-events
+  providerRef:
+    name: datascape-chdlqk8s-dbz
+  options:
+    tables: [students]
+    snapshotMode: initial
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: chdlqk8s-events-to-lake
+spec:
+  mode: sink
+  sourceRef:
+    name: chdlqk8s-attendance-events
+  targetRef:
+    name: chdlqk8s-attendance-raw
+  providerRef:
+    name: datascape-chdlqk8s-s3
+  options:
+    deadLetter:
+      stream: chdlqk8s-attendance-events-dlq
+      tolerance: all
