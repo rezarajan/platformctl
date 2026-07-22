@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -256,7 +257,45 @@ func putConnectorConfig(t *testing.T, baseURL, name string, config map[string]st
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		t.Fatalf("PUT %s: HTTP %d", req.URL, resp.StatusCode)
 	}
-	// Kafka Connect's config PUT applies asynchronously; give the worker a
-	// moment to pick it up before the next GET/probe reads it back.
-	time.Sleep(500 * time.Millisecond)
+	// Kafka Connect's config PUT applies asynchronously. Poll the GET
+	// until the worker reports the config we just wrote (bounded, honest
+	// timeout) — never a fixed pause that assumes the apply landed
+	// (doc 02 §4.1's settledness rule applied to the harness).
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		got, err := getConnectorConfig(baseURL, name)
+		if err == nil {
+			match := true
+			for k, v := range config {
+				if got[k] != v {
+					match = false
+					break
+				}
+			}
+			if match {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("connector %q config did not reflect the PUT within 60s (last err: %v, got: %v)", name, err, got)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// getConnectorConfig reads back /connectors/<name>/config.
+func getConnectorConfig(baseURL, name string) (map[string]string, error) {
+	resp, err := http.Get(baseURL + "/connectors/" + name + "/config")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET config: HTTP %d", resp.StatusCode)
+	}
+	var got map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		return nil, err
+	}
+	return got, nil
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/rezarajan/platformctl/internal/domain/status"
+	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
 // adminClient connects using dialMap — advertised-address → an address
@@ -245,7 +246,7 @@ var (
 // retryTransientProbe re-runs probe while it returns an error, bounded by
 // topicProbeRetryWindow; the first determined verdict returns immediately.
 func retryTransientProbe(ctx context.Context, probe func() (bool, string, error)) (bool, string, error) {
-	deadline := time.Now().Add(topicProbeRetryWindow)
+	deadline := time.Now().Add(runtime.ScaledWait(topicProbeRetryWindow))
 	for {
 		drifted, reason, err := probe()
 		if err == nil {
@@ -263,7 +264,7 @@ func retryTransientProbe(ctx context.Context, probe func() (bool, string, error)
 }
 
 func waitTopicSettled(ctx context.Context, dialMap map[string]string, seeds []string, topic string, wantPartitions, wantReplication int, wantRetentionMS int64) error {
-	deadline := time.Now().Add(topicSettleTimeout)
+	deadline := time.Now().Add(runtime.ScaledWait(topicSettleTimeout))
 	var lastErr error
 	var lastReason string
 	for {

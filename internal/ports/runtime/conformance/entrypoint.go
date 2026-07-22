@@ -99,14 +99,22 @@ func runEntrypointFaithfulness(t *testing.T, rt runtime.ContainerRuntime, fx fix
 		if _, err := rt.EnsureContainer(ctx, spec); err != nil {
 			t.Fatalf("EnsureContainer: %v", err)
 		}
-		// Give the process a moment to exit if Entrypoint didn't take.
-		time.Sleep(2 * time.Second)
+		// Bounded poll to Running, not a fixed pause (NFR-11 applied to the
+		// harness itself — found live on a cold CI runner, doc 11: the
+		// 2s sleep this replaces lost the race against the image pull and
+		// misread "not running YET" as "entrypoint not replaced"). With no
+		// HealthCheck declared, WaitHealthy's bar is exactly Running; a
+		// mis-appended entrypoint ("curl sh -c ...") exits within
+		// milliseconds of the image being present and can never satisfy it.
+		if err := rt.WaitHealthy(ctx, name, 120*time.Second); err != nil {
+			t.Fatalf("container never reached Running — Entrypoint did not replace the image's own ENTRYPOINT (it looks like it was appended after \"curl\" instead, which then failed treating \"sh\" as a URL): the K1 mistake, inverted (%v)", err)
+		}
 		st, found, err := rt.Inspect(ctx, name)
 		if err != nil {
 			t.Fatalf("Inspect: %v", err)
 		}
 		if !found || !st.Running {
-			t.Fatal("container is not running — Entrypoint did not replace the image's own ENTRYPOINT (it looks like it was appended after \"curl\" instead, which then failed treating \"sh\" as a URL): the K1 mistake, inverted")
+			t.Fatal("container not running immediately after WaitHealthy — Entrypoint replacement did not hold")
 		}
 	})
 

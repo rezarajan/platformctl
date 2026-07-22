@@ -318,7 +318,7 @@ var (
 // published address exists there from the moment the container does, so
 // the dial-through always runs.
 func waitForwarderServing(ctx context.Context, rt runtime.ContainerRuntime, name string, conn connection.Connection) error {
-	deadline := time.Now().Add(forwarderSettleTimeout)
+	deadline := time.Now().Add(runtime.ScaledWait(forwarderSettleTimeout))
 	var lastErr error
 	var lastReason string
 	for {

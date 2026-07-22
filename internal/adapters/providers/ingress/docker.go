@@ -362,7 +362,7 @@ func waitRouteServing(ctx context.Context, rt runtime.ContainerRuntime, proxyNam
 	if isTLS {
 		containerPort = httpsContainerPort
 	}
-	deadline := time.Now().Add(routeSettleTimeout)
+	deadline := time.Now().Add(runtime.ScaledWait(routeSettleTimeout))
 	var lastErr error
 	for {
 		lastErr = probeRouteOnce(ctx, rt, proxyName, containerPort, host, isTLS)

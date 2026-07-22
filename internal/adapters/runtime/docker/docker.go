@@ -492,6 +492,10 @@ func (r *Runtime) ReadFile(ctx context.Context, name, path string) ([]byte, erro
 }
 
 func (r *Runtime) WaitHealthy(ctx context.Context, name string, timeout time.Duration) error {
+	// Scaled at the chokepoint so every caller's health wait honors
+	// DATASCAPE_WAIT_SCALE (see runtime.ScaledWait) — deadlines bound
+	// failure reporting only; slow environments widen them uniformly.
+	timeout = runtime.ScaledWait(timeout)
 	deadline := time.Now().Add(timeout)
 	for {
 		info, err := r.cli.ContainerInspect(ctx, name)

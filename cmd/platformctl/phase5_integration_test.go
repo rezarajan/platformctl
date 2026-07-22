@@ -147,8 +147,21 @@ func TestExternalSourceEndToEnd(t *testing.T) {
 		"postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20", "postgres", "-c", "wal_level=logical").CombinedOutput(); err != nil {
 		t.Fatalf("out-of-band docker run: %v\n%s", err, out)
 	}
-	// No healthcheck on the out-of-band container; give initdb a moment.
-	time.Sleep(5 * time.Second)
+	// No healthcheck on the out-of-band container: poll pg_isready until
+	// the server accepts connections (bounded, honest timeout) — a fixed
+	// pause assumes initdb's duration, which is exactly the machine-speed
+	// dependence NFR-11 forbids (found in the doc 11 timed-poll census).
+	initdbDeadline := time.Now().Add(120 * time.Second)
+	for {
+		if out, err := exec.Command("docker", "exec", "ext-attendance-db",
+			"pg_isready", "-U", "extuser", "-d", "attendance").CombinedOutput(); err == nil {
+			_ = out
+			break
+		} else if time.Now().After(initdbDeadline) {
+			t.Fatalf("out-of-band postgres never became ready: %v\n%s", err, out)
+		}
+		time.Sleep(time.Second)
+	}
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/external-scenario"

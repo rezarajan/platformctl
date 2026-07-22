@@ -72,6 +72,10 @@ func (r *Runtime) replicaSetReadiness(ctx context.Context, name string) (ns stri
 }
 
 func (r *Runtime) WaitHealthy(ctx context.Context, name string, timeout time.Duration) error {
+	// Scaled at the chokepoint so every caller's health wait honors
+	// DATASCAPE_WAIT_SCALE (see runtimeport.ScaledWait) — deadlines bound
+	// failure reporting only; slow environments widen them uniformly.
+	timeout = runtimeport.ScaledWait(timeout)
 	deadline := time.Now().Add(timeout)
 	for {
 		ns, found, ready, err := r.replicaSetReadiness(ctx, name)

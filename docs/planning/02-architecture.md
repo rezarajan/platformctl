@@ -315,6 +315,19 @@ wireguard/ingress/proxy (which also demonstrate the runtime-aware bar — where 
 publishes no dial-through address, Probe's own guard on that runtime is the bar, keeping
 reconcile exactly as strict as Probe, never stricter or weaker).
 
+**Deadlines bound failure reporting, never success** — and can therefore
+never be provably sufficient for every environment. `DATASCAPE_WAIT_SCALE`
+(float, default 1) widens every bounded wait uniformly at three
+chokepoints (`runtime.ScaledWait`: both adapters' `WaitHealthy`,
+`WithReachable`, and each provider's settle-deadline construction) so a
+slow environment — emulated architecture, cold CI cache, starved runner —
+tunes one knob instead of anyone ever "fixing" a timeout by guessing a
+bigger constant. The observed conditions are unchanged; only the honest
+give-up point moves. Fixed-duration sleeps that assume completion are
+forbidden in production code AND test harnesses alike (the 2026-07-22
+census, doc 11: one CI failure traced to a harness sleep, three more
+found and removed).
+
 ### 4.2 Provider (reconciler) port and capability interfaces
 
 **Contract revision (docs/planning/08 Stage F, task F5 — 2026-07-20):**

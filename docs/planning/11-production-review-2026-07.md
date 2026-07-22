@@ -425,3 +425,20 @@ static. Dimensions, each producing findings verified before fixing:
   memory/active-wave-handoff.md lists the operational lessons
   (no idle-polling, bounded watchers, git -C for worktrees, unfiltered
   exit checks, kill sweeps WITH their watchers).
+- 2026-07-22: TIMED-POLL CENSUS (owner directive: ready-means-serving on
+  ANY environment). Production code: exactly ONE time.Sleep — a poll
+  cadence inside a bounded condition loop (conformance
+  waitReadyReplicas); zero fixed-sleep functionality. Test corpus: 38
+  sleeps, all but four are bounded-poll cadences; the four violations
+  FIXED: conformance entrypoint sleep-then-assert (the live CI failure —
+  now WaitHealthy-bounded, proven green on both adapters, K8s 374.0s),
+  phase5's 5s initdb assumption (now pg_isready poll), drift-config's
+  500ms PUT-propagation assumption (now bounded read-back poll), proxy
+  test fixtures' 2s session holds (now hold-until-cleanup channels —
+  timeless). Clock-condition waits (lease TTL expiry, deadline-in-past)
+  and yield-based concurrency fixtures audited and kept — they are not
+  machine-speed dependent. SYSTEMIC: DATASCAPE_WAIT_SCALE added at three
+  chokepoints (WaitHealthy x2 adapters, WithReachable, and every settle
+  deadline) — deadlines bound failure reporting only; any environment
+  widens them with one knob (doc 02 §4.1 records the rule). Unfiltered
+  unit true-exit=0; golangci 0 issues; scale=0.01 clamp exercised.

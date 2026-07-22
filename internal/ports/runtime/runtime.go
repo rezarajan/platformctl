@@ -7,7 +7,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -640,4 +642,35 @@ func ManagedLabels(namespace, kind, name, generation string) map[string]string {
 		LabelName:       name,
 		LabelProject:    namespace,
 	}
+}
+
+// ScaledWait multiplies a wait/settle deadline by DATASCAPE_WAIT_SCALE
+// (float, default 1). Deadlines in this codebase bound FAILURE REPORTING,
+// never success — success is always an observed condition (doc 02 §4.1,
+// NFR-11) — so they can never be provably sufficient for every
+// environment (emulated architectures, cold caches, starved CI runners).
+// Rather than each site guessing bigger constants, slow environments set
+// one knob and every bounded wait widens proportionally; the conditions
+// being waited for are unchanged. Values below 1 are permitted (fast-fail
+// experimentation) but clamped to 0.1.
+func ScaledWait(d time.Duration) time.Duration {
+	return time.Duration(float64(d) * waitScale())
+}
+
+var waitScaleOnce sync.Once
+var waitScaleVal float64
+
+func waitScale() float64 {
+	waitScaleOnce.Do(func() {
+		waitScaleVal = 1
+		if s := os.Getenv("DATASCAPE_WAIT_SCALE"); s != "" {
+			if f, err := strconv.ParseFloat(s, 64); err == nil {
+				if f < 0.1 {
+					f = 0.1
+				}
+				waitScaleVal = f
+			}
+		}
+	})
+	return waitScaleVal
 }

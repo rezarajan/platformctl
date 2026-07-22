@@ -833,7 +833,7 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 // the docs/planning/09 F1 re-resolve-per-attempt discipline, multi-ordinal)
 // until all n brokers have joined.
 func waitClusterFormed(ctx context.Context, rt runtime.ContainerRuntime, name string, n int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(runtime.ScaledWait(timeout))
 	var last error
 	for {
 		joined := 0

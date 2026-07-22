@@ -147,16 +147,18 @@ func TestReconcileConnectionSucceedsWhenUpstreamAnswers(t *testing.T) {
 	}
 	defer ln.Close()
 	port := ln.Addr().(*net.TCPAddr).Port
+	holdOpen := make(chan struct{})
+	t.Cleanup(func() { close(holdOpen) })
 	go func() {
 		c, aerr := ln.Accept()
 		if aerr != nil {
 			return
 		}
 		defer c.Close()
-		// Hold the session open past probeThroughForwarder's 1.5s read
-		// deadline — exactly what a live upstream's accepted session looks
-		// like from the forwarder's other side.
-		time.Sleep(2 * time.Second)
+		// Hold the session open until the test ends — a live upstream's
+		// accepted session, with no wall-clock assumption about how long
+		// the probe under test takes (doc 11 timed-poll census).
+		<-holdOpen
 	}()
 
 	ctx := context.Background()
@@ -218,13 +220,15 @@ func TestReconcileConnectionViaJoinsTransitNetworkAndDialsTunnel(t *testing.T) {
 	}
 	defer ln.Close()
 	port := ln.Addr().(*net.TCPAddr).Port
+	holdOpen := make(chan struct{})
+	t.Cleanup(func() { close(holdOpen) })
 	go func() {
 		c, aerr := ln.Accept()
 		if aerr != nil {
 			return
 		}
 		defer c.Close()
-		time.Sleep(2 * time.Second)
+		<-holdOpen
 	}()
 
 	ctx := context.Background()

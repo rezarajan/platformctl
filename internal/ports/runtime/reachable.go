@@ -45,7 +45,10 @@ func WithReachable(ctx context.Context, rt ContainerRuntime, name string, port i
 	if interval <= 0 {
 		interval = DefaultReachableInterval
 	}
-	deadline := time.Now().Add(timeout)
+	// ScaledWait at the chokepoint: every reachability wait in the repo
+	// funnels through here, so one edit honors DATASCAPE_WAIT_SCALE for
+	// all of them (deadlines bound failure reporting only).
+	deadline := time.Now().Add(ScaledWait(timeout))
 	var lastErr error
 	for {
 		lastErr = attemptReachable(ctx, rt, name, port, fn)

@@ -385,7 +385,7 @@ func (p *Provider) reconcileViaTunnels(ctx context.Context, req reconciler.Reque
 // (docs/planning/11 B1 finding 1's discipline, applied to the via path).
 func waitViaTunnelServing(ctx context.Context, rt runtime.ContainerRuntime, network, name string, port int) error {
 	target := fmt.Sprintf("%s:%d", name, port)
-	deadline := time.Now().Add(tunnelSettleTimeout)
+	deadline := time.Now().Add(runtime.ScaledWait(tunnelSettleTimeout))
 	var lastReason string
 	for {
 		ctr, found, err := rt.Inspect(ctx, name)
@@ -754,7 +754,7 @@ var (
 // healthcheck alone (docs/planning/11 B1 finding 1, the redpanda-93fbf14
 // signature).
 func waitTunnelServing(ctx context.Context, rt runtime.ContainerRuntime, name string, conn connection.Connection, tc tunnelConfig) error {
-	deadline := time.Now().Add(tunnelSettleTimeout)
+	deadline := time.Now().Add(runtime.ScaledWait(tunnelSettleTimeout))
 	var lastReason string
 	for {
 		tss, err := probeTunnelServing(ctx, rt, name, conn, tc)
