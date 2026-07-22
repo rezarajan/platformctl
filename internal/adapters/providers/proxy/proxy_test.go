@@ -11,6 +11,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
+	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
 // shrinkForwarderSettle lowers forwarderSettleTimeout/forwarderSettlePoll
@@ -78,6 +79,57 @@ func TestReconcileConnectionFailsHonestlyWhenUpstreamNeverAnswers(t *testing.T) 
 	}
 	if ready, ok := st.Condition(status.Ready); ok && ready.Status == status.True {
 		t.Error("status must not report Ready when the upstream never answered")
+	}
+}
+
+// noHostAddrRuntime wraps the fake runtime but reports no host-side port
+// binding from Inspect — the shape the Kubernetes adapter presents under
+// its default ClusterIP/port-forward access mode, where only NodePort/
+// LoadBalancer Services ever get a HostIP/HostPort.
+type noHostAddrRuntime struct {
+	*fakeruntime.Runtime
+}
+
+func (r *noHostAddrRuntime) Inspect(ctx context.Context, name string) (runtime.ContainerState, bool, error) {
+	st, found, err := r.Runtime.Inspect(ctx, name)
+	for i := range st.Ports {
+		st.Ports[i].HostIP = ""
+		st.Ports[i].HostPort = 0
+	}
+	return st, found, err
+}
+
+// TestReconcileConnectionReadyWhenRuntimePublishesNoHostAddress pins the
+// I4 follow-up found live in TestLakehouseExampleOnKubernetes: on a
+// runtime that publishes no host-side binding (Kubernetes, default
+// ClusterIP/port-forward access mode), Probe's own dial-through is guarded
+// by `if addr != ""` and skipped — so reconcile's settle bar there is
+// container health, the same as Probe's, and it must NOT wait out the
+// settle timeout for an address that can never appear (nor demand the
+// upstream answer: the target may be a genuinely external host
+// unresolvable from the cluster).
+func TestReconcileConnectionReadyWhenRuntimePublishesNoHostAddress(t *testing.T) {
+	shrinkForwarderSettle(t)
+
+	ctx := context.Background()
+	rt := &noHostAddrRuntime{Runtime: fakeruntime.New()}
+	p := New()
+
+	provEnv := providerEnvelope("edge")
+	// Nothing listens anywhere; the target is an external placeholder host.
+	connEnv := connectionEnvelope("orders-db", "edge", 58233, "external-orders-db:5432")
+
+	req := reconciler.Request{Resource: connEnv, Provider: provEnv, Runtime: rt}
+	start := time.Now()
+	st, err := p.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !st.IsReady() {
+		t.Error("expected Ready on a runtime with no published host address (Probe's bar there is container health)")
+	}
+	if elapsed := time.Since(start); elapsed >= forwarderSettleTimeout {
+		t.Errorf("Reconcile took %s — it waited out the settle timeout instead of matching Probe's addr==\"\" skip", elapsed)
 	}
 }
 

@@ -2609,6 +2609,32 @@ unless a dependency is stated.
   target there is an external placeholder host — no edges, no ordering
   change. Unit tests: graph_test.go TestManagedConnectionTarget* (+
   external/no-match/self-edge/cycle negative pins).
+- **Done, follow-up 2 (2026-07-22) — K8s settle bar matches Probe's:**
+  round-2 sweep was 15/16 green; the one K8s failure
+  (TestLakehouseExampleOnKubernetes, Connection/orders-db: "forwarder has
+  no published host address yet" for the full 45s) exposed that proxy's
+  `waitForwarderServing` treated an empty `ctr.HostAddr` as a wait state
+  — but on Kubernetes under the default ClusterIP/port-forward access
+  mode, Inspect NEVER reports a HostIP/HostPort (only NodePort/
+  LoadBalancer Services get one), so the address could never appear.
+  Proxy's Probe guards its own dial-through with `if addr != ""` and
+  skips it in exactly this case; the fix makes the settle poll mirror
+  that guard verbatim — on a runtime with no published host binding, the
+  serving bar is container health, the same as Probe's. Deliberately NOT
+  a per-attempt port-forward dial: that would make reconcile STRICTER
+  than Probe (breaking I4's symmetry in the opposite direction) and would
+  wrongly fail Connections whose target is a genuinely external,
+  unresolvable-from-the-cluster host (the lakehouse example's placeholder
+  upstream) — serving means "the forwarder accepts and forwards";
+  upstream reachability on such runtimes stays Probe/drift's job, as
+  before I4. Docker behavior unchanged (address exists immediately;
+  dial-through always runs — its suites stayed green). Unit pin:
+  proxy_test.go TestReconcileConnectionReadyWhenRuntimePublishesNoHostAddress
+  (a no-host-addr fake wrapper simulating the K8s Inspect shape).
+  Targeted re-run of only the failed lakehouse suite (not a full
+  re-sweep; 15 green suites' content-scope unchanged except proxy —
+  coordinator-authorized deviation, see TASK_PROGRESS.md) launched under
+  the shared flock with the minted minimal-RBAC kubeconfig.
 
 
 

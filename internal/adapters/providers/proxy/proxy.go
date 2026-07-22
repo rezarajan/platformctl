@@ -251,12 +251,31 @@ var (
 )
 
 // waitForwarderServing bounds reconcileConnection's Ready determination to
-// the SAME check Probe uses — probeThroughForwarder, a dial-through the
-// socat forwarder to the upstream, not just the container reporting
-// healthy. A healthy forwarder passes on the first attempt (zero added
-// latency); on timeout, reconcile fails honestly with the last observed
-// state instead of setting Ready from container health alone
-// (docs/planning/11 B1 finding 3).
+// the SAME check Probe uses — container health, then probeThroughForwarder
+// (a dial-through the socat forwarder) exactly where Probe performs it. A
+// healthy forwarder passes on the first attempt (zero added latency); on
+// timeout, reconcile fails honestly with the last observed state instead
+// of setting Ready from container health alone (docs/planning/11 B1
+// finding 3).
+//
+// The dial-through is conditional on ctr.HostAddr publishing a host-side
+// address, mirroring Probe's own `if addr != ""` guard verbatim — NOT an
+// oversight (found live, 2026-07-22, TestLakehouseExampleOnKubernetes): on
+// Kubernetes under the default ClusterIP/port-forward access mode, Inspect
+// reports no HostIP/HostPort at all (only NodePort/LoadBalancer Services
+// get one — see the K8s adapter's Inspect), so treating addr=="" as a wait
+// state could never resolve and timed out a healthy forwarder after 45s.
+// Symmetry with Probe is I4's whole bar: on a runtime where Probe itself
+// skips the dial-through, reconcile's serving check is container health,
+// the same as Probe's. Holding reconcile STRICTER than Probe there (e.g.
+// dialing via a per-attempt port-forward instead) would break the symmetry
+// in the opposite direction and wrongly fail Connections whose target is a
+// genuinely external, unresolvable-from-the-cluster host (the lakehouse
+// example's placeholder upstream): serving means "the forwarder accepts
+// and forwards"; upstream reachability on such runtimes stays Probe/
+// drift's job, exactly as before I4. Docker behavior is unchanged — the
+// published address exists there from the moment the container does, so
+// the dial-through always runs.
 func waitForwarderServing(ctx context.Context, rt runtime.ContainerRuntime, name string, conn connection.Connection) error {
 	deadline := time.Now().Add(forwarderSettleTimeout)
 	var lastErr error
@@ -266,24 +285,23 @@ func waitForwarderServing(ctx context.Context, rt runtime.ContainerRuntime, name
 		if err != nil {
 			return err
 		}
-		switch {
-		case !found || !ctr.Healthy:
+		if found && ctr.Healthy {
+			addr := ctr.HostAddr(conn.Port)
+			if addr == "" {
+				// No published host binding on this runtime — Probe's own
+				// serving bar here is container health alone (see the doc
+				// comment above); already met.
+				return nil
+			}
+			perr := probeThroughForwarder(addr)
+			if perr == nil {
+				return nil
+			}
+			lastErr = perr
+			lastReason = fmt.Sprintf("upstream %s unreachable through forwarder: %v", conn.Target, perr)
+		} else {
 			lastErr = nil
 			lastReason = "forwarder container not healthy"
-		default:
-			addr := ctr.HostAddr(conn.Port)
-			switch {
-			case addr == "":
-				lastErr = nil
-				lastReason = "forwarder has no published host address yet"
-			default:
-				if perr := probeThroughForwarder(addr); perr != nil {
-					lastErr = perr
-					lastReason = fmt.Sprintf("upstream %s unreachable through forwarder: %v", conn.Target, perr)
-				} else {
-					return nil
-				}
-			}
 		}
 		if time.Now().After(deadline) {
 			if lastErr != nil {

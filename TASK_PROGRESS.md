@@ -75,3 +75,35 @@ Orchestrator/next session: check that log's final
 `impact: N selected, N ran, ...` line before merging. Per doc 06 §10 rule
 7, do not `git worktree remove` this worktree while the sweep is running
 (`pgrep -af <worktree-path>`).
+
+
+## Follow-up 2: K8s settle bar (commit 3)
+Round-2 sweep: 15/16 green (graph fix confirmed — ingress green). One
+K8s failure: TestLakehouseExampleOnKubernetes, Connection/orders-db,
+"forwarder has no published host address yet" through the full 45s.
+Root cause (coordinator hypothesis 1/2 mechanism, hypothesis 3 outcome):
+K8s Inspect only fills HostIP/HostPort for NodePort/LoadBalancer
+Services — under the default ClusterIP/port-forward mode `HostAddr` is
+"" forever. proxy's Probe guards its dial-through with `if addr != ""`
+(skips on K8s); my settle poll treated ""=wait, which could never
+resolve. Fix: `waitForwarderServing` now mirrors Probe's guard verbatim
+— healthy + (dial-through only where a host address is published). NOT a
+per-attempt port-forward dial: that would make reconcile stricter than
+Probe and wrongly fail genuinely-external targets (orders-db's
+placeholder host, unresolvable in-cluster). Docker unchanged (address
+exists immediately; dial-through always runs; its suites were green).
+Unit pin: proxy_test.go
+TestReconcileConnectionReadyWhenRuntimePublishesNoHostAddress.
+
+Verification: gofmt/build/vet clean; unfiltered `go test ./...` gives
+true-exit=0.
+
+## Targeted re-run (deviation, coordinator-authorized)
+Per the coordinator's 2026-07-22 message ("re-run ONLY the failed suite
+this time... a full --base main re-sweep would rerun 15 green suites for
+nothing; cite this message as the deviation authorization"): running the
+lakehouse suite command directly under `flock /tmp/platformctl-itest.lock`
+with KUBECONFIG=/tmp/claude-1000/platformctl-rbac/platformctl.kubeconfig
+instead of scripts/test-impact.sh. NOTE: a direct run bypasses the
+ledger — the orchestrator's merge-gate sweep will re-record it. Log:
+`/tmp/claude-1000/-home-cascadura-git-platformctl/3ff96d5f-6a0c-4676-8628-0810b1d9fe68/scratchpad/i4-lakehouse-rerun.log`
