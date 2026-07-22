@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/schemas"
 )
 
@@ -48,8 +49,67 @@ func Build() (map[string]string, error) {
 	b.WriteString(strings.Join(indexRows, "\n"))
 	b.WriteString("\n\n## Provider types\n\n")
 	b.WriteString(providerTypes())
+	b.WriteString("\n\nSee also: [Condition & reason catalog](explain.md) — every Condition Type\n")
+	b.WriteString("and Reason a resource's `status`/`drift` output can show, with meaning,\n")
+	b.WriteString("likely causes, and remedies (`platformctl explain <token>` for the same\n")
+	b.WriteString("content interactively).\n")
 	out["index.md"] = b.String()
+	out["explain.md"] = renderExplainCatalog()
 	return out, nil
+}
+
+// renderExplainCatalog renders status.Catalog (docs/planning/08 E4) as a
+// standalone reference page: `platformctl explain <token>` looks the same
+// entries up interactively; this is the same content, browsable and
+// searchable via `platformctl docs build --html`/`docs serve`. Grouped by
+// CatalogEntry.Area in the order areas first appear in the catalog slice
+// (ConditionTypes first, then each provider/area section — mirroring
+// reasons.go's own section order, since the catalog was built from it).
+func renderExplainCatalog() string {
+	var areaOrder []string
+	seen := map[string]bool{}
+	byArea := map[string][]status.CatalogEntry{}
+	for _, e := range status.Catalog {
+		if !seen[e.Area] {
+			seen[e.Area] = true
+			areaOrder = append(areaOrder, e.Area)
+		}
+		byArea[e.Area] = append(byArea[e.Area], e)
+	}
+
+	var b strings.Builder
+	b.WriteString("# Condition & reason catalog\n\n")
+	b.WriteString("Generated from `internal/domain/status.Catalog` by `platformctl docs build` — do not\n")
+	b.WriteString("edit by hand. The same content is available interactively via\n")
+	b.WriteString("`platformctl explain <ConditionType|reason|error-token>`, which resolves an\n")
+	b.WriteString("exact match first, then a case-insensitive prefix/substring fallback.\n\n")
+
+	for _, area := range areaOrder {
+		entries := byArea[area]
+		fmt.Fprintf(&b, "## %s\n\n", area)
+		for _, e := range entries {
+			token := e.Token
+			if e.Prefix {
+				token += "*"
+			}
+			fmt.Fprintf(&b, "### `%s` (%s)\n\n%s\n\n", token, e.Kind, description(e.Meaning))
+			if len(e.Causes) > 0 {
+				b.WriteString("Likely causes:\n\n")
+				for _, c := range e.Causes {
+					fmt.Fprintf(&b, "- %s\n", c)
+				}
+				b.WriteString("\n")
+			}
+			if len(e.Remedies) > 0 {
+				b.WriteString("Remedies:\n\n")
+				for _, r := range e.Remedies {
+					fmt.Fprintf(&b, "- %s\n", r)
+				}
+				b.WriteString("\n")
+			}
+		}
+	}
+	return b.String()
 }
 
 func providerTypes() string {

@@ -49,6 +49,11 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
+        with:
+          # test-impact.sh diffs against origin/main on pull_request builds
+          # (docs/planning/08 G7); that ref must be resolvable locally, which
+          # the default shallow single-branch checkout doesn't give us.
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -74,8 +79,19 @@ jobs:
       # out-of-band container kills/stops must be observed by `drift`, healed
       # by `apply`, survive a SIGKILL mid-apply, and `destroy` must converge
       # against already-dead infrastructure.
+      #
+      # docs/planning/08 G7: pull requests run only the suites the diff
+      # affects (scripts/test-impact.sh --base origin/main); pushes to main
+      # (and any future scheduled/nightly job — none exists yet) run the
+      # full sweep via --full, so main always has complete integration
+      # coverage regardless of what any one PR touched.
       - name: Integration & chaos tests
-        run: go test -tags integration -timeout 3600s ./...
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            scripts/test-impact.sh --base origin/main
+          else
+            scripts/test-impact.sh --full
+          fi
 
   integration-k8s:
     name: Integration tests (Kubernetes, minimal RBAC role)

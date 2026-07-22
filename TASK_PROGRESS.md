@@ -1,224 +1,227 @@
-# C4 (object-store production posture) + D7 (Dataset lifecycle) — progress
+# E4 (explain catalog) + G7 (test-impact economy hardening) — progress
 
-Task: docs/planning/08 §5 C4 + §7(D) D7. Branch: this worktree
-(worktree-agent-a9b28e633efb9f169). Resume from here + `git log`.
+Task: docs/planning/08 §7 E4 + §7.6 G7. Branch: this worktree
+(worktree-agent-aa460448ab61c2a3d). Resume from here + `git log`.
 
-(Replaces this file's previous contents, which were the already-merged C2
-task's checkpoint — see `git log --oneline -- TASK_PROGRESS.md` /
-`ff16dae`/`b9edeb8` for that history if ever needed.)
+(Replaces this file's previous contents, which were the already-merged
+C4+D7 task's checkpoint.)
 
-Bundled because they own the same files (internal/adapters/providers/s3,
-internal/domain/dataset, schemas/{dataset,provider}.json).
-
-## Design decision (recorded per task instructions)
-
-**No ExternalConfigurer needed for the Dataset half of C4.** Studied doc 03
-§3.3's table + ADR 005's "already fully supported" precedent (external
-Source + CDC works today with zero ExternalConfigurer, because the Binding
-referencing the external Source is itself NOT external — only the Source
-it targets is). Mirrored exactly for s3:
-
-- `Provider(type: s3, external: true, connectionRef: ...)` — the PROVIDER
-  is external. Per doc 03 §3.3's Provider row, this always takes the
-  generic no-provider path (`engine.reconcileExternal` / `isExternalNoProvider`)
-  — connectionRef reachability verified, s3's own `Reconcile`/`Probe`/
-  `Destroy` for kind "Provider" are never even called. No code needed here;
-  already fully generic.
-- `Dataset(providerRef: <that external Provider>, bucket, format)` — the
-  DATASET itself is NOT external (no `external: true` on the Dataset). It
-  therefore takes the ORDINARY (non-external) reconcile path — `s3.Provider
-  .Reconcile`'s `case "Dataset"` — exactly like any managed Dataset. Because
-  doc 03 §3.3's "external+providerRef requires ExternalConfigurer" rule
-  is keyed off the DATASET's own `external` flag, not its realizing
-  Provider's, this combination needs no capability gap closed at all.
-- The only real code gap: `reconcileDataset`/`Probe`/`Destroy` (Dataset
-  case) assumed a managed running container reachable by
-  `naming.RuntimeObjectName(req.Provider)`. Teaching them to detect
-  `cfg.External` on `req.Provider` and, when true, resolve the S3 endpoint
-  + credentials from the Provider's own `connectionRef` (a Connection or
-  bare SecretReference, resolved from `req.Resources` — mirrors exactly how
-  `debezium.buildDesiredConnector` resolves an external Source's
-  `connectionRef`, the proven in-repo precedent) is the actual substance of
-  this half.
-- s3sink Bindings: already fully supported via existing
-  `options.endpoint` + `configuration.credentialsSecretRef` — zero s3sink
-  code changes needed (file-ownership boundary respected; verified by
-  reading, not editing, s3sink.go's `objectStoreEndpoint`).
-
-This closes doc 03 §3.3's capability-gap note only insofar as the Dataset
-side never needed it; the gap itself (no shipped ExternalConfigurer
-implementor) remains open — recorded, not silently worked around.
+File ownership: cmd/platformctl/explain*.go, internal/domain/status
+(catalog additions only), internal/application/docsgen (additive),
+scripts/test-impact.sh (outside the map heredoc only), internal/archtest,
+.github/workflows/ci.yml. Do NOT touch internal/adapters/providers/**,
+docs/onboarding/, README, docs/adr/018, connection/dataset schemas.
 
 ## Step plan and status
 
-1. [done] Merge main — already up to date (this worktree's branch base
-   already includes C2/redpanda multi-broker at b9edeb8; no new merge
-   needed — verified `git merge main --no-edit` says "Already up to date").
-2. [done] Read: doc 08 C4/D7 entries, doc 03 §3.3 + §4 (Provider) + §8
-   (Dataset), ADR 005, reconciler.go (ExternalConfigurer + Request),
-   engine.go (isExternalNoProvider/reconcileExternal/
-   reconcileExternalWithProvider), debezium.go's external-Source connectionRef
-   resolution (the precedent), redpanda.go in full (StableIdentity
-   brokers pattern — the template for minio `nodes`), s3.go/bucket.go,
-   dataset.go, provider.go, connection.go, root.go's
-   checkHighAvailabilityGate, minio-go v7 lifecycle/versioning API,
-   s3sink.go's objectStoreEndpoint (read-only, not owned).
-3. [in-progress] Implement:
-   - [done] `internal/domain/provider`: External/ConnectionRef fields
-     (mirrors source.Source). `go test ./internal/domain/...` green.
-   - [done] `schemas/v1alpha1/provider.json`: connectionRef required when
-     external (allOf, mirrors dataset.json/connection.json); `nodes`
-     documented in configuration description.
-   - [done] `internal/adapters/providers/s3/s3.go`: external-Provider dataset
-     addressing (resolveDatasetDial/externalStoreDial helpers); `nodes`
-     StableIdentity multi-node MinIO (reconcileInstanceSet/probeInstanceSet,
-     ValidateSpec refusing 2-3/port-pins, Destroy volume cleanup); dispatch
-     wiring in Reconcile/Probe/Destroy for all three shapes (legacy,
-     node-set, external). backup.go's newClient calls updated for the new
-     `secure bool` param.
-   - [done] `internal/adapters/providers/s3/bucket.go`: lifecycle rule +
-     versioning ensure (`ensureLifecycle`)/diff (`probeLifecycleDrift`) via
-     minio-go lifecycle API (read-modify-write, preserves sibling Datasets'
-     rules on a shared bucket); `ensureBucketAt` (external, single-shot,
-     mirrors managed `ensureBucket`'s wait-then-create).
-   - [done] `internal/domain/status/reasons.go`: ReasonLifecycleRuleDrift,
-     ReasonVersioningDrift, ReasonNodeMissing, ReasonNodeUnreachable.
-   - [done] `cmd/platformctl/root.go`: checkHighAvailabilityGate generalized
-     to `haReplicaFields = []string{"brokers", "nodes"}`.
-   - [done] `go build ./... && go vet ./... && go test ./...` green except
-     the expected `docs/reference` staleness, fixed by regenerating
-     (`go run ./cmd/platformctl docs build --out docs/reference`) —
-     re-ran, now green.
-   - [done] `internal/domain/dataset/dataset.go`: `Lifecycle` (ExpireAfterDays,
-     Versioning). `go test ./internal/domain/...` green.
-   - [done] `schemas/v1alpha1/dataset.json`: `lifecycle` property.
-   - [done] `cmd/platformctl/root.go`: checkHighAvailabilityGate also checks
-     `nodes`.
-   - [done] docs/planning/03: Dataset lifecycle + Provider s3 external/nodes
-     examples (additive) — see step 3c below.
-   - [done] docs/planning/08: status note under C4 and D7 (additive, mirrors
-     C6's pattern) — written after live verification, citing actual test
-     names/timings; no guard-hook block encountered.
-3b. [done] Unit tests added: internal/domain/provider/provider_test.go
-    (External/ConnectionRef), internal/domain/dataset/dataset_test.go
-    (Lifecycle), internal/adapters/providers/s3/{s3_test.go,bucket_test.go}
-    (nodes validation/topology refusal, minioNodeURLs, lifecycle rule
-    id/match/versioning-status pure-function coverage). Full
-    `go test ./...` green (gofmt/vet clean too).
-3c. [done] docs/planning/03 additive edits: Dataset lifecycle field +
-    external-Provider Dataset example (§8), s3 `nodes`/external Provider
-    examples (§4). No guard-hook block encountered (contrary to the
-    MEMORY.md note that it "always blocks" — pure-insertion diffs went
-    through both times).
-3d. [done] Live integration tests written and GREEN against real Docker:
-    - `TestS3ExternalDatasetEndToEnd` (cmd/platformctl/
-      s3_c4_d7_integration_test.go + testdata/s3-external-scenario):
-      Provider(external:true)+Connection against an out-of-band MinIO
-      container (simulating a cloud bucket), zero managed containers for
-      the store itself, Dataset+lifecycle rule/versioning visible via S3
-      API, out-of-band lifecycle change -> drift (LifecycleRuleDrift) ->
-      healed by re-apply, s3sink Binding (via options.endpoint) lands
-      real Kafka Connect sink traffic in the external bucket, destroy
-      retains the external bucket. 65.7s, PASS.
-    - `TestS3DistributedMinIONodeKill` (same file + testdata/
-      minio-ha-scenario): nodes:4 Provider reaches Ready, lifecycle rule
-      visible, sink traffic (real Binding/Kafka Connect) lands before AND
-      during an out-of-band single-node kill (the literal C4 accept
-      criterion), drift names the missing node (NodeMissing), heal +
-      idempotent re-apply + clean destroy (all 4 ordinals + volumes +
-      network). 51.5s, PASS.
-    - Live-caught finding fixed during this: `produceTo`'s raw-string
-      Kafka value failed the s3sink connector's default JsonConverter
-      (schemas.enable=false still requires parseable JSON) — wrapped as
-      `{"marker": ...}`; first attempt's masking symptom was
-      `waitForObjectAt`'s existing diagnostic-on-timeout path
-      (`sinkConnectorState`) itself erroring because it hardcodes the
-      sink-scenario's own connector name/port — not a bug I fixed (shared
-      helper, out of scope), just diagnosed past it directly against
-      Docker container logs.
-    - `scripts/test-impact.sh`: added `object-store-posture` suite entry
-      (new test file wasn't covered by any existing suite regex).
-    - Unit test additions: `cmd/platformctl/ha_gate_test.go` — nodes
-      gate refusal/acceptance + 2/3-topology refusal via `validate`
-      (fake runtime, no Docker).
-4. [done] Verify: gofmt/build/vet (both tag sets)/`go test ./...` all
-   green; task Accept items covered live above;
-   `scripts/test-impact.sh --base main` next (full run, not spot checks).
-4b. [done] Second `git merge main --no-edit` (main gained C7 ingress,
-    C3+D6 connect workers/DLQ, D10 trino). Conflicts resolved keeping BOTH
-    sides: root.go (main's `replicaFieldsGuardedByHighAvailability` name
-    kept, "nodes" added to its brokers+workers list), ha_gate_test.go
-    (s3-nodes tests + trino-workers tests both kept), provider.json
-    (main's longer configuration description + this task's s3-nodes
-    sentence spliced in after the prometheus sentence; JSON re-validated),
-    doc 03 (main's C3 workers block first, then this task's C4 block),
-    scripts/test-impact.sh (object-store-posture + trino rows both kept),
-    docs/reference/provider.md regenerated from the merged schema,
-    TASK_PROGRESS.md kept ours (main deleted it at the C2 merge).
-    Post-merge: gofmt/build/vet (both tag sets) clean, `go test ./...`
-    fully green.
-5. [done] Live legs — GREEN pre-merge AND re-run green POST-merge:
-   TestS3ExternalDatasetEndToEnd 40.2s, TestS3DistributedMinIONodeKill
-   51.5s (logs: scratchpad/s3ext-postmerge.log, minioha-postmerge.log).
-5b. **GPG signing became unavailable mid-session** (worked for the first
-    six WIP commits, then pinentry Timeout — passphrase cache expired, no
-    TTY to re-prompt). Per §2.1 step 0 + task instructions: merge left
-    STAGED (MERGE_HEAD=585bb96), COMMIT_MSG.txt at repo root holds the
-    final task-commit message. Finalization recipe once signing works
-    (or for the maintainer) — the index already holds the fully
-    merged+resolved tree, so EITHER
-      (a) `git commit --no-edit` (completes the merge, keeps WIP
-          history); OR
-      (b) the C2-precedent squash: `git reset --soft main` (drops the WIP
-          commits AND the pending merge state, keeps the index — the
-          staged diff vs main is then exactly this task's changes), then
-          `git commit -F COMMIT_MSG.txt`, removing COMMIT_MSG.txt from
-          the commit itself.
-5c. [DONE — ALL GREEN] `scripts/test-impact.sh --base main` full
-    post-merge sweep under a freshly minted minimal-RBAC kubeconfig
-    (scratchpad/platformctl-c4d7.kubeconfig, 6h token, per
-    deploy/kubernetes/rbac/README.md — never ambient admin; note
-    minikube's CA is a file path, not embedded data, so the README's
-    CA-data extraction needed the --certificate-authority file variant).
-    The k8s-adapter suite was selected only because the staged merge
-    makes main's own k8s files look uncommitted — not by this task's
-    diff — but was run anyway per "run, don't reason".
-    **impact: 15 selected, 15 ran, 0 deduped, 0 failed (base: main)** —
-    docker-conformance 16.4s, k8s-adapter 372.1s (minimal RBAC),
-    redpanda 86.4s, cdc 173.7s, sink 127.2s, connect-ha-dlq 60.7s,
-    acceptance 63.2s, lakehouse 180.1s, chaos 82.7s, backup 77.0s,
-    prometheus 13.6s, ingress 48.4s, blueprints 59.2s,
-    object-store-posture 95.1s, trino 100.6s. Full log:
-    scratchpad/sweep-postmerge.log. (The pre-merge sweep had also passed
-    redpanda 81.7s and cdc 181.4s before dying to daemon-queue
-    contention.)
-6. [done] Final commit. GPG signing recovered late in the session
-   (passphrase cache restored), so the fallback in 5b was not needed at
-   the end: the merge commit was completed signed, then the C2-precedent
-   squash (`git reset --soft main`) collapsed the six WIP commits + merge
-   into the single task commit with the required subject. The transient
-   GPG outage mid-session (5b) remains recorded as a deviation in the
-   commit body.
+1. [done] `git merge main --no-edit` — fast-forward-merged cleanly
+   (b9edeb8 -> 39efc80, C4/D7/D9/E1 landed on main). No conflicts.
+2. [done] Read: doc 08 E4 + G7 entries in full, doc 02 §5.5 (lineage),
+   internal/domain/status/{reasons.go,status.go} (74 Reason constants + 4
+   ConditionTypes), internal/application/docsgen/{docsgen.go,site.go},
+   cmd/platformctl/{root.go,init.go,output_contract_harness_test.go},
+   internal/cliutil/cliutil.go, internal/archtest/reason_literal_test.go
+   (style precedent), scripts/test-impact.sh in full, doc 06 §10,
+   .github/workflows/ci.yml.
+3. [done] E4 implementation:
+   - [done] `internal/domain/status/catalog.go`: `CatalogEntry` struct +
+     `Catalog []CatalogEntry` — 4 ConditionType entries + one entry per
+     Reason constant (74), grouped/ordered exactly as reasons.go's own
+     section comments. Verified 8 dynamic-prefix reasons by grepping
+     actual call sites (fmt.Sprintf/string-concat), not just doc-comment
+     wording: ReasonConnectorState, ReasonConnectWorkerMissing,
+     ReasonPartitionCountMismatch, ReasonReplicationFactorMismatch,
+     ReasonRetentionMismatch, ReasonBrokerMissing, ReasonBrokerNotJoined,
+     ReasonNodeMissing — all others are literal/complete reasons (e.g.
+     ReasonTopicMissing, ReasonLifecycleRuleDrift/VersioningDrift,
+     ReasonWorkerCountMismatch are NOT prefixes, confirmed by their call
+     sites using the constant as-is, no fmt.Sprintf).
+   - [done] `internal/archtest/explain_catalog_test.go`:
+     `TestExplainCatalogCoversEveryReason` parses reasons.go's AST
+     (go/parser, not regex) for every `Reason* = "value"` const, diffs
+     against `status.Catalog`'s reason tokens both directions (missing +
+     orphan/typo'd + duplicate detection);
+     `TestExplainCatalogCoversEveryConditionType` for the 4 ConditionTypes;
+     `TestDeclaredReasonsDetectsMissingCatalogEntry` self-proof (mirrors
+     reason_literal_test.go's pattern).
+   - [done] Live-proved the guard test against REAL reasons.go (not just
+     the synthetic self-proof): temporarily deleted the ReasonNoDrift
+     catalog entry, ran `go test ./internal/archtest/... -run
+     TestExplainCatalogCoversEveryReason -v` — failed naming
+     `ReasonNoDrift = "NoDrift"` exactly as designed, then restored the
+     file (not committed).
+   - [done] `cmd/platformctl/explain.go`: `newExplainCmd` — exact match,
+     then dynamic-prefix match (query has entry's Token as a literal
+     prefix, e.g. pasting "PartitionCountMismatch(3!=5)" from `status`
+     output), then case-insensitive Token-prefix, then case-insensitive
+     substring — each stage stops at a unique hit; ambiguous/empty
+     -> candidate list + ExitValidation. `-o json|yaml` structured
+     (`explainOutput{query,matched,entry,candidates}`).
+   - [done] `cmd/platformctl/root.go`: registered `newExplainCmd(a)` in
+     `newRootCmd`'s AddCommand list; status footnote (only table mode,
+     only when any resource's Ready != "True") pointing at `explain`.
+   - [done] `cmd/platformctl/output_contract_harness_test.go`: registered
+     "explain" scenario (exact match + ambiguous fallback, both -o json).
+   - [done] `internal/application/docsgen/docsgen.go`: `renderExplainCatalog()`
+     — imports `internal/domain/status` (application->domain, layering-legal),
+     renders `Catalog` grouped by Area into `explain.md`, linked from
+     `index.md`. Regenerated `docs/reference/` (`go run ./cmd/platformctl
+     docs build --out docs/reference`) — `TestGeneratedReferenceInSync`
+     green.
+   - [done] Manually verified end-to-end: `explain WALNotLogical` (exact),
+     `explain DriftDetected` (ConditionType), `explain
+     "PartitionCountMismatch(3!=5)"` (dynamic-prefix paste), `explain
+     Broker` (ambiguous, 4 candidates, exit 3), `explain zzz` (no match,
+     exit 3); `status` footnote appears pre-apply (Unknown/NotApplied) and
+     disappears once all resources are Ready=True, and is absent under
+     `-o json`.
+4. [done] G7 implementation:
+   - [done] Parsed scripts/test-impact.sh's suite map (id|scope|cmd) with
+     a throwaway Python prototype to find EVERY currently-uncovered
+     integration Test* function before writing the Go guard test, so the
+     guard's exemption list would be accurate on day one rather than
+     discovered by trial and error. Found 23 pre-existing gaps (see
+     Finding below) — real bugs in the map's -run filters, NOT
+     something introduced by this task.
+   - [done] `internal/archtest/test_impact_completeness_test.go`: parses
+     the suite map straight from scripts/test-impact.sh's own source text
+     (heredoc between `cat <<'EOF'` / `EOF` inside `suites() {`) —
+     `parseSuiteMap`; extracts each suite's -run regex (quoted-or-bare) +
+     target dirs (recursive `/...` vs exact) — `coveringSuites` mirrors
+     real `go test -run`'s unanchored-substring semantics; enumerates
+     every `func Test*` in cmd/platformctl/*_integration_test.go + every
+     other `//go:build integration`-tagged file repo-wide —
+     `integrationTestFuncs`; fails naming misses not on
+     `integrationTestExemptions` (also flags stale exemptions naming a
+     test that no longer exists). `TestParseSuiteMapAndCoverage`
+     self-proof against synthetic input (mirrors reason_literal_test.go's
+     style).
+   - [done] Proved it live against the REAL map: wrote a throwaway
+     `cmd/platformctl/zzz_fixture_integration_test.go` with
+     `TestZzzTotallyUnmappedFixture`, ran
+     `go test ./internal/archtest/... -run
+     TestIntegrationSuiteMapCoversEveryTest -v` — failed naming
+     `TestZzzTotallyUnmappedFixture@cmd/platformctl` exactly as designed,
+     then deleted the fixture file (never staged/committed;
+     `git status --short` confirmed clean after).
+   - [done] `--prune <days>` flag in scripts/test-impact.sh, added
+     entirely OUTSIDE the suites() heredoc (flag parsing + a standalone
+     prune-and-exit branch using `find -mtime +N -delete`, run before the
+     diff-selection logic). Documented in the script's own header comment
+     and doc 06 §10 (pure append, items 7-9 — no existing text modified;
+     guard hook did not block it). Manually verified: seeded the real
+     shared ledger with a fresh + an artificially-40-day-old fixture
+     entry, `--prune 30` removed only the old one (output: "pruned 1
+     ledger entry(ies)..."), confirmed via `ls`.
+   - [done] `.github/workflows/ci.yml`: `integration` job's checkout now
+     `fetch-depth: 0` (so `origin/main` resolves for the diff); its single
+     step now branches on `github.event_name == 'pull_request'` ->
+     `scripts/test-impact.sh --base origin/main`, else ->
+     `scripts/test-impact.sh --full`. `integration-k8s` job (RBAC minting,
+     kind cluster, kubeconfig steps) untouched — verified via `git diff
+     .github/workflows/ci.yml` that only the `integration` job's checkout
+     step and its one run: block changed. YAML syntax verified
+     (`python3 -c "import yaml; yaml.safe_load(...)"`).
+5. [done] Verify: gofmt clean; `CGO_ENABLED=0 go build -trimpath
+   -buildvcs=false ./cmd/platformctl` OK; `go vet ./...` and `go vet -tags
+   integration ./...` both OK; `go test ./...` fully green (includes the
+   two new archtest completeness tests + explain harness scenario).
+   `scripts/test-impact.sh --base main --print` selected 11 suites
+   (redpanda, cdc, sink, connect-ha-dlq, acceptance, lakehouse,
+   prometheus, ingress, blueprints, object-store-posture, trino) — NOT
+   just gc-state-ops, because this diff touches internal/domain/status
+   (catalog.go), which is in SHARED_CORE and thus in scope for every
+   suite that includes it. Running the full selected set live now (see
+   Verification results below for the outcome).
+6. [done] Live 11-suite impact run complete, fully green (see
+   Verification results). Final commit: squashed the two WIP commits
+   (`git reset --soft 39efc80` — the step-1 merge fast-forwarded to
+   main's tip, so the staged diff vs 39efc80 is exactly this task's
+   changes) into the single task commit with the required subject
+   (C2/C4 squash precedent). GPG signing verified working beforehand.
 
-**STATUS: COMPLETE.** All steps done; both tasks verified live on Docker
-(external-mode suite, 4-node node-kill with sink traffic, D7 lifecycle
-drift/heal) and the full 15-suite impact sweep green post-merge
-(including the K8s adapter leg under minted minimal RBAC). This file is
-the doc-08 §2.1 step-0 checkpoint artifact for the C4+D7 task.
+**STATUS: COMPLETE.** E4: 78-entry catalog (4 ConditionTypes + 74
+reasons, 1:1 with reasons.go), explain command + harness + docsgen page,
+status footnote, completeness enforced by archtest. G7: guard test
+(proven via temporary unmapped fixture), --prune, CI split
+(PR=--base origin/main, main push=--full).
+
+## Finding recorded per doc 08 §2.1 (not silently worked around)
+
+G7's completeness guard, run against the REAL current
+scripts/test-impact.sh map (not just my new guard test's synthetic
+fixture), surfaces **23 pre-existing integration tests with no suite
+coverage** — genuine gaps in the map that predate this task:
+
+- `internal/adapters/state/s3`: TestConformance, TestForceUnlock,
+  TestLockReclaimsAfterExpiry — the `state-s3` suite's `-run
+  'TestSharedState'` filter applies uniformly across BOTH its target dirs
+  (`./internal/adapters/state/...` and `./cmd/platformctl/`), so it never
+  matches this package's own conformance/lock tests even though the
+  directory is in scope.
+- `internal/adapters/runtime/docker`: TestEnsureNetworkRefusesUnmanagedExisting,
+  TestEnsureVolumeRefusesUnmanagedExisting, TestImagePullAuthPullsFromPrivateRegistry,
+  TestNetworkAliasResolvesInNetwork, TestOutOfBandKillSurfacesUnhealthy,
+  TestPublishedPortBindsToLoopbackByDefault, TestPullPolicyNeverFailsFastOnAbsentImage
+  — the `docker-conformance` suite's `-run Conformance` filter only runs
+  Conformance-named tests in that directory; these are real tests in the
+  same directory/package the suite's scope already claims to cover.
+- `cmd/platformctl` (10): TestDockerProviderEndToEnd,
+  TestDriftDetectsDebeziumConnectorConfigMismatch,
+  TestDriftDetectsMariaDBReplicationCredentialMismatch,
+  TestDriftDetectsRedpandaRetentionMismatch, TestExternalSourceEndToEnd,
+  TestImportEndToEnd, TestRedpandaKubernetesEndToEnd,
+  TestRedpandaKubernetesPortForwardEndToEnd,
+  TestValidateFailsFastOnBadKubernetesContext,
+  TestValidatePassesWithReachableKubernetesCluster,
+  TestValidateRefusesKubernetesRuntimeWhenGateExplicitlyDisabled — no
+  suite row's `-run` pattern matches these names at all.
+- `internal/adapters/secrets/kubernetes` (TestResolveLiveCluster) and
+  `internal/adapters/secrets/vault` (TestVaultResolve) — neither
+  directory is referenced by ANY suite row.
+
+Per the task's explicit file-ownership boundary ("keep your edits to the
+script OUTSIDE the map heredoc... two provider agents will each append
+suite rows... your guard test reads whatever rows exist at run time"), I
+cannot fix the map itself (any heredoc edit risks conflicting with
+concurrently active provider agents appending rows). Resolution: all 23
+are recorded on the guard test's in-test exemption list, grouped by the
+four causes above with a reason string each, exactly the escape hatch
+G7's Do line describes ("or be on an explicit exemption list with a
+reason"). Flagged here for the maintainer to fix the map itself in a
+follow-up (each is a one-line `-run` pattern widening, not a design
+problem).
 
 ## Gotchas for a resuming session
 
-- Work ONLY in this worktree (`/home/cascadura/git/platformctl/.claude/worktrees/agent-a9b28e633efb9f169`)
-  — earlier reads accidentally used the main checkout path
-  (`/home/cascadura/git/platformctl/...`); both were byte-identical at
-  session start (same commit) so no harm done, but all writes must target
-  the worktree path.
-- docs/planning guard hook: pure insertions only (per this repo's history,
-  may unconditionally block — attempt once, and if blocked, record the
-  finding here instead of retrying).
-- s3sink, debezium, kafkaconnect, trino, ingress packages belong to other
-  agents — read-only.
+- Work ONLY in this worktree
+  (`/home/cascadura/git/platformctl/.claude/worktrees/agent-aa460448ab61c2a3d`).
+- docs/planning guard hook: additive edits only (doc 06 §10 append for
+  `--prune`) — if it blocks even a pure append, record here instead of
+  retrying more than once (per MEMORY.md).
+- internal/adapters/providers/**, docs/onboarding/, README, docs/adr/018,
+  connection/dataset schemas belong to other agents — read-only.
+- scripts/test-impact.sh: NEVER edit inside the `suites() { cat <<'EOF' ...
+  EOF }` heredoc — flags/pruning logic only, elsewhere in the file.
 
 ## Verification results (fill in as gates run)
 
-(none yet)
+- `go build ./... && go vet ./...`: green (post E4).
+- `go test ./internal/domain/status/... ./internal/archtest/...
+  ./internal/application/docsgen/... ./cmd/platformctl/...`: green
+  (post E4, pre-G7).
+- `gofmt -l .`: clean on all new/touched files.
+- Final gates (post-G7, full tree): `gofmt -l .` empty;
+  `CGO_ENABLED=0 go build -trimpath -buildvcs=false ./cmd/platformctl`
+  OK; `go vet ./...` + `go vet -tags integration ./...` OK;
+  `go test ./...` fully green.
+- `scripts/test-impact.sh --base main` LIVE run (2026-07-20/21, log:
+  scratchpad/test-impact-run.log):
+  **impact: 11 selected, 11 ran, 0 deduped, 0 failed (base: main)** —
+  redpanda 85.4s, cdc 173.2s, sink 158.7s, connect-ha-dlq 104.6s,
+  acceptance 88.9s, lakehouse 182.0s, prometheus 14.4s, ingress 50.0s,
+  blueprints 58.9s, object-store-posture 142.3s, trino 137.8s.
+  Selection driver: catalog.go lives in internal/domain/status
+  (SHARED_CORE), so every SHARED_CORE suite selected — not just
+  gc-state-ops. No K8s leg selected (k8s-adapter scope untouched), as
+  the task brief predicted.

@@ -459,3 +459,26 @@ content-state, across all sessions**:
    provider's K8s-relevant behavior) changed — and always under the
    minted minimal-RBAC kubeconfig (§8 rule 4), via
    `PLATFORMCTL_KUBECONFIG`/`KUBECONFIG` env ahead of the script.
+7. **Completeness is enforced, not just documented** (docs/planning/08
+   G7): `internal/archtest/test_impact_completeness_test.go` parses the
+   suite map straight out of `scripts/test-impact.sh` (never a duplicated
+   copy) and fails naming any `Test*` in `cmd/platformctl/
+   *_integration_test.go` or any other `//go:build integration`-tagged
+   package that no suite's `-run` pattern would actually execute — unless
+   it's named on that test file's `integrationTestExemptions` map with a
+   reason. Adding a suite or widening a `-run` pattern in the same commit
+   that adds the test keeps this green; an unavoidable gap goes on the
+   exemption list instead of being silently unmapped.
+8. **Ledger pruning:** `scripts/test-impact.sh --prune <days>` deletes
+   ledger entries older than `<days>` days (by file mtime) and exits —
+   a standalone maintenance action, run independently of a normal
+   selection/execution invocation. The ledger has no automatic expiry
+   otherwise; a maintainer runs `--prune` periodically (or wires it into
+   a scheduled job) to keep the shared git common dir from accumulating
+   scope-hash keys for content-states that no longer exist on any branch.
+9. **CI adoption:** `.github/workflows/ci.yml`'s `integration` job runs
+   `scripts/test-impact.sh --base origin/main` on pull requests (impact
+   selection) and `scripts/test-impact.sh --full` on pushes to `main`
+   (the full sweep) — the always-full PR sweep this section originally
+   described is retired in favor of that split. `integration-k8s` is
+   unaffected (it is not suite-map-driven; see §8).

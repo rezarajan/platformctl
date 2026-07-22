@@ -33,3 +33,9 @@ Provider implementation to construct. Shipped: redpanda, postgres, mysql, mariad
 - `trino`
 - `noop`
 - `container`
+
+
+See also: [Condition & reason catalog](explain.md) — every Condition Type
+and Reason a resource's `status`/`drift` output can show, with meaning,
+likely causes, and remedies (`platformctl explain <token>` for the same
+content interactively).
