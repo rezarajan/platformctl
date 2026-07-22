@@ -53,6 +53,7 @@ only, never identifiers).
 | Check what's shipped vs planned | [planning/08](planning/08-production-readiness-plan.md) done-notes + [planning/04](planning/04-roadmap-and-feature-gates.md) §12 gate table |
 | Run only the tests my change affects | `just test-affected` ([planning/06](planning/06-agentic-execution-guide.md) §10) |
 | Understand an operational migration | [upgrade-notes.md](upgrade-notes.md) |
+| Check my wiring / design quality, or enforce org guardrails | [adr/020](adr/020-design-lints.md) (lints) + [adr/021](adr/021-policy-engine-zero-trust.md) (policy/zero-trust) — proposed designs, commands land when scheduled |
 
 ## Contracts — the code is checked against these
 

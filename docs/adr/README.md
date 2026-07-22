@@ -45,6 +45,8 @@ pattern of recording a redirected first cut).
 | [017](017-redpanda-multibroker-and-replica-state.md) | Redpanda multi-broker clusters and replica state | accepted (C2) | brokers opts into the ordinal-set shape; StableIdentity at N=1; per-ordinal dialer map; 3→1 refused; aggregate state + published per-ordinal endpoint facts |
 | [018](018-ingress-routing.md) | Ingress and HTTP routing on the Connection seam | accepted (C7) | Caddy (read-write admin API) over Traefik on Docker; native Ingress over Gateway API on Kubernetes; routes reconciled without restarting the shared proxy; TLS deferred to C8 |
 | [019](019-naming-and-brand.md) | Naming: Datascape, platformctl, d7s | accepted | the three-tier naming system; identifier freeze list; the d7s mononym (brand alias only) |
+| [020](020-design-lints.md) | Design lints | **proposed** | deterministic wiring-quality findings (duplicate capture, orphans, plaintext boundaries); waivers; detection-not-enforcement |
+| [021](021-policy-engine-zero-trust.md) | Policy engine & zero-trust | **proposed** | typed deny/warn rules over manifests+plan+lint findings; zero-trust pack; explicit out-of-scope table |
 
 "Retroactive" ADRs (008–014) record decisions made in the planning package
 (docs 00–06) before this convention existed — written 2026-07-21 so the
