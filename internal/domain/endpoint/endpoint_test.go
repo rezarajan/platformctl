@@ -12,13 +12,12 @@ func TestRoundTrip(t *testing.T) {
 	}
 	// ToState yields JSON-friendly maps; simulate the []any round-trip that
 	// state persistence performs.
-	stateVal := any([]any{})
 	tmp := in.ToState()
 	roundtripped := make([]any, len(tmp))
 	for i, m := range tmp {
 		roundtripped[i] = any(m)
 	}
-	stateVal = roundtripped
+	stateVal := any(roundtripped)
 
 	out := FromState(stateVal)
 	if len(out) != 2 {

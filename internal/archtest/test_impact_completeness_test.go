@@ -113,52 +113,21 @@ func coveringSuites(name, dir string, suites []suiteMapping) []string {
 // integrationTestExemptions lists integration Test* functions that the
 // current scripts/test-impact.sh map does not run under any suite's `go
 // test` command, with the reason each is exempted rather than fixed here.
-// Every entry was verified against the REAL map (not a synthetic one) when
-// this guard was added (docs/planning/08 G7) — see TASK_PROGRESS.md's
-// Finding for the full accounting. This task's file-ownership boundary
-// forbids editing scripts/test-impact.sh's suites() heredoc (concurrently
-// active provider agents append rows there), so pre-existing map gaps are
-// recorded here for a maintainer to fix in the map itself, rather than
-// worked around silently.
 //
 // Key is "TestName@package/dir/path" (disambiguates same-named tests in
-// different directories, e.g. the three TestConformance).
-var integrationTestExemptions = map[string]string{
-	// state-s3 suite's `-run 'TestSharedState'` filter applies uniformly
-	// to BOTH its target dirs (./internal/adapters/state/... and
-	// ./cmd/platformctl/); it never matches this package's own
-	// conformance/lock tests even though the directory is in scope.
-	"TestConformance@internal/adapters/state/s3":             "state-s3 suite's -run 'TestSharedState' filter doesn't match this package's own tests despite the dir being in scope (docs/planning/08 G7 finding)",
-	"TestForceUnlock@internal/adapters/state/s3":             "state-s3 suite's -run 'TestSharedState' filter doesn't match this package's own tests despite the dir being in scope (docs/planning/08 G7 finding)",
-	"TestLockReclaimsAfterExpiry@internal/adapters/state/s3": "state-s3 suite's -run 'TestSharedState' filter doesn't match this package's own tests despite the dir being in scope (docs/planning/08 G7 finding)",
-
-	// docker-conformance suite's `-run Conformance` filter only runs
-	// Conformance-named tests in internal/adapters/runtime/docker/; these
-	// real tests in the same directory/package the suite's scope already
-	// claims aren't matched by that filter.
-	"TestEnsureNetworkRefusesUnmanagedExisting@internal/adapters/runtime/docker": "docker-conformance suite's -run Conformance filter doesn't match this test despite the dir being in scope (docs/planning/08 G7 finding)",
-	"TestEnsureVolumeRefusesUnmanagedExisting@internal/adapters/runtime/docker":  "docker-conformance suite's -run Conformance filter doesn't match this test despite the dir being in scope (docs/planning/08 G7 finding)",
-	"TestImagePullAuthPullsFromPrivateRegistry@internal/adapters/runtime/docker": "docker-conformance suite's -run Conformance filter doesn't match this test despite the dir being in scope (docs/planning/08 G7 finding)",
-	"TestNetworkAliasResolvesInNetwork@internal/adapters/runtime/docker":         "docker-conformance suite's -run Conformance filter doesn't match this test despite the dir being in scope (docs/planning/08 G7 finding)",
-	"TestOutOfBandKillSurfacesUnhealthy@internal/adapters/runtime/docker":        "docker-conformance suite's -run Conformance filter doesn't match this test despite the dir being in scope (docs/planning/08 G7 finding)",
-	"TestPublishedPortBindsToLoopbackByDefault@internal/adapters/runtime/docker": "docker-conformance suite's -run Conformance filter doesn't match this test despite the dir being in scope (docs/planning/08 G7 finding)",
-	"TestPullPolicyNeverFailsFastOnAbsentImage@internal/adapters/runtime/docker": "docker-conformance suite's -run Conformance filter doesn't match this test despite the dir being in scope (docs/planning/08 G7 finding)",
-
-	// cmd/platformctl tests with no matching suite -run pattern at all.
-	"TestDockerProviderEndToEnd@cmd/platformctl":                                     "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
-	"TestDriftDetectsDebeziumConnectorConfigMismatch@cmd/platformctl":                "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
-	"TestDriftDetectsMariaDBReplicationCredentialMismatch@cmd/platformctl":           "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
-	"TestDriftDetectsRedpandaRetentionMismatch@cmd/platformctl":                      "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
-	"TestRedpandaKubernetesEndToEnd@cmd/platformctl":                                 "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
-	"TestRedpandaKubernetesPortForwardEndToEnd@cmd/platformctl":                      "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
-	"TestValidateFailsFastOnBadKubernetesContext@cmd/platformctl":                    "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
-	"TestValidatePassesWithReachableKubernetesCluster@cmd/platformctl":               "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
-	"TestValidateRefusesKubernetesRuntimeWhenGateExplicitlyDisabled@cmd/platformctl": "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
-
-	// Directories no suite row references at all.
-	"TestResolveLiveCluster@internal/adapters/secrets/kubernetes": "no suite row targets this directory at all (docs/planning/08 G7 finding)",
-	"TestVaultResolve@internal/adapters/secrets/vault":            "no suite row targets this directory at all (docs/planning/08 G7 finding)",
-}
+// different directories, e.g. the several TestConformance).
+//
+// docs/planning/11 hygiene batch (G7 exemption absorption): every entry
+// that existed here as of the 2026-07-22 audit was mapped into the suite
+// map instead of staying exempted — either by widening an existing
+// row's -run pattern (state-s3, docker-conformance, cdc, redpanda) or by
+// adding a new row scoped to what the test actually exercises
+// (docker-acceptance, k8s-validate, secrets-vault; TestResolveLiveCluster
+// folded into k8s-adapter's own dir list). The list is empty now; it
+// stays here, rather than being deleted, so the next unmappable test has
+// a documented place and a documented bar for "genuinely unmappable"
+// (see TestIntegrationSuiteMapCoversEveryTest's doc comment).
+var integrationTestExemptions = map[string]string{}
 
 var funcTestRE = regexp.MustCompile(`^func (Test[A-Za-z0-9_]+)\(`)
 

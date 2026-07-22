@@ -126,7 +126,7 @@ func providerTypes() string {
 	var b strings.Builder
 	b.WriteString(str(typeProp["description"]) + "\n\n")
 	for _, v := range known {
-		b.WriteString(fmt.Sprintf("- `%v`\n", v))
+		fmt.Fprintf(&b, "- `%v`\n", v)
 	}
 	return b.String()
 }

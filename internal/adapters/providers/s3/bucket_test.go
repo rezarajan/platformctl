@@ -15,7 +15,7 @@ import (
 // ruleMatches), and a shared bucket's other Dataset's rule (a different
 // name, a different ID) is never touched by this Dataset's own reconcile.
 func TestLifecycleRuleIDDeterministic(t *testing.T) {
-	if lifecycleRuleID("attendance-raw") != lifecycleRuleID("attendance-raw") {
+	if lifecycleRuleID("attendance-raw") != lifecycleRuleID("attendance-raw") { //nolint:staticcheck // SA4000: deliberate same-input-twice determinism check, not a copy-paste bug
 		t.Error("lifecycleRuleID is not deterministic for the same name")
 	}
 	if lifecycleRuleID("a") == lifecycleRuleID("b") {

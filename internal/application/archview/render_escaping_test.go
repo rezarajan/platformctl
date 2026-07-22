@@ -36,7 +36,7 @@ func TestGraphIDIsSafeUnquotedIdentifier(t *testing.T) {
 func TestGraphIDStableAndCollisionResistant(t *testing.T) {
 	a := resource.Key{Namespace: "default", Kind: "Source", Name: "orders"}
 	b := resource.Key{Namespace: "default", Kind: "Source", Name: "orders2"}
-	if graphID(a) != graphID(a) {
+	if graphID(a) != graphID(a) { //nolint:staticcheck // SA4000: deliberate same-input-twice determinism check, not a copy-paste bug
 		t.Fatal("graphID not stable for the same key")
 	}
 	if graphID(a) == graphID(b) {

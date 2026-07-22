@@ -129,7 +129,7 @@ func Build(envelopes []resource.Envelope) *View {
 			}
 			// Observers on a non-Binding asset (uncommon) attach directly.
 			for _, obs := range e.Metadata.Observers {
-				v.Edges = append(v.Edges, Edge{From: e.Key(), To: resource.NameRef{Name: obs.Name, Namespace: obs.Namespace}.Key(e.Metadata.Namespace, "Provider"), Kind: Observes})
+				v.Edges = append(v.Edges, Edge{From: e.Key(), To: resource.NameRef(obs).Key(e.Metadata.Namespace, "Provider"), Kind: Observes})
 			}
 		}
 	}

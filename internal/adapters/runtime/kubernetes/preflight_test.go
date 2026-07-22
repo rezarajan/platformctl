@@ -58,10 +58,10 @@ current-context: nowhere
 // an all-allowed clientset must pass clean.
 func TestPreflightWithClientReportsMissingPermissions(t *testing.T) {
 	clientset := fake.NewSimpleClientset()
-	clientset.Fake.PrependReactor("create", "selfsubjectaccessreviews", func(action k8stesting.Action) (bool, apiruntime.Object, error) {
+	clientset.PrependReactor("create", "selfsubjectaccessreviews", func(action k8stesting.Action) (bool, apiruntime.Object, error) {
 		review := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
 		attr := review.Spec.ResourceAttributes
-		review.Status.Allowed = !(attr.Verb == "delete" && attr.Resource == "secrets")
+		review.Status.Allowed = !(attr.Verb == "delete" && attr.Resource == "secrets") //nolint:staticcheck // QF1001: De Morgan's form reads worse for this "only this exact verb/resource is denied" assertion
 		return true, review, nil
 	})
 
@@ -76,7 +76,7 @@ func TestPreflightWithClientReportsMissingPermissions(t *testing.T) {
 
 func TestPreflightWithClientPassesWhenFullyAllowed(t *testing.T) {
 	clientset := fake.NewSimpleClientset()
-	clientset.Fake.PrependReactor("create", "selfsubjectaccessreviews", func(action k8stesting.Action) (bool, apiruntime.Object, error) {
+	clientset.PrependReactor("create", "selfsubjectaccessreviews", func(action k8stesting.Action) (bool, apiruntime.Object, error) {
 		review := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
 		review.Status.Allowed = true
 		return true, review, nil

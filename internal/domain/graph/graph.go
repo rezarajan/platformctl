@@ -188,7 +188,7 @@ func Build(envelopes []resource.Envelope) (*Graph, error) {
 		// observers create edges too: the resource depends on the observed provider
 		// being reconciled first so its endpoint is resolvable.
 		for _, obs := range e.Metadata.Observers {
-			ref := resource.NameRef{Name: obs.Name, Namespace: obs.Namespace}
+			ref := resource.NameRef(obs)
 			if err := validateRef(from, "metadata.observers", ref); err != nil {
 				return nil, err
 			}

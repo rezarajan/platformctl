@@ -19,7 +19,7 @@ func TestCAFilePathDeterministic(t *testing.T) {
 	// Same input, same output — the connector-property side (built at
 	// Binding-reconcile time) and the file-mount side (built at
 	// Provider-reconcile time) must agree without coordination.
-	if CAFilePath("rds-ca") != CAFilePath("rds-ca") {
+	if CAFilePath("rds-ca") != CAFilePath("rds-ca") { //nolint:staticcheck // SA4000: deliberate same-input-twice determinism check, not a copy-paste bug
 		t.Error("CAFilePath must be deterministic")
 	}
 }

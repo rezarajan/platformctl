@@ -137,7 +137,6 @@ func prefixListable(ctx context.Context, cl *minio.Client, bucket, prefix string
 		if obj.Err != nil {
 			return obj.Err
 		}
-		break
 	}
 	return nil
 }
