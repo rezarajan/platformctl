@@ -60,6 +60,7 @@ ingress|internal/adapters/providers/ingress internal/adapters/providers/nessie i
 state-s3|internal/adapters/state internal/ports/state|go test -tags integration -count=1 -timeout 1200s ./internal/adapters/state/... ./cmd/platformctl/ -run 'TestSharedState'
 blueprints|internal/application/blueprint SHARED_CORE|go test -tags integration -count=1 -run 'TestBlueprint' -timeout 1800s ./cmd/platformctl/
 gc-state-ops|cmd/platformctl/gc.go cmd/platformctl/state.go internal/ports/state|go test -tags integration -count=1 -run 'TestGC|TestState' -timeout 1200s ./cmd/platformctl/
+object-store-posture|internal/adapters/providers/s3 internal/domain/dataset internal/domain/provider internal/domain/connection cmd/platformctl/testdata/s3-external-scenario cmd/platformctl/testdata/minio-ha-scenario cmd/platformctl/s3_c4_d7_integration_test.go SHARED_CORE|go test -tags integration -count=1 -run 'TestS3ExternalDatasetEndToEnd|TestS3DistributedMinIONodeKill' -timeout 2400s ./cmd/platformctl/
 trino|internal/adapters/providers/trino internal/adapters/providers/nessie internal/adapters/providers/providerkit internal/adapters/providers/s3 internal/adapters/providers/s3sink internal/adapters/kafkaconnect internal/domain/graph internal/ports/reconciler cmd/platformctl/testdata/trino-scenario SHARED_CORE|go test -tags integration -count=1 -run 'TestTrinoComputeEngineEndToEnd' -timeout 1800s ./cmd/platformctl/
 EOF
 }

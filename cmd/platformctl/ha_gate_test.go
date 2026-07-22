@@ -163,6 +163,98 @@ spec:
 	}
 }
 
+const s3NodesManifest = `
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: s3-ha-gate-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: s3-ha-gate-test
+spec:
+  type: s3
+  runtime:
+    type: fake
+  configuration:
+    nodes: 4
+    rootSecretRef: s3-ha-gate-root
+  secretRefs: [s3-ha-gate-root]
+`
+
+// TestValidateRefusesNodesWithoutHighAvailabilityGate covers docs/planning/08
+// C4: checkHighAvailabilityGate's field list also covers the s3 provider's
+// spec.configuration.nodes (generalized from redpanda's brokers-only check),
+// so a distributed-MinIO Provider fails validate the same way, naming both
+// the gate and the declaring field.
+func TestValidateRefusesNodesWithoutHighAvailabilityGate(t *testing.T) {
+	dir := writeHAManifest(t, s3NodesManifest)
+	_, err, code := run(t, "validate", dir)
+	if err == nil {
+		t.Fatal("validate accepted nodes: 4 with the HighAvailability gate disabled")
+	}
+	if code == 0 {
+		t.Fatalf("validate exit code = %d, want non-zero", code)
+	}
+	if !strings.Contains(err.Error(), "HighAvailability") {
+		t.Errorf("error does not name the gate: %v", err)
+	}
+	if !strings.Contains(err.Error(), "nodes") {
+		t.Errorf("error does not name the declaring field: %v", err)
+	}
+}
+
+// TestValidateAcceptsNodesWithHighAvailabilityGate: the same manifest
+// validates once the gate is enabled.
+func TestValidateAcceptsNodesWithHighAvailabilityGate(t *testing.T) {
+	dir := writeHAManifest(t, s3NodesManifest)
+	out, err, code := run(t, "validate", dir, "--feature-gates", "HighAvailability=true")
+	if err != nil || code != 0 {
+		t.Fatalf("validate failed (code %d): %v\n%s", code, err, out)
+	}
+}
+
+// TestValidateRefusesNodesTopology2Or3 covers docs/planning/08 C4's MinIO
+// topology constraint end-to-end through `validate` (the s3 provider's own
+// ValidateSpec, unit-covered directly in internal/adapters/providers/s3):
+// nodes: 2 has no supported erasure-coding scheme and is refused even with
+// the gate enabled.
+func TestValidateRefusesNodesTopology2Or3(t *testing.T) {
+	dir := writeHAManifest(t, `
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: s3-ha-topo-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: s3-ha-topo-test
+spec:
+  type: s3
+  runtime:
+    type: fake
+  configuration:
+    nodes: 2
+    rootSecretRef: s3-ha-topo-root
+  secretRefs: [s3-ha-topo-root]
+`)
+	_, err, code := run(t, "validate", dir, "--feature-gates", "HighAvailability=true")
+	if err == nil || code == 0 {
+		t.Fatal("validate accepted nodes: 2 (unsupported MinIO topology)")
+	}
+	if !strings.Contains(err.Error(), "nodes") {
+		t.Errorf("error does not mention nodes: %v", err)
+	}
+}
+
 const haTrinoWorkersManifest = `
 apiVersion: datascape.io/v1alpha1
 kind: Provider

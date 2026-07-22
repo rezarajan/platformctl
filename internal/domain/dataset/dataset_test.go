@@ -51,3 +51,64 @@ func TestDeletionPolicyRejectsUnknownValue(t *testing.T) {
 		t.Fatal("unknown deletionPolicy accepted")
 	}
 }
+
+// TestLifecycleOmittedIsEmpty covers docs/planning/08 D7: a Dataset with no
+// spec.lifecycle must leave the provider's lifecycle reconciliation a no-op
+// (Empty() true), not an implicit "expire immediately"/"suspend versioning".
+func TestLifecycleOmittedIsEmpty(t *testing.T) {
+	d, err := FromEnvelope(env(map[string]any{
+		"providerRef": map[string]any{"name": "minio"},
+		"bucket":      "b", "format": "json",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Lifecycle.Empty() {
+		t.Errorf("Lifecycle.Empty() = false for an omitted spec.lifecycle, want true")
+	}
+	if d.Lifecycle.HasExpiration() || d.Lifecycle.HasVersioning() {
+		t.Errorf("Lifecycle = %+v, want zero value", d.Lifecycle)
+	}
+}
+
+func TestLifecycleExpireAfterDaysAndVersioning(t *testing.T) {
+	d, err := FromEnvelope(env(map[string]any{
+		"providerRef": map[string]any{"name": "minio"},
+		"bucket":      "b", "format": "json",
+		"lifecycle": map[string]any{"expireAfterDays": float64(30), "versioning": "enabled"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Lifecycle.HasExpiration() || d.Lifecycle.ExpireAfterDays != 30 {
+		t.Errorf("Lifecycle.ExpireAfterDays = %d, want 30", d.Lifecycle.ExpireAfterDays)
+	}
+	if d.Lifecycle.Versioning != VersioningEnabled {
+		t.Errorf("Lifecycle.Versioning = %q, want %q", d.Lifecycle.Versioning, VersioningEnabled)
+	}
+	if d.Lifecycle.Empty() {
+		t.Error("Lifecycle.Empty() = true with both fields set")
+	}
+}
+
+func TestLifecycleRejectsUnknownVersioningValue(t *testing.T) {
+	_, err := FromEnvelope(env(map[string]any{
+		"providerRef": map[string]any{"name": "minio"},
+		"bucket":      "b", "format": "json",
+		"lifecycle": map[string]any{"versioning": "paused"},
+	}))
+	if err == nil {
+		t.Fatal("unknown lifecycle.versioning value accepted")
+	}
+}
+
+func TestLifecycleRejectsNegativeExpireAfterDays(t *testing.T) {
+	_, err := FromEnvelope(env(map[string]any{
+		"providerRef": map[string]any{"name": "minio"},
+		"bucket":      "b", "format": "json",
+		"lifecycle": map[string]any{"expireAfterDays": float64(-1)},
+	}))
+	if err == nil {
+		t.Fatal("negative lifecycle.expireAfterDays accepted")
+	}
+}

@@ -1,0 +1,109 @@
+# docs/planning/08 C4 (half 1) integration scenario: an external object
+# store — Provider(type: s3, external: true) + Connection, against a MinIO
+# container the test starts out-of-band (docker run, not via platformctl)
+# to simulate a real cloud bucket. A Dataset and a sink Binding both work
+# against it with zero managed object-store containers. Distinct
+# names/ports: redpanda kafkaPort 19197, s3sink connectPort 18190, network
+# datascape-s3ext-net. The external store's own container/network/port are
+# started by the test (see s3_external_integration_test.go), not declared
+# here.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: s3ext-creds
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: s3ext-lake
+spec:
+  external: true
+  host: 127.0.0.1
+  port: 19199
+  secretRef:
+    name: s3ext-creds
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-s3ext-store
+spec:
+  type: s3
+  runtime:
+    type: docker
+    network: datascape-s3ext-net
+  external: true
+  connectionRef:
+    name: s3ext-lake
+  secretRefs: [s3ext-creds]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-s3ext-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-s3ext-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19197
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-s3ext-sink
+spec:
+  type: s3sink
+  runtime:
+    type: docker
+    network: datascape-s3ext-net
+  configuration:
+    image: datascape-s3sink-connect:test
+    connectPort: 18190
+    bootstrapServers: datascape-s3ext-rp:29092
+    credentialsSecretRef: s3ext-creds
+  secretRefs: [s3ext-creds]
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: s3ext-events
+spec:
+  providerRef:
+    name: datascape-s3ext-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: s3ext-raw
+spec:
+  providerRef:
+    name: datascape-s3ext-store
+  bucket: s3ext-raw
+  format: json
+  lifecycle:
+    expireAfterDays: 14
+    versioning: enabled
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: s3ext-events-to-lake
+spec:
+  mode: sink
+  sourceRef:
+    name: s3ext-events
+  targetRef:
+    name: s3ext-raw
+  providerRef:
+    name: datascape-s3ext-sink
+  options:
+    endpoint: http://datascape-s3ext-minio:9000
