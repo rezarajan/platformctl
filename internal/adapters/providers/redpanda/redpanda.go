@@ -670,6 +670,18 @@ func (p *Provider) reconcileTopic(ctx context.Context, req reconciler.Request) (
 	if err := ensureTopic(ctx, dialMap, seeds, topic, partitions, es.ReplicationFactor(), retentionMS); err != nil {
 		return st, err
 	}
+	// Ready means serving (docs/planning/09 F3), applied at the topic level:
+	// ensureTopic returning is not the same as the topic being probe-clean.
+	// After a broker heal, membership rejoin precedes partition leadership
+	// and metadata settling — a drift snapshot taken right after a
+	// successful healing apply transiently failed ListTopics on a slow CI
+	// runner (live-caught, 2026-07-22). Settle to a clean probe before
+	// declaring Ready: on a healthy cluster the first attempt passes
+	// immediately (zero added latency); on timeout, fail the reconcile
+	// honestly with the last probe state instead of over-promising.
+	if err := waitTopicSettled(ctx, dialMap, seeds, topic, partitions, es.ReplicationFactor(), retentionMS); err != nil {
+		return st, err
+	}
 
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTopicReconciled}, now)

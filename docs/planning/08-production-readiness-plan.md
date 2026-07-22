@@ -605,6 +605,20 @@ entrypoints, is observable, and its data is recoverable. This is where
   brokers:3/replication:3 incl. kill/heal); ADR 004's gate-at-validate
   accept line closed (checkHighAvailabilityGate; §a.8 deviation). C3/C4
   and D10 are unblocked.
+- **CI-caught follow-up (2026-07-22, F6 ratchet):** the healing apply
+  returned Ready on broker-membership rejoin while partition leadership/
+  metadata were still settling — a same-instant drift snapshot on a slow
+  CI runner hit a transient ListTopics failure and reported ProbeFailed
+  (never reproducible on fast local machines). Fix: `waitTopicSettled` —
+  reconcileTopic now settles to a clean probe before Ready (F3's
+  ready-means-serving applied at the topic level; zero added latency on
+  a healthy cluster, honest timeout error otherwise) — and the
+  DriftDetected condition now carries the probe error Message (an empty
+  Message hid this root cause). Contract-level reproduction: the class
+  is timing-dependent cluster convergence, not expressible as a
+  deterministic conformance subtest — recorded here per the ratchet's
+  secondary branch, with the HA e2e (which caught it in CI) as the
+  standing live reproduction.
 - **Done (2026-07-21, C2):** design note
   `docs/adr/017-redpanda-multibroker-and-replica-state.md` (both assigned
   questions: multi-broker mechanics on ADR 004's primitive, and the

@@ -189,6 +189,40 @@ func countJoinedBrokers(ctx context.Context, dialMap map[string]string, seeds []
 }
 
 // probeTopic reports drift: (drifted, reason, error).
+// waitTopicSettled re-runs probeTopic until it reports clean, bounded by
+// topicSettleTimeout — the reconcile-side half of "ready means serving"
+// (docs/planning/09 F3) for topics. ensureTopic's success only means the
+// admin API accepted the desired state; after a broker rejoin, partition
+// leadership and cluster metadata settle asynchronously, during which
+// ListTopics/DescribeConfigs can transiently error and a same-instant
+// drift snapshot would report ProbeFailed against a genuinely-healing
+// cluster. A healthy cluster passes on the first attempt.
+const topicSettleTimeout = 45 * time.Second
+
+func waitTopicSettled(ctx context.Context, dialMap map[string]string, seeds []string, topic string, wantPartitions, wantReplication int, wantRetentionMS int64) error {
+	deadline := time.Now().Add(topicSettleTimeout)
+	var lastErr error
+	var lastReason string
+	for {
+		drifted, reason, err := probeTopic(ctx, dialMap, seeds, topic, wantPartitions, wantReplication, wantRetentionMS)
+		if err == nil && !drifted {
+			return nil
+		}
+		lastErr, lastReason = err, reason
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return fmt.Errorf("topic %q did not settle to a clean probe within %s: %w", topic, topicSettleTimeout, lastErr)
+			}
+			return fmt.Errorf("topic %q did not settle to a clean probe within %s (last probe: %s)", topic, topicSettleTimeout, lastReason)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 func probeTopic(ctx context.Context, dialMap map[string]string, seeds []string, topic string, wantPartitions, wantReplication int, wantRetentionMS int64) (bool, string, error) {
 	adm, cl, err := adminClient(dialMap, seeds)
 	if err != nil {

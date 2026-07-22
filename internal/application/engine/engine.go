@@ -528,7 +528,10 @@ func (e *Engine) probeOneAgainstState(ctx context.Context, env resource.Envelope
 		}
 	}
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonProbeFailed, Message: err.Error()}, now)
-	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonProbeFailed}, now)
+	// The drift condition carries the same message: drift output rows read
+	// it from here, and an empty Message hid the root cause of a live CI
+	// failure (2026-07-22) behind a bare ProbeFailed.
+	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonProbeFailed, Message: err.Error()}, now)
 	return st
 }
 
