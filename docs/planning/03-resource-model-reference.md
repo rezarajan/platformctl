@@ -1152,6 +1152,65 @@ spec:
   `scheme: https` fails the standard capability error until docs/planning/08
   C8 adds `Connection.spec.tls` to this same provider.
 
+### 8.2.2 Tunnel-mediated connections (the `wireguard` provider, docs/planning/08 D5, docs/adr/023)
+
+A third realization of the `Connection` shape: a `wireguard`-typed
+`Provider` is itself a `ConnectionCapableProvider` (scheme `tcp`) whose
+Connection's upstream (`spec.target`) is only reachable through a
+WireGuard tunnel the Provider maintains into another network (a VPC, a
+corporate peer network, ...):
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: vpc-tunnel
+spec:
+  type: wireguard
+  secretRefs: [vpc-tunnel-key]
+  configuration:
+    privateKeySecretRef: vpc-tunnel-key   # SecretReference key "privateKey"; file-mounted only, never env/state/inspect
+    peerNetwork: vpc-transit               # the Docker network the WireGuard peer's UDP endpoint is reachable on
+    peerPublicKey: <base64>
+    peerEndpoint: vpc-gateway:51820         # host:port; consumed as-is, like an external Connection's host (not a constructed address)
+    address: 10.13.13.2/32                  # this tunnel's own address on the WireGuard point-to-point subnet
+    allowedIPs: [10.13.13.0/24]             # the private subnet(s) routed through the tunnel
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: orders-db-vpc
+spec:
+  providerRef:
+    name: vpc-tunnel
+  scheme: tcp
+  port: 25432
+  target: 10.13.13.10:5432                  # host:port reachable via the tunnel's AllowedIPs route, not the shared network
+  secretRef:
+    name: orders-db-creds
+```
+
+- `NET_ADMIN` is required (the container creates and manages the `wg0`
+  interface and `iptables` NAT/forward rules) — documented plainly, not a
+  narrower capability, because Linux exposes none narrower for "manage a
+  WireGuard interface" (docs/adr/023 Decision 2).
+- The forwarder is `iptables` DNAT inside the tunnel container (one rule
+  per Connection naming this Provider), not a second forwarder tool —
+  docs/adr/023 Decision 4.
+- Key rotation (a new `SecretReference` value) recreates the tunnel
+  container (the same spec-hash mechanism every `ContainerSpec.Files`
+  change already triggers) rather than a live in-place key swap —
+  docs/adr/023 Decision 3.
+- `Connection.spec.via` (optional `nameRef`, managed connections only)
+  names a tunnel-capable Provider a *different* Connection's own realizing
+  provider (e.g. `proxy`) could chain its egress through — schema-accepted
+  and validate-time capability-checked (the named Provider must implement
+  `TunnelCapableProvider`) but not yet consumed by any realizing provider's
+  own reconciliation; see docs/adr/023's "Scope" section for the full
+  reasoning. The example above does not use `via` — a Connection realized
+  directly by a `wireguard` Provider (as shown) needs no `via`, since the
+  `providerRef` already names the tunnel.
+
 ## 9. Lineage / observability schema
 
 ```yaml

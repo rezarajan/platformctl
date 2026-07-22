@@ -241,6 +241,23 @@ type ContainerSpec struct {
 	Resources     *Resources
 	Security      *SecurityContext
 	LogConfig     *LogConfig
+	// Sysctls sets per-namespace kernel parameters at container-create time
+	// (Docker: HostConfig.Sysctls / `docker run --sysctl`) — the only way
+	// to make some of them writable at all: e.g. net.ipv4.ip_forward
+	// cannot be flipped from inside an already-running unprivileged
+	// container (writing /proc/sys/net/ipv4/ip_forward fails "read-only
+	// file system" even with SecurityContext.CapAdd: ["NET_ADMIN"]) unless
+	// it was named here when the container was created (docs/adr/023
+	// Decision 5, found live). nil/empty is today's behavior, byte-for-byte,
+	// for every provider that doesn't set this. Kubernetes does not
+	// implement this field: a pod's securityContext.sysctls entry needs
+	// the sysctl to be in the cluster's "safe" allowlist or the node's
+	// kubelet to opt into unsafe sysctls — a cluster-operator decision
+	// this codebase has no way to make on the operator's behalf, unlike
+	// NET_ADMIN (granted per-pod unconditionally). The fake adapter
+	// records the value (round-trips through Inspect for tests) without
+	// interpreting it.
+	Sysctls map[string]string
 	// Replicas is the desired size of this spec's replica set
 	// (docs/adr/004-replicas-and-identity.md). 0 and 1 are equivalent to
 	// today's single-container behavior, byte-for-byte — use ReplicaCount()

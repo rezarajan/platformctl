@@ -490,6 +490,29 @@ func checkResourceCapabilities(envelopes []resource.Envelope, idx manifestIndex,
 			if !contains(schemes, c.Scheme) {
 				return fmt.Errorf("Connection %q: Provider %q (type: %s)\ndoes not support connection scheme %q (supported: %s)", e.Metadata.Name, *c.ProviderRef, provType, c.Scheme, joinSorted(schemes))
 			}
+			if c.Via != nil {
+				// A structural + capability check only (docs/adr/023's
+				// Scope section): the named Provider must exist and be
+				// tunnel-capable. Not resolveProviderImpl (that closure's
+				// error message names "providerRef" — this is a different
+				// field), so a dedicated lookup with its own error text.
+				viaRef := resource.RefFromSpec(e.Spec, "via")
+				viaProvEnv, ok := idx.resolveKind(e, viaRef, "Provider")
+				if !ok || viaProvEnv.Kind != "Provider" {
+					return fmt.Errorf("Connection %q: via %q does not resolve to a Provider in namespace %q", e.Metadata.Name, viaRef.Name, viaRef.NamespaceOr(e.Metadata.Namespace))
+				}
+				viaProv, err := provider.FromEnvelope(viaProvEnv)
+				if err != nil {
+					return err
+				}
+				viaImpl, err := resolve(viaProv.Type)
+				if err != nil {
+					return fmt.Errorf("Connection %q: %w", e.Metadata.Name, err)
+				}
+				if _, ok := viaImpl.(reconciler.TunnelCapableProvider); !ok {
+					return fmt.Errorf("Connection %q: via %q (type: %s)\ndoes not support tunnel chaining (provider implements no tunnel capability)", e.Metadata.Name, *c.Via, viaProv.Type)
+				}
+			}
 		}
 	}
 	return nil

@@ -396,6 +396,9 @@ func (r *Runtime) ensureOneContainer(ctx context.Context, spec runtime.Container
 			Config: spec.LogConfig.Options,
 		}
 	}
+	if len(spec.Sysctls) > 0 {
+		hostCfg.Sysctls = spec.Sysctls
+	}
 
 	var netCfg *network.NetworkingConfig
 	if len(spec.Networks) > 0 {

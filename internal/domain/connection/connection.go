@@ -33,6 +33,12 @@ type Connection struct {
 	Port        int     // the port consumers use (managed: listen port on network + host)
 	Target      string  // managed only: host:port the entrypoint forwards to
 	SecretRef   *string // optional SecretReference carrying credentials for whatever answers
+	// Via is the optional nameRef to a tunnel-capable Provider (managed
+	// only) this Connection's egress additionally routes through
+	// (docs/adr/002's addendum, docs/adr/023). Schema-accepted and
+	// validate-time capability-checked; no realizing provider consumes it
+	// yet — see docs/adr/023's "Scope" section.
+	Via *string
 }
 
 // FromEnvelope decodes a Connection from a validated Envelope.
@@ -49,6 +55,9 @@ func FromEnvelope(e resource.Envelope) (Connection, error) {
 	}
 	if ref := refName(e.Spec, "secretRef"); ref != "" {
 		c.SecretRef = &ref
+	}
+	if ref := refName(e.Spec, "via"); ref != "" {
+		c.Via = &ref
 	}
 	c.Host, _ = e.Spec["host"].(string)
 	c.Target, _ = e.Spec["target"].(string)
@@ -71,6 +80,9 @@ func (c Connection) validate(name string) error {
 		}
 		if c.Target != "" {
 			return fmt.Errorf("Connection %q: spec.target is only meaningful on managed connections (an external connection is consumed as-is)", name)
+		}
+		if c.Via != nil {
+			return fmt.Errorf("Connection %q: spec.via is only meaningful on managed connections (an external connection is consumed as-is)", name)
 		}
 	} else {
 		if c.ProviderRef == nil {

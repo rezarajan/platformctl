@@ -15,3 +15,4 @@ A first-class, non-secret description of how to reach a system: address here, cr
 | `spec.scheme` | string | no | Transport scheme; the realizing provider must declare it in SupportedConnectionSchemes(). Default: tcp. |
 | `spec.secretRef` | object `{name}` | no | Optional SecretReference carrying credentials for whatever answers at this connection. |
 | `spec.target` | string | no | Managed only: host:port the entrypoint forwards to — the one place that knows where the system actually lives. |
+| `spec.via` | object `{name}` | no | Managed only: optional reference to a tunnel-capable Provider (docs/adr/023) this Connection's egress additionally routes through. Schema-accepted and validate-time capability-checked (the named Provider must implement TunnelCapableProvider); no realizing provider consumes it yet — a tunnel-mediated Connection is realized directly by the tunnel provider itself today (see docs/adr/002's addendum, docs/adr/023's Scope section). |

@@ -17,7 +17,8 @@
         "host": { "type": "string", "description": "External only: where the system answers." },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "The port consumers use. Managed: the entrypoint's listen port on the shared network and the host." },
         "target": { "type": "string", "description": "Managed only: host:port the entrypoint forwards to — the one place that knows where the system actually lives." },
-        "secretRef": { "$ref": "meta.json#/$defs/nameRef", "description": "Optional SecretReference carrying credentials for whatever answers at this connection." }
+        "secretRef": { "$ref": "meta.json#/$defs/nameRef", "description": "Optional SecretReference carrying credentials for whatever answers at this connection." },
+        "via": { "$ref": "meta.json#/$defs/nameRef", "description": "Managed only: optional reference to a tunnel-capable Provider (docs/adr/023) this Connection's egress additionally routes through. Schema-accepted and validate-time capability-checked (the named Provider must implement TunnelCapableProvider); no realizing provider consumes it yet — a tunnel-mediated Connection is realized directly by the tunnel provider itself today (see docs/adr/002's addendum, docs/adr/023's Scope section)." }
       },
       "required": ["port"],
       "additionalProperties": false,

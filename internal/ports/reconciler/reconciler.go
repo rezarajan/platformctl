@@ -206,6 +206,24 @@ type ConnectionCapableProvider interface {
 	SupportedConnectionSchemes() []string
 }
 
+// TunnelCapableProvider is declared by a provider that can serve as the
+// egress leg named by Connection.spec.via (docs/adr/002's addendum,
+// docs/adr/023) — a tunnel/VPN provider (wireguard first) another
+// Connection's forwarder could chain its egress through. Checked
+// structurally at validate time only, mirroring
+// ConnectionCapableProvider's shape (a capability-declaration slice, not a
+// bare marker) so a future consumer can capability-check the same way.
+// Wiring a via-chained Connection's own realization through the named
+// tunnel is deferred — see docs/adr/023's "Scope" section: a
+// tunnel-mediated Connection is realized directly by the tunnel provider
+// itself as a ConnectionCapableProvider today (see
+// internal/adapters/providers/wireguard), not via chaining through a
+// second provider's forwarder.
+type TunnelCapableProvider interface {
+	Provider
+	SupportsTunnelChaining() []string
+}
+
 // VersionedProvider is implemented by providers whose internals are coupled
 // to the technology's major version (a data mount path, a data directory) —
 // the ones where pairing a free-form image with hard-coded internals would
