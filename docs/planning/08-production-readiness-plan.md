@@ -2911,6 +2911,12 @@ Connect-worker HA (workers>1) remains I7's gap.
   concurrently with another suite-scale workload); flake register entry
   in doc 11 closed.
 - **Gate:** none (test-robustness fix).
+- **Done (2026-07-22, orchestrator):** rpHAK8sProduceConsume rebuilds
+  forwards + client per attempt (25s window each) inside the unchanged
+  90s budget; the probe-side sibling (retryTransientProbe, the
+  CI-reported Docker failure) landed the same day. Run 1 under load
+  3.08: full redpanda suite green 111.9s, ledger-recorded. Run 2
+  queued; transcribed here when green.
 
 
 

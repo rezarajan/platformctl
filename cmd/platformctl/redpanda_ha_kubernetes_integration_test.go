@@ -74,38 +74,70 @@ func rpHAK8sClient(t *testing.T, rt *k8sruntime.Runtime, opts ...kgo.Opt) (*kgo.
 	return cl, closeAll
 }
 
+// rpHAK8sProduceConsume proves a record round-trips the cluster. Overall
+// budget unchanged (90s per phase) but forwards and clients are rebuilt
+// PER ATTEMPT (doc 08 I8): rpHAK8sClient resolves port-forwards once, and
+// a forward established before a broker kill keeps pointing at the dead
+// pod — under host load the client can burn the whole window redialing it
+// ("produce during-kill: context deadline exceeded", observed three times
+// at load ≥3.2, log full of socat connection-refused to the killed pod).
+// Re-resolving per attempt is runtime.WithReachable's own discipline
+// applied to the test client; the per-attempt window is short so a stale
+// forward costs one attempt, not the budget.
 func rpHAK8sProduceConsume(t *testing.T, rt *k8sruntime.Runtime, marker string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
+	deadline := time.Now().Add(90 * time.Second)
 
-	prod, closeProd := rpHAK8sClient(t, rt)
-	defer closeProd()
-	defer prod.Close()
-	if err := prod.ProduceSync(ctx, &kgo.Record{Topic: rpHAK8sTopic, Value: []byte(marker)}).FirstErr(); err != nil {
-		t.Fatalf("produce %q: %v", marker, err)
-	}
-
-	cons, closeCons := rpHAK8sClient(t, rt,
-		kgo.ConsumeTopics(rpHAK8sTopic),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
-	defer closeCons()
-	defer cons.Close()
-	for {
-		fetches := cons.PollFetches(ctx)
-		if err := ctx.Err(); err != nil {
-			t.Fatalf("consume %q: %v", marker, err)
-		}
-		found := false
-		fetches.EachRecord(func(r *kgo.Record) {
-			if string(r.Value) == marker {
-				found = true
+	attempt := func(build func() error) {
+		t.Helper()
+		for {
+			err := build()
+			if err == nil {
+				return
 			}
-		})
-		if found {
-			return
+			if time.Now().After(deadline) {
+				t.Fatalf("%q: %v", marker, err)
+			}
+			time.Sleep(2 * time.Second)
 		}
 	}
+
+	attempt(func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		prod, closeProd := rpHAK8sClient(t, rt)
+		defer closeProd()
+		defer prod.Close()
+		if err := prod.ProduceSync(ctx, &kgo.Record{Topic: rpHAK8sTopic, Value: []byte(marker)}).FirstErr(); err != nil {
+			return fmt.Errorf("produce: %w", err)
+		}
+		return nil
+	})
+
+	attempt(func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		cons, closeCons := rpHAK8sClient(t, rt,
+			kgo.ConsumeTopics(rpHAK8sTopic),
+			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+		defer closeCons()
+		defer cons.Close()
+		for {
+			fetches := cons.PollFetches(ctx)
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("consume: %w", err)
+			}
+			found := false
+			fetches.EachRecord(func(r *kgo.Record) {
+				if string(r.Value) == marker {
+					found = true
+				}
+			})
+			if found {
+				return nil
+			}
+		}
+	})
 }
 
 // ambientClientset builds a client-go clientset from the ambient kubeconfig
