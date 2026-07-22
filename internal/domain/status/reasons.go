@@ -291,6 +291,42 @@ const (
 	ReasonCatalogConfigDrift = "CatalogConfigDrift"
 )
 
+// --- postgres/mysql metrics exporter sidecar (docs/planning/08 C9
+// completion) ---------------------------------------------------------------
+// A second, opt-in (spec.configuration.metrics: enabled) container per
+// Provider, mirroring openlineage's two-container shape (ADR 004) rather
+// than a replica — postgres_exporter / mysqld_exporter. Ready for the
+// Provider kind additionally blocks on this when metrics is enabled; the
+// base instance reuses ReasonInstanceHealthy/Unhealthy above.
+const (
+	ReasonExporterHealthy   = "ExporterHealthy"
+	ReasonExporterUnhealthy = "ExporterUnhealthy"
+)
+
+// --- grafana (managed monitoring stack; docs/planning/08 C9 completion) ----
+// The container itself reuses ReasonInstanceHealthy/Unhealthy above (the
+// shared single-container-instance shape). These are grafana-specific probe
+// outcomes once the container is healthy.
+const (
+	// ReasonDatasourceUnhealthy: the provisioned Prometheus datasource's own
+	// health check (Grafana's /api/datasources/uid/:uid/health) failed —
+	// Grafana is up but cannot reach the prometheus Provider it was
+	// provisioned to query.
+	ReasonDatasourceUnhealthy = "DatasourceUnhealthy"
+	// ReasonDashboardMissing: the starter dashboard's provisioning is
+	// expected (a Files-mounted JSON) but Grafana's own API does not report
+	// it — provisioning failed or was removed out-of-band.
+	ReasonDashboardMissing = "DashboardMissing"
+	// ReasonPrometheusUnresolved: no prometheus Provider's published
+	// endpoint fact could be resolved yet (configuration.prometheusRef
+	// unset with zero or more than one candidate Provider in the
+	// namespace, or the resolved one has not reconciled/published yet) —
+	// the same "next apply converges" convergence caveat prometheus's own
+	// C9 status note already accepts for its scrape targets: no graph edge
+	// orders grafana after prometheus either.
+	ReasonPrometheusUnresolved = "PrometheusUnresolved"
+)
+
 // --- prometheus (managed monitoring stack; docs/planning/08 C9) ------------
 // The base container reuses ReasonInstanceHealthy/ReasonInstanceUnhealthy
 // above (the shared single-container-instance shape). These two are

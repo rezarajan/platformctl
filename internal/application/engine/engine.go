@@ -1265,7 +1265,61 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 		KafkaBootstrapServers: e.resolveKafkaBootstrapServers(provEnv, p, byKey),
 		MetricsTargets:        e.resolveMetricsTargets(env, st),
 		CatalogFacts:          e.resolveCatalogFacts(env, p, byKey, st),
+		PrometheusURL:         e.resolvePrometheusURL(env, p, byKey, st),
 	}, nil
+}
+
+// resolvePrometheusURL resolves a grafana Provider's datasource-provisioning
+// input (docs/planning/08 C9 completion) — see reconciler.Request.
+// PrometheusURL's doc comment for the exact resolution rule and the
+// published-facts-only discipline (ADR 015). Mirrors resolveCatalogFacts's
+// warehouseProviderRef inference: an explicit configuration.prometheusRef
+// wins; otherwise the sole prometheus-typed Provider in the namespace,
+// left unresolved ("") when 0 or more than 1 candidate exists.
+func (e *Engine) resolvePrometheusURL(env resource.Envelope, p provider.Provider, byKey map[resource.Key]resource.Envelope, st *state.State) string {
+	if st == nil || env.Kind != "Provider" {
+		return ""
+	}
+	var promEnv resource.Envelope
+	found := false
+	if ref := resource.RefFromSpec(p.Configuration, "prometheusRef"); ref.Name != "" {
+		promEnv, found = byKey[ref.Key(env.Metadata.Namespace, "Provider")]
+	} else {
+		ns := resource.NormalizeNamespace(env.Metadata.Namespace)
+		ambiguous := false
+		for _, cand := range byKey {
+			if cand.Kind != "Provider" || resource.NormalizeNamespace(cand.Metadata.Namespace) != ns {
+				continue
+			}
+			if t, _ := cand.Spec["type"].(string); t != "prometheus" {
+				continue
+			}
+			if found {
+				ambiguous = true
+				break
+			}
+			promEnv, found = cand, true
+		}
+		if ambiguous {
+			found = false
+		}
+	}
+	if !found {
+		return ""
+	}
+
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	rs, ok := st.Resources[promEnv.Key()]
+	if !ok {
+		return ""
+	}
+	for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
+		if ep.Name == "prometheus" && ep.Internal != "" {
+			return ep.Internal
+		}
+	}
+	return ""
 }
 
 // resolveCatalogFacts resolves Provider(type: trino).spec.configuration.

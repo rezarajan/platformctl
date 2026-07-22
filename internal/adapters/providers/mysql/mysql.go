@@ -168,17 +168,29 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 		return st, err
 	}
 
+	// Metrics sidecar (docs/planning/08 C9 completion): opt-in, additive —
+	// absent/disabled leaves everything above byte-for-byte unchanged. A
+	// second, independent container (ADR 004), never a replica.
+	hostAddr := ctrState.HostAddr(3306) // observed binding, not intent
+	endpoints := endpoint.List{
+		{Name: "mysql", Scheme: "mysql", Host: hostAddr, Internal: name + ":3306", Insecure: true},
+	}
+	if metricsEnabled(cfg) {
+		metricsEP, err := ensureExporter(ctx, rt, req.Provider.Metadata.Namespace, providerkit.Network(cfg), name, rootPass)
+		if err != nil {
+			return st, err
+		}
+		endpoints = append(endpoints, metricsEP)
+	}
+
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonInstanceHealthy}, now)
 	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
-	hostAddr := ctrState.HostAddr(3306) // observed binding, not intent
 	st.ProviderState = map[string]any{
 		"containerId":  ctrState.ID,
 		"hostAddr":     hostAddr,
 		"internalAddr": name + ":3306",
-		endpoint.Key: endpoint.List{
-			{Name: "mysql", Scheme: "mysql", Host: hostAddr, Internal: name + ":3306", Insecure: true},
-		}.ToState(),
+		endpoint.Key:   endpoints.ToState(),
 	}
 	return st, nil
 }
@@ -299,6 +311,11 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 	name := naming.RuntimeObjectName(req.Provider)
 	switch res.Kind {
 	case "Provider":
+		// Removed unconditionally — Remove is idempotent-to-absence, and
+		// the exporter may never have existed (metrics never enabled).
+		if err := rt.Remove(ctx, exporterName(name)); err != nil {
+			return err
+		}
 		if err := rt.Remove(ctx, name); err != nil {
 			return err
 		}
@@ -359,6 +376,11 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		if !found || !ctrState.Healthy {
 			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonInstanceUnhealthy}, now)
 			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonInstanceUnhealthy}, now)
+			return st, nil
+		}
+		if metricsEnabled(cfg) && !probeExporter(ctx, rt, name) {
+			st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonExporterUnhealthy}, now)
+			st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonExporterUnhealthy}, now)
 			return st, nil
 		}
 		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonInstanceHealthy}, now)
@@ -428,6 +450,12 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 		}
 	} else if len(cfg.SecretRefs) == 0 {
 		return fmt.Errorf("spec.secretRefs must name at least one SecretReference (the root credentials; configuration.rootSecretRef selects one explicitly)")
+	}
+	if v, ok := cfg.Configuration["metrics"]; ok {
+		s, _ := v.(string)
+		if s != "enabled" && s != "disabled" {
+			return fmt.Errorf("spec.configuration.metrics must be \"enabled\" or \"disabled\", got %v", v)
+		}
 	}
 	return catalogFor(cfg).ValidateConfig(cfg.Configuration)
 }

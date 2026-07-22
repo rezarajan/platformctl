@@ -910,6 +910,66 @@ var Catalog = []CatalogEntry{
 		},
 	},
 
+	// --- postgres/mysql metrics exporter sidecar (docs/planning/08 C9 completion) ---
+	{
+		Token: ReasonExporterHealthy, Area: "metrics-exporter", Kind: "reason",
+		Meaning:  "The opt-in (configuration.metrics: enabled) postgres_exporter/mysqld_exporter sidecar container is up and healthy alongside its database instance.",
+		Causes:   healthyCauses,
+		Remedies: healthyRemedies,
+	},
+	{
+		Token: ReasonExporterUnhealthy, Area: "metrics-exporter", Kind: "reason",
+		Meaning: "configuration.metrics is enabled but the exporter sidecar container is missing or unhealthy — the database instance itself may still be fine (its own health is reported separately as InstanceHealthy/InstanceUnhealthy).",
+		Causes: []string{
+			"The exporter container was removed or stopped out-of-band.",
+			"The exporter cannot authenticate: the platform-managed monitoring role/user was altered or dropped directly in the database.",
+			"The exporter container is still starting (can be transient just after apply).",
+		},
+		Remedies: []string{
+			"docker logs <instance>-exporter for the exporter's own failure detail.",
+			"platformctl apply <path> to recreate the exporter and re-provision its monitoring role.",
+		},
+	},
+
+	// --- grafana (managed monitoring stack; docs/planning/08 C9 completion) --------
+	{
+		Token: ReasonDatasourceUnhealthy, Area: "grafana", Kind: "reason",
+		Meaning: "Grafana is up but its provisioned Prometheus datasource's own health check (Grafana's /api/datasources/uid/:uid/health) failed — Grafana cannot reach the prometheus Provider it was provisioned to query.",
+		Causes: []string{
+			"The prometheus Provider's container is down or unreachable on the shared network.",
+			"The prometheus Provider was re-created at a different address after grafana's last reconcile.",
+		},
+		Remedies: []string{
+			"platformctl status <path> to check the prometheus Provider's own Ready condition first.",
+			"platformctl apply <path> to re-provision the datasource from the currently-published endpoint fact.",
+		},
+	},
+	{
+		Token: ReasonDashboardMissing, Area: "grafana", Kind: "reason",
+		Meaning: "The starter dashboard's file-based provisioning is expected but Grafana's own API does not report it (GET /api/dashboards/uid/... is not 200) — provisioning failed or the dashboard was removed out-of-band.",
+		Causes: []string{
+			"The dashboard was deleted through Grafana's UI/API (provisioned dashboards can still be removed by an admin).",
+			"Grafana's provisioning scan failed at startup (malformed provisioning file — should not happen with generated content).",
+		},
+		Remedies: []string{
+			"docker logs <grafana-container> for provisioning errors.",
+			"platformctl apply <path> to re-reconcile; if the file content changed, the container is recreated with corrected provisioning.",
+		},
+	},
+	{
+		Token: ReasonPrometheusUnresolved, Area: "grafana", Kind: "reason",
+		Meaning: "No prometheus Provider's published endpoint fact could be resolved for grafana's datasource — configuration.prometheusRef is unset with zero or more than one candidate prometheus Provider in the namespace, or the resolved one has not reconciled/published its endpoint yet. The same next-apply-converges caveat as prometheus's own scrape targets: no graph edge orders grafana after prometheus.",
+		Causes: []string{
+			"The prometheus Provider has not been applied yet (fresh single apply — converges on the next apply).",
+			"More than one prometheus Provider exists and configuration.prometheusRef does not name one explicitly.",
+			"No prometheus Provider exists in the manifest at all.",
+		},
+		Remedies: []string{
+			"platformctl apply <path> again once the prometheus Provider is Ready (its endpoint fact publishes on its first successful reconcile).",
+			"Set configuration.prometheusRef: {name: <prometheus-provider>} to disambiguate when several exist.",
+		},
+	},
+
 	// --- prometheus (managed monitoring stack) -------------------------------------
 	{
 		Token: ReasonScrapeTargetsIncomplete, Area: "prometheus", Kind: "reason",

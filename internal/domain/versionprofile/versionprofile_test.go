@@ -9,7 +9,7 @@ var cat = Catalog{
 	Default: "16",
 	Profiles: map[string]Profile{
 		"16": {Version: "16", Image: "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20", DataMount: "/var/lib/postgresql/data"},
-		"18": {Version: "18", Image: "postgres:18@sha256:32ca0af8e77bfb8c6610c488e4691f83f972a3e9e64d3b02facf3ab111ad5500", DataMount: "/var/lib/postgresql"},
+		"18": {Version: "18", Image: "postgres:18@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a", DataMount: "/var/lib/postgresql"},
 	},
 }
 
@@ -22,7 +22,7 @@ func TestResolveDefaultAndKnown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p18.DataMount != "/var/lib/postgresql" || p18.Image != "postgres:18@sha256:32ca0af8e77bfb8c6610c488e4691f83f972a3e9e64d3b02facf3ab111ad5500" {
+	if p18.DataMount != "/var/lib/postgresql" || p18.Image != "postgres:18@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a" {
 		t.Errorf("18 profile = %+v", p18)
 	}
 }
@@ -44,7 +44,7 @@ func TestValidateConfig(t *testing.T) {
 		t.Errorf("empty config rejected: %v", err)
 	}
 	// image without version → rejected (the reported failure mode)
-	err := cat.ValidateConfig(map[string]any{"image": "postgres:18@sha256:32ca0af8e77bfb8c6610c488e4691f83f972a3e9e64d3b02facf3ab111ad5500"})
+	err := cat.ValidateConfig(map[string]any{"image": "postgres:18@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"})
 	if err == nil || !strings.Contains(err.Error(), "without configuration.version") {
 		t.Errorf("image-without-version not rejected: %v", err)
 	}

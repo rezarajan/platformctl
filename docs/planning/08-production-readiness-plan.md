@@ -1090,6 +1090,93 @@ entrypoints, is observable, and its data is recoverable. This is where
   (the provider is runtime-agnostic by construction — no Docker-specific
   API used beyond the shared `providerkit`/`ContainerRuntime` port — but
   untested against a real cluster).
+- **Status (2026-07-22): C9 completion — exporter sidecars + `grafana`
+  provider shipped**, closing the three deferrals recorded just above
+  (postgres/mysql sidecar exporters and the standalone `grafana` provider;
+  live Kubernetes-runtime verification remains open, unchanged from the
+  original slice — neither new package uses anything beyond the shared
+  `providerkit`/`ContainerRuntime` port). `postgres`/`mysql`/`mariadb` gain
+  an opt-in `configuration.metrics: enabled | disabled` (default disabled,
+  same `MonitoringStackProvider` gate, enforced at validate by the CLI's
+  `checkMonitoringMetricsGate` — a `SpecValidator` has no gate access by
+  design, docs/adr/017 §a.8): a second, independent
+  `postgres_exporter`/`mysqld_exporter` container reconciled alongside the
+  instance (docs/adr/004 — a sidecar, mirroring `openlineage`'s Marquez+db
+  two-container shape, never a replica; the instance's own `ContainerSpec`
+  is untouched code, not just untouched behavior — proven by
+  `TestInstanceContainerSpecUnaffectedByMetrics` in both providers' test
+  suites). The exporter's port is `Audience: internal` — never
+  host-published — and authenticates as a dedicated least-privilege
+  monitoring role/user (`pg_monitor`; `PROCESS, REPLICATION CLIENT,
+  SELECT`) this provider creates and password-manages itself at reconcile,
+  never the admin/root credential and never a user-declared
+  `SecretReference`; the password never touches env either
+  (`DATA_SOURCE_PASS_FILE` for postgres_exporter, a fully file-mounted
+  `--config.my-cnf` for mysqld_exporter — both verified live against the
+  real images, no env-based deviation needed for either exporter, unlike
+  the task brief's anticipated fallback). Its `"metrics"` endpoint fact
+  publishes exactly like redpanda's/s3's, so the `prometheus` provider
+  scrapes it with **zero** changes to `internal/adapters/providers/prometheus`
+  (asserted by inspection: that package's `git diff` for this task is
+  empty; `resolveMetricsTargets` keys `JobName` off the owning `Provider`
+  resource's own name, confirmed by reading
+  `internal/application/engine/engine.go`). The new `grafana` provider
+  (nessie-shaped: one container, no dependent kind) reuses the existing
+  `MonitoringStackProvider` gate rather than a new one (recorded design
+  choice: it gates the monitoring stack as a class), is provisioned
+  entirely via `ContainerSpec.Files` (Grafana's own file-based provisioning
+  mechanism) with a Prometheus datasource resolved from a `prometheus`
+  Provider's own published `"prometheus"` endpoint fact — a new
+  `reconciler.Request.PrometheusURL` field, resolved in `engine.go`'s
+  `resolvePrometheusURL` the same explicit-ref-or-sole-candidate-inference
+  rule `resolveCatalogFacts`'s `warehouseProviderRef` already established
+  (`configuration.prometheusRef`, optional; ambiguous when unset with more
+  than one candidate — never guessed, ADR 015) — and a minimal starter
+  broker+database overview dashboard (three stat panels: `sum(up)`,
+  `sum(pg_up)`, `sum(mysql_up)`). Admin credentials are a required
+  `SecretReference` (`ValidateSpec`-checked), mounted via
+  `GF_SECURITY_ADMIN_USER` (env) + `GF_SECURITY_ADMIN_PASSWORD__FILE`
+  (file — verified live: Grafana's own double-underscore `__FILE`
+  convention); anonymous access is explicitly set off rather than relied
+  on as Grafana's own default. **Deviation, recorded not solved**: Grafana
+  only applies its admin-credential env vars the first time it creates the
+  admin user in its own on-disk database (a documented Grafana limitation)
+  — unlike postgres/mysql's `CredentialRotation` state machine, a
+  `SecretReference` value changed after the first apply is not rotated
+  into a live Grafana container; this needed no new code because Grafana
+  itself doesn't support it, not because it was out of scope. **Finding**:
+  the task's Accept criteria asked for both the exporter's `Audience:
+  internal` fact (no host-published address) and for `inventory --for
+  prometheus` to include the exporter targets — in tension as literally
+  written, since `gatherToolFacts` uniformly skipped any endpoint fact with
+  no host-published address. Resolved (not routed to the maintainer, a
+  small and clearly-scoped fix): the `"metrics"` case in
+  `cmd/platformctl/toolconfig.go`'s `gatherToolFacts` now falls back to the
+  endpoint's in-network address when no host address is published — still
+  a legitimate bring-your-own-Prometheus target for a Prometheus container
+  joined to the same runtime network, just not from an arbitrary external
+  host; pinned by `TestGatherToolFactsFallsBackToInternalForMetrics`.
+  Verified live: `TestMonitoringStackCompletionEndToEnd`
+  (`cmd/platformctl/monitoring_completion_integration_test.go`) against
+  real Docker — a three-tier apply (infra: redpanda+EventStream+minio+
+  postgres(metrics)+mysql(metrics); + prometheus; + grafana, each against
+  the same state file, mirroring the recorded convergence caveat) to
+  `/api/v1/targets` showing all four jobs (`mon-redpanda`, `mon-minio`,
+  `mon-postgres`, `mon-mysql` — job names are the realizing Provider's own
+  resource name, not the exporter container's `-exporter` name)
+  `up == 1` within a 30s deadline; Grafana's own
+  `/api/datasources/uid/prometheus/health` reports `OK` and
+  `/api/dashboards/uid/datascape-overview` 200s; `inventory --for
+  prometheus` names both exporter jobs and their in-network target
+  addresses; idempotent re-apply (all eight managed containers' IDs
+  unchanged, including both exporter sidecars and grafana); clean destroy
+  — green in ~40s per run. `TestPrometheusMonitoringStackEndToEnd`
+  re-run live to confirm no regression (~14s, unchanged from its own
+  status note). Unit tests added in both exporter-providing packages
+  (`metrics_test.go`) and the new `grafana` package (`grafana_test.go`,
+  `internal/application/engine/engine_test.go`'s
+  `TestResolvePrometheusURL*`); `go test ./...`/`gofmt`/`go vet` all
+  green.
 
 ### C10: In-network reachability probes
 

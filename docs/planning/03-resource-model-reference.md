@@ -418,6 +418,40 @@ spec:
                                        # SecretReference for the engine to resolve it
 ```
 
+Also optional, not required for v1.0.0 (docs/planning/08 C9 completion, gate `MonitoringStackProvider`,
+Alpha/disabled — the postgres/mysql exporter sidecar and the `grafana` provider deferred by C9's
+original core slice):
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lake-postgres
+spec:
+  type: postgres
+  runtime: {type: docker, network: datascape}
+  configuration:
+    version: "16"
+    metrics: enabled                  # optional; default disabled. Adds a postgres_exporter
+                                       # sidecar (Audience: internal-only) authenticated as a
+                                       # dedicated least-privilege monitoring role this
+                                       # provider creates itself — never the superuser
+                                       # credential. Requires --feature-gates=MonitoringStackProvider=true
+  secretRefs: [pg-admin]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lake-grafana
+spec:
+  type: grafana
+  runtime: {type: docker, network: datascape}
+  configuration:
+    prometheusRef: {name: local-prometheus}  # optional; inferred when exactly one
+                                              # prometheus Provider exists in the manifest
+  secretRefs: [grafana-admin]           # required: admin username/password
+```
+
 Field notes:
 - `spec.type` selects which `Provider` (reconciler) implementation and JSON Schema for
   `spec.configuration` apply.
@@ -487,6 +521,31 @@ Field notes:
   from the same facts. **Deferred** (explicit, not silently missing): postgres/mysql sidecar exporter
   containers (no native metrics endpoint to publish yet), a standalone `grafana` provider, and live
   Kubernetes-runtime verification.
+- **C9 completion — exporter sidecars and the `grafana` provider** (docs/planning/08 C9 completion,
+  same `MonitoringStackProvider` gate — it gates the monitoring stack as a class, not a new gate per
+  provider): `postgres`/`mysql`/`mariadb`'s `configuration.metrics: enabled | disabled` (default
+  disabled) reconciles a second, independent `postgres_exporter`/`mysqld_exporter` container
+  alongside the instance (docs/adr/004 — a sidecar, not a replica of the instance's own
+  `ContainerSpec`, which stays byte-for-byte unchanged when `metrics` is unset). The exporter's port
+  is `Audience: internal` — never published to the host, reachable only by other containers on the
+  shared network (`prometheus`, most immediately) — and authenticates as a dedicated
+  least-privilege monitoring role/user this provider creates and password-manages itself at
+  reconcile (`pg_monitor` for postgres; `PROCESS, REPLICATION CLIENT, SELECT` for mysql/mariadb) —
+  never the admin/root credential, never a user-declared `SecretReference`. Its own `"metrics"`
+  endpoint fact is published exactly like redpanda's/s3's, so `prometheus` scrapes it with **zero**
+  changes to the `prometheus` provider itself. The new `grafana` provider (nessie-shaped: one
+  container, no dependent kind) is provisioned entirely via `ContainerSpec.Files` — Grafana's own
+  file-based provisioning mechanism, not an API call this provider makes — with a Prometheus
+  datasource resolved from a `prometheus` `Provider`'s own published `"prometheus"` endpoint fact
+  (`configuration.prometheusRef`, optional — inferred when the manifest declares exactly one
+  `prometheus` `Provider`, left unresolved on ambiguity — never constructed, ADR 015) and a minimal
+  starter broker+database overview dashboard. `spec.secretRefs` (or `configuration.adminSecretRef`)
+  is required for the admin username/password, mounted via `GF_SECURITY_ADMIN_USER` (env) +
+  `GF_SECURITY_ADMIN_PASSWORD__FILE` (file — the password itself never touches env); anonymous
+  access is always explicitly off. **Known limitation, recorded not solved**: Grafana only applies
+  its admin-credential env vars the first time it creates the admin user in its own on-disk
+  database — unlike postgres/mysql's rotation state machine, a `SecretReference` value changed
+  after the first apply is not rotated into a live Grafana container.
 - **`trino` compute-engine provider** (docs/planning/08 D10, gate `TrinoProvider`, Alpha/disabled;
   design note docs/adr/006-compute-engines.md): reconciles one coordinator container plus
   `configuration.workers` (integer ≥ 1, default 1) worker containers via the C1/C2 replica
