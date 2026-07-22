@@ -399,3 +399,13 @@ static. Dimensions, each producing findings verified before fixing:
   against every manifest the repo ships, not just examples — a unit
   test doing the sweep would make this class impossible (small
   follow-up, noted).
+- 2026-07-22: DAY CLOSED FULLY VERIFIED. Final-gate fix re-proofs green
+  (ingress 118.8s incl. the TLS scenario; state-s3 4.8s incl. the
+  dead-holder reclaim) and ledger-recorded. Every suite in the map is
+  green at the current content-state. Main carries waves 1-3 merged,
+  the systems pass, and today's seven root-cause fixes; unpushed,
+  awaiting the owner. Open: owner decisions (KubernetesRuntime GA — HA
+  now feature-complete per the owner's bar; v1.3.0;
+  ExternalResourceConfiguration GA) and the sequenced tail (E6→E7,
+  H5→H6, I9, small follow-ups: fragment-completeness unit sweep, slog,
+  dbjob revisit-before-backup-GA).
