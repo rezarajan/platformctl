@@ -140,4 +140,35 @@ Provider in the namespace. `resolveDatasetS3Facts` factors the shared tail
   the D8 derivation path is genuinely exercised, not just present in code.
   Full accept list (Ready, scale 2->3 in place, drift-heal, idempotent
   re-apply "no changes", validate rejection) all still green.
-- Live Docker: TestLakehouse — running (see below for result).
+- **Live Docker: TestLakehouse — PASS (67.89s)**: examples/lakehouse applies
+  to Ready with warehouseRef (no Provider-level defaultWarehouseLocation),
+  including idempotent re-apply ("no changes"), secret rotation, CDC
+  through the managed Connection, drift/heal, clean destroy. Bonus:
+  **TestLakehouseExampleOnKubernetes also matched the -run pattern and
+  passed (135.82s)** — the warehouseRef flow verified on the Kubernetes
+  runtime too, unplanned but recorded.
+- **Live inventory check — PASS** (accept: "inventory --for spark/trino
+  reflect the warehouse"; scripted apply -> inventory -> probe -> destroy,
+  scratchpad/inventory_check.sh, full log in the session transcript):
+  - apply examples/lakehouse: 20 applied, all Ready.
+  - docker inspect catalog-svc env shows the warehouseRef-DERIVED config:
+    `NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION=s3://warehouse/iceberg/`
+    (bucket+prefix of the `warehouse` Dataset), warehouse-creds
+    name/secret from lake-minio-root — no Provider-level explicit fields
+    exist in the example anymore.
+  - `curl http://127.0.0.1:19121/iceberg/v1/config` answers 200 with
+    defaults — pre-D8 (no warehouse config at all in this example) this
+    endpoint answered 500 "No default-warehouse configured"; D8's derived
+    config genuinely took effect server-side.
+  - `inventory --for spark`: renders catalog uri
+    (http://127.0.0.1:19121/iceberg), ref main, s3a endpoint
+    (http://127.0.0.1:19010) + lake-minio-root credsRef.
+  - `inventory --for trino`: paste-ready lakehouse.properties with
+    iceberg.rest-catalog.uri + s3.endpoint + credsRef comment.
+  - destroy: 19 succeeded, 0 failed; external Source untouched.
+  - gatherToolFacts needed NO code change: it is already fact-driven
+    (published endpoint facts), which is exactly why the snippets pick the
+    warehouse up automatically — verified live rather than modified.
+- scripts/test-impact.sh --base main: 14 suites selected (diff touches
+  SHARED_CORE: internal/domain, internal/ports, internal/application/
+  engine). Launched; result + per-suite timings recorded below when done.
