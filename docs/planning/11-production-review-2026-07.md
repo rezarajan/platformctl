@@ -257,3 +257,11 @@ static. Dimensions, each producing findings verified before fixing:
   were lost to a pipe-masked exit (the documented class, this time by
   the orchestrator) — messages reconstructed from reports, marked as
   such in each commit body.
+- 2026-07-22: OWNER DECISION recorded: KubernetesRuntime does NOT GA
+  until HA is feature-complete — I7 is the gate. WAVE 3 launched: I7
+  (workers>1 fix + ADR 004 addendum + 2-worker K8s DLQ/HA test), E5
+  (provider schema fragments + typed option validation + negative
+  corpus — the E-chain opener, now unblocked), H4 (zero-trust pack CI'd
+  against examples + governance onboarding), and a hygiene batch
+  (.golangci.yml adoption follow-up + G7 exemption-list absorption).
+  E6→E7, H5→H6 queue behind their dependencies next wave.
