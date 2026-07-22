@@ -9,10 +9,24 @@ append facts).
 
 | Audience | Reading order |
 |---|---|
-| New contributor / agent | `CLAUDE.md` (the invariant) → [planning/01](planning/01-product-requirements.md) → [planning/02](planning/02-architecture.md) → the sections of [planning/03](planning/03-resource-model-reference.md) your task touches → [planning/06](planning/06-agentic-execution-guide.md) §3's pre-coding checklist |
+| New contributor / agent | [onboarding/developers.md](onboarding/developers.md) → `CLAUDE.md` (the invariant) → [planning/01](planning/01-product-requirements.md) → [planning/02](planning/02-architecture.md) → the sections of [planning/03](planning/03-resource-model-reference.md) your task touches → [planning/06](planning/06-agentic-execution-guide.md) §3's pre-coding checklist |
 | "What should I work on?" | [planning/08](planning/08-production-readiness-plan.md) — the live stage-gated backlog; §10 is the sequencing |
 | "Why is it like this?" | [planning/10](planning/10-project-history-and-evolution.md) — the consolidated history with reasoning, then the specific [ADR](adr/) |
-| Operator / user | The repo [README](../README.md) → generated kind reference in [reference/](reference/index.md) → [upgrade-notes.md](upgrade-notes.md) |
+| Operator / user | [onboarding/users.md](onboarding/users.md) → the repo [README](../README.md) → generated kind reference in [reference/](reference/index.md) → [upgrade-notes.md](upgrade-notes.md) |
+
+## Onboarding
+
+- [onboarding/users.md](onboarding/users.md) — operating platformctl: the
+  mental model (kinds, lifecycles, Bindings), the daily
+  validate/plan/apply/status/drift workflow with exit codes, secrets,
+  runtimes, feature gates, and the most likely failures with their actual
+  error text.
+- [onboarding/developers.md](onboarding/developers.md) — contributing to
+  platformctl: reading order, the one invariant with real package names,
+  how doc 08's task protocol works, a first-contribution provider
+  walkthrough, testing (unit/conformance/integration, minimal-RBAC), and
+  the docs rules (schema sync, generated reference, planning-doc guard,
+  ADR practice).
 
 ## Contracts — the code is checked against these
 
@@ -84,3 +98,12 @@ human (or the documented maintenance unlock).
   with their original asks).
 - [upgrade-notes.md](upgrade-notes.md) — behavioral migrations an operator
   would otherwise mistake for regressions.
+
+## Positioning — comparative framing, not a contract/plan/record
+
+- [positioning/terraform.md](positioning/terraform.md) — how platformctl
+  compares to Terraform (same declarative/plan/apply/state family, but a
+  domain control plane that reconciles past resource creation into
+  application-level configuration), when to reach for Terraform instead,
+  how the two are used together today through the `Connection` seam, and
+  unscheduled future-integration ideas.

@@ -44,9 +44,28 @@ applied: 14 succeeded, 0 failed, 0 skipped
 - **A real pipeline, end-to-end** — the provider set covers a working
   lakehouse: Redpanda, Postgres, MySQL/MariaDB, Debezium CDC, MinIO/S3, a
   Kafka-Connect S3 sink, Nessie (Iceberg REST catalog), Marquez
-  (OpenLineage backend), and a proxy surface giving external systems stable
-  platform-owned entrypoints. Rows inserted into Postgres land as objects
-  in a bucket with nothing hand-wired in between.
+  (OpenLineage backend), Trino (query engine, Alpha), Prometheus (managed
+  monitoring, Alpha), an ingress provider (HTTP routing on the `Connection`
+  seam, Alpha), and a proxy surface giving external systems stable
+  platform-owned entrypoints. Rows inserted into Postgres land as
+  schema-carrying Parquet objects in a bucket with nothing hand-wired in
+  between — `examples/cdc-attendance/` ships `Dataset.spec.format: parquet`
+  as its acceptance shape, not just JSON.
+- **Production-shaped HA, not just "the container restarts"** — Redpanda
+  (`configuration.brokers`), Kafka Connect workers behind debezium/s3sink
+  (`configuration.workers`), and MinIO (`configuration.nodes`, 4+ nodes,
+  erasure-coded) all opt into a multi-instance, stable-identity shape
+  behind the `HighAvailability` gate; object storage additionally has a
+  documented external-production posture (a real S3/GCS/R2 endpoint,
+  verified reachable, never created/deleted by platformctl) for teams that
+  don't want to self-host at all.
+- **Dataset lifecycle, dead-letter queues, backup/restore** — a `Dataset`
+  can declare `spec.lifecycle` (object expiry + bucket versioning,
+  reconciled and drift-checked against the live bucket); any sink `Binding`
+  can declare `options.deadLetter` routing poison records to their own
+  `EventStream`; `platformctl backup`/`restore` (Alpha) streams a
+  data-bearing resource's actual contents to and from an object-store
+  destination for postgres, mysql, and s3.
 - **Orchestrator-ready** — `examples/lakehouse/` stands up the
   infrastructure a Dagster deployment runs against: object store, an
   Iceberg `Catalog`, a lineage backend, relational stores, and a managed
@@ -222,8 +241,10 @@ bin/platformctl destroy cdc-to-lake --auto-approve
 | `apply <dir>` | Reconcile in topological order; state persisted after every resource. |
 | `status <dir>` | Per-resource `Ready`/`DRIFT`/conditions/lifecycle from recorded state. |
 | `drift <dir>` | Probe live infrastructure, record observed conditions into state, report drift. Exit `1` when drift is found; run `apply` to heal it. |
+| `backup <Kind/name> [dir] --to ...` | Stream a `BackupCapableProvider` resource's contents (postgres, mysql, s3) to a `Dataset` or an object-store URL. Alpha, `BackupRestore` gate. |
+| `restore <Kind/name> [dir] --from ...` | Stream a backup back into a resource, overwriting its current data; refuses without `--yes-i-understand-this-overwrites-existing-data`. Alpha, `BackupRestore` gate. |
 | `graph <dir> [--format tree\|dot\|mermaid\|json]` | Render the platform architecture — data-flow pipelines + technology layer, not the raw dependency DAG. `-o json\|yaml` overrides `--format` with a structured node/edge document. |
-| `inventory <dir>` (aka `services`, `endpoints`) | List applied components' endpoints + which SecretReference holds their credentials. `--for spark\|trino\|dbt\|psql\|s3\|kafka\|dagster\|flink\|metabase\|superset` renders a paste-ready config snippet from the recorded endpoints instead. |
+| `inventory <dir>` (aka `services`, `endpoints`) | List applied components' endpoints + which SecretReference holds their credentials. `--for dagster\|dbt\|flink\|kafka\|metabase\|prometheus\|psql\|s3\|spark\|superset\|trino` renders a paste-ready config snippet from the recorded endpoints instead. |
 | `import <Kind>/<name> --from <name>` | Adopt a pre-existing backing object into state as Imported (probe, never create). Gated by `ImportedResources`. |
 | `docs build\|serve` | Generate/serve the resource reference from `schemas/`. |
 | `destroy <dir>` | Reverse-order teardown. `--include-external` additionally requires `--yes-i-understand-this-is-destructive`. |
@@ -270,8 +291,9 @@ sufficient.
 ## 🗄 Database HA posture
 
 Managed `postgres`/`mysql` are deliberately **single-node**, positioned for
-dev, staging, and small production — hardened by backup/restore (planned,
-docs/planning/08 C6) and fast drift-heal, not by reimplementing replication.
+dev, staging, and small production — hardened by `platformctl backup`/
+`restore` (Alpha, `BackupRestore` gate) and fast drift-heal, not by
+reimplementing replication.
 Patroni, Galera, and cloud RDS/Aurora are operationally deep enough that
 platformctl doesn't try to own that surface; instead, a production HA
 database integrates as an **`external: true` Source through the Connection
@@ -281,12 +303,55 @@ seam** — already fully supported today, CDC included (see
 for the full decision and what would change if a replication-capable managed
 mode is ever added.
 
+## 🔀 platformctl and Terraform
+
+Same family: declarative desired state, `plan`/`apply`, a state file, drift
+— platformctl deliberately borrows Terraform's authoritative-apply and
+state conventions
+([docs/adr/012-determinism-and-state.md](docs/adr/012-determinism-and-state.md)).
+The difference is depth and scope, not just tooling:
+
+- **Reconciliation depth.** Terraform provisions resources through
+  cloud/provider APIs and stops at resource CRUD. platformctl continues
+  past creation into application-level reconciliation — creating topics
+  inside a broker it just started, enabling logical replication inside a
+  database, registering and health-verifying Kafka Connect connectors,
+  checking that a connector's *live config* still matches the manifest
+  (drift here means `wal_level changed`, not just "the VM is gone"),
+  rotating credentials, backing up and restoring data.
+- **Runtime portability.** One manifest reconciles to Docker locally and
+  Kubernetes in staging with zero manifest changes (`spec.runtime.type`) —
+  the provider/runtime split is this architecture's central bet, and it's
+  Docker-first by design, the opposite of Terraform's cloud-API-first
+  starting point.
+- **Typed, validate-time-complete domain model.** A `Binding` to a provider
+  that can't do CDC fails at `validate` with a precise capability error;
+  Terraform's equivalent errors mostly surface at `apply`, from the
+  provider, if at all.
+- **Scope.** platformctl is deliberately not a general-purpose provisioner
+  (no VPCs, IAM, DNS, managed cloud services) and has no multi-tenant
+  control plane — that's squarely Terraform's territory.
+
+**Use them together, today:** Terraform provisions the cloud foundation
+(the RDS instance, the S3 bucket, the network); platformctl consumes it as
+an `external: true` resource through the `Connection` seam and owns what
+runs on top of it — "CDC off it is running, healthy, and its connector
+config hasn't drifted." This is the shipped, CI-exercised pattern (see
+`examples/lakehouse/sources-and-datasets.yaml`'s `orders` Source and
+docs/planning/08 C4's external object-store posture), not a roadmap item.
+
+Full comparison, an honest "when to use Terraform instead," and unscheduled
+future-integration ideas (a Terraform runtime adapter, the inverse
+platformctl-as-a-Terraform-provider, a state bridge):
+[docs/positioning/terraform.md](docs/positioning/terraform.md).
+
 ## 🧪 Development
 
 ```sh
 just build             # CGO_ENABLED=0 static build
 just test              # unit + contract tests (no Docker)
-just test-integration  # real Docker: runtime conformance + Redpanda/CDC/sink e2e
+just test-affected     # impact-mapped, ledger-deduped integration suites for your diff
+just test-integration  # real Docker: the full suite (runtime conformance + every provider e2e)
 just check             # gofmt + go vet (both build-tag variants)
 ```
 
@@ -296,6 +361,13 @@ criteria literally — including "re-apply makes zero mutating calls" and
 "destroy leaves no orphans". A chaos-monkey suite additionally kills and
 stops managed containers out-of-band (and SIGKILLs the CLI mid-apply) and
 requires drift reporting, healing, recovery, and convergent teardown.
+`just test-affected` (`scripts/test-impact.sh --base main`) is the
+day-to-day default for contributors — it maps your diff to only the
+integration suites it could plausibly affect and skips any suite already
+proven green against the same content-state (a shared ledger keyed by a
+hash of each suite's scoped files, including uncommitted changes), so
+routine changes don't re-earn a green they already have
+(docs/planning/06-agentic-execution-guide.md §10).
 
 **Adding a provider:** implement `reconciler.Provider` (plus capability
 interfaces you support), register it in `application/registry` wiring behind
@@ -303,12 +375,19 @@ a feature gate, and cover it with an integration test. Every call receives a
 single `reconciler.Request` — your `Provider` resource, the runtime,
 resolved secrets, and the full validated resource set — so providers are
 stateless per call (docs/planning/02 §4.2); see
-`internal/adapters/providers/redpanda` for the smallest complete example.
+`internal/adapters/providers/nessie` for a small, complete template (or
+`internal/adapters/providers/redpanda` for the larger multi-instance/
+StableIdentity shape). The full walkthrough — plus `providerkit`, the
+feature-gate/impact-map steps, and where the process docs live — is
+[docs/onboarding/developers.md](docs/onboarding/developers.md).
 
 ## 📚 Documentation
 
 [docs/README.md](docs/README.md) maps the whole documentation tree —
-contracts vs. plans vs. historical records. The load-bearing pieces:
+contracts vs. plans vs. historical records. New here? Start with
+[docs/onboarding/users.md](docs/onboarding/users.md) (operating platformctl)
+or [docs/onboarding/developers.md](docs/onboarding/developers.md)
+(contributing to it). The load-bearing planning pieces:
 
 | Doc | Contents |
 |---|---|
@@ -318,6 +397,7 @@ contracts vs. plans vs. historical records. The load-bearing pieces:
 | [04-roadmap-and-feature-gates](docs/planning/04-roadmap-and-feature-gates.md) | Phases 0–8 and the feature-gate master table. |
 | [08-production-readiness-plan](docs/planning/08-production-readiness-plan.md) | **The live, stage-gated backlog** (Stages A–F). |
 | [10-project-history-and-evolution](docs/planning/10-project-history-and-evolution.md) | The full history, with reasoning, commit-anchored. |
+| [positioning/terraform](docs/positioning/terraform.md) | How platformctl compares to, and works alongside, Terraform. |
 
 **Status:** v1.0.0 shipped (Phases 0–5, every exit criterion automated; the
 acceptance scenario runs in CI against the literal example manifests),
