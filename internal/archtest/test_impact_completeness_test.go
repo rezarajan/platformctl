@@ -149,8 +149,6 @@ var integrationTestExemptions = map[string]string{
 	"TestDriftDetectsDebeziumConnectorConfigMismatch@cmd/platformctl":                "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
 	"TestDriftDetectsMariaDBReplicationCredentialMismatch@cmd/platformctl":           "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
 	"TestDriftDetectsRedpandaRetentionMismatch@cmd/platformctl":                      "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
-	"TestExternalSourceEndToEnd@cmd/platformctl":                                     "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
-	"TestImportEndToEnd@cmd/platformctl":                                             "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
 	"TestRedpandaKubernetesEndToEnd@cmd/platformctl":                                 "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
 	"TestRedpandaKubernetesPortForwardEndToEnd@cmd/platformctl":                      "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",
 	"TestValidateFailsFastOnBadKubernetesContext@cmd/platformctl":                    "no suite row's -run pattern matches this test name (docs/planning/08 G7 finding)",

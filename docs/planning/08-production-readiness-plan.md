@@ -2579,6 +2579,31 @@ unless a dependency is stated.
   extracted resolution helper).
 - **Gate:** none (refactor).
 
+### I6: KubernetesRuntime GA-parity evidence (B2 gaps 1+2)
+
+- **Size:** M. **Depends:** none (test-only; no production code).
+- **Why:** the B2 audit (doc 11) found the two evidence gaps standing
+  between KubernetesRuntime and an UNCONDITIONAL GA claim: no K8s
+  analogue of `TestChaosApplyKilledMidRun` (crash-mid-apply +
+  re-converge is proven on Docker only), and no K8s variant of
+  `TestConnectWorkersHAAndDeadLetterQueue` (DLQ + worker-HA is GA-gated
+  functionality, unverified on the GA-candidate runtime).
+- **Do:** (1) a K8s mid-apply-kill test: run apply against the cluster,
+  SIGKILL it mid-run, re-apply, assert convergence + clean drift —
+  mirror the Docker chaos test's structure; add a `chaos-k8s` suite row
+  (scope: internal/adapters/runtime/kubernetes + SHARED_CORE).
+  (2) a K8s Connect-HA/DLQ test mirroring the Docker one's assertions
+  (worker kill → task rebalance; poison message → DLQ topic) on the
+  minimal-RBAC cluster; extend the `connect-ha-dlq` suite row's scope
+  with the K8s adapter dir. Both run under the minted minimal-RBAC
+  kubeconfig (doc 06 §8.4) — RBAC verbs they surface as missing get the
+  role.yaml+preflight+README treatment in the same commit.
+- **Accept:** both tests green twice on the live cluster; suite rows
+  selected by a K8s-adapter-only change (`test-impact.sh --print`
+  proof). GA graduation of KubernetesRuntime (owner decision) can then
+  be unconditional.
+- **Gate:** none (evidence for an existing gate's graduation).
+
 
 
 

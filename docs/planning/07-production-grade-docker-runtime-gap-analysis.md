@@ -159,6 +159,15 @@ unless truly technology-specific" standard):
 - **`SecurityContext.SecurityOpt`** is a Docker-specific escape hatch
   (e.g. `no-new-privileges`) with no generic Kubernetes translation.
   Ignored by the Kubernetes adapter.
+- **`ContainerSpec.Sysctls`** (added by docs/adr/023 for the WireGuard
+  tunnel's `net.ipv4.ip_forward`) is Docker-only today: the Kubernetes
+  adapter does not translate it (K8s treats non-default sysctls as
+  node-policy-gated `securityContext.sysctls`, a cluster-admin decision).
+  Recorded here by the 2026-07 production review (doc 11 B2 gap 4), which
+  found the drop was silent and undocumented — the only setter is the
+  `wireguard` provider (gate `TunnelProvider`, Alpha/disabled), whose own
+  ADR records it as Docker-only. If a second setter appears, the adapter
+  should refuse loudly rather than drop.
 - **CPU reservation.** Kubernetes has a real, portable reservation concept
   (`resources.requests.cpu`); Docker does not (CPU shares are a relative
   weight). `Resources.CPUReservation` was added to the port specifically

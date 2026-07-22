@@ -49,15 +49,15 @@ and extended by the full pass):
 Fan-out review (sonnet agents, file-ownership fenced) once main is
 static. Dimensions, each producing findings verified before fixing:
 
-- [ ] B1 async/state-machine correctness: every wait/poll/settle/probe
+- [x] B1 async/state-machine correctness: every wait/poll/settle/probe
       path in engine + providers + runtimes (races, unsettled-Ready,
       machine-speed dependence)
-- [ ] B2 GA-bar audit: every gate marked GA/enabled vs its actual
+- [x] B2 GA-bar audit: every gate marked GA/enabled vs its actual
       test evidence and error-path behavior
 - [ ] B3 production-scenario walkthroughs: external cloud DB (TLS,
       secured connector), VPC-via-tunnel (A1 outcome), each exercised
       end-to-end or explicitly documented as gapped
-- [ ] B4 coding practices: error wrapping, context propagation,
+- [x] B4 coding practices: error wrapping, context propagation,
       goroutine lifecycle/leaks, lint debt beyond golangci defaults
 - [ ] B5 fix waves for confirmed findings, impact-gated per doc 06 §10
 
@@ -127,3 +127,52 @@ static. Dimensions, each producing findings verified before fixing:
   areas: SQL parameterization, secret hygiene (fingerprints only,
   0600 modes), HTTP client timeouts, atomic state writes, no init()/
   mutable package state.
+- 2026-07-22: Phase A+B4 batch integration gate GREEN: 18/18 suites,
+  0 failed (base 5b91048) — mysql injection fix, specHash propagation,
+  via refusal all verified live incl. docker-conformance (17.3s) and
+  k8s-adapter under minimal RBAC.
+- 2026-07-22: I4's strictness EXPOSED A REAL ORDERING GAP (the review's
+  async-correctness thesis validated end-to-end): `Connection.spec.target`
+  is a plain host:port string, so graph.Build never ordered a managed
+  Connection after the resource its target names — apply order was
+  arbitrary (observed live: Connection/minio at [4/6] before its
+  upstream Provider at [6/6]; the old blind-Ready masked it, the new
+  settle-poll honestly failed in 46s). Fix in flight on the I4 branch:
+  a target-host→resource dependency edge in graph.Build (warehouseRef-
+  edge precedent), with cycle detection left LOUD, plus unit ordering
+  tests. Wireguard leg of I4 was green (32.0s) incl. the NFR-11
+  zero-drift-after-apply assertion.
+- 2026-07-22: Phase B2 audit received. ALL 8 GA gates SOLID (incl. the
+  chaos mid-apply-kill and node-kill evidence; only reachable panic is a
+  build-defect guard; docs make no overclaims). KubernetesRuntime:
+  conditional-GA recommendation — the runtime port, RBAC discipline, and
+  the GA provider set are proven (conformance suite, minted minimal-RBAC
+  CI job on every PR, HA-on-K8s live, both examples e2e on a real
+  cluster), but there is NO K8s chaos/mid-apply-kill test and NO K8s
+  DLQ/Connect-HA test (sequenced as doc 08 I6); an unconditional GA
+  claim is not yet honest — a scoped GA (runtime lifecycle + GA
+  providers) with a release-notes scope line is defensible NOW, owner's
+  call. Mechanical fixes applied this commit: K8s adapter dir added to
+  redpanda/cdc/lakehouse impact scopes (gap 3), new `external-import`
+  suite row unexempts TestImportEndToEnd/TestExternalSourceEndToEnd
+  (ExternalResourceConfiguration's e2e was unreachable by every CI -run
+  filter), doc 07 now documents the Sysctls Docker-only drop (gap 4).
+- 2026-07-22: I4 FULLY VERIFIED — round-2 sweep 15/16 (graph edge fixed
+  the ingress ordering failure) + targeted lakehouse-K8s re-run green
+  (157.9s) after the proxy settle fix (mirror Probe's guard: dial-through
+  only where the runtime publishes a host address; container-health is
+  the bar on ClusterIP/port-forward K8s — keeps reconcile/Probe symmetry
+  bidirectional). I5 sweep 13/13 green. Both branches staged behind the
+  GPG lapse (COMMIT_MSG.txt in each worktree). MERGE QUEUE (execute when
+  GPG unlocks): (1) commit this staged main batch; (2) in
+  .claude/worktrees/agent-aa3b8d094e3a2a974: `git commit -F
+  COMMIT_MSG.txt`, then re-sign 858277c (rebase --exec 'git commit
+  --amend --no-edit -S' or merge as-is and note it); (3) in
+  .claude/worktrees/agent-a76e72e4b87175348: `git commit -F
+  COMMIT_MSG.txt`; (4) merge I4 then I5 into main (expect trivial
+  overlap: both touch runtime adapters — I5 moved docker's dialable into
+  internal/adapters/runtime/probe; I4 does not touch that code); (5)
+  post-merge: unfiltered unit run; integration evidence already in the
+  ledger at each branch's content-state — merged-state delta gate:
+  docker-conformance + k8s-adapter + ingress + wireguard + lakehouse +
+  cdc + jdbcsink minimum, ledger-deduped.
