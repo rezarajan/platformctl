@@ -70,7 +70,18 @@ import (
 const defaultImage = "linuxserver/wireguard:1.0.20260223@sha256:2868ae5e3dd9065ea3b1e44b4214b33b02b7ce5ebcb9e4f33e1132b75007f39c"
 
 const (
-	wgConfPath         = "/etc/wireguard/wg0.conf"
+	// wgConfPath is deliberately NOT under /etc/wireguard: the pinned
+	// image symlinks /etc/wireguard -> /config/wg_confs (an s6-overlay
+	// init-time convenience for its own auto-config path, unused here),
+	// and that target doesn't exist in the image's base layer — a
+	// FileMount write through it fails opaquely ("Could not find the file
+	// /", found live) since Docker's pre-start file-copy has to resolve
+	// the full symlink chain to a real directory. wg-quick accepts any
+	// absolute path (only a bare name with no "/" is looked up under
+	// /etc/wireguard/<name>.conf), so a plain, unshadowed path sidesteps
+	// the symlink entirely; the interface still comes up as "wg0" (from
+	// the file's basename).
+	wgConfPath         = "/etc/datascape/wg0.conf"
 	entrypointPath     = "/etc/datascape/entrypoint.sh"
 	handshakeStatePath = "/var/run/datascape/handshake-status"
 	defaultKeepalive   = 25
