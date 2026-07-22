@@ -40,6 +40,7 @@ only, never identifiers).
 | I want to… | Go to |
 |---|---|
 | Run my first pipeline | [onboarding/users.md](onboarding/users.md) → README quickstart (`platformctl init cdc-to-lake`) |
+| Grow a platform incrementally (add/wire/expose) | [adr/024](adr/024-interactive-composition.md) — scheduled as doc 08 E9; until it lands, copy patterns from `platformctl init --list` blueprints |
 | Understand a Kind's fields | [reference/](reference/index.md) (generated, always current), depth in [planning/03](planning/03-resource-model-reference.md) |
 | Know what a command does / exit codes | [onboarding/users.md](onboarding/users.md) §workflow; `platformctl <cmd> --help` |
 | Diagnose a condition/reason or error | `platformctl explain <reason-or-type>` — accepts constants (`WALNotLogical`), pasted dynamic reasons (`"PartitionCountMismatch(3!=5)"`), and case-insensitive prefixes; `-o json`; static catalog in [reference/explain.md](reference/explain.md) |

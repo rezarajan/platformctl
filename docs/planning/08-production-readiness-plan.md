@@ -1644,6 +1644,44 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
 
 ---
 
+### E9: Interactive composition — add / wire / expose (ADR 024)
+
+- **Size:** L (ADR 024 is the design — implement it literally).
+  **Depends:** H1 (emitted patches must lint clean; co-evolves with the
+  lint fixture bar). E1 blueprints are the template stock.
+- **Do:** `internal/application/compose` (headless engine: composite
+  definitions with attachment points, graph-aware candidate computation
+  via the loadAndValidate front-end in tolerant mode, manifest-patch
+  generation at blueprint quality with provenance comments, idempotent
+  re-generation, collision-safe naming); `platformctl add <composite>`
+  (`source`, `pipeline`, `sink`, `catalog`, `monitoring`),
+  `platformctl wire <mode> --from --to`, `platformctl expose
+  <Kind>/<name>` (Connection realization selected by scheme: tcp→proxy,
+  http(s)→ingress); every prompt flag-covered, non-TTY+incomplete-flags
+  a hard error, `--dry-run` exact; interactive layer via charm.land/huh
+  v2 confined to cmd/platformctl+cliutil by a new archtest; machine
+  output per the A7 harness for --dry-run/-o json.
+- **Accept:** the owner scenario end-to-end as an integration test:
+  init → add pipeline → add pipeline (second run's candidate lists
+  include the first broker/Dataset; prefix override emits a second sink
+  Binding to the same bucket) → expose Source/<first> → the resulting
+  set validates green, lints clean, applies to Ready on Docker, and
+  re-running each add with identical answers proposes zero changes;
+  TUI-confinement archtest proven by a fixture violation.
+- **Gate:** none (file-generation only, the init precedent — recorded in
+  ADR 024).
+
+### E10: Visual composer (optional; spin-off candidate)
+
+- **Size:** L. **Depends:** E9 (builds on the engine/TUI seam).
+- **Do:** deliberately not designed yet (ADR 024 §interaction layer):
+  a Bubble Tea v2 canvas over the compose engine — live graph view,
+  select-to-wire. Revisit once E9 usage shows what a canvas must do;
+  candidate for a separate repository consuming the compose engine as a
+  library, which would force the engine's API to be clean (the same
+  forcing-function argument as Phase 8 plugins).
+- **Accept:** n/a until designed; placement here records intent only.
+
 ## 7.5 Stage F — Segregation readiness (systemic fixes from live-testing findings)
 
 Theme: close the five recurring bug classes that live Kubernetes/Docker
@@ -2240,6 +2278,8 @@ stage and may start immediately; H4 waits for C8; H6 is the only L-size
 item and should not start before the C/D provider wave has merged (it
 touches the Connection seam those tasks also exercise). Stage H does not
 block Stage C/D/E closure — it is an additive programme.
+E9 (composition, ADR 024) slots after H1 merges and pairs naturally with
+H1's lint bar; E10 is unscheduled intent.
 
 **Standing rules:** C5/D9 are decided (ADR 005/006) — do not reopen them
 without new evidence. Stage C closes when its five exit criteria hold;
