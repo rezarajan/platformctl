@@ -1,0 +1,94 @@
+# docs/planning/08 C4 integration scenario: a 4-node distributed MinIO
+# Provider (nodes: 4), a single-broker redpanda EventStream, and a
+# Binding(mode: sink) landing records produced directly to the EventStream's
+# topic into the node set — proving sink traffic keeps flowing through a
+# node kill. Distinct names/ports from every other scenario: redpanda
+# kafkaPort 19196, s3sink connectPort 18189, network datascape-minioha-net.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: minioha-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-minioha-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-minioha-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19196
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-minioha-s3
+spec:
+  type: s3
+  runtime:
+    type: docker
+    network: datascape-minioha-net
+  configuration:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    nodes: 4
+    rootSecretRef: minioha-root
+  secretRefs: [minioha-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-minioha-sink
+spec:
+  type: s3sink
+  runtime:
+    type: docker
+    network: datascape-minioha-net
+  configuration:
+    image: datascape-s3sink-connect:test
+    connectPort: 18189
+    bootstrapServers: datascape-minioha-rp:29092
+    credentialsSecretRef: minioha-root
+  secretRefs: [minioha-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: minioha-events
+spec:
+  providerRef:
+    name: datascape-minioha-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: minioha-raw
+spec:
+  providerRef:
+    name: datascape-minioha-s3
+  bucket: minioha-raw
+  format: json
+  lifecycle:
+    expireAfterDays: 30
+    versioning: enabled
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: minioha-events-to-lake
+spec:
+  mode: sink
+  sourceRef:
+    name: minioha-events
+  targetRef:
+    name: minioha-raw
+  providerRef:
+    name: datascape-minioha-sink

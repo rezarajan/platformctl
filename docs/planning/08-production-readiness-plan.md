@@ -711,6 +711,46 @@ entrypoints, is observable, and its data is recoverable. This is where
   (simulating a cloud bucket); 4-node MinIO survives one node kill with
   sink traffic flowing; docs state the recommendation (external for prod,
   distributed MinIO for self-hosted).
+- **Status (2026-07-21): implemented and verified live on Docker (bundled
+  with D7 — both land in the s3 provider).** Design finding recorded first:
+  no `ExternalConfigurer` was needed for the Dataset half. Studying doc 03
+  §3.3's table against ADR 005's "external Source + CDC already works with
+  no ExternalConfigurer" precedent showed the same shape applies here — a
+  `Provider(type: s3, external: true)` always takes the engine's generic
+  no-provider path (`isExternalNoProvider`/`reconcileExternal`; its own
+  `Reconcile`/`Probe`/`Destroy` are never called), while a Dataset naming it
+  via an ordinary (non-`external`) `providerRef` reconciles through the
+  normal path unchanged — the only real gap was teaching
+  `reconcileDataset`/`Probe`/`Destroy` to resolve their realizing
+  Provider's S3 endpoint from its own `spec.connectionRef` (a Connection or
+  bare SecretReference, resolved from `req.Resources`) when that Provider
+  is external, mirroring exactly how `debezium.buildDesiredConnector`
+  already resolves an external Source's `connectionRef`. Half (2):
+  `spec.configuration.nodes` opts an `s3` Provider into C2's StableIdentity
+  ordinal-set shape (mirrors redpanda's `brokers` field-for-field);
+  `nodes: 1` uses a single ordinal, `nodes: 4+` is a genuine distributed
+  erasure-coded cluster (MinIO's own node list is static and identical on
+  every ordinal, so — unlike redpanda's join protocol — no Entrypoint
+  override/shell script was needed), `nodes: 2` or `3` refused at validate
+  (no supported MinIO topology exists there), `nodes > 1` gated by
+  `HighAvailability` (`checkHighAvailabilityGate` generalized from a single
+  `brokers` check to a field list). `s3sink` Bindings needed zero changes
+  for either half: its existing `options.endpoint` + Provider-level
+  `configuration.credentialsSecretRef` already address any S3-compatible
+  endpoint. Verified live against real Docker (`cmd/platformctl/
+  s3_c4_d7_integration_test.go`): `TestS3ExternalDatasetEndToEnd` (65.7s) —
+  apply against an out-of-band MinIO container simulating a cloud bucket
+  creates zero containers for the store itself, a real sink Binding lands
+  Kafka Connect traffic in it, destroy retains the external bucket.
+  `TestS3DistributedMinIONodeKill` (51.5s) — a 4-node cluster reaches
+  Ready, sink traffic lands both before and during an out-of-band
+  single-node kill (the literal accept criterion), drift names the missing
+  node, re-apply heals and is subsequently idempotent, destroy removes all
+  four ordinals/volumes/network cleanly. Live-caught building the test: a
+  raw (non-JSON) Kafka record value silently fails Kafka Connect's default
+  JsonConverter — a test-fixture finding, not a product bug. docs/planning/
+  03 updated (§4 Provider `nodes`/external examples, §8 Dataset external-
+  Provider example).
 
 ### C5: Database HA posture — decision note
 
@@ -1203,6 +1243,24 @@ note first (per doc 06 §3).
 - **Accept:** integration: lifecycle rule visible via S3 API after apply;
   out-of-band rule change detected as drift and healed; docs/planning/03
   updated.
+- **Status (2026-07-21): implemented and verified live on Docker (bundled
+  with C4 — see that task's status note for the shared design/verification
+  detail).** `Dataset.spec.lifecycle: {expireAfterDays, versioning}` reconciled
+  via minio-go's lifecycle/versioning API — one managed rule keyed by a
+  deterministic per-Dataset ID (`ensureLifecycle`, read-modify-write so a
+  shared bucket's other Datasets' rules survive the S3 lifecycle PUT's
+  full-replace semantics) and bucket versioning, each independently and
+  only when declared; probe diffs both (`probeLifecycleDrift`) and reports
+  `LifecycleRuleDrift`/`VersioningDrift`. External Datasets get this for
+  free — no ExternalConfigurer/configure-only special case was needed (see
+  C4's status note): the same `reconcileDataset`/`Probe` code path runs
+  regardless of whether the realizing Provider is managed or external,
+  because externality is resolved once, in the endpoint-dial step, not in
+  the lifecycle logic. Verified live in both C4 integration tests: the rule
+  and versioning state are visible via the real S3 API immediately after
+  apply, and (in `TestS3ExternalDatasetEndToEnd`) an out-of-band
+  `SetBucketLifecycle` call is caught as `LifecycleRuleDrift` by `drift`
+  and healed by the next `apply`.
 
 ### D8: First-class Catalog↔warehouse reference
 

@@ -180,6 +180,25 @@ const (
 	ReasonDatasetHealthy     = "DatasetHealthy"
 	ReasonBucketMissing      = "BucketMissing"
 	ReasonPrefixUnlistable   = "PrefixUnlistable"
+	// ReasonLifecycleRuleDrift and ReasonVersioningDrift are Dataset probe's
+	// lifecycle-management drift reasons (docs/planning/08 D7): the live
+	// bucket's managed lifecycle rule (by deterministic ID) or versioning
+	// state no longer matches spec.lifecycle — including an out-of-band
+	// change to either.
+	ReasonLifecycleRuleDrift = "LifecycleRuleDrift"
+	ReasonVersioningDrift    = "VersioningDrift"
+)
+
+// --- s3 (Provider, StableIdentity node set; docs/planning/08 C4) -------
+const (
+	// ReasonNodeMissing and ReasonNodeUnreachable mirror redpanda's
+	// ReasonBrokerMissing/ReasonBrokerUnhealthy for a distributed MinIO
+	// node set: a missing/stopped ordinal is drift the runtime can report
+	// even with the whole cluster otherwise healthy; ReasonNodeUnreachable
+	// covers every ordinal present but none of them answering (a network
+	// partition, not a per-ordinal absence).
+	ReasonNodeMissing     = "NodeMissing"
+	ReasonNodeUnreachable = "NodeUnreachable"
 )
 
 // --- ingress (managed HTTP Connection routing; docs/planning/08 C7,

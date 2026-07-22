@@ -264,12 +264,13 @@ func (a *app) checkSchemaRegistryGate(envelopes []resource.Envelope) error {
 // spec.configuration.<field> that opts a Provider into ADR 004's
 // Replicas > 1 shape and therefore requires the HighAvailability gate:
 // redpanda's brokers (docs/adr/017 §a.8), debezium/s3sink's workers
-// (docs/planning/08 C3), and trino's workers (docs/planning/08 D10). A single list, scanned uniformly, is what lets
+// (docs/planning/08 C3), trino's workers (docs/planning/08 D10), and s3's
+// nodes (docs/planning/08 C4). A single list, scanned uniformly, is what lets
 // checkHighAvailabilityGate name whichever field actually triggered it in
 // the error instead of hardcoding one field's name (doc 08 C3's explicit
 // instruction, since brokers was the only field when §a.8 first wrote this
 // check).
-var replicaFieldsGuardedByHighAvailability = []string{"brokers", "workers"}
+var replicaFieldsGuardedByHighAvailability = []string{"brokers", "workers", "nodes"}
 
 // checkHighAvailabilityGate covers docs/adr/017 §a.8, closing docs/adr/004's
 // deferred gate-at-validate accept line (C2): HighAvailability is

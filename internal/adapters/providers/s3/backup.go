@@ -135,7 +135,7 @@ func (p *Provider) Backup(ctx context.Context, req reconciler.Request, dest back
 		return backup.Manifest{}, err
 	}
 	defer closeAddr()
-	srcClient, err := newClient(addr, user, pass)
+	srcClient, err := newClient(addr, user, pass, false)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
@@ -189,7 +189,7 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 		return err
 	}
 	defer closeAddr()
-	destClient, err := newClient(addr, user, pass)
+	destClient, err := newClient(addr, user, pass, false)
 	if err != nil {
 		return err
 	}

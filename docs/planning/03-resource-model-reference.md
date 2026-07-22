@@ -305,6 +305,61 @@ spec:
     workers: 2          # requires --feature-gates=HighAvailability=true
 ```
 
+**Object-store production posture** (docs/planning/08 C4, 2026-07-21): the
+recommendation is external for production (a real S3/GCS/R2-compatible
+endpoint, verified reachable but never created/deleted by platformctl) and
+distributed MinIO for self-hosted production. Two independent knobs, the
+same `s3` provider `type`:
+
+An `s3` Provider additionally accepts `configuration.nodes` (integer ≥ 1),
+the same `ContainerSpec.Replicas` + `StableIdentity: true` ordinal-set
+pattern `brokers` uses above: `nodes: 1` still opts into the ordinal-set
+shape (a single node, `<name>-0`); `nodes: 4` or more starts a genuine
+distributed, erasure-coded MinIO cluster (every node started with the full
+peer URL list, unlike redpanda's seed-and-join protocol — no per-ordinal
+script needed). `nodes: 2` or `nodes: 3` is refused at validate (no
+supported MinIO topology exists between "1 node, no erasure coding" and "4+
+nodes, erasure coding"). `nodes > 1` requires the `HighAvailability` gate,
+enforced at validate exactly like `brokers > 1`. Declaring `nodes` cannot be
+combined with a pinned `port` (auto-assigned per node, like every other
+ordinal-set shape). Omitting `nodes` keeps the pre-C4 single-container shape
+byte-for-byte. Scaling `nodes` up applies in place (a new erasure-coded
+pool); scaling down is refused (data-loss risk, same reasoning as `brokers`):
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: minio-cluster
+spec:
+  type: s3
+  runtime: {type: docker, network: datascape}
+  configuration:
+    nodes: 4              # requires --feature-gates=HighAvailability=true
+  secretRefs: [minio-admin]
+```
+
+An `s3` Provider may instead declare `external: true` (§3.3's Provider
+row): Datascape verifies `connectionRef` reachability and creates nothing —
+zero managed containers. A Dataset naming this Provider in its own
+`providerRef` (§8's external-posture example) still reconciles normally
+against the real endpoint (bucket creation, `spec.lifecycle`, `s3sink`
+Bindings via `spec.options.endpoint`) — see §8 for the full contract:
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: prod-s3
+spec:
+  type: s3
+  runtime: {type: docker, network: datascape}   # still required by schema; nothing is created
+  external: true
+  connectionRef:
+    name: prod-lake        # a Connection (preferred) or SecretReference; required when external
+  secretRefs: [minio-admin] # must list the Connection's own secretRef, resolved and handed to this Provider
+```
+
 Optional, not required for v1.0.0:
 
 ```yaml
@@ -852,6 +907,53 @@ spec:
   external: true
   connectionRef:
     name: prod-lake            # a Connection (preferred) or SecretReference; required when external
+  bucket: raw-events
+  format: parquet
+```
+
+`spec.lifecycle` (docs/planning/08 D7, additive as of 2026-07-21): optional
+object-store lifecycle management, reconciled via the S3 API by the
+realizing `s3`/`minio` provider (one managed lifecycle rule keyed by a
+deterministic per-Dataset ID, plus bucket versioning); omitting it entirely
+leaves the bucket's lifecycle/versioning config unmanaged, including any
+out-of-band configuration already there. `probe` diffs the live rule/
+versioning state (names and values, never secrets — a lifecycle rule holds
+none) and reports drift; a subsequent `apply` heals it, including an
+out-of-band change to either.
+
+```yaml
+spec:
+  providerRef:
+    name: local-minio
+  bucket: raw-events
+  prefix: attendance/
+  format: parquet
+  lifecycle:
+    expireAfterDays: 90        # manage one lifecycle rule expiring objects under this Dataset's prefix
+    versioning: enabled        # enabled | suspended
+```
+
+External **object-store production posture** (docs/planning/08 C4,
+2026-07-21): a Dataset's own `providerRef` may point at an object-store
+`Provider` that is itself declared `external: true` (a real S3-compatible
+endpoint — AWS S3, R2, or a MinIO container standing in for one — reached
+through a `Connection`, docs/planning/08 §4's Provider external example).
+The Dataset itself stays a normal, non-external resource — it is not "the
+external system", it is platformctl's own bucket/prefix record, realized
+against a store it doesn't manage the lifecycle of — so it reconciles
+through the ordinary (non-`external`) path, exactly like a Dataset against
+a managed store, and needs no `ExternalConfigurer` capability: only a
+Provider's own `external: true` declaration takes the connection-verified,
+nothing-created path (§3.3's Provider row). `spec.lifecycle` above works
+identically against this external store. `s3sink` Bindings reach the same
+external store via the connector's existing `spec.options.endpoint` +
+the s3sink Provider's `configuration.credentialsSecretRef` — no Dataset/
+Provider-specific wiring needed on the sink side.
+
+```yaml
+spec:
+  providerRef:
+    name: prod-s3               # a Provider(type: s3, external: true) — see §4
   bucket: raw-events
   format: parquet
 ```

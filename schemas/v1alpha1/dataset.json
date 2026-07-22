@@ -17,7 +17,16 @@
         "format": { "type": "string", "minLength": 1, "description": "Validated against the sink provider's SupportedSinkFormats() (e.g. json, jsonl, csv, parquet)." },
         "external": { "type": "boolean" },
         "connectionRef": { "$ref": "meta.json#/$defs/nameRef", "description": "A Connection (preferred) or SecretReference describing how to reach an external object store. Required when external." },
-        "deletionPolicy": { "type": "string", "enum": ["retain", "delete"], "description": "What Dataset destroy does to the stored objects: retain (default) keeps bucket contents — destroying the platform's record of a dataset must not destroy the data; delete removes every object under bucket/prefix. Instance teardown (Provider destroy) removes the backing store regardless." }
+        "deletionPolicy": { "type": "string", "enum": ["retain", "delete"], "description": "What Dataset destroy does to the stored objects: retain (default) keeps bucket contents — destroying the platform's record of a dataset must not destroy the data; delete removes every object under bucket/prefix. Instance teardown (Provider destroy) removes the backing store regardless." },
+        "lifecycle": {
+          "type": "object",
+          "description": "Object-store lifecycle management (docs/planning/08 D7), reconciled via the S3 API by the realizing s3/minio provider; omit entirely to leave the bucket's lifecycle/versioning config unmanaged (including any out-of-band config already there). Works identically for an external Dataset's Provider (configure-only, docs/planning/08 C4) as for a managed one.",
+          "properties": {
+            "expireAfterDays": { "type": "integer", "minimum": 1, "description": "Manage exactly one lifecycle rule expiring objects under this Dataset's prefix after this many days. Omit to leave expiration unmanaged." },
+            "versioning": { "type": "string", "enum": ["enabled", "suspended"], "description": "Manage the bucket's versioning state. Omit to leave versioning unmanaged." }
+          },
+          "additionalProperties": false
+        }
       },
       "required": ["bucket", "format"],
       "additionalProperties": false,
