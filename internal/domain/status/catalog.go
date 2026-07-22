@@ -1246,4 +1246,137 @@ var Catalog = []CatalogEntry{
 			"If the nested layout is intentional, waive DL-s3sink-001 with a reason.",
 		},
 	},
+
+	// --- built-in zero-trust policy pack (docs/adr/021-policy-engine-zero-
+	// trust.md §4, docs/planning/08 H3) -----------------------------------
+	// Kind "policyRule" — a fourth explain vocabulary alongside
+	// conditionType, reason, and lintCode. Every rule id in the pack
+	// `platformctl policy init zero-trust` writes must have exactly one
+	// entry here; internal/application/policy.BuiltinRuleIDs (parsed from
+	// the embedded pack itself) is what the completeness guard
+	// (cmd/platformctl/policy_catalog_test.go) checks this against. A
+	// user-authored policy's own rule ids are never in this catalog —
+	// only the shipped pack is, exactly as lintCode only covers built-in +
+	// provider-contributed codes, never a manifest author's own content.
+	{
+		Token: "no-plaintext-connections", Area: "policy", Kind: "policyRule",
+		Meaning: "A managed Connection's spec.scheme is not \"https\" (an omitted scheme, defaulting to plaintext tcp, is treated the same as an explicit non-https value) — docs/adr/018, docs/planning/08 C8.",
+		Causes: []string{
+			"The Connection was written before its Provider gained TLS support.",
+			"Plaintext was chosen for local development and never revisited.",
+		},
+		Remedies: []string{
+			"Set spec.scheme to https if the realizing Provider supports it.",
+			"This rule ships exemptible: true — waive with metadata.annotations[\"policy.datascape.io/exempt\"]: \"no-plaintext-connections: <reason>\" for local-only traffic.",
+		},
+	},
+	{
+		Token: "images-from-corp-registry", Area: "policy", Kind: "policyRule",
+		Meaning: "A Provider's spec.configuration.image does not match ^registry\\.corp\\..+@sha256:<digest>$ — supply-chain posture (docs/planning/08 A10).",
+		Causes: []string{
+			"The image was pulled from a public registry or a floating tag rather than the organization's pinned mirror.",
+		},
+		Remedies: []string{
+			"Point spec.configuration.image at your corp registry mirror with a full sha256 digest.",
+			"Tailor the rule's assert.matches pattern to your organization's actual registry host — the shipped pack uses registry.corp.* as a placeholder.",
+		},
+	},
+	{
+		Token: "protect-data", Area: "policy", Kind: "policyRule",
+		Meaning: "A Dataset/Source does not set metadata.protect: true — ownership/blast-radius control (ADR 013). Non-exemptible in the shipped pack.",
+		Causes: []string{
+			"metadata.protect was never set (the field defaults to false).",
+		},
+		Remedies: []string{
+			"Set metadata.protect: true on the resource.",
+		},
+	},
+	{
+		Token: "no-isolation-optout", Area: "policy", Kind: "policyRule",
+		Meaning: "A Provider sets spec.runtime.networkPolicy: \"none\", opting out of default-deny network isolation (docs/planning/08 B7). Non-exemptible in the shipped pack.",
+		Causes: []string{
+			"networkPolicy: none was set to debug connectivity and never reverted.",
+		},
+		Remedies: []string{
+			"Remove spec.runtime.networkPolicy or set it to a value other than \"none\".",
+		},
+	},
+	{
+		Token: "secrets-from-vault-or-k8s", Area: "policy", Kind: "policyRule",
+		Meaning: "A SecretReference's spec.backend is not \"vault\" or \"kubernetes\" — least-privilege secrets handling (ADR 013). Non-exemptible in the shipped pack.",
+		Causes: []string{
+			"The backend is \"env\" or \"file\" — a convenience backend not backed by a managed secret store.",
+		},
+		Remedies: []string{
+			"Point spec.backend at vault or kubernetes.",
+		},
+	},
+	{
+		Token: "escalate-duplicate-capture", Area: "policy", Kind: "policyRule",
+		Meaning: "Escalates the DL001 design-lint finding (overlapping cdc capture on one sourceRef) from a warning to a hard deny.",
+		Causes:  []string{"See DL001's own catalog entry."},
+		Remedies: []string{
+			"Consolidate the overlapping cdc Bindings, or waive/exempt with a reason.",
+		},
+	},
+	{
+		Token: "no-dataset-deletes-in-ci", Area: "policy", Kind: "policyRule",
+		Meaning: "Plan-scoped (matchPlan): the computed plan contains a delete action against a Dataset. Evaluated at plan/apply/destroy, never at validate (no plan exists yet). Non-exemptible in the shipped pack.",
+		Causes: []string{
+			"A Dataset manifest was removed from the set, or the plan otherwise wants to delete it.",
+		},
+		Remedies: []string{
+			"Re-add the Dataset manifest if the delete is unintended.",
+			"Run outside this pack's evaluation (a different --policies set, or the gate disabled) for a reviewed, intentional teardown.",
+		},
+	},
+	{
+		Token: "require-digest-pins", Area: "policy", Kind: "policyRule",
+		Meaning: "A Provider's spec.configuration.image carries no digest pin (no \"@sha256:<digest>\" suffix), independent of registry — supply-chain posture (docs/planning/08 A10).",
+		Causes: []string{
+			"The image reference uses a floating tag (e.g. \"latest\") instead of a digest.",
+		},
+		Remedies: []string{
+			"Pin the image to a digest: \"<image>:<tag>@sha256:<digest>\".",
+		},
+	},
+	{
+		Token: "ha-replication-floor", Area: "policy", Kind: "policyRule",
+		Meaning: "Escalates the DL014 design-lint finding (a Provider explicitly declares a single-replica field — brokers/workers/nodes: 1 — while the HighAvailability gate is enabled) from an info-level finding to a hard deny — docs/adr/004-replicas-and-identity.md.",
+		Causes:  []string{"See DL014's own catalog entry."},
+		Remedies: []string{
+			"Raise the replica count, or waive/exempt with a reason for an intentional scratch/dev instance.",
+		},
+	},
+	{
+		Token: "insecure-endpoint", Area: "policy", Kind: "policyRule",
+		Meaning: "Escalates the DL004 design-lint finding (a plaintext Connection where a TLS-capable realization exists) from a warning to a hard deny — docs/adr/018, docs/planning/08 C8.",
+		Causes:  []string{"See DL004's own catalog entry."},
+		Remedies: []string{
+			"Switch to the TLS-capable scheme, or waive/exempt with a reason.",
+		},
+	},
+	{
+		Token: "external-allowlist", Area: "policy", Kind: "policyRule",
+		Meaning: "An external Connection's spec.host does not match this rule's allowlist pattern — trust-boundary control (docs/planning/09 §4). The shipped pack denies every external host by default (a REPLACE_ME placeholder pattern) until tailored.",
+		Causes: []string{
+			"The pack has not been tailored yet — every external Connection is denied by design until the pattern is edited.",
+			"A genuinely new external target was added without updating the allowlist.",
+		},
+		Remedies: []string{
+			"Edit this rule's assert.matches pattern in the written pack to your organization's approved external hosts.",
+			"Waive/exempt an individual Connection with a reason as an interim measure.",
+		},
+	},
+	{
+		Token: "forbid-env-secret-backend", Area: "policy", Kind: "policyRule",
+		Meaning: "A SecretReference's spec.backend is \"env\" — a dev-only convenience backend (ADR 013), forbidden by default.",
+		Causes: []string{
+			"Local/dev usage with no vault or kubernetes secret store available.",
+		},
+		Remedies: []string{
+			"Point spec.backend at vault or kubernetes for non-dev use.",
+			"This rule ships exemptible: true — waive with metadata.annotations[\"policy.datascape.io/exempt\"]: \"forbid-env-secret-backend: <reason>\" for local/dev use.",
+		},
+	},
 }

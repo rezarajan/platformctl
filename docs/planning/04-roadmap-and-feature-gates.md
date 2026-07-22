@@ -419,6 +419,7 @@ GA. Phase 7 closes with Stage B's exit criteria held (docs/planning/08 §4).
 | `TLSTermination` | 08 Stage C (C8) | Alpha | disabled | Beta after real-use soak; independent of `IngressProvider`'s own gate (a Connection can stay plaintext even once ingress routing graduates) — see docs/adr/018 addendum |
 | `TunnelProvider` | 08 Stage D (D5) | Alpha | disabled | Beta after real-use soak; defaults off — a new provider granting `NET_ADMIN` and opening a routed path into a private network is a meaningfully different risk profile from the Phase 6.5 enabled-Alpha precedent — docs/adr/023-wireguard-tunnel.md |
 | `DesignLints` | 08 Stage H (H1) | Alpha | enabled | Beta once blueprints + examples are lint-clean for a release (docs/adr/020-design-lints.md) — read-only reporting, so it defaults on; the gate switches `validate`'s one-line summary off, not the `lint` command itself |
+| `PolicyEngine` | 08 Stage H (H3) | Alpha | disabled | Beta after the zero-trust pack soaks in this repo's own CI (docs/adr/021-policy-engine-zero-trust.md) — unlike `DesignLints`, disabled means a full no-op (no directory read, no evaluation), and an enabled deny blocks validate/plan/apply/destroy, so this defaults off |
 
 Gates planned by the production-readiness backlog (`HighAvailability`,
 `IngressProvider`, `TLSTermination`, `MonitoringStackProvider`,

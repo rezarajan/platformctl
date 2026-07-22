@@ -2388,6 +2388,38 @@ ADRs and is not restated.
   message, resource, and exits via the standard validation path;
   determinism golden.
 - **Gate:** `PolicyEngine` (Alpha, disabled).
+- **Done (2026-07-22):** `internal/domain/policy` (types, Decode/Validate,
+  Decision/Less, ExemptAnnotation/ParseExemptions, FieldValue's
+  absent-is-nil uniform semantics) + `internal/application/policy`
+  (LoadDir, `Run` for match+assert/matchFinding, `RunPlan` for matchPlan,
+  applyExemptions, the embedded zero-trust pack + `WritePack` +
+  `BuiltinRuleIDs`) + `schemas/policy/v1alpha1/policy.json` (a parallel
+  embed, `schemas.PolicyFS`/`PolicyKindFiles`, deliberately kept out of
+  `KindFiles`). Wired into `loadAndValidate` (after compatibility; lint
+  findings computed best-effort inside `enforcePolicies` itself) and into
+  `plan`/`apply`/`destroy` via `enforcePlanPolicies` on the computed plan.
+  `platformctl policy test [path]` and `platformctl policy init <pack>`
+  shipped (`cmd/platformctl/policy.go`); 12 built-in rule ids in the
+  explain catalog (`policyRule` kind) with a completeness guard
+  (`cmd/platformctl/policy_catalog_test.go`); README CLI-surface rows and
+  an output-contract harness entry added. `PolicyEngine` registered
+  Alpha/disabled in `main.go`; doc 04 §12 has the matching row. Tests:
+  domain + application unit coverage (match/assert semantics including the
+  absent-field convention, Validate's structural checks, determinism,
+  deny-wins precedence, exemptible-vs-non-exemptible, a golden fixture
+  triggering all 11 field/finding-scoped built-in rules) plus cmd-level
+  end-to-end coverage (gate-disabled full no-op, a deny blocking
+  `validate`, an honored exemption unblocking it, a `matchPlan` rule
+  blocking `destroy`). Two vocabulary items from ADR 021's evaluation
+  inputs list (an external-egress selector, a gate selector) and a
+  numeric-threshold assert operator are not implemented — the task's own
+  closed-vocabulary scope (match kind/label/name; assert
+  equals/notEquals/in/absent/matches; matchFinding; matchPlan) covers
+  every pack rule via matchFinding escalation instead (documented in the
+  pack YAML and in `evaluator.go`'s `Run` doc comment) rather than
+  expanding the vocabulary. H4 (the pack's own onboarding docs section and
+  its evaluation against the shipped examples with recorded waivers) is
+  not started.
 
 ### H4: Zero-trust policy pack (ADR 021 §4)
 

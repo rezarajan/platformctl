@@ -1,0 +1,145 @@
+# The Datascape built-in zero-trust pack (docs/adr/021-policy-engine-zero-
+# trust.md §4). Written by `platformctl policy init zero-trust` for local
+# tailoring — this is a starting point, not a fixed contract: edit ids,
+# messages, exemptible flags, and especially the "REPLACE_ME" placeholders
+# below before enabling this pack in CI. Each rule's comment names the
+# mechanism ADR/plan section it makes mandatory — policy never invents
+# posture here, it enforces posture Datascape already ships as a default.
+#
+# Enable evaluation with the PolicyEngine feature gate (Alpha, disabled by
+# default): --feature-gates PolicyEngine=true, and point platformctl at this
+# directory with --policies (or leave it at the conventional
+# .datascape/policies/ location, which `policy init` writes to by default).
+apiVersion: policy.datascape.io/v1alpha1
+kind: Policy
+metadata:
+  name: zero-trust
+spec:
+  rules:
+    # 1. Default-deny networking / explicit trust boundaries (ADR 018, docs/
+    #    planning/08 C8): a managed Connection must terminate TLS, not carry
+    #    plaintext traffic. An omitted spec.scheme (defaulting to plaintext
+    #    tcp downstream) is denied exactly like an explicit non-https value.
+    - id: no-plaintext-connections
+      match: { kind: Connection }
+      assert: { field: spec.scheme, in: [https] }
+      effect: deny
+      exemptible: true
+      message: "Connections must terminate TLS (spec.scheme: https) — docs/adr/018, docs/planning/08 C8. Exempt for local-only dev traffic with a reason."
+
+    # 2. Supply chain (docs/planning/08 A10 — version+digest-pinned images):
+    #    a stricter, registry-scoped form requiring corp-registry images to
+    #    also carry a full sha256 digest pin.
+    - id: images-from-corp-registry
+      match: { kind: Provider }
+      assert: { field: spec.configuration.image, matches: "^registry\\.corp\\..+@sha256:[0-9a-f]{64}$" }
+      effect: deny
+      exemptible: true
+      message: "Provider images must come from registry.corp.* with a full sha256 digest pin (docs/planning/08 A10). Tailor the registry host to your organization's."
+
+    # 3. Blast-radius control / ownership (ADR 013): data-bearing kinds must
+    #    opt in to delete protection explicitly. Non-exemptible — this is
+    #    the point of governance (ADR 021 §3).
+    - id: protect-data
+      match: { kind: [Dataset, Source] }
+      assert: { field: metadata.protect, equals: true }
+      effect: deny
+      exemptible: false
+      message: "Dataset/Source resources must set metadata.protect: true (ADR 013)."
+
+    # 4. Default-deny networking (docs/planning/08 B7): a Provider may not
+    #    opt out of the platform's default network isolation. Non-exemptible.
+    - id: no-isolation-optout
+      match: { kind: Provider }
+      assert: { field: spec.runtime.networkPolicy, notEquals: "none" }
+      effect: deny
+      exemptible: false
+      message: "spec.runtime.networkPolicy: none opts out of default-deny isolation (docs/planning/08 B7) and is not permitted."
+
+    # 5. Least privilege / secrets handling (ADR 013): credentials must come
+    #    from a managed backend, never a hand-rolled one. Non-exemptible.
+    - id: secrets-from-vault-or-k8s
+      match: { kind: SecretReference }
+      assert: { field: spec.backend, in: [vault, kubernetes] }
+      effect: deny
+      exemptible: false
+      message: "SecretReference.spec.backend must be vault or kubernetes (ADR 013)."
+
+    # 6. Escalates DL001 (docs/adr/020-design-lints.md): overlapping cdc
+    #    capture on one sourceRef, promoted from a warning to a hard deny.
+    - id: escalate-duplicate-capture
+      matchFinding: { code: DL001 }
+      effect: deny
+      exemptible: true
+      message: "Overlapping cdc capture (DL001) is denied under this pack — consolidate the Bindings or exempt with a reason."
+
+    # 7. Safety rail: no authoritative Dataset deletes in a CI/automated
+    #    apply. Plan-scoped (evaluated at plan/apply/destroy, never
+    #    validate). Non-exemptible.
+    - id: no-dataset-deletes-in-ci
+      matchPlan: { action: delete, kind: Dataset }
+      effect: deny
+      exemptible: false
+      message: "This plan deletes a Dataset — not permitted under this pack; run outside CI with an explicit, reviewed exception."
+
+    # 8. Supply chain (docs/planning/08 A10), general form: any Provider
+    #    image must carry a digest pin, independent of registry.
+    - id: require-digest-pins
+      match: { kind: Provider }
+      assert: { field: spec.configuration.image, matches: ".+@sha256:[0-9a-f]{64}$" }
+      effect: deny
+      exemptible: true
+      message: "Provider images must be digest-pinned (...@sha256:<digest>) — docs/planning/08 A10."
+
+    # 9. Replicas & identity (docs/adr/004-replicas-and-identity.md), doc08
+    #    C1-C3: escalates DL014 (a Provider explicitly declares a
+    #    single-replica field while the HighAvailability gate is enabled) to
+    #    a hard deny — the practical, in-vocabulary form of "no single
+    #    point of failure once HA is turned on" expressible with this
+    #    engine's closed assert operators (equals/notEquals/in/absent/
+    #    matches have no numeric-threshold operator, so a literal "must be
+    #    >= 3" floor isn't directly expressible without a vocabulary
+    #    extension — out of scope for this pack; ADR 021 §2).
+    - id: ha-replication-floor
+      matchFinding: { code: DL014 }
+      effect: deny
+      exemptible: true
+      message: "A single-replica field (brokers/workers/nodes: 1) with HighAvailability enabled (DL014) is denied under this pack — raise the replica count or exempt with a reason."
+
+    # 10. TLS boundary (ADR 018, docs/planning/08 C8): escalates DL004 (a
+    #     plaintext Connection where a TLS-capable realization exists) to a
+    #     hard deny. The live audience/Insecure fact itself (F2) is a
+    #     runtime-computed value, not present in the static manifest graph
+    #     this engine's field selectors read — DL004 is the closest
+    #     validate-time signal, hence the escalation rather than a direct
+    #     field assert.
+    - id: insecure-endpoint
+      matchFinding: { code: DL004 }
+      effect: deny
+      exemptible: true
+      message: "A plaintext Connection with a TLS-capable realization available (DL004) is denied under this pack — switch schemes or exempt with a reason."
+
+    # 11. Trust boundaries / blast-radius (docs/planning/09 §4 plane
+    #     analysis): an external Connection's target host must be on an
+    #     explicit allowlist. Ships denying everything by default (the
+    #     regex only matches the empty string, which is what a managed
+    #     Connection's absent spec.host stringifies to, so managed
+    #     Connections are unaffected) — REPLACE the pattern below with your
+    #     organization's approved external hosts before enabling in CI.
+    - id: external-allowlist
+      match: { kind: Connection }
+      assert: { field: spec.host, matches: "^(REPLACE_WITH_YOUR_ALLOWLISTED_HOST)?$" }
+      effect: deny
+      exemptible: true
+      message: "External Connection target is not on the allowlist — edit this rule's assert.matches pattern (external-allowlist) to your organization's approved hosts."
+
+    # 12. Secrets handling (ADR 013): the env secret backend is a dev-only
+    #     convenience (values come from process environment variables, not
+    #     a managed store) — forbidden by default, exemptible for local/dev
+    #     use with a recorded reason.
+    - id: forbid-env-secret-backend
+      match: { kind: SecretReference }
+      assert: { field: spec.backend, notEquals: "env" }
+      effect: deny
+      exemptible: true
+      message: "The env secret backend is dev-only (ADR 013) — exempt with metadata.annotations[\"policy.datascape.io/exempt\"]: \"forbid-env-secret-backend: <reason>\" for local/dev use."

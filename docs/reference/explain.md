@@ -1536,3 +1536,156 @@ Remedies:
 - Give each sink Binding a disjoint prefix tree.
 - If the nested layout is intentional, waive DL-s3sink-001 with a reason.
 
+## policy
+
+### `no-plaintext-connections` (policyRule)
+
+A managed Connection's spec.scheme is not "https" (an omitted scheme, defaulting to plaintext tcp, is treated the same as an explicit non-https value) — docs/adr/018, docs/planning/08 C8.
+
+Likely causes:
+
+- The Connection was written before its Provider gained TLS support.
+- Plaintext was chosen for local development and never revisited.
+
+Remedies:
+
+- Set spec.scheme to https if the realizing Provider supports it.
+- This rule ships exemptible: true — waive with metadata.annotations["policy.datascape.io/exempt"]: "no-plaintext-connections: <reason>" for local-only traffic.
+
+### `images-from-corp-registry` (policyRule)
+
+A Provider's spec.configuration.image does not match ^registry\.corp\..+@sha256:<digest>$ — supply-chain posture (docs/planning/08 A10).
+
+Likely causes:
+
+- The image was pulled from a public registry or a floating tag rather than the organization's pinned mirror.
+
+Remedies:
+
+- Point spec.configuration.image at your corp registry mirror with a full sha256 digest.
+- Tailor the rule's assert.matches pattern to your organization's actual registry host — the shipped pack uses registry.corp.* as a placeholder.
+
+### `protect-data` (policyRule)
+
+A Dataset/Source does not set metadata.protect: true — ownership/blast-radius control (ADR 013). Non-exemptible in the shipped pack.
+
+Likely causes:
+
+- metadata.protect was never set (the field defaults to false).
+
+Remedies:
+
+- Set metadata.protect: true on the resource.
+
+### `no-isolation-optout` (policyRule)
+
+A Provider sets spec.runtime.networkPolicy: "none", opting out of default-deny network isolation (docs/planning/08 B7). Non-exemptible in the shipped pack.
+
+Likely causes:
+
+- networkPolicy: none was set to debug connectivity and never reverted.
+
+Remedies:
+
+- Remove spec.runtime.networkPolicy or set it to a value other than "none".
+
+### `secrets-from-vault-or-k8s` (policyRule)
+
+A SecretReference's spec.backend is not "vault" or "kubernetes" — least-privilege secrets handling (ADR 013). Non-exemptible in the shipped pack.
+
+Likely causes:
+
+- The backend is "env" or "file" — a convenience backend not backed by a managed secret store.
+
+Remedies:
+
+- Point spec.backend at vault or kubernetes.
+
+### `escalate-duplicate-capture` (policyRule)
+
+Escalates the DL001 design-lint finding (overlapping cdc capture on one sourceRef) from a warning to a hard deny.
+
+Likely causes:
+
+- See DL001's own catalog entry.
+
+Remedies:
+
+- Consolidate the overlapping cdc Bindings, or waive/exempt with a reason.
+
+### `no-dataset-deletes-in-ci` (policyRule)
+
+Plan-scoped (matchPlan): the computed plan contains a delete action against a Dataset. Evaluated at plan/apply/destroy, never at validate (no plan exists yet). Non-exemptible in the shipped pack.
+
+Likely causes:
+
+- A Dataset manifest was removed from the set, or the plan otherwise wants to delete it.
+
+Remedies:
+
+- Re-add the Dataset manifest if the delete is unintended.
+- Run outside this pack's evaluation (a different --policies set, or the gate disabled) for a reviewed, intentional teardown.
+
+### `require-digest-pins` (policyRule)
+
+A Provider's spec.configuration.image carries no digest pin (no "@sha256:<digest>" suffix), independent of registry — supply-chain posture (docs/planning/08 A10).
+
+Likely causes:
+
+- The image reference uses a floating tag (e.g. "latest") instead of a digest.
+
+Remedies:
+
+- Pin the image to a digest: "<image>:<tag>@sha256:<digest>".
+
+### `ha-replication-floor` (policyRule)
+
+Escalates the DL014 design-lint finding (a Provider explicitly declares a single-replica field — brokers/workers/nodes: 1 — while the HighAvailability gate is enabled) from an info-level finding to a hard deny — docs/adr/004-replicas-and-identity.md.
+
+Likely causes:
+
+- See DL014's own catalog entry.
+
+Remedies:
+
+- Raise the replica count, or waive/exempt with a reason for an intentional scratch/dev instance.
+
+### `insecure-endpoint` (policyRule)
+
+Escalates the DL004 design-lint finding (a plaintext Connection where a TLS-capable realization exists) from a warning to a hard deny — docs/adr/018, docs/planning/08 C8.
+
+Likely causes:
+
+- See DL004's own catalog entry.
+
+Remedies:
+
+- Switch to the TLS-capable scheme, or waive/exempt with a reason.
+
+### `external-allowlist` (policyRule)
+
+An external Connection's spec.host does not match this rule's allowlist pattern — trust-boundary control (docs/planning/09 §4). The shipped pack denies every external host by default (a REPLACE_ME placeholder pattern) until tailored.
+
+Likely causes:
+
+- The pack has not been tailored yet — every external Connection is denied by design until the pattern is edited.
+- A genuinely new external target was added without updating the allowlist.
+
+Remedies:
+
+- Edit this rule's assert.matches pattern in the written pack to your organization's approved external hosts.
+- Waive/exempt an individual Connection with a reason as an interim measure.
+
+### `forbid-env-secret-backend` (policyRule)
+
+A SecretReference's spec.backend is "env" — a dev-only convenience backend (ADR 013), forbidden by default.
+
+Likely causes:
+
+- Local/dev usage with no vault or kubernetes secret store available.
+
+Remedies:
+
+- Point spec.backend at vault or kubernetes for non-dev use.
+- This rule ships exemptible: true — waive with metadata.annotations["policy.datascape.io/exempt"]: "forbid-env-secret-backend: <reason>" for local/dev use.
+

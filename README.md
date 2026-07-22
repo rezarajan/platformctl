@@ -242,6 +242,8 @@ bin/platformctl destroy cdc-to-lake --auto-approve
 | `init <blueprint> [--dir]` | Scaffold a ready-to-apply manifest set + `.env` template + README from an embedded blueprint (`cdc-to-lake`, `lakehouse`, `stream-basics`, `external-cdc`). `--list` enumerates blueprints (`-o json\|yaml` for the machine-readable form). |
 | `validate <dir>` | Schema + graph (cycles) + Binding capability checks. No state, no runtime calls. |
 | `lint [dir]` | Deterministic design lints over a valid set (ADR 020): built-in DL codes + provider-contributed checks; waivable per-resource with a reason; `--strict` exits `1` on warnings. |
+| `policy test [dir]` | Evaluate typed governance policies (ADR 021) against a manifest set without the rest of validate — a fast authoring loop. Exits `1` on any unexempted deny. Alpha, `PolicyEngine` gate. |
+| `policy init <pack>` | Write a built-in policy pack (`zero-trust`) for local tailoring — same blueprint pattern as `init`. |
 | `explain <token>` | Explain any condition type, status reason, or lint code from the built-in catalog: meaning, likely causes, remedies. |
 | `plan <dir>` | Deterministic diff of manifests vs. state. Exit `1` when changes are pending. |
 | `apply <dir>` | Reconcile in topological order; state persisted after every resource. |
@@ -265,7 +267,10 @@ bin/platformctl destroy cdc-to-lake --auto-approve
 | `state unlock` | Force-release the state lock (escape hatch for a holder process that died). |
 
 Global flags: `--state-file` (default `.datascape/state.json`, local backend),
-`--feature-gates`, `-o table|json|yaml`. Shared state
+`--feature-gates`, `-o table|json|yaml`, `--policies` (directory of Policy
+documents, ADR 021; default `.datascape/policies/` if it exists — evaluated
+at validate/plan/apply/destroy when the `PolicyEngine` gate is enabled).
+Shared state
 (`docs/adr/003-shared-state.md`, gated `SharedStateBackend`):
 `--state-backend s3 --state-bucket ... --state-endpoint ... --state-secret-ref
 ...` points every command at an S3-compatible bucket instead of a local file,
