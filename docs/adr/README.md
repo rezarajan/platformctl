@@ -49,6 +49,7 @@ pattern of recording a redirected first cut).
 | [021](021-policy-engine-zero-trust.md) | Policy engine & zero-trust | accepted (Stage H3/H4) | typed deny/warn rules over manifests+plan+lint findings; zero-trust pack; explicit out-of-scope table |
 | [022](022-identity-aware-mediation.md) | Identity-aware mediation | accepted (Stage H5/H6) | domains as first-class; three enforcement rings; OpenZiti-first MediatedConnections; the Lattice raw-TCP lesson |
 | [024](024-interactive-composition.md) | Interactive composition | accepted (E9/E10) | add/wire/expose compile to manifests, never bypass them; graph-aware reuse; Huh v2 prompts confined to cmd/cliutil |
+| [023](023-wireguard-tunnel.md) | WireGuard tunnel provider | accepted (Stage D5) | `linuxserver/wireguard` pinned; file-mounted key, rotation-by-recreate; iptables DNAT forwarder, not socat; `ContainerSpec.Sysctls`; handshake-recency probe; `Connection.spec.via` schema-complete, not yet `proxy`-wired |
 
 "Retroactive" ADRs (008–014) record decisions made in the planning package
 (docs 00–06) before this convention existed — written 2026-07-21 so the

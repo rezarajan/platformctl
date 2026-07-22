@@ -417,6 +417,7 @@ GA. Phase 7 closes with Stage B's exit criteria held (docs/planning/08 §4).
 | `JDBCSinkProvider` | 08 Stage D (D3) | Alpha | disabled | Beta after real-use soak; defaults off, matching the IngressProvider/TrinoProvider posture (a new provider exposing a new capability surface — writes into a database — defaults off until soaked) |
 | `IngestProvider` | 08 Stage D (D4) | Alpha | disabled | Beta after real-use soak; same posture as `JDBCSinkProvider` |
 | `TLSTermination` | 08 Stage C (C8) | Alpha | disabled | Beta after real-use soak; independent of `IngressProvider`'s own gate (a Connection can stay plaintext even once ingress routing graduates) — see docs/adr/018 addendum |
+| `TunnelProvider` | 08 Stage D (D5) | Alpha | disabled | Beta after real-use soak; defaults off — a new provider granting `NET_ADMIN` and opening a routed path into a private network is a meaningfully different risk profile from the Phase 6.5 enabled-Alpha precedent — docs/adr/023-wireguard-tunnel.md |
 
 Gates planned by the production-readiness backlog (`HighAvailability`,
 `IngressProvider`, `TLSTermination`, `MonitoringStackProvider`,

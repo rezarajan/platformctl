@@ -1145,7 +1145,7 @@ note first (per doc 06 §3).
 - [x] Lake data can be replayed into an EventStream (ingest) and an
       EventStream can be served into a relational Source (jdbc sink), both
       to Ready through `validate`-checked Bindings.
-- [ ] A Binding across a WireGuard-tunneled Connection reaches a database
+- [x] A Binding across a WireGuard-tunneled Connection reaches a database
       only routable inside a private network, CDC RUNNING.
 - [x] Sink Bindings support declared dead-letter topics; poison messages
       land there without stopping the connector.
@@ -1159,6 +1159,10 @@ note first (per doc 06 §3).
       `TestDeadLetterConfigReplicationFromEventStream` in
       `internal/adapters/providers/jdbcsink`), closing D6's own "jdbcsink
       half is N/A — D3 open" note now that D3 has landed.)
+      (Exit-criterion evidence, D5, 2026-07-22: criterion 3 —
+      `TestWireGuardTunnelEndToEnd`, live against real Docker, two
+      consecutive green runs (26–29s); see D5's own status note above for
+      the full topology and the two bugs found live.)
 
 ### D1: Schema registry support
 
@@ -1348,6 +1352,56 @@ note first (per doc 06 §3).
   isolated network, unreachable without the tunnel (asserted); key rotation
   via SecretReference re-establishes the tunnel; destroy leaves no tunnel
   artifacts.
+- **Done (2026-07-22, D5):** `wireguard` provider (docs/adr/023, decisions
+  recorded there) — a `ConnectionCapableProvider` (scheme `tcp`) realizing
+  a tunnel-mediated Connection directly (see the ADR's "Scope" section for
+  why `Connection.spec.via` chaining through an *existing* `proxy`/
+  `ingress` Connection is schema-complete but not wired this task — the
+  file fence marks `proxy` read-only reference). One tunnel container per
+  Connection (`linuxserver/wireguard`, digest-pinned, `NET_ADMIN`), driving
+  `wg-quick` via a custom entrypoint; the forwarder is an `iptables` DNAT
+  rule baked into the same container's boot script (no socat — the pinned
+  image ships neither socat nor nc, and installing one at apply time would
+  break image pinning). Private key file-mounted only (never env/state/
+  inspect); rotation is a container recreate via the existing spec-hash
+  mechanism. New `ContainerSpec.Sysctls` runtime-port field (Docker-wired;
+  Kubernetes intentionally unimplemented, documented — a cluster-operator
+  sysctls-allowlist decision this task cannot make unilaterally): found
+  live that `net.ipv4.ip_forward=1` must be set at container-create time.
+  Gate `TunnelProvider` registered Alpha/disabled. **Docker only — no K8s
+  leg**: `NET_ADMIN` + the `ip_forward` sysctl on Kubernetes is explicit
+  future work (docs/adr/023 follow-ups), not silently missing.
+  Verified live: `TestWireGuardTunnelEndToEnd`
+  (`cmd/platformctl/wireguard_integration_test.go`, 26–29s per run, two
+  consecutive green runs against real Docker) — a raw (unmanaged) isolated
+  "VPC" Docker network hosts a plain `postgres:16` (no host publish) and a
+  hand-configured WireGuard responder fixture (same pinned image, server
+  role); negative reachability proven via `runtime.ProbeReachable` from the
+  shared platform network *before* the tunnel exists (a host-side dial
+  would not have been a real negative proof, since the test process runs
+  on the same host as the daemon regardless of Docker network topology);
+  after `apply`, the CDC connector reaches `RUNNING` through the tunnel
+  (Debezium never joins the VPC or transit networks, only the tunnel
+  container's own `name:port` on the shared network); idempotent re-apply
+  (unchanged container ID); key rotation (new `SecretReference` value +
+  the responder accepting the new peer key, the real VPC-operator-side
+  half of a rotation) recreates the tunnel container and the connector
+  stays `RUNNING`; `destroy` removes the tunnel container and the shared
+  platform network, leaving only the still-attached raw responder fixture
+  holding the peer network open (`RemoveNetwork`'s own documented
+  refuse-while-attached contract — correct, not a leak). Two bugs found
+  and fixed live, both recorded in `docs/adr/023`/commit history: (a) the
+  pinned image symlinks `/etc/wireguard` -> `/config/wg_confs`, which
+  doesn't exist pre-boot — `ContainerSpec.Files` writes there failed
+  opaquely; moved the config to `/etc/datascape/wg0.conf` (`wg-quick`
+  accepts any absolute path); (b) a design correction, found by reading
+  `debezium.go`'s Connection-resolution code before finishing
+  implementation: a first draft used one shared container per *Provider*
+  (baking every Connection's DNAT rule into one boot script); every
+  existing managed-Connection consumer dials `naming.RuntimeObjectName`
+  of the *Connection* resource itself, so the shared-container shape was
+  unresolvable by any real consumer — reworked to one tunnel container
+  per Connection, matching `proxy`'s own shape exactly.
 
 ### D6: Dead-letter queue support for sink Bindings
 

@@ -935,4 +935,56 @@ var Catalog = []CatalogEntry{
 			"platformctl apply <path> to regenerate and reconcile it.",
 		},
 	},
+
+	// --- wireguard (tunnel provider on the Connection seam; docs/planning/08 D5, docs/adr/023) ---
+	{
+		Token: ReasonTunnelSurfaceReady, Area: "wireguard", Kind: "reason",
+		Meaning:  "The shared tunnel container (Provider kind) is up and healthy (its wg0 interface exists).",
+		Causes:   healthyCauses,
+		Remedies: healthyRemedies,
+	},
+	{
+		Token: ReasonTunnelDown, Area: "wireguard", Kind: "reason",
+		Meaning: "The shared tunnel container is missing or unhealthy — every Connection realized through it is unreachable.",
+		Causes: []string{
+			"The tunnel container is not running or still starting.",
+			"configuration.peerNetwork does not exist or is unreachable.",
+		},
+		Remedies: []string{
+			"docker logs <wireguard-provider-container> for the failure detail.",
+			"platformctl apply <path> to retry.",
+		},
+	},
+	{
+		Token: ReasonTunnelUp, Area: "wireguard", Kind: "reason",
+		Meaning:  "A Connection's forwarder answers through the tunnel (a live TCP accept through its iptables DNAT rule).",
+		Causes:   healthyCauses,
+		Remedies: healthyRemedies,
+	},
+	{
+		Token: ReasonHandshakeStale, Area: "wireguard", Kind: "reason",
+		Meaning: "The WireGuard peer's latest handshake is older than 3x the configured PersistentKeepalive — logged as drift, not failed outright, since a stale reading can still coexist with a functioning tunnel.",
+		Causes: []string{
+			"The peer (the WireGuard responder) is unreachable or has stopped responding.",
+			"configuration.peerEndpoint or configuration.peerPublicKey no longer match the peer's actual configuration.",
+			"Normal idle roaming behavior — a stale reading with a still-successful upstream dial is not necessarily broken.",
+		},
+		Remedies: []string{
+			"platformctl status <path> to check whether the upstream dial through the tunnel is still succeeding.",
+			"Verify the peer (responder) is up and reachable on configuration.peerNetwork independently of platformctl.",
+		},
+	},
+	{
+		Token: ReasonTunnelUpstreamUnreachable, Area: "wireguard", Kind: "reason",
+		Meaning: "The tunnel and its forwarder rule are in place but the upstream (spec.target) does not answer through it. Named distinctly from proxy's own UpstreamUnreachable (same concept, different provider).",
+		Causes: []string{
+			"The upstream (spec.target) is down or not listening on the declared port.",
+			"spec.target is not actually within configuration.allowedIPs — the tunnel has no route to it.",
+			"The WireGuard peer (responder) is not forwarding/NATing traffic into its own private network.",
+		},
+		Remedies: []string{
+			"platformctl drift <path> to see the exact observed vs. wanted forwarder config.",
+			"Verify spec.target is reachable from the peer's own network independently of platformctl.",
+		},
+	},
 }

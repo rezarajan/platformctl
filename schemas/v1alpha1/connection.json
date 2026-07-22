@@ -27,7 +27,8 @@
             "secretName": { "type": "string", "minLength": 1, "description": "Kubernetes only: references an existing kubernetes.io/tls Secret by name (e.g. cert-manager-managed). platformctl only ever reads this Secret." }
           },
           "additionalProperties": false
-        }
+        },
+        "via": { "$ref": "meta.json#/$defs/nameRef", "description": "Managed only: optional reference to a tunnel-capable Provider (docs/adr/023) this Connection's egress additionally routes through. Schema-accepted and validate-time capability-checked (the named Provider must implement TunnelCapableProvider); no realizing provider consumes it yet — a tunnel-mediated Connection is realized directly by the tunnel provider itself today (see docs/adr/002's addendum, docs/adr/023's Scope section)." }
       },
       "required": ["port"],
       "additionalProperties": false,
