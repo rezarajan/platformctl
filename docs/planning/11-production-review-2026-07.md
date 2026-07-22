@@ -442,3 +442,16 @@ static. Dimensions, each producing findings verified before fixing:
   deadline) — deadlines bound failure reporting only; any environment
   widens them with one knob (doc 02 §4.1 records the rule). Unfiltered
   unit true-exit=0; golangci 0 issues; scale=0.01 clamp exercised.
+- 2026-07-22: CI parallelization (owner request) + two fixes. Fix: my
+  phase5 pg_isready poll targeted the wrong container name
+  (ext-attendance-db vs the test's actual datascape-ext-outofband-pg) —
+  the bounded poll burned its full window on a nonexistent container;
+  corrected and proven live (suite 15.2s, was 121s failing). CI:
+  test-impact.sh gained --list (JSON suite ids) and --only <ids>; the
+  serial 20-min integration job is now integration-plan (selects once)
+  + a per-suite matrix — each suite on its own runner with its own
+  daemon (the flock exists for SHARED local daemons only), wall-clock ≈
+  slowest suite + setup, failures isolated per-job. integration-k8s
+  sharded into two parallel kind clusters (adapter conformance vs cmd
+  scenarios). Stale CI comments fixed (removed-twin policy rule, old
+  job shape).

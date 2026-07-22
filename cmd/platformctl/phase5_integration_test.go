@@ -153,7 +153,7 @@ func TestExternalSourceEndToEnd(t *testing.T) {
 	// dependence NFR-11 forbids (found in the doc 11 timed-poll census).
 	initdbDeadline := time.Now().Add(120 * time.Second)
 	for {
-		if out, err := exec.Command("docker", "exec", "ext-attendance-db",
+		if out, err := exec.Command("docker", "exec", "datascape-ext-outofband-pg",
 			"pg_isready", "-U", "extuser", "-d", "attendance").CombinedOutput(); err == nil {
 			_ = out
 			break

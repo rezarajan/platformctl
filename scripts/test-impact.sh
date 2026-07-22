@@ -42,13 +42,15 @@ LEDGER="$COMMON_DIR/platformctl-itest-ledger"
 LOCK="/tmp/platformctl-itest.lock"
 mkdir -p "$LEDGER"
 
-BASE="main"; PRINT=0; FORCE=0; FULL=0; PRUNE_DAYS=""
+BASE="main"; PRINT=0; FORCE=0; FULL=0; PRUNE_DAYS=""; LIST=0; ONLY=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --base) BASE="$2"; shift 2 ;;
     --print) PRINT=1; shift ;;
     --force) FORCE=1; shift ;;
     --full) FULL=1; shift ;;
+    --list) LIST=1; PRINT=1; shift ;;
+    --only) ONLY="$2"; shift 2 ;;
     --prune) PRUNE_DAYS="$2"; shift 2 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
@@ -132,11 +134,14 @@ CHANGED=$(changed | sort -u)
 k8s_preflight
 
 selected=0; ran=0; skipped=0; failed=0
+LIST_IDS=()
 while IFS='|' read -r id scope cmd; do
   [[ -z "$id" ]] && continue
   scope=${scope//SHARED_CORE/$SHARED_CORE}
   hit=0
-  if [[ $FULL -eq 1 ]]; then hit=1; else
+  if [[ -n "$ONLY" ]]; then
+    if [[ ",$ONLY," == *",$id,"* ]]; then hit=1; fi
+  elif [[ $FULL -eq 1 ]]; then hit=1; else
     for path in $scope; do
       if grep -q "^${path}" <<<"$CHANGED"; then hit=1; break; fi
     done
@@ -149,6 +154,7 @@ while IFS='|' read -r id scope cmd; do
     echo "SKIP  $id — already green at this content-state ($(cat "$entry"))"
     skipped=$((skipped+1)); continue
   fi
+  if [[ $LIST -eq 1 ]]; then LIST_IDS+=("$id"); continue; fi
   if [[ $PRINT -eq 1 ]]; then echo "WOULD RUN  $id: $cmd"; continue; fi
   echo "RUN   $id: $cmd"
   # One suite at a time on the shared daemon: contention causes flaky
@@ -161,5 +167,14 @@ while IFS='|' read -r id scope cmd; do
   fi
 done < <(suites)
 
+if [[ $LIST -eq 1 ]]; then
+  printf '['
+  for i in "${!LIST_IDS[@]}"; do
+    [[ $i -gt 0 ]] && printf ','
+    printf '"%s"' "${LIST_IDS[$i]}"
+  done
+  printf ']\n'
+  exit 0
+fi
 echo "impact: $selected selected, $ran ran, $skipped deduped, $failed failed (base: $BASE)"
 [[ $failed -eq 0 ]]

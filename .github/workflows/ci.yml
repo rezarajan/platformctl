@@ -6,8 +6,8 @@ on:
   pull_request:
   # docs/planning/08 §7 E8: weekly full-matrix soak. No job below needs an
   # `if: github.event_name == 'schedule'` guard to get this — the
-  # `integration` job's existing G7 branch already falls through to
-  # `scripts/test-impact.sh --full` for any event that isn't
+  # `integration-plan` job's G7 branch already falls through to
+  # `scripts/test-impact.sh --list --full` for any event that isn't
   # `pull_request` (schedule included), and `integration-k8s` has no event
   # gating at all, so adding this trigger alone reproduces "full-matrix
   # (test-impact --full + the Kubernetes job) once a week" with zero
@@ -86,34 +86,64 @@ jobs:
       # denies (plaintext connections, env-backend secrets, unpinned/
       # non-corp-registry images) carry recorded
       # policy.datascape.io/exempt waivers in the example/blueprint
-      # manifests themselves; two non-exemptible rules
-      # (protect-data, secrets-from-vault-or-k8s) fire on every shipped
-      # example/blueprint by design and are pinned as a known, recorded
-      # finding in cmd/platformctl/policy_pack_examples_test.go rather
-      # than routed around — a *new* unexempted deny fails this step.
+      # manifests themselves; the one non-exemptible rule (protect-data —
+      # its twin was removed by the owner's one-rule-per-fact decision,
+      # docs/adr/021 addendum) fires on every shipped example/blueprint by
+      # design and is pinned as a known, recorded finding in
+      # cmd/platformctl/policy_pack_examples_test.go rather than routed
+      # around — a *new* unexempted deny fails this step.
       - name: Policy pack against examples and blueprints
         run: go test ./cmd/platformctl/... -run TestZeroTrustPackAgainstExamplesAndBlueprints -v
 
-  integration:
-    name: Integration tests (Docker)
+  # Suite selection runs once; every selected suite then runs as its own
+  # matrix job on its own runner (own Docker daemon — no shared-daemon
+  # flock contention, which only exists for LOCAL shared daemons, doc 06
+  # §10 rule 4). Wall-clock drops from the serial sum (~20 min) to the
+  # slowest single suite plus setup, and a failure is isolated in its own
+  # job log (owner request, doc 11 2026-07-22).
+  integration-plan:
+    name: Select integration suites
     runs-on: ubuntu-latest
     needs: unit
-    timeout-minutes: 75
+    timeout-minutes: 10
+    outputs:
+      suites: ${{ steps.plan.outputs.suites }}
     steps:
       - uses: actions/checkout@v4
         with:
-          # test-impact.sh diffs against origin/main on pull_request builds
-          # (docs/planning/08 G7); that ref must be resolvable locally, which
-          # the default shallow single-branch checkout doesn't give us.
+          fetch-depth: 0
+      - id: plan
+        name: Compute affected suites
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            SUITES=$(scripts/test-impact.sh --list --base origin/main | tail -1)
+          else
+            SUITES=$(scripts/test-impact.sh --list --full | tail -1)
+          fi
+          echo "suites=$SUITES" >> "$GITHUB_OUTPUT"
+          echo "selected: $SUITES"
+
+  integration:
+    name: "suite: ${{ matrix.suite }}"
+    runs-on: ubuntu-latest
+    needs: integration-plan
+    if: needs.integration-plan.outputs.suites != '[]'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(needs.integration-plan.outputs.suites) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      # The suite stands up real Redpanda, Postgres, Debezium, and MinIO
-      # containers and builds the sink Connect image (Debezium + Aiven S3
-      # sink plugin) itself. Pre-pulling keeps per-test timeouts honest.
+      # Each runner has its own daemon; pre-pulling keeps per-test
+      # timeouts honest (images pull in parallel on GH's network).
       - name: Pre-pull container images
         run: |
           docker pull docker.redpanda.com/redpandadata/redpanda:v24.2.1 &
@@ -127,29 +157,24 @@ jobs:
           docker pull hashicorp/vault:latest &
           wait
 
-      # Includes the chaos-monkey suite (cmd/platformctl/chaos_integration_test.go):
-      # out-of-band container kills/stops must be observed by `drift`, healed
-      # by `apply`, survive a SIGKILL mid-apply, and `destroy` must converge
-      # against already-dead infrastructure.
-      #
-      # docs/planning/08 G7: pull requests run only the suites the diff
-      # affects (scripts/test-impact.sh --base origin/main); pushes to main
-      # (and any future scheduled/nightly job — none exists yet) run the
-      # full sweep via --full, so main always has complete integration
-      # coverage regardless of what any one PR touched.
-      - name: Integration & chaos tests
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            scripts/test-impact.sh --base origin/main
-          else
-            scripts/test-impact.sh --full
-          fi
+      # K8s-legged tests inside these suites skip themselves when no
+      # cluster is reachable — the dedicated integration-k8s job provides
+      # the cluster coverage (unchanged).
+      - name: Run suite
+        run: scripts/test-impact.sh --only "${{ matrix.suite }}"
 
   integration-k8s:
-    name: Integration tests (Kubernetes, minimal RBAC role)
+    # Sharded (owner request, doc 11 2026-07-22): each shard gets its own
+    # kind cluster + minted minimal-RBAC kubeconfig and runs half the K8s
+    # surface in parallel — adapter conformance vs cmd-level scenarios.
+    name: "k8s ${{ matrix.shard }} (minimal RBAC)"
     runs-on: ubuntu-latest
     needs: unit
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [adapter, scenarios]
     steps:
       - uses: actions/checkout@v4
 
@@ -197,7 +222,10 @@ jobs:
           KUBECONFIG: ${{ env.PLATFORMCTL_KUBECONFIG }}
           PLATFORMCTL_REQUIRE_K8S: "1"
         run: |
-          go test -tags integration -timeout 1200s \
-            ./internal/adapters/runtime/kubernetes/... \
-            ./internal/adapters/secrets/kubernetes/...
-          go test -tags integration -timeout 1200s -run Kubernetes ./cmd/platformctl/...
+          if [ "${{ matrix.shard }}" = "adapter" ]; then
+            go test -tags integration -timeout 1200s \
+              ./internal/adapters/runtime/kubernetes/... \
+              ./internal/adapters/secrets/kubernetes/...
+          else
+            go test -tags integration -timeout 1200s -run Kubernetes ./cmd/platformctl/...
+          fi
