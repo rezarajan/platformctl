@@ -1888,6 +1888,126 @@ renderer dispatch, the 96-line registry indirection, and `meta.json`
 
 ---
 
+## 7.7 Stage H — Guardrails & zero trust (ADRs 020/021/022)
+
+Theme: the owner-directed guardrail programme — design-quality lints
+(detection), organizational policy (enforcement), and identity-aware
+mediation (runtime zero trust) — delivered in that order because each
+layer consumes the previous one's output. Designs are accepted in ADR
+020 (lints), ADR 021 (policy), ADR 022 (domains/identity/mediation);
+tasks here carry sizes/acceptance only — the design content lives in the
+ADRs and is not restated.
+
+**Stage exit criteria:**
+- [ ] `platformctl lint` reports the ADR 020 built-in set deterministically
+      (byte-identical on identical input), waivers are auditable, every
+      shipped blueprint lints clean in CI, and every lint code resolves in
+      `platformctl explain`.
+- [ ] A policy file can deny a manifest set at validate/plan/apply with
+      the standard error shape; the zero-trust pack ships and passes
+      against the lakehouse example (with documented, justified waivers
+      where the example is deliberately dev-flavored).
+- [ ] The owner's scenario holds end-to-end: a cdc Binding whose source
+      and sink chains carry different `metadata.domain` values is denied
+      at validate by a cross-domain policy; with an allow policy, the
+      same manifest reconciles the path through a MediatedConnection and
+      the mediator's own logs/policy state show the identity-checked
+      dial; removing the allow and re-applying severs it.
+- [ ] Undeclared domains remain byte-identical to today's behavior
+      (no segmentation, no mediation) — pinned by tests.
+
+### H1: Lint engine and built-in set (ADR 020)
+
+- **Size:** M. **Depends:** — (E4's explain catalog is merged).
+- **Do:** `internal/application/lint` (pure functions over the resolved
+  graph + provider implementations, reusing compatibility's index);
+  the DL001–DL021 built-in set from ADR 020 §4; severities warning/info;
+  `platformctl lint [path]` with `-o json` + `--strict`; the one-line
+  validate summary; waiver annotations (`lint.datascape.io/waive`) with
+  mandatory reasons (empty reason is itself a warning); every code in the
+  E4 explain catalog (extend the completeness guard to lint codes).
+  Findings sorted (severity, code, key); golden test for determinism.
+- **Accept:** stage-criterion 1's lint half; blueprint lint-clean CI
+  test; a fixture manifest exhibiting every DL code, golden-verified.
+- **Gate:** `DesignLints` (Alpha, **enabled** — read-only reporting; the
+  gate exists to switch the validate summary off, not to hide the
+  command).
+
+### H2: Provider-contributed lints (ADR 020 §5)
+
+- **Size:** S. **Depends:** H1.
+- **Do:** `reconciler.DesignLinter` optional capability (pure,
+  validate-time); first implementors: debezium (N connectors × one
+  database = N replication slots; overlapping table captures), redpanda
+  (replication vs broker count shape hints), s3sink (prefix-collision
+  refinement). Codes namespaced `DL-<type>-NNN`, catalog entries
+  included.
+- **Accept:** each shipped lint has a positive+negative fixture; the
+  catalog completeness guard covers namespaced codes.
+
+### H3: Policy engine core (ADR 021 §§1–3)
+
+- **Size:** L (ADR 021 is the design note; no new ADR needed unless the
+  vocabulary must deviate — then amend 021 additively). **Depends:** H1
+  (findings are policy facts).
+- **Do:** `internal/domain/policy` (kind `policy.datascape.io/v1alpha1`,
+  closed rule vocabulary per ADR 021 §2, JSON Schema); loading from
+  `--policies`/`.datascape/policies/` (never from the governed set);
+  deny-wins evaluation wired into loadAndValidate (after compatibility +
+  lint) and into plan/apply/destroy for plan-scoped rules; exemption
+  annotations honored only when the rule declares `exemptible: true`;
+  `platformctl policy test`; rule ids in the explain catalog; machine
+  output per the A7 harness.
+- **Accept:** stage-criterion 2's engine half; a deny names rule id,
+  message, resource, and exits via the standard validation path;
+  determinism golden.
+- **Gate:** `PolicyEngine` (Alpha, disabled).
+
+### H4: Zero-trust policy pack (ADR 021 §4)
+
+- **Size:** S. **Depends:** H3; C8 (the TLS rules reference shipped
+  mechanisms only).
+- **Do:** `platformctl policy init zero-trust` writing the versioned
+  starter pack (every rule cites its mechanism ADR); onboarding
+  §governance section; pack evaluated in CI against the examples with
+  recorded waivers where dev-flavored.
+- **Accept:** stage-criterion 2's pack half.
+
+### H5: Domains and cross-domain policy (ADR 022 Rings 0–1)
+
+- **Size:** M. **Depends:** H3.
+- **Do:** `metadata.domain` (meta.json, DNS-label, default `default`;
+  doc 03 §2 additive); policy vocabulary gains domain/edge selectors
+  (`crossDomain: {from, to}` over graph edges); Ring-0 validate denial;
+  Ring-1 compilation — per-domain network segmentation (Docker: network
+  per domain; Kubernetes: the existing B7 walls per domain-namespace
+  mapping) with allowed cross-domain paths compiling to exactly the
+  mediated entrypoint's holes; undeclared-domain no-op pinned
+  byte-identical.
+- **Accept:** the owner-scenario's validate half (stage criterion 3,
+  first sentence); segmentation integration test on both runtimes.
+- **Gate:** rides `PolicyEngine` (domains without policies are inert
+  labels; no separate gate).
+
+### H6: Mediated connections — OpenZiti mesh provider (ADR 022 Ring 2)
+
+- **Size:** L (ADR 022 is the design). **Depends:** H5.
+- **Do:** a `mesh`-class provider (OpenZiti: pinned controller + router
+  images) realizing MediatedConnections on the Connection seam
+  (ConnectionCapableProvider); workload identities minted per
+  participant from the F4 naming authority (SPIFFE-aligned URI form);
+  ADR 021/H5 policies compiled to Ziti dial/bind service policies;
+  the raw-TCP proof is a Postgres path (a cdc Binding dialing its
+  cross-domain source only through the mediated entrypoint, source dark
+  on the shared networks); mediator mTLS is Ziti's own (no hand-rolled
+  certs); teardown removes identities/policies. Consul-intentions
+  alternative and sidecar `meshMode` recorded as follow-ups in ADR 022 —
+  not built here.
+- **Accept:** stage criterion 3 end-to-end + criterion 4; drift on
+  out-of-band Ziti policy edits detected and healed (the debezium
+  config-drift bar applied to mediator state).
+- **Gate:** `MediatedConnections` (Alpha, disabled).
+
 ## 8. New feature gates introduced by this plan
 
 Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
@@ -1907,6 +2027,9 @@ Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
 | `IngestProvider` | D4 | disabled | Beta after soak |
 | `TunnelProvider` | D5 | disabled | Beta after real-VPC validation |
 | `TrinoProvider` | D10 | disabled | Beta after soak |
+| `DesignLints` | H1 | **enabled** (read-only reporting) | Beta once blueprints + examples are lint-clean for a release |
+| `PolicyEngine` | H3 | disabled | Beta after the zero-trust pack soaks in this repo's own CI |
+| `MediatedConnections` | H6 | disabled | Beta after the owner-scenario e2e soaks on both runtimes |
 | Phase 6.5 gates (`MySQLProvider`, `NessieProvider`, `OpenLineageProvider`, `ProxyProvider`) | — | enabled (Alpha) | promote to Beta at Stage A close (their hardening period ends with the ops-hardening stage) |
 
 ## 9. Mapping to doc 07's open items
@@ -1998,6 +2121,14 @@ build on ADR 015's plane and benefit from G3 having landed.
 E5 (schema fragments) → E6 (author guide + reconciler conformance suite;
 requires G1 and F5 — F5 is done) → E7 (truth sweep) → E8 (release
 engineering). E6's plugin decision note is the Phase 8 gateway.
+
+**Step 6 — guardrails & zero trust (Stage H, added 2026-07-22 by owner
+direction; ADRs 020/021/022):** H1 → H2 in parallel with H3's start; H3 →
+H4 and H5; H6 last (needs H5's domains). H1 is independent of every other
+stage and may start immediately; H4 waits for C8; H6 is the only L-size
+item and should not start before the C/D provider wave has merged (it
+touches the Connection seam those tasks also exercise). Stage H does not
+block Stage C/D/E closure — it is an additive programme.
 
 **Standing rules:** C5/D9 are decided (ADR 005/006) — do not reopen them
 without new evidence. Stage C closes when its five exit criteria hold;

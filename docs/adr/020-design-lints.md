@@ -1,9 +1,6 @@
 # ADR 020 — Design lints: deterministic wiring-quality evaluation
 
-**Status:** proposed (2026-07-22) — design accepted by the project owner in
-intent ("guardrails a data engineer would expect"); backlog placement
-awaits the owner's green light. No sequencing content in doc 08 is
-modified by this record.
+**Status:** accepted (2026-07-22) — scheduled as doc 08 Stage H (H1/H2).
 
 ## Context
 
