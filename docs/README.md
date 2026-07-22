@@ -28,6 +28,32 @@ append facts).
   the docs rules (schema sync, generated reference, planning-doc guard,
   ADR practice).
 
+
+## Find your answer ("I want to…")
+
+The fastest route from question to answer, for humans and agents alike.
+Naming rule used everywhere (docs/adr/019): **Datascape** = the product,
+**`platformctl`** = the binary/commands, **`datascape`** = wire/disk/env
+identifiers (frozen contracts), **d7s** = the short brand alias (prose
+only, never identifiers).
+
+| I want to… | Go to |
+|---|---|
+| Run my first pipeline | [onboarding/users.md](onboarding/users.md) → README quickstart (`platformctl init cdc-to-lake`) |
+| Understand a Kind's fields | [reference/](reference/index.md) (generated, always current), depth in [planning/03](planning/03-resource-model-reference.md) |
+| Know what a command does / exit codes | [onboarding/users.md](onboarding/users.md) §workflow; `platformctl <cmd> --help` |
+| Diagnose a condition/reason or error | `platformctl explain <reason>` (once merged; until then the reason constants in `internal/domain/status/reasons.go` are documented inline) |
+| Connect an external system (prod DB, cloud bucket) | [planning/03](planning/03-resource-model-reference.md) §3 lifecycles + §8.2 Connection; [adr/005](adr/005-database-ha-posture.md) (databases), doc 08's C4 notes (object stores) |
+| Wire Spark/Trino/dbt/Dagster/Grafana to the platform | `platformctl inventory --for <tool>`; [onboarding/users.md](onboarding/users.md) |
+| Decide platformctl vs Terraform | README's "platformctl and Terraform"; full page: [positioning/terraform.md](positioning/terraform.md) |
+| Contribute — first change | [onboarding/developers.md](onboarding/developers.md), then `CLAUDE.md`'s checklist |
+| Add a provider | [onboarding/developers.md](onboarding/developers.md) §walkthrough (providerkit + the nessie template; E6's full author guide supersedes later) |
+| Pick up a backlog task (agents) | [planning/08](planning/08-production-readiness-plan.md) §2.1 protocol → your task's entry → the ADRs it names |
+| Know why a design is the way it is | [adr/README.md](adr/README.md) index → the numbered record; narrative: [planning/10](planning/10-project-history-and-evolution.md) |
+| Check what's shipped vs planned | [planning/08](planning/08-production-readiness-plan.md) done-notes + [planning/04](planning/04-roadmap-and-feature-gates.md) §12 gate table |
+| Run only the tests my change affects | `just test-affected` ([planning/06](planning/06-agentic-execution-guide.md) §10) |
+| Understand an operational migration | [upgrade-notes.md](upgrade-notes.md) |
+
 ## Contracts — the code is checked against these
 
 - [planning/01-product-requirements.md](planning/01-product-requirements.md)

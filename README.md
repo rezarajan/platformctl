@@ -4,6 +4,8 @@
 
 ### `platformctl` — declarative data infrastructure on container runtimes
 
+*Datascape — **d7s** for short — is the product; `platformctl` is the binary you run.*
+
 *Describe your data platform as resources. Plan the diff. Apply it. Watch a
 Postgres → Debezium → Redpanda → S3 pipeline reach `Ready` from a directory
 of YAML.*
