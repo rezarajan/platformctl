@@ -71,4 +71,31 @@ internal/ports/reconciler/reconciler.go, internal/domain/graph/graph.go.
 
 ## Verification log
 
-See final commit message / report for command output summaries.
+- `gofmt -l .` — empty (clean) after every increment.
+- `go build ./...` — clean.
+- `go vet ./...` — clean.
+- `go test ./...` — all packages pass (internal/application/lint,
+  internal/domain/lint, cmd/platformctl including
+  TestBlueprintsLintClean/TestExplainCatalogCoversEveryLintCode/
+  TestEveryLintCodeExplains/the H2 positive+negative fixture tests, every
+  provider package including debezium/redpanda/s3sink's existing suites
+  unaffected by the additive lint.go files).
+- `just test-affected main` (scripts/test-impact.sh --base main): the
+  diff's breadth (cmd/platformctl/*.go, internal/application/blueprint/
+  templates/**, three provider packages) maps to nearly every Docker
+  integration suite's scope (14 selected), and the shared flock is
+  contended by 5 other concurrently active agent worktrees per this task's
+  own briefing ("shared flock; queuing expected"). `redpanda` suite
+  (TestRedpandaEndToEnd|TestRedpandaHA — the suite most relevant to
+  redpanda/lint.go) ran green in 85.6s once the lock was free. The
+  remaining suites (cdc, sink, connect-ha-dlq, acceptance, lakehouse,
+  prometheus, ingress, blueprints, object-store-posture, trino, jdbcsink,
+  s3source) were left running in the background against the shared ledger
+  (git common dir) — a future run against the same content-state will hit
+  the ledger and skip, per the script's own design; see the final report
+  for how far it got. The lint engine itself is pure (no live infra, per
+  ADR 020 and this task's own instruction); the three provider lint.go
+  additions add only a new LintDesign method each and touch no existing
+  Reconcile/Probe/Destroy/ValidateSpec code path those suites exercise —
+  the risk of a live-infra regression from this diff is low by
+  construction, not just by inference from the one suite that finished.
