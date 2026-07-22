@@ -370,3 +370,16 @@ static. Dimensions, each producing findings verified before fixing:
   Probe stays a point-in-time observation. Live proof run queued. The
   heal-window class is now closed at reconcile-membership, reconcile-
   topic, probe-transport, and test-client layers.
+- 2026-07-22: min-view settle proven live (full redpanda suite 131.6s
+  GREEN incl. both K8s HA tests). Wave-3 gate then caught the K8s
+  workers:2 DLQ test timing out at ConnectorStateUNASSIGNED — root
+  cause is Kafka Connect ITSELF: incremental cooperative rebalancing
+  parks a departed worker's tasks for scheduled.rebalance.max.delay.ms
+  (default FIVE MINUTES, tuned for rolling upgrades) awaiting its
+  return; I7's 120s poll passes only when the replacement pod rejoins
+  fast. Product-level fix (not a test budget bump): all three managed
+  Connect worker providers (debezium, s3sink, s3source) now set
+  CONNECT_SCHEDULED_REBALANCE_MAX_DELAY_MS=10000 — C3's promise is
+  RUNNING-through-loss, worker restarts are reconcile-driven, so fast
+  reassignment is the correct posture. Live connect-ha-dlq proof (both
+  runtimes) queued.

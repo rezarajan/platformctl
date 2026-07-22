@@ -147,19 +147,31 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 			Image:    image,
 			Replicas: workers,
 			Env: map[string]string{
-				"BOOTSTRAP_SERVERS":                      bootstrap,
-				"GROUP_ID":                               name,
-				"CONFIG_STORAGE_TOPIC":                   name + "-configs",
-				"OFFSET_STORAGE_TOPIC":                   name + "-offsets",
-				"STATUS_STORAGE_TOPIC":                   name + "-status",
-				"CONFIG_STORAGE_REPLICATION_FACTOR":      "1",
-				"OFFSET_STORAGE_REPLICATION_FACTOR":      "1",
-				"STATUS_STORAGE_REPLICATION_FACTOR":      "1",
-				"KEY_CONVERTER":                          "org.apache.kafka.connect.json.JsonConverter",
-				"VALUE_CONVERTER":                        "org.apache.kafka.connect.json.JsonConverter",
-				"CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE":   "false",
-				"CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE": "false",
-				"OFFSET_FLUSH_INTERVAL_MS":               "5000",
+				"BOOTSTRAP_SERVERS": bootstrap,
+				"GROUP_ID":          name,
+				// Fast task failover (docs/planning/08 C3/I7; found live at
+				// the wave-3 gate, doc 11): Kafka Connect's incremental
+				// cooperative rebalancing parks a departed worker's tasks
+				// UNASSIGNED for scheduled.rebalance.max.delay.ms awaiting
+				// its return — default FIVE MINUTES, tuned for rolling
+				// upgrades, not failover. C3's promise is "the Binding
+				// keeps RUNNING through the loss of one worker", and these
+				// workers' restarts are reconcile-driven (heal re-creates
+				// them), so a short delay is the right posture: tasks
+				// reassign to survivors in seconds; a healed worker simply
+				// triggers one more (cooperative, incremental) rebalance.
+				"CONNECT_SCHEDULED_REBALANCE_MAX_DELAY_MS": "10000",
+				"CONFIG_STORAGE_TOPIC":                     name + "-configs",
+				"OFFSET_STORAGE_TOPIC":                     name + "-offsets",
+				"STATUS_STORAGE_TOPIC":                     name + "-status",
+				"CONFIG_STORAGE_REPLICATION_FACTOR":        "1",
+				"OFFSET_STORAGE_REPLICATION_FACTOR":        "1",
+				"STATUS_STORAGE_REPLICATION_FACTOR":        "1",
+				"KEY_CONVERTER":                            "org.apache.kafka.connect.json.JsonConverter",
+				"VALUE_CONVERTER":                          "org.apache.kafka.connect.json.JsonConverter",
+				"CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE":     "false",
+				"CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE":   "false",
+				"OFFSET_FLUSH_INTERVAL_MS":                 "5000",
 			},
 			Ports: connectPorts(cfg, name, workers),
 			HealthCheck: &runtime.HealthCheck{
