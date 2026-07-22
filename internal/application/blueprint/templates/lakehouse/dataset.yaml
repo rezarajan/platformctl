@@ -12,3 +12,4 @@ spec:
   bucket: raw-events
   prefix: events/
   format: json
+  deletionPolicy: retain

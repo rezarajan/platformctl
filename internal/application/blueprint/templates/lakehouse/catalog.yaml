@@ -5,6 +5,14 @@ apiVersion: datascape.io/v1alpha1
 kind: Catalog
 metadata:
   name: lakehouse-catalog
+  # DL011 (docs/adr/020-design-lints.md): no compute-engine Provider
+  # (trino) is wired into this blueprint yet — this Catalog and the
+  # warehouse Dataset (dataset-warehouse.yaml) exist so `platformctl
+  # inventory --for trino|spark` has something to point at once one is
+  # added. Waived rather than removed: it's the worked example of what a
+  # lakehouse platform provisions ahead of its compute layer.
+  annotations:
+    lint.datascape.io/waive: "DL011: no compute-engine Provider is wired into this blueprint yet; see dataset-warehouse.yaml's comment"
 spec:
   engine: nessie
   providerRef:

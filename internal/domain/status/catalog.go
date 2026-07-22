@@ -1036,4 +1036,54 @@ var Catalog = []CatalogEntry{
 			"If the resource is genuinely safe to delete, no action is needed beyond confirming the authoritative delete is intentional.",
 		},
 	},
+
+	// --- provider-contributed design lints (docs/adr/020-design-lints.md
+	// §5, docs/planning/08 H2) — DL-<type>-NNN, one Area per contributing
+	// technology.
+	{
+		Token: "DL-debezium-001", Area: "lint", Kind: "lintCode",
+		Meaning: "N cdc Bindings, each realized by a debezium-typed Provider, capture from Source resources backed by the same physical Postgres/MySQL Provider — each Binding is a separate Debezium connector, and each connector opens its own replication slot against that one server, independent of DL001's table-overlap condition (different Source resources, so DL001 never fires here).",
+		Causes: []string{
+			"Several independent Source resources on one physical database instance each got their own cdc Binding.",
+			"A migration in progress: an old and a new cdc Binding both point at the same server.",
+		},
+		Remedies: []string{
+			"Consolidate into fewer Debezium connectors (wider table lists) if these are really one capture concern.",
+			"If independent replication slots are intentional (isolated failure domains per consumer), waive DL-debezium-001 with a reason.",
+		},
+	},
+	{
+		Token: "DL-debezium-002", Area: "lint", Kind: "lintCode",
+		Meaning: "Two cdc Bindings on the same sourceRef whose options.tables entries overlap only once Debezium's own table.include.list regex semantics are applied (e.g. a pattern like \"ord.*\" against a literal \"orders\") — DL001's generic, technology-agnostic form only compares literal table names.",
+		Causes: []string{
+			"One Binding uses a regex-shaped table pattern that happens to also match another Binding's explicit table list.",
+		},
+		Remedies: []string{
+			"Narrow the pattern, or consolidate into one Binding with a single wider table list.",
+			"If the overlapping patterns are intentional, waive DL-debezium-002 with a reason.",
+		},
+	},
+	{
+		Token: "DL-redpanda-001", Area: "lint", Kind: "lintCode",
+		Meaning: "A multi-broker redpanda cluster (spec.configuration.brokers > 1) hosts an EventStream whose spec.replication is lower than the broker count — a durability shape hint, not a hazard on DL001-004's level (an intentionally low replication factor for a scratch/throwaway topic is entirely reasonable), hence info like DL014's identically-shaped single-replica hint.",
+		Causes: []string{
+			"The EventStream's spec.replication was left at its 1-copy default after the broker count was raised.",
+			"A low replication factor is intentional for this topic (non-critical data, cost/throughput tradeoff).",
+		},
+		Remedies: []string{
+			"Raise spec.replication toward the broker count for better durability.",
+			"If a low replication factor is intentional, waive DL-redpanda-001 with a reason.",
+		},
+	},
+	{
+		Token: "DL-s3sink-001", Area: "lint", Kind: "lintCode",
+		Meaning: "Refines the generic DL002 (exact bucket+prefix match): two sink Bindings realized by s3sink write into the same bucket with prefixes where one is a path-hierarchy prefix of the other (e.g. \"events/\" and \"events/raw/\") — S3 prefixes are hierarchical, so their object keys still overlap even though the prefix strings differ, which DL002's plain equality check cannot see.",
+		Causes: []string{
+			"Two sink Bindings were given nested prefixes under the same bucket without noticing the overlap.",
+		},
+		Remedies: []string{
+			"Give each sink Binding a disjoint prefix tree.",
+			"If the nested layout is intentional, waive DL-s3sink-001 with a reason.",
+		},
+	},
 }

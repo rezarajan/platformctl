@@ -2,6 +2,12 @@ apiVersion: datascape.io/v1alpha1
 kind: EventStream
 metadata:
   name: events
+  # DL010 (docs/adr/020-design-lints.md): stream-basics deliberately ships
+  # no Binding — it's "a Redpanda broker with a couple of topics" for
+  # prototyping producers/consumers directly against Kafka, not a wired
+  # pipeline (see README.md).
+  annotations:
+    lint.datascape.io/waive: "DL010: stream-basics is a bare broker+topics blueprint with no Binding by design; see README.md"
 spec:
   providerRef:
     name: broker

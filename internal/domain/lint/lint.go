@@ -86,10 +86,14 @@ func Less(a, b Finding) bool {
 //	  annotations:
 //	    lint.datascape.io/waive: "DL102: reason"
 //
-// Multiple codes on one resource are comma-separated entries of the same
-// "CODE: reason" shape — the ADR gives a single-code example; this is the
-// natural, minimal extension for a resource that needs to waive more than
-// one finding, not a reopened decision.
+// Multiple codes on one resource are newline-separated entries of the same
+// "CODE: reason" shape (a YAML block scalar reads naturally here) — the ADR
+// gives a single-code example; this is the natural, minimal extension for a
+// resource that needs to waive more than one finding, not a reopened
+// decision. Newline, not comma, is the separator specifically because a
+// reason is prose and commonly contains commas ("delivery is added
+// downstream, see README.md") — splitting on comma would silently truncate
+// or misparse a perfectly normal reason.
 const WaiveAnnotation = "lint.datascape.io/waive"
 
 // Waiver is one parsed "CODE: reason" entry from WaiveAnnotation.
@@ -99,9 +103,9 @@ type Waiver struct {
 }
 
 // ParseWaivers parses metadata.annotations[WaiveAnnotation] into individual
-// Waivers, one per comma-separated entry. A malformed entry — no colon, or
-// an empty reason after it — is still returned (Code holds whatever text
-// preceded the colon, or the whole entry if there was none; Reason is
+// Waivers, one per newline-separated entry. A malformed entry — no colon,
+// or an empty reason after it — is still returned (Code holds whatever
+// text preceded the colon, or the whole entry if there was none; Reason is
 // empty) so the caller can flag it as its own finding (ADR 020: "empty
 // reason = the waiver itself is a warning") rather than silently dropping
 // it.
@@ -111,7 +115,7 @@ func ParseWaivers(annotations map[string]string) []Waiver {
 		return nil
 	}
 	var out []Waiver
-	for _, entry := range strings.Split(raw, ",") {
+	for _, entry := range strings.Split(raw, "\n") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue

@@ -52,6 +52,15 @@ first apply a manifest for it with `protect` removed. This applies engine-wide, 
 data-bearing kinds (Dataset, Source, Catalog) are the primary intended use, but the field is
 available on every Kind.
 
+`metadata.annotations["lint.datascape.io/waive"]` (docs/adr/020-design-lints.md, 08 H1) waives one
+or more `platformctl lint` findings against this resource: `"DL010: <reason>"`, one entry per line
+for more than one code on the same resource (newline-separated, not comma — a reason is prose and
+commonly contains commas). A reason is mandatory; an empty one does not suppress the finding it
+names and is itself flagged (`DL000`). A waived finding still appears in `platformctl lint -o
+json` with `waived: true` and the recorded reason — this is an auditability mechanism, not a
+silencing one. See §9 for the lint finding vocabulary reference and `platformctl explain <code>`
+for any specific code's meaning and remedies.
+
 ## 3. Lifecycle taxonomy — how it's expressed per kind
 
 | Lifecycle | How it's declared | Behavior |
