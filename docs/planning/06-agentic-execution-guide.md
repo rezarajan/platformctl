@@ -459,6 +459,13 @@ content-state, across all sessions**:
    provider's K8s-relevant behavior) changed — and always under the
    minted minimal-RBAC kubeconfig (§8 rule 4), via
    `PLATFORMCTL_KUBECONFIG`/`KUBECONFIG` env ahead of the script.
+7. **Never remove a worktree with live test processes rooted in it.**
+   Before `git worktree remove` on a merged agent branch, check
+   `pgrep -af <worktree-path>` — a suite still running from a vanished
+   directory produces spurious failures that look like code regressions
+   (observed live, 2026-07-22: a green-twice suite "failed" only because
+   the orchestrator deleted its cwd mid-run). Wait for the flock queue
+   to drain or kill the specific run deliberately, then remove.
 7. **Completeness is enforced, not just documented** (docs/planning/08
    G7): `internal/archtest/test_impact_completeness_test.go` parses the
    suite map straight out of `scripts/test-impact.sh` (never a duplicated
