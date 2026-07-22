@@ -1,104 +1,95 @@
-# D3 (jdbcsink) + D4 (s3source) — task progress
+# E8 (release engineering and CI matrix) — task progress
 
-Doc 08 §2.1 protocol. Step 0 checkpoint file.
+Doc 08 §2.1 protocol. Step 0 checkpoint file (overwrites the previous
+task's D3/D4 file per convention — that work is already committed on
+main, `git log` has it, commit 2fca03e).
 
 ## Plan
 
-1. [done] git merge main --no-edit (brought in D1/D2/C3/D6 dependencies).
-2. [done] Read: CLAUDE.md, doc 08 D3/D4 entries + §2.1, ADR 001/009/016,
-   s3sink.go + debezium.go in full, kafkaconnect client, providerkit,
-   registry/main.go wiring, compatibility.go (capability checks already
-   exist for both pairings), doc 03 §7.1/§7.2, doc 04 §12, doc 08 §8,
-   scripts/test-impact.sh format, guard-planning-docs.sh (additive edits
-   pass), sink_integration_test.go pattern.
-3. [done] Connector/jar research (live, pinned):
-   - jdbcsink: Confluent kafka-connect-jdbc v10.9.6 (confluentinc
-     kafka-connect-jdbc, Confluent Hub zip) — connector class
-     io.confluent.connect.jdbc.JdbcSinkConnector. Bundles postgresql JDBC
-     driver (42.7.11); mysql-connector-j 9.7.0 added separately (Maven
-     Central, not bundled).
-   - s3source: Aiven's s3-source-connector-for-apache-kafka v3.4.2 (repo
-     Aiven-Open/cloud-storage-connectors-for-apache-kafka — the old
-     s3-connector-for-apache-kafka repo s3sink uses was archived
-     2024-09-11 and development moved here). Connector class
-     io.aiven.kafka.connect.s3.source.S3SourceConnector. Bundles its own
-     Confluent Avro converter + parquet/hadoop jars.
-   - CRITICAL FINDING (verified against kafka-connect-jdbc source,
-     FieldsMetadata.java): the JDBC sink connector cannot write ANY value
-     column from a fully schemaless (Map-typed) Kafka record — it only
-     extracts fields from a Struct valueSchema. Debezium's own json path
-     (debezium.applyConverterConfig, read-only) hardcodes
-     schemas.enable=false always. Consequence: jdbcsink is only usable
-     with schema-carrying options.format (avro/protobuf) — NOT an
-     optional nicety, a hard technical requirement. jdbcsink.
-     ValidateBindingOptions rejects unset/"json" format accordingly.
-     Documented in jdbcsink.go doc comments + will be noted in doc 03 and
-     the final report as a deviation from "options.format optional
-     everywhere".
-4. [done] Implement internal/adapters/providers/jdbcsink (D3) — commit 615b5ed.
-5. [done] Implement internal/adapters/providers/s3source (D4) — commit 615b5ed.
-6. [done] Unit tests for both (mirror s3sink_test.go pattern) — all green.
-7. [done] testdata Dockerfiles: jdbcsink-image, s3source-image — both build
-   clean (verified: `docker build` succeeded for both).
-8. [done] Registry + main.go wiring + feature gates (JDBCSinkProvider,
-   IngestProvider — Alpha/disabled).
-9. [done] schemas/v1alpha1/provider.json, binding.json additive updates +
-   docs/reference/ regenerated (TestGeneratedReferenceInSync green).
-10. [done] docs/planning/03 §7.2 additive update — commit 50ab8c8.
-11. [done] docs/planning/04 §12 rows appended — commit 50ab8c8.
-12. [done] docs/planning/08: additive "Done" status blocks under D3/D4 +
-    Stage D exit-criteria checkboxes 2 and 4 checked (with evidence).
-13. [done] scripts/test-impact.sh: two new suite rows (jdbcsink, s3source).
-14. [done] Live integration tests, both green against real Docker:
-    - TestS3SourceIngestEndToEnd (246.9s) + TestS3SourceValidateCapability
-      ErrorExact: PASS first try, no bugs found.
-    - TestJDBCSinkEndToEnd (63.3s, after fixing two bugs found live — see
-      commit 5f0641b) + TestJDBCSinkValidateCapabilityErrorExact: PASS.
-      Bugs found+fixed: (a) topics.regex vs literal topics (Debezium
-      writes to a per-table topic, not the bare EventStream name); (b)
-      missing CONNECT_CONSUMER_METADATA_MAX_AGE_MS (s3sink's own doc
-      comment already named this exact gotcha; jdbcsink was missing the
-      identical setting).
-15. [done] gofmt / go build / go vet / go test ./... all clean.
-    scripts/test-impact.sh --base main: jdbcsink suite recorded green in
-    the ledger (66.1s); s3source suite was mid-run (contending for the
-    shared Docker daemon flock with a concurrent agent's own
-    test-impact.sh run) at the time this task's work was finalized —
-    same code/test already independently verified green at 246.9s
-    moments earlier (commit 36baa48's status note), so this is a ledger-
-    recording formality expected to complete on its own, not a
-    correctness risk.
-16. [done] Final commit.
+1. [done] `git merge main --no-edit` — fast-forwarded 80b5bf6..c497530
+   (docs(06) §10.7 addition only, unrelated to E8). NOTE: an earlier
+   attempt was run with an explicit `cd` into the *shared* checkout path
+   (`/home/cascadura/git/platformctl`, not this worktree) and reported
+   "already up to date" against a stale ref before another agent
+   advanced `main`; corrected by re-running the merge from the actual
+   worktree cwd. All further shell commands in this task use this
+   worktree's cwd, never the shared checkout path.
+2. [done] Read: CLAUDE.md; doc 08 §2.1 protocol + full E8 entry; §10
+   execution order (confirms Step 0's C1/D1/C6 branch-landing items are
+   other agents' worktrees, out of scope here — file fence says work
+   only in this worktree); ADR README index (no new ADR needed — E8 is
+   Size M, not L, and B8/A10 its named deps are both already shipped);
+   `.github/workflows/ci.yml` (unit / integration / integration-k8s
+   jobs, G7 test-impact wiring) + `refresh-digests.yml` (existing weekly
+   cron pattern: `0 6 * * 1`); `cmd/platformctl/main.go`'s `version` var
+   (`-ldflags -X main.version=...`) and `root.go`'s cobra wiring;
+   `docs/history/checkpoint.md` "Release mechanics" section;
+   `scripts/pinned-images.txt`; `docs/README.md`; `docs/adr/README.md`.
+3. [done] Confirmed already-existing coverage (do not duplicate):
+   - example-validate: unit job's "Validate examples" step
+     (cdc-attendance + lakehouse) + `TestInitBlueprintValidatesWithNoEdits`
+     (cmd/platformctl/init_test.go, no build tag, runs under
+     `go test ./...` in the unit job) covers every blueprint (currently
+     just cdc-to-lake and lakehouse per internal/application/blueprint's
+     catalog).
+   - machine-output harness (A7):
+     `cmd/platformctl/output_contract_harness_test.go`, no build tag,
+     already runs under `go test ./...`.
+   - Kubernetes leg (B8): `integration-k8s` job, minimal-RBAC, already
+     exists.
+   - Digest refresh (A10): `refresh-digests.yml`, already exists.
+4. [done] Timed `go test -race -count=1 ./...` locally: ~41s wall
+   (vs ~5.5s plain `go test -count=1 ./...`) — cheap enough for a CI leg
+   scoped to unit tests (no `-tags integration`, so it never touches
+   adapters needing Docker/K8s).
+5. [done] `go run github.com/goreleaser/goreleaser/v2@latest --version`
+   resolved v2.17.0 (network install available).
+6. [done] `.goreleaser.yaml` — linux/darwin x amd64/arm64,
+   CGO_ENABLED=0 -trimpath, version stamped via `-ldflags -X
+   main.version={{.Tag}}` (keeps the "vX.Y.Z" shape `main.go` already
+   uses — goreleaser's `.Version` strips the leading "v", `.Tag` does
+   not), archives + checksums. Validated: `goreleaser check` clean;
+   `goreleaser release --snapshot --clean` built all 4 targets, archived,
+   checksummed (64-hex sha256 verified). Found+removed a
+   `before.hooks: go mod tidy` step from the first draft — it silently
+   rewrote go.mod/go.sum (pulled in other in-flight branches' indirect
+   test deps as direct requires); reverted with `git checkout -- go.mod
+   go.sum` and re-validated clean without the hook.
+7. [done] `.github/workflows/release.yml` — triggers on `v*.*.*` tags,
+   `verify` job re-runs the unit job's checks against the tagged commit,
+   then `goreleaser` job (needs verify) runs `goreleaser-action@v6`.
+8. [done] ci.yml additive edits: `Race detector` step in the `unit` job
+   (`go test -race ./...`, ~41s measured vs ~5.5s plain), and a
+   `schedule: cron: "0 7 * * 1"` trigger added to `on:` (offset from
+   refresh-digests.yml's `0 6 * * 1`) — the existing `integration` job's
+   `if event_name == pull_request` branch already falls through to
+   `--full` for any non-pull_request event including `schedule`, and
+   `integration-k8s` has no event gating at all, so adding the schedule
+   trigger alone reproduces "test-impact --full + the K8s job" weekly
+   with zero restructuring of G7's wiring.
+9. [done] `docs/releasing.md` — preconditions, tag command, what the
+   workflow does, post-release verification, doc 08 §10 milestone-tagging
+   convention. Additive link from docs/README.md's Process section.
+10. [done] Local end-to-end version-stamp proof:
+    `go build -ldflags "-X main.version=v9.9.9-test"` → `--version`
+    printed "platformctl version v9.9.9-test" exactly.
+11. [done] Verify: gofmt clean, build/vet/`go test ./...` green (sanity
+    only, no Go source touched); `go run
+    github.com/rhysd/actionlint/cmd/actionlint@latest` (network install
+    available, v1.7.12) against all three workflow files — zero findings.
+12. [done] doc 08 additive E8 status note (pure insertion, hook-verified
+    additive via `git diff`); final commit.
 
 ## Resume point if this session dies
 
-Read this file + `git log --oneline -10` first. If step 14's live Docker
-legs haven't completed: re-run
-`go test -tags integration -run TestS3SourceIngestEndToEnd -v -timeout 600s ./cmd/platformctl/`
-and
-`go test -tags integration -run TestJDBCSinkEndToEnd -v -timeout 900s ./cmd/platformctl/`
-(the jdbcsink one needs both testdata/avro-connect-image and
-testdata/jdbcsink-image built first — the test does this itself). Fix any
-failures found (most likely culprit: the s3source connector's exact output
-shape for jsonl input — the test uses substring assertions specifically to
-tolerate uncertainty here, documented in s3source_integration_test.go).
-Once both pass, finish steps 12/16: append doc 08 D3/D4 status blocks with
-real timings (mirror D1/D2/D6's "Done (2026-07-2X, merged): ..." shape),
-check the Stage D exit-criterion box for "Lake data can be replayed... and
-an EventStream can be served into a relational Source", then the final
-consolidated commit per the task's required subject line.
+Read this file + `git log --oneline -10` first. Files touched:
+`.goreleaser.yaml`, `.github/workflows/release.yml`,
+`.github/workflows/ci.yml` (additive only), `docs/releasing.md`,
+`docs/README.md` (additive line), this file, and an additive doc 08 E8
+status note. No `internal/**` changes (none expected/needed for E8).
 
 ## Notes / open questions
 
-- jdbcsink target-DB preflight mirrors debezium's buildDesiredConnector
-  Connection-resolution exactly (per task instruction), renamed for the
-  TARGET (sink) direction.
-- jdbcsink needs a Debezium-envelope-unwrap SMT to write sane rows from a
-  CDC-sourced topic (io.debezium.transforms.ExtractNewRecordState, bundled
-  in the debezium/connect base image already) — added as
-  options.unwrap: bool (default false), documented as necessary plumbing
-  beyond the task's literal option list, called out in the final report.
-- s3source: SupportedIngestFormats = jsonl, avro, parquet (not literal
-  "json" — the connector's input.format enum has no whole-file-JSON-array
-  mode, only jsonl; documented deviation from the task text's "json at
-  minimum" phrasing).
+- Doc 08 §10's "Step 0" (merge C1/D1/C6 branches) is a maintainer action
+  on *other* agents' worktrees — out of scope here per the file-fence
+  instruction to work only in this worktree.

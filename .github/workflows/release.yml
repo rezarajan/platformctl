@@ -1,0 +1,78 @@
+name: Release
+
+# docs/planning/08 §7 E8 / docs/releasing.md. Fires only on an annotated
+# `vMAJOR.MINOR.PATCH`-style tag push (the tag command in docs/releasing.md
+# is the only intended trigger — this workflow never runs on branch
+# pushes). The `verify` job re-runs exactly ci.yml's `unit` job checks
+# (gofmt/build/vet/unit tests/example validate) against the tagged commit
+# before anything is published: a release is never allowed to ship on the
+# strength of `ci.yml`'s own (possibly stale, possibly re-run-with-different-
+# code) green check on some earlier commit — the tag itself is re-verified.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Build, vet & unit tests (release verification)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "files need gofmt:" && echo "$out" && exit 1
+          fi
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -trimpath -buildvcs=false ./cmd/platformctl
+
+      - name: Vet
+        run: |
+          go vet ./...
+          go vet -tags integration ./...
+
+      - name: Unit & contract tests
+        run: go test ./...
+
+      - name: Validate examples
+        run: |
+          go run ./cmd/platformctl validate examples/cdc-attendance/
+          go run ./cmd/platformctl validate examples/lakehouse/
+
+  goreleaser:
+    name: goreleaser (publish GitHub release artifacts)
+    runs-on: ubuntu-latest
+    needs: verify
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # goreleaser needs the full tag history to compute the changelog
+          # range and resolve `{{ .Tag }}`/`{{ .PreviousTag }}`; the default
+          # shallow single-branch checkout doesn't carry tags at all.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

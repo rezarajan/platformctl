@@ -95,6 +95,11 @@ human (or the documented maintenance unlock).
   ratchet (§8).
 - [planning/00-README.md](planning/00-README.md) — the planning package's
   own index and the founding design-decision table.
+- [releasing.md](releasing.md) — the mechanical release checklist:
+  preconditions (green `main`, ADR 014 gates-table review, upgrade-notes
+  check, docs/reference sync), the tag command, what
+  `.github/workflows/release.yml` + `.goreleaser.yaml` do, post-release
+  verification, and doc 08 §10's milestone-tagging convention.
 
 ## Records — history; append facts, never revise meaning
 
