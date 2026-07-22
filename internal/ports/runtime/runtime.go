@@ -476,6 +476,15 @@ type IngressSpec struct {
 	TargetName string
 	TargetPort int
 	Labels     map[string]string
+	// TLSSecretName, when non-empty, adds spec.tls to the Ingress: this
+	// Host routes through the named kubernetes.io/tls Secret
+	// (docs/planning/08 C8, docs/adr/018 addendum). The Secret must
+	// already exist — either materialized by this same provider via
+	// EnsureTLSSecret (spec.tls.secretRef/selfSigned) or referenced by
+	// name only (spec.tls.secretName, typically cert-manager-managed;
+	// platformctl never creates/deletes that one). Empty means plaintext
+	// HTTP, the pre-C8 behavior unchanged.
+	TLSSecretName string
 }
 
 // IngressState reports what EnsureIngress/GetIngress observed — Host,
@@ -489,6 +498,9 @@ type IngressState struct {
 	TargetName string
 	TargetPort int
 	Address    string
+	// TLSSecretName mirrors IngressSpec.TLSSecretName as observed on the
+	// live object — empty when the Ingress carries no spec.tls block.
+	TLSSecretName string
 }
 
 // IngressCapableRuntime is an optional ContainerRuntime capability
@@ -508,6 +520,27 @@ type IngressCapableRuntime interface {
 	// Ingress exists (e.g. removed out-of-band).
 	GetIngress(ctx context.Context, namespace, name string) (state IngressState, found bool, err error)
 	RemoveIngress(ctx context.Context, namespace, name string) error
+
+	// EnsureTLSSecret/GetTLSSecret/RemoveTLSSecret (docs/planning/08 C8,
+	// docs/adr/018 addendum) manage a kubernetes.io/tls-shaped Secret
+	// (keys "tls.crt"/"tls.key") — used both for a Connection's own
+	// provided/self-signed leaf certificate (referenced by an Ingress's
+	// TLSSecretName) and for the ingress provider's Provider-scoped local
+	// CA keypair (never referenced by any Ingress — stored only so it can
+	// be read back and reused rather than regenerated on every apply).
+	// Kubernetes-only, like the three Ingress methods above; a
+	// cert-manager-managed Secret (spec.tls.secretName) is only ever read
+	// via GetTLSSecret, never written by Ensure/RemoveTLSSecret.
+	EnsureTLSSecret(ctx context.Context, namespace, name string, certPEM, keyPEM []byte, labels map[string]string) error
+	// GetTLSSecret reads an existing Secret's cert/key material. found is
+	// false when no such Secret exists (not yet provisioned, or — for a
+	// cert-manager-managed name — not yet issued).
+	GetTLSSecret(ctx context.Context, namespace, name string) (certPEM, keyPEM []byte, found bool, err error)
+	// RemoveTLSSecret deletes a Secret this provider created (never called
+	// for a cert-manager-managed spec.tls.secretName). A no-op, not an
+	// error, if already gone — the same idempotent-Destroy contract as
+	// RemoveIngress.
+	RemoveTLSSecret(ctx context.Context, namespace, name string) error
 }
 
 // Datascape ownership labels — applied to every created object so

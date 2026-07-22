@@ -475,6 +475,13 @@ func checkResourceCapabilities(envelopes []resource.Envelope, idx manifestIndex,
 					return fmt.Errorf("Connection %q: secretRef %q must resolve to a SecretReference in namespace %q", e.Metadata.Name, *c.SecretRef, resource.RefNamespace(e.Spec, "secretRef", e.Metadata.Namespace))
 				}
 			}
+			if c.TLS != nil && c.TLS.SecretRef != nil {
+				tlsBlock, _ := e.Spec["tls"].(map[string]any)
+				target, ok := idx.resolveKind(e, resource.RefFromSpec(tlsBlock, "secretRef"), "SecretReference")
+				if !ok || target.Kind != "SecretReference" {
+					return fmt.Errorf("Connection %q: tls.secretRef %q must resolve to a SecretReference in namespace %q", e.Metadata.Name, *c.TLS.SecretRef, resource.RefNamespace(tlsBlock, "secretRef", e.Metadata.Namespace))
+				}
+			}
 			if c.External {
 				continue
 			}

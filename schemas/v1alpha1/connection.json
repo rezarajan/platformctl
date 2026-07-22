@@ -17,7 +17,17 @@
         "host": { "type": "string", "description": "External only: where the system answers." },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "The port consumers use. Managed: the entrypoint's listen port on the shared network and the host." },
         "target": { "type": "string", "description": "Managed only: host:port the entrypoint forwards to — the one place that knows where the system actually lives." },
-        "secretRef": { "$ref": "meta.json#/$defs/nameRef", "description": "Optional SecretReference carrying credentials for whatever answers at this connection." }
+        "secretRef": { "$ref": "meta.json#/$defs/nameRef", "description": "Optional SecretReference carrying credentials for whatever answers at this connection." },
+        "tls": {
+          "type": "object",
+          "description": "Terminates TLS at the entrypoint (docs/planning/08 C8). Only meaningful together with scheme: https on a managed (non-external) Connection. Exactly one of secretRef, selfSigned, or secretName.",
+          "properties": {
+            "secretRef": { "$ref": "meta.json#/$defs/nameRef", "description": "SecretReference carrying the cert+key PEM material (keys: cert, key). Must also appear in the realizing Provider's spec.secretRefs for the engine to resolve it (mirrors spec.secretRef's own plumbing)." },
+            "selfSigned": { "type": "boolean", "description": "The provider provisions a local CA plus a per-host leaf certificate for dev use. The CA's public certificate is published in providerState so tools can trust it." },
+            "secretName": { "type": "string", "minLength": 1, "description": "Kubernetes only: references an existing kubernetes.io/tls Secret by name (e.g. cert-manager-managed). platformctl only ever reads this Secret." }
+          },
+          "additionalProperties": false
+        }
       },
       "required": ["port"],
       "additionalProperties": false,

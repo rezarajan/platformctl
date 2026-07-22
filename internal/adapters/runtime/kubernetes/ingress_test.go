@@ -86,6 +86,45 @@ func TestRemoveIngressIdempotent(t *testing.T) {
 	}
 }
 
+func TestEnsureIngressSetsTLSBlock(t *testing.T) {
+	clientset := fake.NewSimpleClientset()
+	r := &Runtime{clientset: clientset}
+	ctx := context.Background()
+	spec := runtimeport.IngressSpec{
+		Name: "route-nessie", Namespace: "datascape", Host: "nessie.localhost",
+		TargetName: "nessie", TargetPort: 19120, TLSSecretName: "tls-nessie",
+	}
+	state, err := r.EnsureIngress(ctx, spec)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if state.TLSSecretName != "tls-nessie" {
+		t.Errorf("returned state TLSSecretName = %q, want tls-nessie", state.TLSSecretName)
+	}
+	ing, err := clientset.NetworkingV1().Ingresses("datascape").Get(ctx, "route-nessie", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(ing.Spec.TLS) != 1 || ing.Spec.TLS[0].SecretName != "tls-nessie" || ing.Spec.TLS[0].Hosts[0] != "nessie.localhost" {
+		t.Errorf("Spec.TLS = %+v, want one entry for nessie.localhost -> tls-nessie", ing.Spec.TLS)
+	}
+
+	got, found, err := r.GetIngress(ctx, "datascape", "route-nessie")
+	if err != nil || !found {
+		t.Fatalf("GetIngress: found=%v err=%v", found, err)
+	}
+	if got.TLSSecretName != "tls-nessie" {
+		t.Errorf("GetIngress TLSSecretName = %q, want tls-nessie", got.TLSSecretName)
+	}
+}
+
+func TestBuildIngressNoTLSBlockWhenSecretNameEmpty(t *testing.T) {
+	ing := buildIngress(runtimeport.IngressSpec{Name: "route-x", Namespace: "datascape", Host: "x.localhost", TargetName: "x", TargetPort: 1})
+	if len(ing.Spec.TLS) != 0 {
+		t.Errorf("Spec.TLS = %+v, want empty for a plaintext (no TLSSecretName) spec", ing.Spec.TLS)
+	}
+}
+
 func TestEnsureIngressRefusesUnmanaged(t *testing.T) {
 	clientset := fake.NewSimpleClientset()
 	r := &Runtime{clientset: clientset}

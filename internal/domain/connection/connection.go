@@ -33,6 +33,35 @@ type Connection struct {
 	Port        int     // the port consumers use (managed: listen port on network + host)
 	Target      string  // managed only: host:port the entrypoint forwards to
 	SecretRef   *string // optional SecretReference carrying credentials for whatever answers
+	// TLS declares that this managed Connection terminates TLS at its
+	// entrypoint (docs/planning/08 C8, docs/adr/018 addendum) — nil means
+	// plaintext, the pre-C8 behavior unchanged. Only meaningful together
+	// with scheme: https.
+	TLS *TLS
+}
+
+// TLS is Connection.spec.tls's decoded shape — exactly one of SecretRef,
+// SelfSigned, or SecretName is set (validated below).
+type TLS struct {
+	// SecretRef names a SecretReference carrying the cert+key PEM material
+	// (keys: "cert", "key"). Resolves through Request.Secrets only when the
+	// realizing Provider's own spec.secretRefs also lists this name — the
+	// same plumbing Connection.SecretRef already uses (mirrors debezium's
+	// Connection-secretRef-must-also-be-in-the-Provider's-secretRefs
+	// pattern), never resolved by this package (domain has no secret
+	// store access).
+	SecretRef *string
+	// SelfSigned requests a Provider-managed local CA + per-host leaf
+	// certificate for dev use. The CA's public certificate is published in
+	// providerState so tools can trust it; the private key never appears
+	// in state/logs/inspect output (see docs/planning/03 §8.2.2 for where
+	// it persists instead, and why).
+	SelfSigned bool
+	// SecretName is Kubernetes-only: references an existing
+	// kubernetes.io/tls Secret by name (e.g. cert-manager-managed).
+	// platformctl only ever reads this Secret, never creates, updates, or
+	// deletes it.
+	SecretName *string
 }
 
 // FromEnvelope decodes a Connection from a validated Envelope.
@@ -58,6 +87,19 @@ func FromEnvelope(e resource.Envelope) (Connection, error) {
 	case float64:
 		c.Port = int(n)
 	}
+	if raw, ok := e.Spec["tls"].(map[string]any); ok {
+		t := &TLS{}
+		if ref := refName(raw, "secretRef"); ref != "" {
+			t.SecretRef = &ref
+		}
+		if v, ok := raw["selfSigned"].(bool); ok {
+			t.SelfSigned = v
+		}
+		if v, ok := raw["secretName"].(string); ok && v != "" {
+			t.SecretName = &v
+		}
+		c.TLS = t
+	}
 	return c, c.validate(e.Metadata.Name)
 }
 
@@ -72,6 +114,9 @@ func (c Connection) validate(name string) error {
 		if c.Target != "" {
 			return fmt.Errorf("Connection %q: spec.target is only meaningful on managed connections (an external connection is consumed as-is)", name)
 		}
+		if c.TLS != nil {
+			return fmt.Errorf("Connection %q: spec.tls is only meaningful on managed connections (TLS terminates at the entrypoint; an external connection has none)", name)
+		}
 	} else {
 		if c.ProviderRef == nil {
 			return fmt.Errorf("Connection %q: spec.providerRef is required unless spec.external is true", name)
@@ -79,6 +124,40 @@ func (c Connection) validate(name string) error {
 		if c.Target == "" {
 			return fmt.Errorf("Connection %q: spec.target (host:port the entrypoint forwards to) is required on managed connections", name)
 		}
+	}
+	if err := c.validateTLS(name); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateTLS enforces the spec.tls/spec.scheme pairing and the
+// exactly-one-of shape (docs/planning/03 §8.2.2). Which of the three modes
+// is actually usable on a given runtime (secretName is Kubernetes-only) is
+// checked by the realizing provider, not here — domain has no runtime-type
+// access.
+func (c Connection) validateTLS(name string) error {
+	if c.TLS == nil {
+		if c.Scheme == "https" {
+			return fmt.Errorf("Connection %q: scheme https requires spec.tls to be declared (secretRef, selfSigned, or secretName)", name)
+		}
+		return nil
+	}
+	if c.Scheme != "https" {
+		return fmt.Errorf("Connection %q: spec.tls is declared but scheme is %q (must be https)", name, c.Scheme)
+	}
+	set := 0
+	if c.TLS.SecretRef != nil {
+		set++
+	}
+	if c.TLS.SelfSigned {
+		set++
+	}
+	if c.TLS.SecretName != nil {
+		set++
+	}
+	if set != 1 {
+		return fmt.Errorf("Connection %q: spec.tls must set exactly one of secretRef, selfSigned, or secretName (got %d)", name, set)
 	}
 	return nil
 }

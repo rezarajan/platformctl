@@ -979,6 +979,86 @@ spec:
   `scheme: https` fails the standard capability error until docs/planning/08
   C8 adds `Connection.spec.tls` to this same provider.
 
+### 8.2.2 TLS termination (docs/planning/08 C8, docs/adr/018 addendum)
+
+`SupportedConnectionSchemes()` grows to `["http", "https"]`; a `scheme:
+https` Connection requires `spec.tls`, exactly one of:
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: nessie
+spec:
+  providerRef:
+    name: edge-http
+  scheme: https
+  port: 443
+  target: nessie:19120
+  tls:
+    secretRef:                       # option 1: operator-provided cert+key
+      name: nessie-tls
+    # selfSigned: true                # option 2: provider-managed local CA + leaf cert
+    # secretName: nessie-cert-mgr     # option 3: Kubernetes only, cert-manager-managed Secret by name
+```
+
+- `tls.secretRef` names a `SecretReference` whose `spec.keys` include `cert`
+  and `key` (PEM values). It resolves through the engine's existing
+  secret-resolution mechanism — the same one `Connection.spec.secretRef`
+  already uses — **and only when the realizing `Provider`'s own
+  `spec.secretRefs` also lists this same name** (mirrors how a
+  Source/Binding's Connection credentials only resolve when the *working*
+  provider — e.g. `debezium` — lists them, `internal/adapters/providers/
+  debezium/debezium.go`). Declaring `tls.secretRef` without adding it to
+  the `ingress` Provider's `spec.secretRefs` fails at apply with a message
+  naming exactly that.
+- `tls.selfSigned: true` — the `ingress` provider provisions one local CA
+  per `Provider(type: ingress)` instance (lazily, on first self-signed
+  Connection) plus a per-host leaf certificate signed by it. The CA's
+  **public certificate only** is published in `providerState.tls.caCert`
+  (`platformctl inventory` names where to find it; the CA private key
+  never appears in state, logs, or `docker/kubectl inspect` output).
+  Persistence (so the CA doesn't rotate on every `apply`, which would
+  force every trusting tool to re-trust it):
+  - **Docker**: the CA keypair is placed via `ContainerSpec.Files` on the
+    shared Caddy container at a fixed path, using the same
+    read-existing-before-regenerate pattern `postgres`'s superuser
+    password rotation already uses (`rt.ReadFile` the prior container's
+    file before deciding to keep vs. rotate) — the CA only changes if that
+    file is genuinely missing (a fresh Provider, or the container was
+    destroyed), never on an unrelated Connection's add/change/remove. Leaf
+    certificates themselves are never placed via `ContainerSpec.Files` —
+    they're loaded into Caddy's live config via its admin API
+    (`/config/apps/tls/certificates/load_pem`), exactly like C7's route
+    reconciliation, so a per-Connection cert never restarts the shared
+    proxy.
+  - **Kubernetes**: the CA keypair is stored as a `kubernetes.io/tls`
+    Secret the `ingress` provider owns (not referenced by any `Ingress`
+    object), read back before regenerating via the same
+    `IngressCapableRuntime.GetTLSSecret` capability used for provided/
+    self-signed leaf certs.
+- `tls.secretName` (Kubernetes only) references an existing
+  `kubernetes.io/tls` Secret by name — typically cert-manager-managed.
+  platformctl only ever *reads* this Secret (`Ingress.spec.tls[].secretName`
+  points at it); it is never created, updated, or deleted by platformctl,
+  matching the "integration = referencing, not operating cert-manager"
+  scope line. Declaring `secretName` on a Docker-runtime Provider fails at
+  apply — Docker has no cert-manager equivalent; use `secretRef` or
+  `selfSigned` there.
+- Docker: a second Caddy HTTP server (`srv1`, container-internal port 443,
+  `tls_connection_policies: [{}]` so it actually terminates TLS — found
+  live: `automatic_https.disable: true` alone leaves the listener speaking
+  plain HTTP) hosts every `https` Connection's route, addressed the same
+  `Host(...)` way `srv0` (plain HTTP, unchanged) addresses `http`
+  Connections.
+- Kubernetes: the `Ingress` object gains `spec.tls: [{hosts: [<host>],
+  secretName: <resolved secret name>}]`.
+- A `https` endpoint reports `Insecure: false`; `platformctl inventory`
+  renders its URL with the `https://` scheme (same `Endpoint.Scheme`/
+  `Insecure` fields every other endpoint already uses — no separate
+  rendering path).
+- Gate `TLSTermination` (Alpha, disabled) — doc 04 §12.
+
 ## 9. Lineage / observability schema
 
 ```yaml
