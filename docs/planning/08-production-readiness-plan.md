@@ -1021,13 +1021,23 @@ note first (per doc 06 §3).
 **Stage exit criteria:**
 - [ ] A CDC pipeline lands **Parquet** in the lake, schema-evolved via a
       registry, queryable by Spark/Trino through the Nessie catalog.
-- [ ] Lake data can be replayed into an EventStream (ingest) and an
+- [x] Lake data can be replayed into an EventStream (ingest) and an
       EventStream can be served into a relational Source (jdbc sink), both
       to Ready through `validate`-checked Bindings.
 - [ ] A Binding across a WireGuard-tunneled Connection reaches a database
       only routable inside a private network, CDC RUNNING.
-- [ ] Sink Bindings support declared dead-letter topics; poison messages
+- [x] Sink Bindings support declared dead-letter topics; poison messages
       land there without stopping the connector.
+      (Exit-criterion evidence, D3/D4, 2026-07-22: criterion 2 —
+      `TestJDBCSinkEndToEnd` (63.3s) / `TestS3SourceIngestEndToEnd`
+      (246.9s), both live against real Docker, see those tasks' own status
+      notes above. Criterion 4 — `s3sink` live-verified at D6
+      (`TestConnectWorkersHAAndDeadLetterQueue`); `jdbcsink` translates
+      `options.deadLetter` identically, unit-tested
+      (`TestDeadLetterConfigTranslation`/
+      `TestDeadLetterConfigReplicationFromEventStream` in
+      `internal/adapters/providers/jdbcsink`), closing D6's own "jdbcsink
+      half is N/A — D3 open" note now that D3 has landed.)
 
 ### D1: Schema registry support
 
@@ -1117,6 +1127,50 @@ note first (per doc 06 §3).
   Source table (insert + upsert modes); capability error remains exact for
   non-capable providers; config drift detection matches the
   debezium/s3sink contract (key names only).
+- **Done (2026-07-21/22, merged):** `jdbcsink` provider implementing
+  `DatabaseSinkCapableProvider` (`SupportedSinkEngines`: `postgres`, `mysql`
+  — exactly the engines with shipped providers) over Confluent's
+  kafka-connect-jdbc v10.9.6 (`io.confluent.connect.jdbc.JdbcSinkConnector`;
+  the zip bundles the PostgreSQL driver, mysql-connector-j 9.7.0 added
+  separately — testdata/jdbcsink-image). Target Source address/credential
+  resolution mirrors `debezium.buildDesiredConnector`'s SOURCE-side
+  resolution applied to the Binding's TARGET side, exactly as this task
+  specified. `options.mode` (insert/upsert, validated), `options.table`
+  (name override), `options.pkFields` (upsert), `options.unwrap` (Debezium's
+  own envelope-unwrap SMT — necessary plumbing beyond the task's own option
+  list, documented in the provider's doc comment and docs/planning/03 §7.2:
+  a CDC-sourced topic's records are Debezium's before/after/op envelope, not
+  a flat row). DLQ (D6) reuse unit-tested identically to s3sink's own
+  coverage. **Finding, recorded per this task's own protocol:**
+  `ValidateBindingOptions` requires `options.format` to be `avro`/`protobuf`
+  — stronger than every other provider's optional-format treatment,
+  verified against kafka-connect-jdbc's own `FieldsMetadata.extract`
+  (v10.9.6): a schemaless (json) record contributes zero value columns and
+  `pk.mode: record_key` throws outright with no key schema. This is a
+  genuine technical constraint of the chosen connector, not a design
+  preference (docs/planning/03 §7.2 documents it in full).
+  `TestJDBCSinkEndToEnd` green against real Docker (63.3s, after fixing two
+  bugs found live — recorded here per protocol, not silently corrected):
+  (a) `buildDesiredConnector` initially set a literal `topics: <EventStream
+  name>`, but Debezium writes CDC records to a per-table topic
+  (`<prefix>.<schema>.<table>`), never the bare name — fixed to
+  `topics.regex`, mirroring `s3sink.desiredConnectorConfig`'s identical
+  pattern; (b) even with the regex fixed, the sink connector's consumer
+  only discovers newly-matching topics on its next metadata refresh
+  (Kafka's 5-minute default) — `s3sink.reconcileWorker`'s own doc comment
+  already names this exact gotcha and sets
+  `CONNECT_CONSUMER_METADATA_MAX_AGE_MS=10000`; `jdbcsink.reconcileWorker`
+  was missing the identical setting, added. With both fixes: insert mode
+  lands CDC rows in a second managed postgres Source's table; a
+  manifest-only mode switch to upsert updates the connector in place (no
+  container recreated, `insert.mode`/`pk.mode` drift-diff-visible);
+  a source `UPDATE` lands as an in-place row update and a fresh `INSERT` as
+  a new row, both via `pk.mode: record_key` with no `pkFields` override
+  (the CDC key IS the row's primary key); idempotent re-apply; clean
+  destroy. `TestJDBCSinkValidateCapabilityErrorExact` confirms the exact
+  ADR 009 error shape. Gate `JDBCSinkProvider` registered Alpha/disabled
+  (doc 04 §12 row appended). Bundled with D4 (s3source) in the same
+  commit/PR — see that task's own status note.
 
 ### D4: Object-store ingest provider (Dataset → EventStream)
 
@@ -1132,6 +1186,27 @@ note first (per doc 06 §3).
   into a fresh topic and consumed; ordering/offset semantics documented;
   validate rejects `mode: ingest` for non-capable providers with the
   standard error.
+- **Done (2026-07-21, merged):** `s3source` provider implementing
+  `IngestCapableProvider` (`SupportedIngestFormats`: `jsonl`, `avro`,
+  `parquet` — deliberately not the literal `json` value, see docs/planning/03
+  §7.2's update note) over Aiven's s3-source-connector-for-apache-kafka
+  v3.4.2 (`io.aiven.kafka.connect.s3.source.S3SourceConnector`; the repo
+  s3sink's own plugin comes from was archived 2024-09-11, development moved
+  to `Aiven-Open/cloud-storage-connectors-for-apache-kafka`, this provider's
+  first use of it). Same Kafka-Connect-worker/`ValidateSpec`/
+  `ValidateBindingOptions`/config-drift bars as `s3sink`; ordering/offset
+  semantics documented in docs/planning/03 §7.2 (lexicographical
+  `ListObjectsV2` order, `startAfter`-cursor-in-offsets-topic resumption,
+  never-reprocess). `TestS3SourceIngestEndToEnd` green against real Docker
+  (246.9s): records produced directly to a topic (bypassing CDC), landed by
+  the existing `s3sink` provider in MinIO, replayed by `s3source` into a
+  fresh topic with content asserted; idempotent re-apply ("no changes");
+  clean destroy, no orphans. `TestS3SourceValidateCapabilityErrorExact`
+  confirms the exact ADR 009 error shape for a non-ingest-capable provider.
+  Gate `IngestProvider` registered Alpha/disabled in `cmd/platformctl/
+  main.go`, matching the `IngressProvider`/`TrinoProvider` posture (doc 04
+  §12 row appended). Bundled with D3 (jdbcsink) — see that task's own
+  status note for the shared commit/PR.
 
 ### D5: Tunnel provider (WireGuard) on the Connection seam
 

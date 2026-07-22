@@ -15,7 +15,7 @@ Generated from `schemas/` by `platformctl docs build` — do not edit by hand.
 
 ## Provider types
 
-Provider implementation to construct. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections, scheme tcp), prometheus (managed monitoring stack, gate MonitoringStackProvider, docs/planning/08 C9), ingress (realizes managed Connections, scheme http — HTTP hostname routing; gate IngressProvider, docs/planning/08 C7, docs/adr/018) — plus noop/container for testing. Open-ended: unknown types fail at registry construction, not schema validation. Technology providers realize the provider-agnostic kinds; the model speaks Catalog/Connection, never a technology's name. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections), prometheus (managed monitoring stack, gate MonitoringStackProvider, docs/planning/08 C9), trino (compute-engine coordinator + workers, gate TrinoProvider, docs/planning/08 D10) — plus noop/container for testing. 
+Provider implementation to construct. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections, scheme tcp), prometheus (managed monitoring stack, gate MonitoringStackProvider, docs/planning/08 C9), ingress (realizes managed Connections, scheme http — HTTP hostname routing; gate IngressProvider, docs/planning/08 C7, docs/adr/018) — plus noop/container for testing. Open-ended: unknown types fail at registry construction, not schema validation. Technology providers realize the provider-agnostic kinds; the model speaks Catalog/Connection, never a technology's name. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections), prometheus (managed monitoring stack, gate MonitoringStackProvider, docs/planning/08 C9), trino (compute-engine coordinator + workers, gate TrinoProvider, docs/planning/08 D10) — plus noop/container for testing. jdbcsink (realizes Binding(mode: sink, targetRef: Source) — a JDBC database sink over Confluent's kafka-connect-jdbc, gate JDBCSinkProvider, docs/planning/08 D3) and s3source (realizes Binding(mode: ingest) — an S3 object-store source over Aiven's s3-source-connector, gate IngestProvider, docs/planning/08 D4) are the ADR 001/009 sink-into-Source and ingest capability seams made real; both Alpha/disabled by default.
 
 - `redpanda`
 - `postgres`
@@ -25,6 +25,8 @@ Provider implementation to construct. Shipped: redpanda, postgres, mysql, mariad
 - `s3`
 - `minio`
 - `s3sink`
+- `jdbcsink`
+- `s3source`
 - `nessie`
 - `openlineage`
 - `proxy`

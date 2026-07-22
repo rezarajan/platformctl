@@ -12,6 +12,7 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/adapters/providers/debezium"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/ingress"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/jdbcsink"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/mysql"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/nessie"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/noop"
@@ -23,6 +24,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/adapters/providers/redpanda"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/s3"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/s3sink"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/s3source"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/trino"
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	fakeruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/fake"
@@ -143,6 +145,14 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// port is a meaningfully different risk profile and defaults off until
 	// reviewed (ADR 006's "Feature gate" section).
 	gates.Register("TrinoProvider", featuregate.Alpha, false)
+	// docs/planning/08 D3/D4, docs/adr/001 + 009: the two capability seams
+	// (sink -> Source, ingest) modeled with no shipped provider since
+	// v1.0.0. Alpha/disabled — new providers exposing new capability
+	// surfaces default off until soaked, matching the IngressProvider/
+	// TrinoProvider posture (design note 006), not the Phase 6.5
+	// enabled-Alpha precedent.
+	gates.Register("JDBCSinkProvider", featuregate.Alpha, false)
+	gates.Register("IngestProvider", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
@@ -155,6 +165,8 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	reg.RegisterProvider("s3", func() reconciler.Provider { return s3.New() }, "ObjectStoreProvider")
 	reg.RegisterProvider("minio", func() reconciler.Provider { return s3.New() }, "ObjectStoreProvider")
 	reg.RegisterProvider("s3sink", func() reconciler.Provider { return s3sink.New() }, "ObjectStoreProvider")
+	reg.RegisterProvider("jdbcsink", func() reconciler.Provider { return jdbcsink.New() }, "JDBCSinkProvider")
+	reg.RegisterProvider("s3source", func() reconciler.Provider { return s3source.New() }, "IngestProvider")
 	// "mysql" and "mariadb" are the same adapter (same protocol; per-type
 	// image and binlog flags).
 	reg.RegisterProvider("mysql", func() reconciler.Provider { return mysql.New() }, "MySQLProvider")

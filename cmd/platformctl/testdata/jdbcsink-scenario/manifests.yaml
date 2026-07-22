@@ -1,0 +1,188 @@
+# docs/planning/08 D3 integration scenario: Postgres CDC via Debezium
+# (Avro, against Redpanda's built-in schema registry — required, see
+# jdbcsink's ValidateBindingOptions doc comment) into a SECOND managed
+# postgres Source via jdbcsink. Host ports are deliberately non-default to
+# avoid collisions on shared dev machines: source Postgres 15648, target
+# Postgres 15649, Kafka 19294, schema registry 18582, Debezium Connect
+# 18287, jdbcsink Connect 18288.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: jdbcsink-pg-src-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: jdbcsink-pg-src-repl
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: jdbcsink-pg-dst-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-jdbcsink-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-jdbcsink-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19294
+    # jdbcsink requires schema-carrying records (ValidateBindingOptions) —
+    # the registry both the cdc and sink Bindings' avro converters use.
+    schemaRegistry: enabled
+    schemaRegistryPort: 18582
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-jdbcsink-pg-src
+spec:
+  type: postgres
+  runtime:
+    type: docker
+    network: datascape-jdbcsink-net
+  configuration:
+    version: "16"
+    port: 15648
+    superuserSecretRef: jdbcsink-pg-src-admin
+    replicationSecretRef: jdbcsink-pg-src-repl
+  secretRefs: [jdbcsink-pg-src-admin, jdbcsink-pg-src-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-jdbcsink-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape-jdbcsink-net
+  configuration:
+    # Built by jdbcsink_integration_test.go from testdata/avro-connect-image
+    # (the D1 image — stock Debezium lacks Confluent's AvroConverter).
+    image: datascape-avro-connect:test
+    connectPort: 18287
+    bootstrapServers: datascape-jdbcsink-rp:29092
+    replicationSecretRef: jdbcsink-pg-src-repl
+  secretRefs: [jdbcsink-pg-src-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-jdbcsink-pg-dst
+spec:
+  type: postgres
+  runtime:
+    type: docker
+    network: datascape-jdbcsink-net
+  configuration:
+    version: "16"
+    port: 15649
+    superuserSecretRef: jdbcsink-pg-dst-admin
+  secretRefs: [jdbcsink-pg-dst-admin]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-jdbcsink-connect
+spec:
+  type: jdbcsink
+  runtime:
+    type: docker
+    network: datascape-jdbcsink-net
+  configuration:
+    # Built by jdbcsink_integration_test.go from testdata/jdbcsink-image.
+    image: datascape-jdbcsink-connect:test
+    connectPort: 18288
+    bootstrapServers: datascape-jdbcsink-rp:29092
+    # The target Source (datascape-jdbcsink-pg-dst) is managed with no
+    # Connection, so this is the only credential source — reusing its own
+    # superuser secret (the docs/planning/08 D3 pattern this task
+    # instructs: "secrets via the Source's/Connection's existing secretRef
+    # plumbing").
+    credentialsSecretRef: jdbcsink-pg-dst-admin
+  secretRefs: [jdbcsink-pg-dst-admin]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: jdbcsink-students
+spec:
+  engine: postgres
+  providerRef:
+    name: datascape-jdbcsink-pg-src
+  postgres:
+    database: school
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: jdbcsink-warehouse
+spec:
+  engine: postgres
+  providerRef:
+    name: datascape-jdbcsink-pg-dst
+  postgres:
+    database: warehouse
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: jdbcsink-attendance-events
+spec:
+  providerRef:
+    name: datascape-jdbcsink-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: jdbcsink-students-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: jdbcsink-students
+  targetRef:
+    name: jdbcsink-attendance-events
+  providerRef:
+    name: datascape-jdbcsink-dbz
+  options:
+    tables: [students]
+    snapshotMode: initial
+    format: avro
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: jdbcsink-events-to-warehouse
+spec:
+  mode: sink
+  sourceRef:
+    name: jdbcsink-attendance-events
+  targetRef:
+    name: jdbcsink-warehouse
+  providerRef:
+    name: datascape-jdbcsink-connect
+  options:
+    format: avro
+    mode: insert
+    table: attendance
+    unwrap: true

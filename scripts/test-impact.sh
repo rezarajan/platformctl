@@ -61,6 +61,8 @@ state-s3|internal/adapters/state internal/ports/state|go test -tags integration 
 blueprints|internal/application/blueprint SHARED_CORE|go test -tags integration -count=1 -run 'TestBlueprint' -timeout 1800s ./cmd/platformctl/
 gc-state-ops|cmd/platformctl/gc.go cmd/platformctl/state.go internal/ports/state|go test -tags integration -count=1 -run 'TestGC|TestState' -timeout 1200s ./cmd/platformctl/
 trino|internal/adapters/providers/trino internal/adapters/providers/nessie internal/adapters/providers/providerkit internal/adapters/providers/s3 internal/adapters/providers/s3sink internal/adapters/kafkaconnect internal/domain/graph internal/ports/reconciler cmd/platformctl/testdata/trino-scenario SHARED_CORE|go test -tags integration -count=1 -run 'TestTrinoComputeEngineEndToEnd' -timeout 1800s ./cmd/platformctl/
+jdbcsink|internal/adapters/providers/jdbcsink internal/adapters/providers/debezium internal/adapters/providers/postgres internal/adapters/kafkaconnect internal/adapters/providers/providerkit cmd/platformctl/testdata/jdbcsink-image cmd/platformctl/testdata/avro-connect-image cmd/platformctl/testdata/jdbcsink-scenario SHARED_CORE|go test -tags integration -count=1 -run 'TestJDBCSinkEndToEnd|TestJDBCSinkValidateCapabilityErrorExact' -timeout 1800s ./cmd/platformctl/
+s3source|internal/adapters/providers/s3source internal/adapters/providers/s3sink internal/adapters/providers/s3 internal/adapters/kafkaconnect internal/adapters/providers/providerkit cmd/platformctl/testdata/s3source-image cmd/platformctl/testdata/s3sink-image cmd/platformctl/testdata/s3source-scenario SHARED_CORE|go test -tags integration -count=1 -run 'TestS3SourceIngestEndToEnd|TestS3SourceValidateCapabilityErrorExact' -timeout 1800s ./cmd/platformctl/
 EOF
 }
 
