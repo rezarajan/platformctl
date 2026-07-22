@@ -175,6 +175,33 @@ const (
 	ReasonPrefixUnlistable   = "PrefixUnlistable"
 )
 
+// --- trino (compute-engine provider; docs/planning/08 D10) -----------------
+const (
+	// ReasonCoordinatorHealthy/Unhealthy: the coordinator container's own
+	// health (reuses the shared-instance shape's naming convention, but
+	// declared separately since a Ready trino Provider blocks on both the
+	// coordinator AND the worker set below — a single ReasonInstanceHealthy
+	// couldn't distinguish which).
+	ReasonCoordinatorHealthy   = "CoordinatorHealthy"
+	ReasonCoordinatorUnhealthy = "CoordinatorUnhealthy"
+	// ReasonWorkerCountMismatch: ContainerState.ReadyReplicas does not
+	// (yet) match the declared spec.configuration.workers count.
+	ReasonWorkerCountMismatch = "WorkerCountMismatch"
+	// ReasonCatalogConfigMissing: configuration.catalogRef is set but the
+	// referenced Catalog (or its resolved warehouse Provider) has not yet
+	// published the facts etc/catalog/lakehouse.properties needs
+	// (Request.CatalogFacts is nil) — distinct from CatalogConfigDrift
+	// below, which is the file existing but disagreeing with the current
+	// facts.
+	ReasonCatalogConfigMissing = "CatalogConfigMissing"
+	// ReasonCatalogConfigDrift: the live etc/catalog/lakehouse.properties
+	// (read back via ContainerRuntime.ReadFile) no longer matches the file
+	// regenerated from the currently-published catalog/warehouse facts —
+	// the same regenerate-and-diff-by-key bar as prometheus's
+	// ScrapeConfigDrift / debezium's ConnectorConfigDrift.
+	ReasonCatalogConfigDrift = "CatalogConfigDrift"
+)
+
 // --- prometheus (managed monitoring stack; docs/planning/08 C9) ------------
 // The base container reuses ReasonInstanceHealthy/ReasonInstanceUnhealthy
 // above (the shared single-container-instance shape). These two are

@@ -69,6 +69,11 @@ type toolFacts struct {
 	postgres []dbEndpoint
 	mysql    []dbEndpoint
 	metrics  []metricsEndpoint
+	// trino is populated from a "trino"-named endpoint fact (the trino
+	// provider's coordinator, docs/planning/08 D10) — present only once a
+	// trino Provider has been applied. renderTrino's live-endpoint branch
+	// checks this before falling back to the bring-your-own paste snippet.
+	trino []simpleEndpoint
 }
 
 func gatherToolFacts(envelopes []resource.Envelope, st state.State, creds map[resource.Key]string) toolFacts {
@@ -103,6 +108,8 @@ func gatherToolFacts(envelopes []resource.Envelope, st state.State, creds map[re
 					f.s3 = append(f.s3, simpleEndpoint{component: e.Key(), host: ep.Host, credsRef: creds[e.Key()]})
 				case "kafka":
 					f.kafka = append(f.kafka, simpleEndpoint{component: e.Key(), host: ep.Host, credsRef: creds[e.Key()]})
+				case "trino":
+					f.trino = append(f.trino, simpleEndpoint{component: e.Key(), host: ep.Host})
 				case "postgres":
 					dbIndex[e.Key()] = len(f.postgres)
 					dbFamily[e.Key()] = "postgres"
@@ -255,8 +262,29 @@ func renderSpark(w io.Writer, f toolFacts) {
 	})
 }
 
+// renderTrino covers two cases (docs/planning/08 D10): a live `trino`
+// Provider applied to the platform ("it's already running" per
+// docs/adr/006-compute-engines.md — render its coordinator's JDBC URL/UI
+// address, alongside the paste-ready snippet below, which stays relevant
+// for the bring-your-own case even when a managed coordinator also exists),
+// or none applied (only the pre-existing paste-ready snippet, unchanged).
 func renderTrino(w io.Writer, f toolFacts) {
-	note(w, "etc/catalog/lakehouse.properties — Iceberg REST connector.")
+	if len(f.trino) > 0 {
+		note(w, "Managed trino Provider — live coordinator.")
+		forEachSection(w, f.trino, func(t simpleEndpoint) resource.Key { return t.component }, func(w io.Writer, t simpleEndpoint) {
+			if t.host == "" {
+				note(w, "coordinator applied but no host binding observed (Kubernetes in-cluster access mode?)")
+				return
+			}
+			// t.host is a full "http://host:port" URL (the endpoint fact's
+			// own convention, matching s3/nessie/prometheus); a JDBC URL
+			// has no http:// scheme, so it's stripped for that line only.
+			fmt.Fprintf(w, "jdbc:trino://%s\n", strings.TrimPrefix(t.host, "http://"))
+			fmt.Fprintf(w, "UI: %s/ui\n", t.host)
+		})
+		fmt.Fprintln(w)
+	}
+	note(w, "etc/catalog/lakehouse.properties — Iceberg REST connector (bring-your-own coordinator).")
 	if len(f.catalogs) == 0 {
 		note(w, "no catalog endpoint recorded — apply the platform first")
 		return
@@ -267,7 +295,13 @@ func renderTrino(w io.Writer, f toolFacts) {
 		fmt.Fprintf(w, "iceberg.rest-catalog.uri=%s\n", c.host)
 	})
 	forEachSection(w, f.s3, func(s simpleEndpoint) resource.Key { return s.component }, func(w io.Writer, s simpleEndpoint) {
-		fmt.Fprintf(w, "fs.native-s3.enabled=true\ns3.endpoint=%s\ns3.path-style-access=true\n", s.host)
+		// s3.region: found live wiring D10's trino provider against real
+		// Trino — without it, Trino's S3 filesystem factory falls back to
+		// the AWS SDK's default region-provider chain, which spends
+		// minutes exhausting every provider (env var, profile, EC2
+		// metadata) before failing catalog init outright. MinIO ignores
+		// the value; any syntactically valid region satisfies the SDK.
+		fmt.Fprintf(w, "fs.native-s3.enabled=true\ns3.endpoint=%s\ns3.region=us-east-1\ns3.path-style-access=true\n", s.host)
 		if s.credsRef != "" {
 			note(w, fmt.Sprintf("s3.aws-access-key/s3.aws-secret-key: the %q SecretReference", s.credsRef))
 		}

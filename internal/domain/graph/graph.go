@@ -15,6 +15,35 @@ import (
 // form used by Connection; Provider's plural secretRefs is handled below.
 var refFields = []string{"providerRef", "sourceRef", "targetRef", "connectionRef", "secretRef"}
 
+// configRefField pairs a ref field nested one level under spec.configuration
+// with the Kind(s) it must resolve to.
+type configRefField struct {
+	field   string
+	allowed map[string]bool
+}
+
+// configRefFields are ref fields nested one level under spec.configuration
+// rather than at the spec top level like refFields above — introduced by
+// docs/planning/08 D10 for Provider(type: trino).spec.configuration.
+// catalogRef (Catalog, must reconcile before the Trino Provider that reads
+// its published REST endpoint) and .warehouseProviderRef (Provider, an
+// explicit disambiguator for which S3/MinIO Provider backs the catalog's
+// warehouse when more than one exists in the manifest — see D10's
+// TASK_PROGRESS.md design note on why this exists instead of a
+// Catalog.spec.warehouseRef: D8, which would add that field, is not
+// implemented on main). spec.configuration is otherwise an open,
+// provider-specific bag (never introspected generically) — this list is
+// deliberately narrow, naming only the exact fields a specific provider is
+// known to place refs in, not a general "any nested Ref-shaped field"
+// mechanism. A slice, not a map, so processing order — and therefore which
+// error surfaces first when more than one field is invalid — stays
+// deterministic (docs/planning/08 §2's "plan output stays deterministic"
+// bar), the same reason refFields above is a slice.
+var configRefFields = []configRefField{
+	{field: "catalogRef", allowed: map[string]bool{"Catalog": true}},
+	{field: "warehouseProviderRef", allowed: map[string]bool{"Provider": true}},
+}
+
 // refKinds maps a ref field to the Kind(s) the name may resolve to. sourceRef
 // and targetRef are mode-dependent for Binding, so those resolve by name
 // across all kinds.
@@ -70,6 +99,28 @@ func Build(envelopes []resource.Envelope) (*Graph, error) {
 				return nil, fmt.Errorf("%s: spec.%s %q is ambiguous in namespace %q (matches %d resources)", from, field, ref.Name, ref.NamespaceOr(e.Metadata.Namespace), len(targets))
 			}
 			g.Edges[from] = append(g.Edges[from], to)
+		}
+		// Nested configuration-level refs (D10): same resolution/validation
+		// as the top-level pass above, scoped to spec.configuration.
+		if configBlock, ok := e.Spec["configuration"].(map[string]any); ok {
+			for _, crf := range configRefFields {
+				ref := resource.RefFromSpec(configBlock, crf.field)
+				if ref.Name == "" {
+					continue
+				}
+				if err := validateRef(from, "configuration."+crf.field, ref); err != nil {
+					return nil, err
+				}
+				targets := filterKinds(byName[nameIndexKey(ref.NamespaceOr(e.Metadata.Namespace), ref.Name)], crf.allowed)
+				if len(targets) == 0 {
+					return nil, fmt.Errorf("%s: spec.configuration.%s %q does not resolve to any resource in namespace %q", from, crf.field, ref.Name, ref.NamespaceOr(e.Metadata.Namespace))
+				}
+				to := targets[0]
+				if len(targets) > 1 {
+					return nil, fmt.Errorf("%s: spec.configuration.%s %q is ambiguous in namespace %q (matches %d resources)", from, crf.field, ref.Name, ref.NamespaceOr(e.Metadata.Namespace), len(targets))
+				}
+				g.Edges[from] = append(g.Edges[from], to)
+			}
 		}
 		// secretRefs (Provider kind) create edges to SecretReferences.
 		if refs, ok := e.Spec["secretRefs"].([]any); ok {

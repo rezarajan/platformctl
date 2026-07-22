@@ -22,6 +22,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/adapters/providers/redpanda"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/s3"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/s3sink"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/trino"
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	fakeruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/fake"
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
@@ -127,6 +128,13 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// exporters and a standalone grafana provider are explicit deferrals,
 	// see the C9 status note).
 	gates.Register("MonitoringStackProvider", featuregate.Alpha, false)
+	// docs/planning/08 D10 / docs/adr/006-compute-engines.md: the trino
+	// compute-engine provider. Alpha/disabled — unlike NessieProvider/
+	// OpenLineageProvider's enabled-Alpha Phase 6.5 precedent, a query
+	// engine accepting arbitrary SQL from whoever can reach its coordinator
+	// port is a meaningfully different risk profile and defaults off until
+	// reviewed (ADR 006's "Feature gate" section).
+	gates.Register("TrinoProvider", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
@@ -147,6 +155,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	reg.RegisterProvider("openlineage", func() reconciler.Provider { return openlineage.New() }, "OpenLineageProvider")
 	reg.RegisterProvider("proxy", func() reconciler.Provider { return proxy.New() }, "ProxyProvider")
 	reg.RegisterProvider("prometheus", func() reconciler.Provider { return prometheus.New() }, "MonitoringStackProvider")
+	reg.RegisterProvider("trino", func() reconciler.Provider { return trino.New() }, "TrinoProvider")
 	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
 		return fakeruntime.New(), nil
 	})

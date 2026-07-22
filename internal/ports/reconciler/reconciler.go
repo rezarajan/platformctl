@@ -93,6 +93,38 @@ type Request struct {
 	// Binding-only scoping above) — empty for every other provider, which
 	// simply never reads it.
 	MetricsTargets []MetricsTarget
+	// CatalogFacts resolves Provider(type: trino).spec.configuration.
+	// catalogRef (+ the optional warehouseProviderRef disambiguator) into
+	// the published facts the trino provider needs to write
+	// etc/catalog/lakehouse.properties (docs/planning/08 D10) — the
+	// referenced Catalog's "iceberg-rest" endpoint fact and the resolved
+	// S3/MinIO Provider's "s3" endpoint fact plus its credential
+	// SecretReference *name* (not its values — those still only resolve
+	// when that same name also appears in this Provider's own
+	// spec.secretRefs, the engine's one existing secret-resolution
+	// mechanism). The engine resolves this from state exactly like
+	// SchemaRegistryURL/MetricsTargets above — the trino provider never
+	// constructs these addresses itself (ADR 015). nil when
+	// configuration.catalogRef is unset, Resource.Kind != "Provider", or the
+	// referenced Catalog/warehouse Provider has not published its endpoint
+	// yet in this state.
+	CatalogFacts *CatalogFacts
+}
+
+// CatalogFacts is Request.CatalogFacts's payload — see its doc comment.
+type CatalogFacts struct {
+	// RestInternal is the referenced Catalog's "iceberg-rest" endpoint
+	// fact's in-network address (reachable from the trino coordinator
+	// container).
+	RestInternal string
+	// S3Internal is the resolved warehouse-backing S3/MinIO Provider's "s3"
+	// endpoint fact's in-network address ("host:port", no scheme).
+	S3Internal string
+	// S3SecretRef is the SecretReference *name* holding that Provider's
+	// credentials (its own configuration.rootSecretRef, or the first entry
+	// of its spec.secretRefs) — a graph fact, never a resolved value; the
+	// trino provider looks this name up in its own Request.Secrets.
+	S3SecretRef string
 }
 
 // MetricsTarget names one already-published metrics endpoint fact: JobName

@@ -306,6 +306,28 @@ spec:
     scrapeInterval: 15s               # optional; default "15s"
 ```
 
+Also optional, not required for v1.0.0 (docs/planning/08 D10, gate `TrinoProvider`, Alpha/disabled;
+design note docs/adr/006-compute-engines.md):
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lake-trino
+spec:
+  type: trino
+  runtime: {type: docker, network: datascape}
+  configuration:
+    workers: 3                        # optional; default 1. workers > 1 requires
+                                       # --feature-gates=HighAvailability=true
+    catalogRef: {name: lakehouse-catalog}   # optional; a Catalog, graph-ordered before this Provider
+    warehouseProviderRef: {name: lake-minio} # optional; disambiguates the warehouse-backing
+                                              # S3/MinIO Provider when more than one exists —
+                                              # inferred when the manifest declares exactly one
+  secretRefs: [minio-creds]           # must include the warehouse Provider's own credential
+                                       # SecretReference for the engine to resolve it
+```
+
 Field notes:
 - `spec.type` selects which `Provider` (reconciler) implementation and JSON Schema for
   `spec.configuration` apply.
@@ -344,6 +366,24 @@ Field notes:
   `Internal` address other containers on the shared network dial) and surfaced by `platformctl
   inventory` like every other endpoint. See §7.3 for how a `Binding`'s `spec.options.format`
   consumes it.
+- **`nessie`'s default warehouse location** (docs/planning/08 D10, found while wiring the `trino`
+  provider against a real Nessie instance — not previously needed by anything in this codebase):
+  `configuration.defaultWarehouseLocation` (an S3-shaped URI, e.g. `s3://bucket/prefix/`), when set,
+  configures Nessie's Iceberg REST Catalog personality with a default warehouse
+  (`NESSIE_CATALOG_DEFAULT_WAREHOUSE`/`NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION` env vars).
+  Without it, Nessie's `/iceberg/v1/config` answers `500 "No default-warehouse configured"` for
+  every request, which blocks any Iceberg REST client — Trino included — from initializing the
+  catalog at all. Omitted (the pre-D10 default), Nessie's behavior is unchanged for every
+  deployment that never pairs it with a compute engine.
+- **`nessie`'s warehouse S3 credentials** (docs/planning/08 D10, the same finding as the bullet
+  above): a configured warehouse location alone is not enough. `configuration.warehouseS3Endpoint`
+  (e.g. `http://minio:9000`) and `configuration.warehouseS3SecretRef` (a `SecretReference` name,
+  must also be listed in `spec.secretRefs`) give Nessie itself the S3 endpoint and credentials it
+  needs to associate that location with an object store
+  (`NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_*`/`NESSIE_CATALOG_SECRETS_WAREHOUSE_CREDS_*` env
+  vars) — without them, creating a namespace or table under the warehouse fails with `"Missing
+  access key and secret for STATIC authentication mode"` even though `/iceberg/v1/config` itself
+  already answers correctly.
 - **`prometheus` monitoring provider** (docs/planning/08 C9, gate `MonitoringStackProvider`,
   Alpha/disabled): reconciles a managed Prometheus container whose scrape config is *generated*
   from every other Provider's published `"metrics"`-named endpoint fact in state (never
@@ -357,6 +397,61 @@ Field notes:
   from the same facts. **Deferred** (explicit, not silently missing): postgres/mysql sidecar exporter
   containers (no native metrics endpoint to publish yet), a standalone `grafana` provider, and live
   Kubernetes-runtime verification.
+- **`trino` compute-engine provider** (docs/planning/08 D10, gate `TrinoProvider`, Alpha/disabled;
+  design note docs/adr/006-compute-engines.md): reconciles one coordinator container plus
+  `configuration.workers` (integer ≥ 1, default 1) worker containers via the C1/C2 replica
+  primitive (`ContainerSpec.Replicas`, `StableIdentity: false` — workers are pure compute, no
+  per-replica storage or stable hostname beyond the ordinal name). `workers > 1` requires the
+  `HighAvailability` gate, enforced at validate (`checkHighAvailabilityGate`'s field list extends
+  to `configuration.workers` alongside redpanda's `configuration.brokers`). `configuration.catalogRef`
+  (optional, a `nameRef` to a `Catalog`) is kind-checked and graph-ordered — the referenced `Catalog`
+  reconciles before this `Provider` — via a new nested-ref extraction rule in
+  `internal/domain/graph/graph.go` (`configRefFields`, scoped to `spec.configuration`, alongside the
+  optional `configuration.warehouseProviderRef` disambiguator described below); a `catalogRef` naming
+  a resource that is not a `Catalog` is rejected at validate with graph's standard
+  "does not resolve to any resource" shape (the same structural kind-check `providerRef`/
+  `connectionRef` already use, not a capability-interface check — there is no "can this provider do
+  X" question here, only "does this name resolve to the right Kind"). When `catalogRef` is set, the
+  provider writes `etc/catalog/lakehouse.properties` on every coordinator and worker node from the
+  referenced `Catalog`'s published `"iceberg-rest"` endpoint fact and a resolved warehouse-backing
+  S3/MinIO `Provider`'s published `"s3"` endpoint fact plus credentials (never constructed — ADR
+  015): `configuration.warehouseProviderRef` names that `Provider` explicitly when a manifest
+  declares more than one S3/MinIO `Provider`; omitted, the sole S3/MinIO-typed `Provider` in the
+  manifest's namespace is inferred (0 or >1 candidates leave the catalog unconfigured until
+  disambiguated — no silent guess). The warehouse `Provider`'s own credential `SecretReference` name
+  is a graph/state fact, but its *values* only resolve when that same name also appears in this
+  `Provider`'s own `spec.secretRefs` (the engine's one existing secret-resolution mechanism —
+  mirrors `s3`'s `configuration.rootSecretRef` "must also be listed in spec.secretRefs" rule).
+  The generated config always additionally sets `s3.region: us-east-1` (found live: Trino's S3
+  filesystem factory falls back to the AWS SDK's default region-provider chain when unset, which
+  takes minutes to exhaust — env var, profile, EC2 metadata, all absent in a container — before
+  failing catalog init outright, indistinguishable from the outside from a hung coordinator; MinIO
+  ignores the value). Nessie itself additionally needs `configuration.defaultWarehouseLocation` set
+  (see the `nessie` bullet above) for its Iceberg REST personality to answer at all.
+  Drift-checked: `Probe` regenerates the desired file from current facts and diffs it against the
+  live file (read via `ContainerRuntime.ReadFile`) by key, the same bar as debezium/s3sink's
+  connector-config drift and prometheus's scrape-config drift; a detected drift is healed on the
+  next `Reconcile` by forcing the coordinator (and worker set) to recreate with corrected content —
+  `ContainerRuntime` has no primitive to rewrite a file inside an already-running container, and
+  Trino only reads catalog config at process start, so healing a file-mounted config requires a
+  restart, unlike debezium/s3sink's REST-reconfigurable connectors. `Ready` requires the
+  coordinator's `/v1/info` to answer 200 with `"starting": false` and the worker set's
+  `ContainerState.ReadyReplicas` to equal `configuration.workers`. `platformctl inventory --for
+  trino` renders the coordinator's live JDBC URL/UI address once a `trino` `Provider` exists in
+  applied state, alongside the existing paste-ready snippet for the bring-your-own case.
+  **Deviation from the D8-context language** ("`spec.nessie` already carries warehouse config
+  today"): D8 (`Catalog.spec.warehouseRef`) is not implemented as of D10; this provider does not
+  depend on it and does not add a `Catalog`-side warehouse field, to avoid taking on D8's scope —
+  `configuration.warehouseProviderRef` above is D10's own, narrower mechanism, additive and
+  non-conflicting with a future D8 (which could supersede it as the preferred path). **Deviation
+  from the literal accept-list wording** "a query against a table written by the... D2 parquet
+  scenario": D1/D2's `s3sink` writes plain partitioned Parquet files (the Aiven S3 sink connector's
+  own layout), not an Iceberg table (no manifest/snapshot metadata is generated by any component in
+  this codebase) — Trino's `iceberg` connector cannot query that data directly. D10's integration
+  test instead proves the full stack (coordinator/worker reconciliation, catalog auto-configuration,
+  Nessie + MinIO wiring) by having Trino itself `CREATE TABLE`/`INSERT` the same row content produced
+  by the D2 scenario as a genuine Iceberg table through the coordinator, then `SELECT` it back —
+  recorded here as a finding for a maintainer decision, not a silent scope change.
 
 ## 5. Kind: `Source`
 

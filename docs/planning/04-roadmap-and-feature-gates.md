@@ -412,6 +412,7 @@ GA. Phase 7 closes with Stage B's exit criteria held (docs/planning/08 §4).
 | `SchemaRegistrySupport` | 08 Stage D (D1) | Beta (since D2, 2026-07-21) | enabled | graduated per the recorded intent when D2 landed |
 | `BackupRestore` | 08 Stage C (C6) | Alpha | disabled | Beta after restore drills in CI |
 | `MonitoringStackProvider` | 08 Stage C (C9) | Alpha | disabled | Beta after real-use soak (core slice only — see 08 C9's status note for explicit deferrals) |
+| `TrinoProvider` | 08 Stage D (D10) | Alpha | disabled | Beta after real-use soak; defaults off (unlike the enabled-Alpha Phase 6.5 precedent) because a query engine accepting arbitrary SQL from whoever can reach its coordinator port is a meaningfully different risk profile — docs/adr/006-compute-engines.md |
 
 Gates planned by the production-readiness backlog (`HighAvailability`,
 `IngressProvider`, `TLSTermination`, `MonitoringStackProvider`,

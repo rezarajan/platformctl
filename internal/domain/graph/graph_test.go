@@ -52,3 +52,71 @@ func TestAmbiguousBareRefRejectedWithinNamespace(t *testing.T) {
 		t.Fatalf("Build error = %v, want ambiguity", err)
 	}
 }
+
+// TestNestedConfigurationRefResolvesAndOrders covers docs/planning/08 D10:
+// Provider(type: trino).spec.configuration.catalogRef is a ref nested one
+// level under spec.configuration, not a top-level spec field like
+// providerRef — graph.go's configRefFields extraction must find it there
+// and create the same kind of dependency edge (Catalog reconciles before
+// the trino Provider that reads it).
+func TestNestedConfigurationRefResolvesAndOrders(t *testing.T) {
+	cat := graphEnv("default", "Catalog", "lakehouse-catalog", map[string]any{})
+	trino := graphEnv("default", "Provider", "lake-trino", map[string]any{
+		"configuration": map[string]any{"catalogRef": map[string]any{"name": "lakehouse-catalog"}},
+	})
+	g, err := Build([]resource.Envelope{cat, trino})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := g.Edges[trino.Key()]
+	if len(deps) != 1 || deps[0] != cat.Key() {
+		t.Fatalf("deps = %v, want [%s]", deps, cat.Key())
+	}
+	levels := g.TopologicalLevels()
+	if len(levels) != 2 {
+		t.Fatalf("levels = %v, want 2 (Catalog before Provider)", levels)
+	}
+	if levels[0][0] != cat.Key() {
+		t.Errorf("level 0 = %v, want Catalog first", levels[0])
+	}
+}
+
+// TestNestedConfigurationRefRejectsWrongKind covers D10's negative-path
+// accept item: catalogRef naming a resource that exists but is not a
+// Catalog is rejected at Build (i.e. at validate), with the same
+// "does not resolve to any resource" shape every other kind-checked ref
+// (providerRef, connectionRef, ...) already uses — not a capability-error
+// shape, since this is a structural kind mismatch, not a "can this provider
+// do X" question (see docs/planning/03's trino section for the recorded
+// reasoning).
+func TestNestedConfigurationRefRejectsWrongKind(t *testing.T) {
+	notACatalog := graphEnv("default", "Provider", "lakehouse-catalog", map[string]any{})
+	trino := graphEnv("default", "Provider", "lake-trino", map[string]any{
+		"configuration": map[string]any{"catalogRef": map[string]any{"name": "lakehouse-catalog"}},
+	})
+	_, err := Build([]resource.Envelope{notACatalog, trino})
+	if err == nil || !strings.Contains(err.Error(), "does not resolve to any resource") {
+		t.Fatalf("Build error = %v, want a kind-mismatch rejection", err)
+	}
+	if !strings.Contains(err.Error(), "configuration.catalogRef") {
+		t.Errorf("error does not name spec.configuration.catalogRef: %v", err)
+	}
+}
+
+// TestWarehouseProviderRefResolves covers the optional disambiguator
+// (docs/planning/08 D10's TASK_PROGRESS.md design note): same nested-ref
+// mechanism, allowed kind Provider instead of Catalog.
+func TestWarehouseProviderRefResolves(t *testing.T) {
+	minio := graphEnv("default", "Provider", "lake-minio", map[string]any{})
+	trino := graphEnv("default", "Provider", "lake-trino", map[string]any{
+		"configuration": map[string]any{"warehouseProviderRef": map[string]any{"name": "lake-minio"}},
+	})
+	g, err := Build([]resource.Envelope{minio, trino})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := g.Edges[trino.Key()]
+	if len(deps) != 1 || deps[0] != minio.Key() {
+		t.Fatalf("deps = %v, want [%s]", deps, minio.Key())
+	}
+}

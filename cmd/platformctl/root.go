@@ -263,28 +263,32 @@ func (a *app) checkSchemaRegistryGate(envelopes []resource.Envelope) error {
 // checkHighAvailabilityGate covers docs/adr/017 §a.8, closing docs/adr/004's
 // deferred gate-at-validate accept line (C2): HighAvailability is
 // Alpha/disabled, so a manifest declaring a multi-replica shape —
-// spec.configuration.brokers > 1 today; D10's workers later — must fail
-// fast at validate with the gate's standard disabled message, exactly like
-// checkSchemaRegistryGate. A provider's SpecValidator cannot host this
-// check (it has no feature-gate access by design — widening its signature
-// would break every implementor, the F5 lesson); the registry's
-// haGuardRuntime decorator remains the apply-time backstop.
+// spec.configuration.brokers > 1 (redpanda) or spec.configuration.workers >
+// 1 (trino, docs/planning/08 D10) — must fail fast at validate with the
+// gate's standard disabled message, exactly like checkSchemaRegistryGate. A
+// provider's SpecValidator cannot host this check (it has no feature-gate
+// access by design — widening its signature would break every implementor,
+// the F5 lesson); the registry's haGuardRuntime decorator remains the
+// apply-time backstop.
 func (a *app) checkHighAvailabilityGate(envelopes []resource.Envelope) error {
+	replicaFields := []string{"brokers", "workers"}
 	for _, e := range envelopes {
 		if e.Kind != "Provider" {
 			continue
 		}
 		cfg, _ := e.Spec["configuration"].(map[string]any)
-		n := 0
-		switch v := cfg["brokers"].(type) {
-		case int:
-			n = v
-		case float64:
-			n = int(v)
-		}
-		if n > 1 {
-			if err := a.gates.Require("HighAvailability"); err != nil {
-				return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("%s declares spec.configuration.brokers: %d: %w", e.Key(), n, err))
+		for _, field := range replicaFields {
+			n := 0
+			switch v := cfg[field].(type) {
+			case int:
+				n = v
+			case float64:
+				n = int(v)
+			}
+			if n > 1 {
+				if err := a.gates.Require("HighAvailability"); err != nil {
+					return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("%s declares spec.configuration.%s: %d: %w", e.Key(), field, n, err))
+				}
 			}
 		}
 	}

@@ -1,0 +1,229 @@
+# docs/planning/08 D10 integration scenario: the same CDC->Redpanda->
+# s3sink(parquet) spine as ../parquet-sink-scenario (D2), renamed to the
+# "trn" prefix, plus a Nessie Catalog and a trino compute-engine Provider
+# with catalogRef wired to it and warehouseProviderRef naming the MinIO
+# Provider explicitly. Host ports: Postgres 15647, Debezium Connect 18286,
+# Kafka 19296, schema registry 18584, MinIO 19104, sink Connect 18190,
+# Nessie API 19122, Trino coordinator 18091.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: trn-pg-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: trn-pg-repl
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: trn-minio-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-trn-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-trn-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19296
+    schemaRegistry: enabled
+    schemaRegistryPort: 18584
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-trn-pg
+spec:
+  type: postgres
+  runtime:
+    type: docker
+    network: datascape-trn-net
+  configuration:
+    version: "16"
+    port: 15647
+    superuserSecretRef: trn-pg-admin
+    replicationSecretRef: trn-pg-repl
+  secretRefs: [trn-pg-admin, trn-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-trn-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape-trn-net
+  configuration:
+    image: datascape-s3sink-connect:test
+    connectPort: 18286
+    bootstrapServers: datascape-trn-rp:29092
+    replicationSecretRef: trn-pg-repl
+  secretRefs: [trn-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-trn-minio
+spec:
+  type: minio
+  runtime:
+    type: docker
+    network: datascape-trn-net
+  configuration:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    port: 19104
+    rootSecretRef: trn-minio-root
+  secretRefs: [trn-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-trn-s3
+spec:
+  type: s3sink
+  runtime:
+    type: docker
+    network: datascape-trn-net
+  configuration:
+    image: datascape-s3sink-connect:test
+    connectPort: 18190
+    bootstrapServers: datascape-trn-rp:29092
+    credentialsSecretRef: trn-minio-root
+  secretRefs: [trn-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-trn-nessie
+spec:
+  type: nessie
+  runtime:
+    type: docker
+    network: datascape-trn-net
+  configuration:
+    port: 19122
+    # Required for the Iceberg REST catalog personality to answer
+    # /v1/config at all, and to associate a namespace/table location with
+    # an object store (found live wiring this scenario, not documented
+    # anywhere in Nessie's own defaults) — see nessie.go's
+    # defaultWarehouseEnv doc comment.
+    defaultWarehouseLocation: s3://raw-events/iceberg-warehouse/
+    warehouseS3Endpoint: http://datascape-trn-minio:9000
+    warehouseS3SecretRef: trn-minio-root
+  secretRefs: [trn-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Catalog
+metadata:
+  name: trn-catalog
+spec:
+  engine: nessie
+  providerRef:
+    name: datascape-trn-nessie
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-trn-trino
+spec:
+  type: trino
+  runtime:
+    type: docker
+    network: datascape-trn-net
+  configuration:
+    port: 18091
+    # The count below is deliberately not 1 — StableIdentity: false plus
+    # Replicas <= 1 is always the single-container shape (byte-for-byte,
+    # runtime.ContainerSpec's own contract); going from that shape to any
+    # Replicas above 1 is a shape transition, refused in place (the same
+    # rule redpanda's brokers field obeys for its legacy-to-declared
+    # transition). Starting at the smallest count already in the
+    # ordinal-set shape means scaling up from here is a genuine, supported
+    # in-place scale-up — requires --feature-gates=HighAvailability=true
+    # throughout this scenario.
+    workers: 2
+    catalogRef:
+      name: trn-catalog
+    warehouseProviderRef:
+      name: datascape-trn-minio
+  secretRefs: [trn-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: trn-students
+spec:
+  engine: postgres
+  providerRef:
+    name: datascape-trn-pg
+  postgres:
+    database: attendance
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: trn-attendance-events
+spec:
+  providerRef:
+    name: datascape-trn-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: trn-attendance-raw
+spec:
+  providerRef:
+    name: datascape-trn-minio
+  bucket: raw-events
+  prefix: attendance/
+  format: parquet
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: trn-students-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: trn-students
+  targetRef:
+    name: trn-attendance-events
+  providerRef:
+    name: datascape-trn-dbz
+  options:
+    tables: [students]
+    snapshotMode: initial
+    format: avro
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: trn-events-to-lake
+spec:
+  mode: sink
+  sourceRef:
+    name: trn-attendance-events
+  targetRef:
+    name: trn-attendance-raw
+  providerRef:
+    name: datascape-trn-s3
