@@ -272,3 +272,27 @@ const (
 	// currently-published metrics endpoint facts.
 	ReasonScrapeConfigDrift = "ScrapeConfigDrift"
 )
+
+// --- wireguard (tunnel provider on the Connection seam; docs/planning/08
+// D5, docs/adr/023) ----------------------------------------------------
+const (
+	// ReasonTunnelSurfaceReady: the shared tunnel container (Provider
+	// kind) is up and healthy (wg0 interface exists).
+	ReasonTunnelSurfaceReady = "TunnelSurfaceReady"
+	// ReasonTunnelDown: the shared tunnel container is missing or
+	// unhealthy — every Connection realized through it is unreachable.
+	ReasonTunnelDown = "TunnelDown"
+	// ReasonTunnelUp: a Connection's forwarder answers through the tunnel
+	// (a live TCP accept through its DNAT rule).
+	ReasonTunnelUp = "TunnelUp"
+	// ReasonHandshakeStale: the WireGuard peer's latest handshake is older
+	// than handshakeStaleFactor times the configured PersistentKeepalive —
+	// logged as drift, not failed outright, since a stale reading can
+	// still coexist with a functioning tunnel (docs/adr/023 Decision 6).
+	ReasonHandshakeStale = "HandshakeStale"
+	// ReasonTunnelUpstreamUnreachable: the tunnel and its forwarder rule
+	// are in place but the upstream (spec.target) does not answer through
+	// it. Named distinctly from proxy's own ReasonUpstreamUnreachable
+	// (same concept, different provider).
+	ReasonTunnelUpstreamUnreachable = "TunnelUpstreamUnreachable"
+)

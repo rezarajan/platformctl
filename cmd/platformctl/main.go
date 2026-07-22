@@ -26,6 +26,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/adapters/providers/s3sink"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/s3source"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/trino"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/wireguard"
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	fakeruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/fake"
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
@@ -153,6 +154,12 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// enabled-Alpha precedent.
 	gates.Register("JDBCSinkProvider", featuregate.Alpha, false)
 	gates.Register("IngestProvider", featuregate.Alpha, false)
+	// docs/planning/08 D5, docs/adr/023: the wireguard tunnel provider —
+	// a managed Connection whose upstream is only reachable through a
+	// WireGuard peer. Alpha/disabled — grants NET_ADMIN and opens a routed
+	// path into a private network, a meaningfully different risk profile
+	// from the Phase 6.5 enabled-Alpha precedent.
+	gates.Register("TunnelProvider", featuregate.Alpha, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
@@ -177,6 +184,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	reg.RegisterProvider("prometheus", func() reconciler.Provider { return prometheus.New() }, "MonitoringStackProvider")
 	reg.RegisterProvider("ingress", func() reconciler.Provider { return ingress.New() }, "IngressProvider")
 	reg.RegisterProvider("trino", func() reconciler.Provider { return trino.New() }, "TrinoProvider")
+	reg.RegisterProvider("wireguard", func() reconciler.Provider { return wireguard.New() }, "TunnelProvider")
 	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
 		return fakeruntime.New(), nil
 	})
