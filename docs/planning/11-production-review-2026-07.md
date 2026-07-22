@@ -296,3 +296,16 @@ static. Dimensions, each producing findings verified before fixing:
   Honest scoping note: 5 providers' single-field checks kept as
   defense-in-depth. Stage E exit criterion 1 ticked by the agent with
   evidence. Sweep launched (16 suites, queued).
+- 2026-07-22: WAVE 3 MERGED — I7 6a00f42 (GA blocker closed: workers>1
+  any-member addressing, run 1 + run 2 127.1s green live), E5 31ba711
+  (fragments + corpus + latent ADR 011 bug closed), H4 d09cf1d (pack
+  applied; OWNER'S one-rule-per-fact decision executed in-merge — ADR
+  021 addendum, non-exemptible secrets twin removed, pack = 11 rules,
+  Stage H criterion 2 ticked), hygiene 940549f (golangci 0 issues at
+  merged state, exemption map EMPTY, two real fixes). I8 closed (run 1
+  111.9s @load 3.08 + run 2 89.4s, both green under load); the CI
+  probe-side fix validated on the same runs. All worktrees cleaned;
+  wave-3 merged-state gate sweep launched. REMAINING: E6→E7, H5→H6;
+  owner decisions now fully unblocked — KubernetesRuntime GA (HA
+  feature-complete per the owner's bar), v1.3.0,
+  ExternalResourceConfiguration GA.
