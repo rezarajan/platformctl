@@ -28,8 +28,8 @@ func TestWritePackZeroTrust(t *testing.T) {
 	if len(policies) != 1 {
 		t.Fatalf("got %d policies, want 1", len(policies))
 	}
-	if got := len(policies[0].Rules()); got != 12 {
-		t.Errorf("zero-trust pack has %d rules, want 12", got)
+	if got := len(policies[0].Rules()); got != 11 {
+		t.Errorf("zero-trust pack has %d rules, want 11", got)
 	}
 }
 
@@ -83,7 +83,6 @@ func fixtureEnvelopes() []resource.Envelope {
 			Spec:             map[string]any{},
 		},
 		{
-			// secrets-from-vault-or-k8s (backend not vault/kubernetes) +
 			// forbid-env-secret-backend (backend == "env").
 			GroupVersionKind: resource.GroupVersionKind{APIVersion: gvk.APIVersion, Kind: "SecretReference"},
 			Metadata:         resource.Metadata{Name: "sec"},
@@ -107,8 +106,8 @@ func TestBuiltinRuleIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuiltinRuleIDs: %v", err)
 	}
-	if len(ids) != 12 {
-		t.Fatalf("got %d rule ids, want 12: %v", len(ids), ids)
+	if len(ids) != 11 {
+		t.Fatalf("got %d rule ids, want 11: %v", len(ids), ids)
 	}
 	for i := 1; i < len(ids); i++ {
 		if ids[i-1] >= ids[i] {
@@ -151,7 +150,6 @@ func TestBuiltinPackDeniesEveryFieldOrFindingRule(t *testing.T) {
 		"images-from-corp-registry",
 		"protect-data",
 		"no-isolation-optout",
-		"secrets-from-vault-or-k8s",
 		"escalate-duplicate-capture",
 		"require-digest-pins",
 		"ha-replication-floor",

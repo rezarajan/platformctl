@@ -62,6 +62,25 @@ jobs:
           go run ./cmd/platformctl validate examples/cdc-attendance/
           go run ./cmd/platformctl validate examples/lakehouse/
 
+      # docs/planning/08 §7.7 H4: the shipped zero-trust policy pack
+      # (`platformctl policy init zero-trust`), evaluated via `platformctl
+      # policy test` against every shipped example and blueprint with the
+      # PolicyEngine gate enabled for this invocation only (it stays
+      # Alpha/disabled everywhere else). Pure manifest evaluation — no
+      # Docker, no state, trivial runtime cost (already included in "Unit
+      # & contract tests" above; broken out as its own step for CI
+      # visibility into posture regressions specifically). Dev-flavored
+      # denies (plaintext connections, env-backend secrets, unpinned/
+      # non-corp-registry images) carry recorded
+      # policy.datascape.io/exempt waivers in the example/blueprint
+      # manifests themselves; two non-exemptible rules
+      # (protect-data, secrets-from-vault-or-k8s) fire on every shipped
+      # example/blueprint by design and are pinned as a known, recorded
+      # finding in cmd/platformctl/policy_pack_examples_test.go rather
+      # than routed around — a *new* unexempted deny fails this step.
+      - name: Policy pack against examples and blueprints
+        run: go test ./cmd/platformctl/... -run TestZeroTrustPackAgainstExamplesAndBlueprints -v
+
   integration:
     name: Integration tests (Docker)
     runs-on: ubuntu-latest

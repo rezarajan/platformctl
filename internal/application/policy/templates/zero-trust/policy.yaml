@@ -56,14 +56,13 @@ spec:
       exemptible: false
       message: "spec.runtime.networkPolicy: none opts out of default-deny isolation (docs/planning/08 B7) and is not permitted."
 
-    # 5. Least privilege / secrets handling (ADR 013): credentials must come
-    #    from a managed backend, never a hand-rolled one. Non-exemptible.
-    - id: secrets-from-vault-or-k8s
-      match: { kind: SecretReference }
-      assert: { field: spec.backend, in: [vault, kubernetes] }
-      effect: deny
-      exemptible: false
-      message: "SecretReference.spec.backend must be vault or kubernetes (ADR 013)."
+    # 5. Least privilege / secrets handling (ADR 013) is covered by the
+    #    exemptible forbid-env-secret-backend rule below. An earlier pack
+    #    revision shipped a non-exemptible twin (secrets-from-vault-or-k8s)
+    #    on the same fact; the owner removed it (docs/adr/021 addendum,
+    #    2026-07-22): the pack is a starter for local tailoring — an
+    #    organization wanting the backend rule un-waivable flips
+    #    forbid-env-secret-backend's `exemptible` to false here.
 
     # 6. Escalates DL001 (docs/adr/020-design-lints.md): overlapping cdc
     #    capture on one sourceRef, promoted from a warning to a hard deny.

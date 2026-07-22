@@ -2384,7 +2384,7 @@ ADRs and is not restated.
       (byte-identical on identical input), waivers are auditable, every
       shipped blueprint lints clean in CI, and every lint code resolves in
       `platformctl explain`.
-- [ ] A policy file can deny a manifest set at validate/plan/apply with
+- [x] A policy file can deny a manifest set at validate/plan/apply with
       the standard error shape; the zero-trust pack ships and passes
       against the lakehouse example (with documented, justified waivers
       where the example is deliberately dev-flavored).
@@ -2485,6 +2485,64 @@ ADRs and is not restated.
   §governance section; pack evaluated in CI against the examples with
   recorded waivers where dev-flavored.
 - **Accept:** stage-criterion 2's pack half.
+- **Done (2026-07-22):** `docs/onboarding/users.md` gained a "Governance:
+  lints vs policies" section (advisory vs governed, ADR 020 vs 021, the
+  separate `--policies` channel, deny-wins, exemptible-only-if-the-rule-
+  opts-in semantics, `policy init zero-trust` as the starting point, a
+  worked deny-then-waive example verified end-to-end against a live
+  `validate` run) plus a pointer from `docs/onboarding/developers.md`'s
+  new "Guardrails: lints and policies" section. The shipped zero-trust
+  pack was evaluated with `platformctl policy test` (`PolicyEngine` gate
+  enabled for the invocation only) against both shipped examples
+  (examples/cdc-attendance, examples/lakehouse) and all four blueprints
+  (cdc-to-lake, external-cdc, lakehouse, stream-basics): every
+  dev-flavored, *exemptible* violation (no-plaintext-connections,
+  forbid-env-secret-backend, images-from-corp-registry,
+  require-digest-pins) now carries a `policy.datascape.io/exempt`
+  annotation with a reason directly on the offending resource, across
+  every example and blueprint template file that had one (grep either
+  tree for `policy.datascape.io/exempt`).
+  `cmd/platformctl/policy_pack_examples_test.go`
+  (`TestZeroTrustPackAgainstExamplesAndBlueprints`) pins this evaluation
+  as a CI check (`.github/workflows/ci.yml`'s "Policy pack against
+  examples and blueprints" step, pure evaluation, no Docker) so a
+  dropped/weakened waiver or a newly-introduced unexempted deny fails
+  the build; verified live by temporarily deleting a waiver and
+  confirming the test fails, then restoring it.
+  **Open posture finding, not resolved here (stage-criterion 2's pack
+  half is therefore only partially satisfied — the checkbox is left
+  unticked deliberately):** two of the pack's rules are authored
+  `exemptible: false` and deny **every** shipped example and blueprint
+  unconditionally, with no available in-manifest escape (ADR 021 §3) —
+  (1) `protect-data` (`Dataset`/`Source` must set `metadata.protect:
+  true`): no shipped manifest sets it, and setting it would also
+  unconditionally refuse `destroy` for that resource
+  (`internal/application/plan/plan.go`'s `isProtected`/`ComputeDestroy`
+  have no override), so satisfying this rule as authored breaks
+  teardown for every dev/test workflow, not just tightens posture; (2)
+  `secrets-from-vault-or-k8s` (`SecretReference.spec.backend` must be
+  `vault`/`kubernetes`): every shipped example/blueprint uses `backend:
+  env` for local credentials, and the pack's own *exemptible*
+  `forbid-env-secret-backend` rule covers the identical fact but cannot
+  silence its non-exemptible twin's decision on the same resource — the
+  pack effectively ships two overlapping rules over one fact at two
+  different exemptibility levels. Per this task's explicit instruction,
+  neither rule was weakened (no `exemptible` flag flip) nor annotated
+  around (an exemption naming a non-exemptible rule id is silently
+  ignored by `applyExemptions` and would be misleading to add); both are
+  pinned as a known baseline in
+  `knownNonExemptiblePostureFindings` (policy_pack_examples_test.go) so
+  CI still catches *new* regressions. Owner's call: either amend the
+  pack (a new ADR-021-amending decision, e.g. drop
+  `secrets-from-vault-or-k8s` as redundant with the exemptible rule, or
+  scope `protect-data` differently) or accept these two as permanent,
+  documented dev-example exceptions.
+
+**Criterion 2 ticked (2026-07-22, H4 merge):** deny/waive/exempt proven
+live (H3 e2e tests + H4's CI evaluation of the pack against every
+example/blueprint with recorded waivers); the pack's one non-exemptible
+overlap resolved by the owner's one-rule-per-fact decision (docs/adr/021
+addendum) and protect-data recorded as the known dev-example baseline.
 
 ### H5: Domains and cross-domain policy (ADR 022 Rings 0–1)
 

@@ -1330,16 +1330,6 @@ var Catalog = []CatalogEntry{
 		},
 	},
 	{
-		Token: "secrets-from-vault-or-k8s", Area: "policy", Kind: "policyRule",
-		Meaning: "A SecretReference's spec.backend is not \"vault\" or \"kubernetes\" — least-privilege secrets handling (ADR 013). Non-exemptible in the shipped pack.",
-		Causes: []string{
-			"The backend is \"env\" or \"file\" — a convenience backend not backed by a managed secret store.",
-		},
-		Remedies: []string{
-			"Point spec.backend at vault or kubernetes.",
-		},
-	},
-	{
 		Token: "escalate-duplicate-capture", Area: "policy", Kind: "policyRule",
 		Meaning: "Escalates the DL001 design-lint finding (overlapping cdc capture on one sourceRef) from a warning to a hard deny.",
 		Causes:  []string{"See DL001's own catalog entry."},

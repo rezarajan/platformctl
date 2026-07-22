@@ -1621,18 +1621,6 @@ Remedies:
 
 - Remove spec.runtime.networkPolicy or set it to a value other than "none".
 
-### `secrets-from-vault-or-k8s` (policyRule)
-
-A SecretReference's spec.backend is not "vault" or "kubernetes" — least-privilege secrets handling (ADR 013). Non-exemptible in the shipped pack.
-
-Likely causes:
-
-- The backend is "env" or "file" — a convenience backend not backed by a managed secret store.
-
-Remedies:
-
-- Point spec.backend at vault or kubernetes.
-
 ### `escalate-duplicate-capture` (policyRule)
 
 Escalates the DL001 design-lint finding (overlapping cdc capture on one sourceRef) from a warning to a hard deny.

@@ -5,6 +5,12 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: test-lineage-fake
+  # docs/adr/021 zero-trust pack (H4): a noop/fake-runtime stand-in has no
+  # real image at all — waived, not applicable outside this dev example.
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: fake-runtime stand-in Provider, no real image to pin
+      require-digest-pins: fake-runtime stand-in Provider, no real image to pin
 spec:
   type: noop
   runtime:

@@ -4,10 +4,19 @@
 # Dagster and Metabase run outside platformctl and connect to the endpoints
 # in README.md. network/image/bootstrapServers all use their defaults
 # throughout — see README.md#defaults (docs/planning/08 E2).
+#
+# docs/adr/021 zero-trust pack (H4): every Provider below uses its stock
+# default image (or, for orders-cdc, a locally-built one), not a
+# registry.corp.* digest pin — waived below, not applicable outside this
+# dev example (docs/planning/08 A10 covers production digest pinning).
 apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: lake-minio
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: dev example uses the stock default image, not registry.corp.*
+      require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: minio
   runtime: {type: docker}
@@ -24,6 +33,10 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: catalog-svc
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: dev example uses the stock default image, not registry.corp.*
+      require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: nessie
   runtime: {type: docker}
@@ -37,6 +50,10 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: lake-lineage
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: dev example uses the stock default image, not registry.corp.*
+      require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: openlineage
   runtime: {type: docker}
@@ -46,6 +63,10 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: lake-postgres
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: dev example uses the stock default image, not registry.corp.*
+      require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: postgres
   runtime: {type: docker}
@@ -56,6 +77,10 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: lake-mysql
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: dev example uses the stock default image, not registry.corp.*
+      require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: mysql
   runtime: {type: docker}
@@ -69,6 +94,10 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: edge
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: dev example uses the stock default forwarder image, not registry.corp.*
+      require-digest-pins: dev example uses the stock default forwarder image by tag
 spec:
   type: proxy
   runtime: {type: docker}
@@ -77,6 +106,10 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: lake-redpanda
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: dev example uses the stock default image, not registry.corp.*
+      require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: redpanda
   runtime: {type: docker}
@@ -90,6 +123,10 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: orders-cdc
+  annotations:
+    policy.datascape.io/exempt: |
+      images-from-corp-registry: dev example uses the stock default image, not registry.corp.*
+      require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: debezium
   runtime: {type: docker}

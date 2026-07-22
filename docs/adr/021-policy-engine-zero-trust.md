@@ -151,3 +151,20 @@ the shipped posture mandatory.
 ADR 011 (the enforcement point's contract), 012/013 (the mechanisms
 policy makes mandatory), 018 + C8 (TLS boundary), 020 (findings as policy
 facts), doc 09 §4 (plane analysis; one-shot posture), doc 01 NG2/NG3.
+
+## Addendum (2026-07-22, owner decision at H4): one rule per fact
+
+H4's evaluation of the shipped pack against every example/blueprint
+surfaced that the pack carried TWO rules on the secret-backend fact:
+exemptible `forbid-env-secret-backend` and a non-exemptible
+`secrets-from-vault-or-k8s` twin — and §3's rule-scoped exemptions mean
+a waiver on the former can never silence the latter, making every
+dev-flavored example permanently deny. The owner resolved it by this
+ADR's own framing: **the pack is a starter for local tailoring** —
+one rule per fact, shipped exemptible; an organization wanting it
+un-waivable flips that rule's `exemptible: false` in its tailored copy.
+The non-exemptible twin is removed from the pack. `protect-data` stays
+non-exemptible: it has no exemptible sibling, and the examples' failure
+to meet it is recorded as a known baseline (the CI evaluation catches
+new regressions), not waived — a prod-bar rule a dev example honestly
+does not meet.
