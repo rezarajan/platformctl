@@ -469,6 +469,50 @@ type ContainerRuntime interface {
 	ProbeReachable(ctx context.Context, network, target string) error
 }
 
+// MemberSetRuntime is an optional ContainerRuntime capability (the same
+// type-assert-an-optional-capability pattern as IngressCapableRuntime below)
+// answering docs/adr/004's I7 addendum (docs/planning/08 §7.8): for a
+// StableIdentity:false ("Deployment-shaped") replica set with more than one
+// member, does OrdinalName(name, i) address a real, individually resolvable
+// object on this runtime — or is the set's own bare Name the only address
+// that resolves to anything, with "any one currently live member" as that
+// address's whole meaning?
+//
+// Docker and the fake runtime do NOT implement this interface: ADR 004
+// forces every replica onto a literal, ordinal-named object on those two
+// runtimes regardless of StableIdentity (Docker containers must be uniquely
+// named per host), so OrdinalName already addresses something real there,
+// and the pre-existing per-ordinal EnsureReachable/Inspect loop in
+// providerkit.ReachableURLs/ProbeConnectWorkerSet is correct as it stands —
+// a runtime that doesn't implement this interface keeps that behavior,
+// unchanged. Kubernetes' Deployment shape is different in kind, not degree:
+// exactly one Deployment/Service pair exists for the whole set, and pod
+// names are Kubernetes-assigned random suffixes, never "<name>-<i>"
+// (internal/adapters/runtime/kubernetes/container_remove.go's findOrdinalPod
+// doc comment) — there is no ordinal object on that runtime to resolve at
+// all, so every OrdinalName lookup fails outright
+// ("no member of %q (%d ordinals) is currently reachable"), even though the
+// set itself is healthy. Kubernetes implements this interface to say so;
+// its own EnsureReachable/Inspect, called with the set's bare Name, already
+// give the right answer (a Service or ready-pod label selector picks a live
+// member; Inspect(name) already reports the Deployment's own aggregate
+// ReadyReplicas) — no new Kubernetes-adapter reachability code was needed,
+// only this signal plus the two callers above choosing when to use it.
+//
+// Connect workers are interchangeable members of one Kafka-consumer-group
+// rebalancing set (debezium/s3sink's workers > 1, docs/planning/08 C3): "any
+// one live member can serve the group's REST API" is the semantically
+// correct address, exactly what a Kubernetes Service already gives for
+// free — a genuinely better address than Docker's own per-ordinal failover
+// list, not a lesser one.
+type MemberSetRuntime interface {
+	// AddressesMembersCollectively is true when this runtime has no
+	// separately-addressable ordinal object for a StableIdentity:false
+	// replica set — callers must resolve the whole set once, by its own
+	// Name, instead of iterating OrdinalName(name, 0..members-1).
+	AddressesMembersCollectively() bool
+}
+
 // IngressSpec describes one HTTP route to publish through the runtime's own
 // native ingress mechanism (docs/planning/08 C7, docs/adr/018): Kubernetes
 // realizes it as a networking.k8s.io/v1 Ingress object routing Host(Host) to

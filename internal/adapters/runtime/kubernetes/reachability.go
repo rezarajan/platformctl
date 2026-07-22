@@ -202,6 +202,18 @@ func (r *Runtime) firstNodeAddr(ctx context.Context) (string, error) {
 	return internal, nil
 }
 
+// AddressesMembersCollectively implements runtime.MemberSetRuntime
+// (docs/adr/004's I7 addendum, docs/planning/08 §7.8): a
+// StableIdentity:false replica set on Kubernetes is always exactly one
+// Deployment/Service pair, never a set of objects literally named
+// "<name>-<i>" (only StatefulSet ordinals get that treatment —
+// findOrdinalPod's own doc comment below). EnsureReachable and Inspect,
+// called with the set's own bare Name, already resolve to "any one
+// currently live member" (a Service or the ready-pod label selector) —
+// exactly what a caller needs instead of a per-ordinal loop that would
+// never find anything on this runtime.
+func (r *Runtime) AddressesMembersCollectively() bool { return true }
+
 // EnsureReachable makes a container's port reachable from this process
 // (running outside the cluster), per the AccessMode its Deployment was last
 // created/updated with (docs/planning/08 B1):

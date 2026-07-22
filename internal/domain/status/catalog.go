@@ -400,7 +400,7 @@ var Catalog = []CatalogEntry{
 	},
 	{
 		Token: ReasonConnectWorkerMissing, Area: "connect", Kind: "reason", Prefix: true,
-		Meaning: "Prefix, not a complete reason (docs/planning/08 C3, mirrors redpanda's BrokerMissing): a declared spec.configuration.workers > 1 Connect-worker set whose per-ordinal Probe finds one or more ordinals absent/stopped appends the missing ordinal names to this prefix.",
+		Meaning: "Prefix, not a complete reason (docs/planning/08 C3, mirrors redpanda's BrokerMissing): a declared spec.configuration.workers > 1 Connect-worker set whose per-ordinal Probe finds one or more ordinals absent/stopped appends the missing ordinal names to this prefix. On a runtime.MemberSetRuntime (Kubernetes, docs/adr/004's I7 addendum) the appended detail is a \"N/M ready\" count instead, since there are no per-ordinal names on that runtime.",
 		Causes: []string{
 			"One or more Connect worker containers/pods were stopped or killed out of band.",
 			"A prior apply that was supposed to scale the worker set up did not complete.",

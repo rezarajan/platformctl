@@ -183,3 +183,65 @@ func TestRuntime_PromotesIngressCapableRuntime(t *testing.T) {
 		t.Fatal("EnsureTLSSecret against a non-ingress-capable runtime should error, got nil")
 	}
 }
+
+// memberSetCapableFake wraps the fake runtime and adds a bare-bones
+// runtime.MemberSetRuntime implementation — enough to prove
+// Registry.Runtime's wrapper promotes the capability correctly, without
+// pulling in the real Kubernetes adapter package (the same constraint
+// ingressCapableFake above documents).
+type memberSetCapableFake struct {
+	*fakeruntime.Runtime
+}
+
+func (memberSetCapableFake) AddressesMembersCollectively() bool { return true }
+
+// TestRuntime_PromotesMemberSetRuntime is the I7 counterpart of
+// TestRuntime_PromotesIngressCapableRuntime above (docs/adr/004's I7
+// addendum, docs/planning/08 §7.8): haGuardRuntime embeds the
+// runtime.ContainerRuntime *interface*, so without an explicit delegating
+// AddressesMembersCollectively method, a provider's own
+// req.Runtime.(runtime.MemberSetRuntime) type assertion (providerkit's new
+// collective-addressing branch) would always fail for every runtime
+// obtained through this registry — including a real Kubernetes adapter that
+// genuinely implements it — the identical bug class ADR 018's addendum
+// caught live for IngressCapableRuntime.
+func TestRuntime_PromotesMemberSetRuntime(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	gates.Register("HighAvailability", featuregate.Alpha, false)
+	reg := New(gates)
+	reg.RegisterRuntime("memberset-fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return memberSetCapableFake{Runtime: fakeruntime.New()}, nil
+	})
+	reg.RegisterRuntime("plain-fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+
+	rt, err := reg.Runtime("memberset-fake", nil)
+	if err != nil {
+		t.Fatalf("Runtime: %v", err)
+	}
+	ms, ok := rt.(runtime.MemberSetRuntime)
+	if !ok {
+		t.Fatal("registry-wrapped runtime does not implement MemberSetRuntime even though the underlying adapter does")
+	}
+	if !ms.AddressesMembersCollectively() {
+		t.Error("AddressesMembersCollectively() = false, want true (delegated to the underlying adapter)")
+	}
+
+	// The negative path: a runtime whose underlying adapter genuinely does
+	// not implement the capability (Docker/fake in production) still
+	// satisfies the MemberSetRuntime type assertion — haGuardRuntime itself
+	// always declares the method now — but answers false, the legitimate
+	// "ordinal addressing applies" default, never a panic.
+	plainRt, err := reg.Runtime("plain-fake", nil)
+	if err != nil {
+		t.Fatalf("Runtime: %v", err)
+	}
+	plainMS, ok := plainRt.(runtime.MemberSetRuntime)
+	if !ok {
+		t.Fatal("registry-wrapped runtime does not implement MemberSetRuntime at all (haGuardRuntime should always declare this method)")
+	}
+	if plainMS.AddressesMembersCollectively() {
+		t.Error("AddressesMembersCollectively() = true for a non-capable underlying runtime, want false")
+	}
+}

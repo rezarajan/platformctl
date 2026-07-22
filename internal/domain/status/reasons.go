@@ -115,7 +115,10 @@ const (
 	// declared spec.configuration.workers > 1 Connect-worker set whose
 	// per-ordinal Probe finds one or more ordinals absent/stopped appends
 	// the missing ordinal names to this prefix, naming exactly which
-	// worker(s) are gone.
+	// worker(s) are gone. On a runtime.MemberSetRuntime (Kubernetes,
+	// docs/adr/004's I7 addendum), there are no per-ordinal names to name —
+	// the appended detail is a "%d/%d ready" count instead
+	// (providerkit.probeConnectWorkerSetCollective).
 	ReasonConnectWorkerMissing = "ConnectWorkerMissing"
 )
 

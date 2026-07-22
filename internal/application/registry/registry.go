@@ -197,6 +197,26 @@ func (g *haGuardRuntime) RemoveTLSSecret(ctx context.Context, namespace, name st
 	return ic.RemoveTLSSecret(ctx, namespace, name)
 }
 
+// AddressesMembersCollectively makes haGuardRuntime itself satisfy
+// runtime.MemberSetRuntime (docs/adr/004's I7 addendum, docs/planning/08
+// §7.8), delegating to the embedded runtime when it implements the
+// capability — the identical explicit-delegation treatment
+// EnsureIngress/GetIngress/RemoveIngress needed above, for the identical
+// reason (docs/adr/018 addendum): an embedded runtime.ContainerRuntime
+// *interface* only promotes that interface's own declared method set, so
+// without this method a provider's own
+// req.Runtime.(runtime.MemberSetRuntime) type assertion would always fail
+// for every runtime obtained through this registry, including a real
+// Kubernetes adapter that genuinely implements it. Unlike the Ingress
+// methods, a missing capability is not an error here — a runtime that
+// doesn't implement it (Docker, the fake) legitimately answers "false"
+// (ordinal addressing applies, its pre-existing behavior), so this always
+// returns a bool rather than (bool, error).
+func (g *haGuardRuntime) AddressesMembersCollectively() bool {
+	ms, ok := g.ContainerRuntime.(runtime.MemberSetRuntime)
+	return ok && ms.AddressesMembersCollectively()
+}
+
 func joinKeys[V any](m map[string]V) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
