@@ -1,0 +1,12 @@
+# Class: Provider configuration fragment — wrong type.
+# brokers must be a positive integer (docs/adr/017 §a.4); a string value
+# must fail at validate.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: broker
+spec:
+  type: redpanda
+  runtime: {type: fake}
+  configuration:
+    brokers: "three"

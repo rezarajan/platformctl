@@ -446,6 +446,10 @@ func TestValidateSpecCredentialsSecretRefMustBeDeclared(t *testing.T) {
 	}
 }
 
+// TestValidateSpecWorkers: workers' own positive-integer shape is now
+// schemas/v1alpha1/fragments/provider/jdbcsink.json's job (docs/planning/08
+// E5) — see cmd/platformctl's negative-test corpus; this only covers that
+// every legal value still passes.
 func TestValidateSpecWorkers(t *testing.T) {
 	p := New()
 	base := map[string]any{
@@ -456,12 +460,6 @@ func TestValidateSpecWorkers(t *testing.T) {
 		cfg := provider.Provider{Configuration: merge(base, "workers", v)}
 		if err := p.ValidateSpec(cfg); err != nil {
 			t.Errorf("workers %v rejected: %v", v, err)
-		}
-	}
-	for _, v := range []any{0, -1, "two", 1.5} {
-		cfg := provider.Provider{Configuration: merge(base, "workers", v)}
-		if err := p.ValidateSpec(cfg); err == nil {
-			t.Errorf("workers %v (%T) accepted, want an error", v, v)
 		}
 	}
 }

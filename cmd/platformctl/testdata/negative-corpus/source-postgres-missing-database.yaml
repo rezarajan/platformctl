@@ -1,0 +1,23 @@
+# Class: Source engine-block fragment — required field missing
+# (docs/planning/08 E5). Before this fragment existed, an empty/missing
+# spec.postgres.database validated cleanly and failed only at reconcile
+# time ("Source %q: spec.postgres.database is required") — an apply-time-
+# only regression ADR 011 names. Every shipped example/testdata manifest
+# already sets database (reconcile would otherwise fail), so this is a real,
+# closed gap, not a behavior change for any valid manifest.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: db
+spec:
+  type: postgres
+  runtime: {type: fake}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: students
+spec:
+  engine: postgres
+  providerRef: {name: db}
+  postgres: {}

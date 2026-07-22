@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/binding/sink-jdbcsink.json",
+  "title": "Binding(mode: sink, providerRef type: jdbcsink).spec.options",
+  "description": "Shape-only fragment (docs/planning/08 E5, D3), migrated from jdbcsink.ValidateBindingOptions. format is required and restricted to avro|protobuf — stricter than every other provider in this codebase, deliberate: kafka-connect-jdbc cannot derive column names/types from a schemaless json record. deadLetter is accepted only to avoid additionalProperties:false rejecting it (shape owned by binding.FromEnvelope at the Kind level).",
+  "type": "object",
+  "properties": {
+    "format": { "type": "string", "enum": ["avro", "protobuf"] },
+    "converter": { "type": "string", "minLength": 1 },
+    "mode": { "type": "string", "enum": ["insert", "upsert"] },
+    "table": { "type": "string", "minLength": 1 },
+    "pkFields": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1
+    },
+    "unwrap": { "type": "boolean" },
+    "autoCreate": { "type": "boolean" },
+    "autoEvolve": { "type": "boolean" },
+    "databaseHostname": { "type": "string", "minLength": 1 },
+    "databasePort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "deadLetter": { "type": "object" }
+  },
+  "required": ["format"],
+  "additionalProperties": false
+}

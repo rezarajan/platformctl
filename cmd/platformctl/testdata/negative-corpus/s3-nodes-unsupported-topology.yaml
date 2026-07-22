@@ -1,0 +1,25 @@
+# Class: Provider SpecValidator cross-field rule (docs/planning/08 C4) —
+# NOT expressible as a static JSON Schema fragment (it excludes two specific
+# values, 2 and 3, rather than a type/range/enum), so this one is caught by
+# s3.ValidateSpec's own Go code, not schemas/v1alpha1/fragments/provider/
+# s3.json. Included in the corpus anyway: the accept bar is "fails at
+# validate with a named error", regardless of which layer enforces it.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: s3-root
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: store
+spec:
+  type: s3
+  runtime: {type: fake}
+  configuration:
+    rootSecretRef: s3-root
+    nodes: 2
+  secretRefs: [s3-root]

@@ -36,7 +36,7 @@ func Build() (map[string]string, error) {
 				return nil, fmt.Errorf("parse %s: %w", files[kind], err)
 			}
 			name := strings.ToLower(kind) + ".md"
-			out[name] = renderKind(apiVersion, kind, sch)
+			out[name] = renderKind(apiVersion, kind, sch) + renderFragmentsFor(kind)
 			indexRows = append(indexRows, fmt.Sprintf("| [%s](%s) | `%s` | %s |", kind, name, apiVersion, str(firstParagraph(sch["description"]))))
 		}
 	}
@@ -127,6 +127,80 @@ func providerTypes() string {
 	b.WriteString(str(typeProp["description"]) + "\n\n")
 	for _, v := range known {
 		b.WriteString(fmt.Sprintf("- `%v`\n", v))
+	}
+	return b.String()
+}
+
+// renderFragmentsFor appends the provider-owned schema fragment reference
+// (docs/planning/08 E5) for the Kinds that have one: Provider
+// (spec.configuration, keyed by spec.type), Source/Catalog (spec.<engine>,
+// keyed by spec.engine), Binding (spec.options, keyed by
+// "<mode>-<providerType>"). Every other Kind gets no extra section.
+func renderFragmentsFor(kind string) string {
+	switch kind {
+	case "Provider":
+		return renderFragmentGroup(
+			"Provider configuration reference (by `spec.type`)",
+			"This table is generated from each provider's own JSON-Schema fragment (`schemas/v1alpha1/fragments/provider/`) — the shape-only rules enforced on `spec.configuration` at `validate` time, in addition to the cross-field rules a provider's `SpecValidator` still checks (docs/planning/08 E5).",
+			schemas.ProviderConfigFragments, "spec.configuration")
+	case "Source":
+		return renderFragmentGroup(
+			"Source engine reference (by `spec.engine`)",
+			"This table is generated from each engine's own JSON-Schema fragment (`schemas/v1alpha1/fragments/source/`) — the shape of the `spec.<engine>` block (docs/planning/08 E5).",
+			schemas.SourceEngineFragments, "spec.<engine>")
+	case "Catalog":
+		return renderFragmentGroup(
+			"Catalog engine reference (by `spec.engine`)",
+			"This table is generated from each engine's own JSON-Schema fragment (`schemas/v1alpha1/fragments/catalog/`) — the shape of the `spec.<engine>` block (docs/planning/08 E5).",
+			schemas.CatalogEngineFragments, "spec.<engine>")
+	case "Binding":
+		return renderFragmentGroup(
+			"Binding options reference (by `spec.mode` + provider type)",
+			"This table is generated from each mode/provider pairing's own JSON-Schema fragment (`schemas/v1alpha1/fragments/binding/`) — the shape of the `spec.options` block once the realizing provider's type is known (docs/planning/08 E5). Only pairings with a registered fragment appear; every other provider's options are checked solely by its `BindingOptionsValidator` Go code, if it implements one.",
+			schemas.BindingOptionsFragments, "spec.options")
+	default:
+		return ""
+	}
+}
+
+// renderFragmentGroup renders one "## title" section with one "### <names>"
+// subsection per distinct fragment file in fragments (paths shared by more
+// than one discriminator — mysql/mariadb, s3/minio — render once, headed by
+// every discriminator that names them, comma-joined).
+func renderFragmentGroup(title, intro string, fragments map[string]string, blockPath string) string {
+	if len(fragments) == 0 {
+		return ""
+	}
+	byPath := map[string][]string{}
+	for disc, path := range fragments {
+		byPath[path] = append(byPath[path], disc)
+	}
+	paths := make([]string, 0, len(byPath))
+	for path, discs := range byPath {
+		sort.Strings(discs)
+		byPath[path] = discs
+		paths = append(paths, path)
+	}
+	sort.Slice(paths, func(i, j int) bool { return byPath[paths[i]][0] < byPath[paths[j]][0] })
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n## %s\n\n%s\n\n", title, intro)
+	for _, path := range paths {
+		raw, err := schemas.FragmentFS.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var sch map[string]any
+		if err := json.Unmarshal(raw, &sch); err != nil {
+			continue
+		}
+		fmt.Fprintf(&b, "### %s\n\n", strings.Join(byPath[path], ", "))
+		if desc := description(sch["description"]); desc != "" {
+			fmt.Fprintf(&b, "%s\n\n", desc)
+		}
+		b.WriteString("| Field | Type | Required | Description |\n|---|---|---|---|\n")
+		renderFields(&b, blockPath, sch)
+		b.WriteString("\n")
 	}
 	return b.String()
 }

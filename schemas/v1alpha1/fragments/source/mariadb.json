@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/source/mariadb.json",
+  "title": "Source(engine: mariadb).spec.mariadb",
+  "description": "Shape-only fragment (docs/planning/08 E5, docs/planning/08 A9's mariadb-cdc-scenario): database is required — identical shape to the mysql engine block (same adapter, distinct engine discriminator since a Source names its own nested block after spec.engine verbatim).",
+  "type": "object",
+  "properties": {
+    "database": { "type": "string", "minLength": 1 }
+  },
+  "required": ["database"],
+  "additionalProperties": false
+}

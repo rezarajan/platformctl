@@ -1,0 +1,21 @@
+# Class: Source engine-block fragment — required field missing
+# (docs/planning/08 E5). Same gap as the postgres engine (see
+# source-postgres-missing-database.yaml) — mysql.go/backup.go's identical
+# "spec.mysql.database is required" was reconcile-time-only before this
+# fragment.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: db
+spec:
+  type: mysql
+  runtime: {type: fake}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: orders
+spec:
+  engine: mysql
+  providerRef: {name: db}
+  mysql: {}

@@ -1,0 +1,12 @@
+# Class: Provider configuration fragment — wrong type.
+# workers must be a positive integer (docs/planning/08 C3).
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: cdc
+spec:
+  type: debezium
+  runtime: {type: fake}
+  configuration:
+    bootstrapServers: "broker:29092"
+    workers: 0

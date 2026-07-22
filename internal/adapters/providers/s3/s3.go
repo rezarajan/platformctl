@@ -786,17 +786,22 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 		return fmt.Errorf("configuration.imagePullSecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", ref)
 	}
 	if v, declared := cfg.Configuration["nodes"]; declared {
-		n, ok := -1, false
+		// nodes' own positive-integer shape (docs/planning/08 E5) is now
+		// schemas/v1alpha1/fragments/provider/s3.json's job, composed into
+		// manifest.Validate ahead of this method in every real CLI path
+		// (ADR 011's loadAndValidate order); a non-numeric nodes value
+		// slipping past that layer leaves n at its zero value (-1) below,
+		// which matches neither the 2/3 refusal nor any positive count —
+		// still caught by the mutual-exclusion/HighAvailability paths a
+		// real declared value would need to clear.
+		n := -1
 		switch t := v.(type) {
 		case int:
-			n, ok = t, true
+			n = t
 		case float64:
 			if t == float64(int(t)) {
-				n, ok = int(t), true
+				n = int(t)
 			}
-		}
-		if !ok || n < 1 {
-			return fmt.Errorf("spec.configuration.nodes must be a positive integer, got %v", v)
 		}
 		// MinIO's erasure-coded distributed mode has no supported topology
 		// between "1 node, no erasure coding" and "4+ nodes, erasure

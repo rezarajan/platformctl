@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/catalog/nessie.json",
+  "title": "Catalog(engine: nessie).spec.nessie",
+  "description": "Shape-only fragment (docs/planning/08 E5, docs/planning/03 §8.1): defaultBranch is optional (defaults to \"main\", docs/planning/08 E2 configuration-minimization).",
+  "type": "object",
+  "properties": {
+    "defaultBranch": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}

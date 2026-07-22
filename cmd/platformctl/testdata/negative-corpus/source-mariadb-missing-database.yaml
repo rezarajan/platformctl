@@ -1,0 +1,21 @@
+# Class: Source engine-block fragment — required field missing
+# (docs/planning/08 A9, E5). mariadb is its own engine discriminator (a
+# Source names its nested block after spec.engine verbatim, even though
+# mariadb shares the mysql adapter) — this is a distinct fragment from
+# source-mysql-missing-database.yaml, not the same code path.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: db
+spec:
+  type: mariadb
+  runtime: {type: fake}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: orders
+spec:
+  engine: mariadb
+  providerRef: {name: db}
+  mariadb: {}

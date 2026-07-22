@@ -753,23 +753,14 @@ func (p *Provider) ValidateSpec(cfg provider.Provider) error {
 	}
 	// workers > 1 (docs/planning/08 C3) requires the HighAvailability gate
 	// (enforced at validate by cmd/platformctl's checkHighAvailabilityGate,
-	// the same mechanism as redpanda's brokers — docs/adr/017 §a.8); this
-	// check only guards the value's own shape, mirroring redpanda's
-	// ValidateSpec split between gate-independent shape checks here and
-	// gate enforcement in loadAndValidate.
-	if v, declared := cfg.Configuration["workers"]; declared {
-		n, ok := -1, false
-		switch t := v.(type) {
-		case int:
-			n, ok = t, true
-		case float64:
-			if t == float64(int(t)) {
-				n, ok = int(t), true
-			}
-		}
-		if !ok || n < 1 {
-			return fmt.Errorf("spec.configuration.workers must be a positive integer, got %v", v)
-		}
+	// the same mechanism as redpanda's brokers — docs/adr/017 §a.8).
+	// workers' own positive-integer shape (docs/planning/08 E5) is now
+	// schemas/v1alpha1/fragments/provider/debezium.json's job, composed
+	// into manifest.Validate ahead of this method in every real CLI path
+	// (ADR 011's loadAndValidate order) — this check only guards the
+	// cross-field mutual exclusion below, which a static JSON Schema
+	// fragment cannot express against a sibling field.
+	if _, declared := cfg.Configuration["workers"]; declared {
 		// Host-port pin cannot be combined with the replica-set shape:
 		// every ordinal's host port is auto-assigned (connectPorts,
 		// mirroring docs/adr/017 §a.4's identical refusal for redpanda's

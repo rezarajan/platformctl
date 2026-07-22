@@ -1,0 +1,59 @@
+# Class: Binding options fragment — required field missing (docs/planning/08
+# D3; gate JDBCSinkProvider, enabled by the test harness). format is
+# REQUIRED and restricted to avro|protobuf for jdbcsink specifically
+# (kafka-connect-jdbc cannot derive columns from schemaless json) — omitting
+# it must fail at validate, not with a cryptic connector-registration error.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: broker
+spec:
+  type: redpanda
+  runtime: {type: fake}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: warehouse-db
+spec:
+  type: postgres
+  runtime: {type: fake}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: jsink
+spec:
+  type: jdbcsink
+  runtime: {type: fake}
+  configuration:
+    image: "datascape-jdbcsink-connect:local"
+    bootstrapServers: "broker:29092"
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: warehouse
+spec:
+  engine: postgres
+  providerRef: {name: warehouse-db}
+  postgres: {database: warehouse}
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: attendance-events
+spec:
+  providerRef: {name: broker}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: events-to-warehouse
+spec:
+  mode: sink
+  sourceRef: {name: attendance-events}
+  targetRef: {name: warehouse}
+  providerRef: {name: jsink}
+  options:
+    table: attendance

@@ -1,0 +1,58 @@
+# Class: Binding options fragment — empty array where at least one entry is
+# required (docs/planning/08 E5). options.tables, when declared, must name
+# at least one table — an empty list is almost certainly a manifest-
+# authoring mistake (a template placeholder left unfilled), not a
+# deliberate "capture nothing".
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: broker
+spec:
+  type: redpanda
+  runtime: {type: fake}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: cdc
+spec:
+  type: debezium
+  runtime: {type: fake}
+  configuration:
+    bootstrapServers: "broker:29092"
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: db
+spec:
+  type: postgres
+  runtime: {type: fake}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: students
+spec:
+  engine: postgres
+  providerRef: {name: db}
+  postgres: {database: attendance}
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: attendance-events
+spec:
+  providerRef: {name: broker}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: students-to-events
+spec:
+  mode: cdc
+  sourceRef: {name: students}
+  targetRef: {name: attendance-events}
+  providerRef: {name: cdc}
+  options:
+    tables: []

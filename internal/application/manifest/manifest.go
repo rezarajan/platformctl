@@ -21,6 +21,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/secret"
 	"github.com/rezarajan/platformctl/internal/domain/source"
+	"github.com/rezarajan/platformctl/schemas"
 )
 
 // KnownKinds is the closed set of v1 kinds.
@@ -84,6 +85,19 @@ func Load(path string) ([]resource.Envelope, error) {
 // Validate runs envelope-level and kind-specific validation over the set.
 func Validate(envelopes []resource.Envelope) error {
 	seen := make(map[resource.Key]bool)
+	// providerTypeByKey resolves a Binding's providerRef to its Provider's
+	// spec.type ahead of the main pass below (docs/planning/08 E5): a
+	// Binding may appear before its Provider in file order, and a Binding's
+	// spec.options fragment is keyed by "<mode>-<providerType>".
+	providerTypeByKey := make(map[resource.Key]string, len(envelopes))
+	for _, e := range envelopes {
+		if e.Kind != "Provider" {
+			continue
+		}
+		if t, _ := e.Spec["type"].(string); t != "" {
+			providerTypeByKey[e.Key()] = t
+		}
+	}
 	for _, e := range envelopes {
 		if err := e.Validate(); err != nil {
 			return err
@@ -103,17 +117,33 @@ func Validate(envelopes []resource.Envelope) error {
 		var err error
 		switch e.Kind {
 		case "Provider":
-			_, err = provider.FromEnvelope(e)
+			var p provider.Provider
+			p, err = provider.FromEnvelope(e)
+			if err == nil {
+				err = validateProviderConfigurationFragment(e, p.Type)
+			}
 		case "Source":
-			_, err = source.FromEnvelope(e)
+			var s source.Source
+			s, err = source.FromEnvelope(e)
+			if err == nil {
+				err = validateEngineFragment(e, s.Engine, s.EngineConfig, schemas.SourceEngineFragments, "source")
+			}
 		case "EventStream":
 			_, err = eventstream.FromEnvelope(e)
 		case "Binding":
-			_, err = binding.FromEnvelope(e)
+			var b binding.Binding
+			b, err = binding.FromEnvelope(e)
+			if err == nil {
+				err = validateBindingOptionsFragment(e, string(b.Mode), "providerRef", b.Options, providerTypeByKey)
+			}
 		case "Dataset":
 			_, err = dataset.FromEnvelope(e)
 		case "Catalog":
-			_, err = catalog.FromEnvelope(e)
+			var c catalog.Catalog
+			c, err = catalog.FromEnvelope(e)
+			if err == nil {
+				err = validateEngineFragment(e, c.Engine, c.EngineConfig, schemas.CatalogEngineFragments, "catalog")
+			}
 		case "Connection":
 			_, err = connection.FromEnvelope(e)
 		case "SecretReference":

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/binding/sink-s3sink.json",
+  "title": "Binding(mode: sink, providerRef type: s3sink).spec.options",
+  "description": "Shape-only fragment (docs/planning/08 E5), migrated from s3sink.ValidateBindingOptions. options.endpoint's well-formed-URL check (scheme+host) remains a SpecValidator rule (more than a JSON Schema string shape can express); deadLetter's own shape ({stream, tolerance}, docs/planning/08 D6) is validated unconditionally at the Kind level by binding.FromEnvelope regardless of provider, so it is accepted here only to avoid additionalProperties:false rejecting it.",
+  "type": "object",
+  "properties": {
+    "endpoint": { "type": "string", "minLength": 1 },
+    "format": { "type": "string", "enum": ["json", "avro", "protobuf"] },
+    "converter": { "type": "string", "minLength": 1 },
+    "deadLetter": { "type": "object" }
+  },
+  "additionalProperties": false
+}

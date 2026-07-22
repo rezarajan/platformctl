@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/provider/openlineage.json",
+  "title": "Provider(type: openlineage).spec.configuration",
+  "description": "Shape-only fragment (docs/planning/08 E5). No SpecValidator implemented for this provider today — first coverage from this fragment.",
+  "type": "object",
+  "properties": {
+    "image": { "type": "string", "minLength": 1 },
+    "apiPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+  },
+  "additionalProperties": false
+}

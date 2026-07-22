@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/provider/mysql.json",
+  "title": "Provider(type: mysql|mariadb).spec.configuration",
+  "description": "Shape-only fragment (docs/planning/08 E5): shared by both the mysql and mariadb provider types (same adapter, per-type image/profile catalog). The rootSecretRef-or-nonempty-secretRefs fallback and *SecretRef spec.secretRefs-membership checks remain SpecValidator cross-field rules.",
+  "type": "object",
+  "properties": {
+    "image": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "rootSecretRef": { "type": "string", "minLength": 1 },
+    "replicationSecretRef": { "type": "string", "minLength": 1 },
+    "metrics": { "type": "string", "enum": ["enabled", "disabled"] }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,13 @@
+# Class: Provider configuration fragment — enum typo.
+# schemaRegistry accepts only "enabled"|"disabled"; a typo must fail at
+# validate, not silently leave the registry off until someone notices at
+# apply time.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: broker
+spec:
+  type: redpanda
+  runtime: {type: fake}
+  configuration:
+    schemaRegistry: "yes"

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/binding/ingest-s3source.json",
+  "title": "Binding(mode: ingest, providerRef type: s3source).spec.options",
+  "description": "Shape-only fragment (docs/planning/08 E5, D4), migrated from s3source.ValidateBindingOptions. options.endpoint's well-formed-URL check (scheme+host) remains a SpecValidator rule.",
+  "type": "object",
+  "properties": {
+    "endpoint": { "type": "string", "minLength": 1 },
+    "converter": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}

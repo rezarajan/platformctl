@@ -938,26 +938,16 @@ func retentionMillis(s string) (int64, error) {
 // design (docs/adr/017 §a.8); cmd/platformctl's checkHighAvailabilityGate
 // enforces it in loadAndValidate, the same mechanism as
 // checkSchemaRegistryGate.
+// ValidateSpec implements reconciler.SpecValidator. schemaRegistry's enum
+// shape and brokers' positive-integer shape (docs/planning/08 E5) are now
+// enforced by schemas/v1alpha1/fragments/provider/redpanda.json, composed
+// into manifest.Validate ahead of this method in every real CLI path
+// (ADR 011's loadAndValidate order) — the checks below are the cross-field
+// rules a static JSON Schema fragment cannot express (mutual exclusion
+// between spec.configuration.brokers and a sibling host-port pin/
+// schemaRegistry value).
 func (p *Provider) ValidateSpec(cfg provider.Provider) error {
-	if v, ok := cfg.Configuration["schemaRegistry"]; ok {
-		s, _ := v.(string)
-		if s != "enabled" && s != "disabled" {
-			return fmt.Errorf("spec.configuration.schemaRegistry must be \"enabled\" or \"disabled\", got %v", v)
-		}
-	}
-	if v, declared := cfg.Configuration["brokers"]; declared {
-		n, ok := -1, false
-		switch t := v.(type) {
-		case int:
-			n, ok = t, true
-		case float64:
-			if t == float64(int(t)) {
-				n, ok = int(t), true
-			}
-		}
-		if !ok || n < 1 {
-			return fmt.Errorf("spec.configuration.brokers must be a positive integer, got %v", v)
-		}
+	if _, declared := cfg.Configuration["brokers"]; declared {
 		// Host-port pins cannot be combined with the ordinal-set shape:
 		// every ordinal's host port is auto-assigned (docs/adr/004 known
 		// limitation, closed at validate here per docs/adr/017 §a.4).

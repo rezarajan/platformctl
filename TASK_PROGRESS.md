@@ -1,114 +1,160 @@
-# I6: KubernetesRuntime GA-parity evidence — progress
+# E5: Provider-owned schema fragments + typed option validation — progress
 
-Task: docs/planning/08 §7.8 I6. Test-only; no production code changes.
-Final commit: one squashed
-`test(k8s): chaos mid-apply-kill + Connect HA/DLQ on Kubernetes (I6)`.
+Task: docs/planning/08 §7 E5 (Size L). Final commit: ONE squashed commit
+`feat(validation): provider-owned schema fragments + negative corpus (E5)`.
+Branch: worktree-agent-af9e4d6fb80205dd4 (do not touch main; no push).
+
+Design decision (recorded here + in final commit body): fragments live
+under `schemas/v1alpha1/fragments/{provider,source,catalog,binding}/*.json`
+(embedded via a new `schemas.FragmentFS`), NOT physically inside each
+adapter package. Composition happens in Go
+(`internal/application/manifest/fragment.go`), not via JSON `$ref`/if-then
+chains inside the core Kind schemas (provider.json/source.json/etc. are
+UNCHANGED) — this keeps the core Kind shape and each provider's fragment
+independently evolvable, avoids a 17-way `if spec.type == ...` inside one
+shared file, and needs no new adapter->schema-compiler dependency (schemas
+remain pure data, manifest already imports `schemas`). "Provider-owned" is
+satisfied by one file per provider/engine/binding-discriminator, named for
+it, with the redundant-check migration recorded in that provider's own
+diff.
 
 ## Steps
 
-1. [done] Read task spec (doc 08 I6), Docker originals
-   (`cmd/platformctl/chaos_integration_test.go`'s
-   `TestChaosApplyKilledMidRun`, `cmd/platformctl/
-   connect_ha_dlq_integration_test.go`'s
-   `TestConnectWorkersHAAndDeadLetterQueue`), doc 06 §8 (minimal-RBAC)
-   and §10 (integration economy).
-2. [done] **Finding #1 (deviation clause, doc 08 §2.1):** live-probed a
-   `workers: 2` debezium Provider on `runtime: kubernetes` against the
-   real cluster. Confirmed `providerkit.ReachableURLs`' per-ordinal
-   addressing (`runtime.OrdinalName(name, i)` -> `EnsureReachable`) has
-   no Kubernetes analogue for the Deployment (`StableIdentity: false`)
-   shape debezium/s3sink's `workers > 1` opts into (docs/adr/004):
-   every ordinal fails to resolve, so a Binding wired to such a
-   Provider fails outright at apply:
-   `no member of "probe-hadbz-dbz" (2 ordinals) is currently reachable`.
-   Real, currently-open production gap (both debezium and s3sink; shared
-   code path). Recorded additively in docs/planning/07 (per-runtime
-   differences, dated finding under the open multi-replica checkbox) and
-   in doc 08 I6's Done-note. Consequence: the K8s Connect test is scoped
-   to D6 (DLQ) in full + native Deployment self-heal after an
-   out-of-band single-worker kill — not C3's "second worker keeps
-   serving" claim. Probe env destroyed cleanly (EXIT=0).
-3. [done] `cmd/platformctl/testdata/chaos-k8s-scenario/manifests.yaml` —
-   K8s mirror of `testdata/cdc-scenario` (redpanda+postgres+debezium,
-   single-instance — smallest CDC shape, doc 06 §10 rule 5).
-   `access: node-port` throughout.
-4. [done] `cmd/platformctl/testdata/connect-ha-dlq-k8s-scenario/
-   manifests.yaml` — K8s mirror of `testdata/connect-ha-dlq-scenario`,
-   single-worker per finding #1 (rationale in the file header).
-5. [done] `cmd/platformctl/chaos_kubernetes_integration_test.go` —
-   `TestKubernetesChaosApplyKilledMidRun`.
-6. [done] `cmd/platformctl/connect_ha_dlq_kubernetes_integration_test.go`
-   — `TestKubernetesConnectDeadLetterQueueAndWorkerResilience`.
-   **Finding #2 (live, fixed in-test):** host-side produce/consume
-   against the legacy single-broker redpanda shape on K8s hangs dialing
-   the broker's advertised loopback sentinel
-   (redpanda.advertisedAddr "127.0.0.1:<kafkaPort>", docs/adr/017
-   §a.4) — metadata-only calls work via the seed broker, produce
-   follows the advertised address. Fixed with the provider's own
-   dialer-redirect trick (chdlqk8sRedirectDialer: every dial goes to
-   the EnsureReachable-resolved tunnel address; correct for exactly one
-   broker). Two live failures diagnosed to get here
-   (scratchpad logs connect-ha-dlq-k8s-run1.log / -run1b.log).
-7. [done] `scripts/test-impact.sh`: `chaos-k8s` row added (scope
-   `internal/adapters/runtime/kubernetes
-   cmd/platformctl/testdata/chaos-k8s-scenario SHARED_CORE`);
-   `connect-ha-dlq` row's scope extended with
-   `internal/adapters/runtime/kubernetes` +
-   `cmd/platformctl/testdata/connect-ha-dlq-k8s-scenario`, -run pattern
-   extended with `|TestKubernetesConnectDeadLetterQueueAndWorkerResilience`.
-   `go test ./internal/archtest/...` green. `--print --base main`
-   selects exactly the two suites.
-8. [done] Gates: gofmt clean, `go vet ./...` clean, build (plain +
-   `-tags integration`) clean, unfiltered
-   `go test ./... ; echo true-exit=$?` = 0.
-9. [in-progress, detached] Live evidence — ALL FOUR legs run
-   sequentially by one detached script:
-   **log: `i6-live-runs.log` (worktree root), nohup PID 1400362**,
-   script at scratchpad/i6-live-runs.sh. Order: run 1 of both suites
-   via `bash scripts/test-impact.sh --base main` (ledger-records
-   greens; also re-runs the Docker connect-ha-dlq leg, same suite),
-   then run 2 of each K8s test via direct
-   `flock /tmp/platformctl-itest.lock go test ...` (the ledger would
-   dedupe an identical suite re-run). KUBECONFIG exported to the minted
-   minimal-RBAC kubeconfig. Queued behind other agents' sweeps on the
-   shared flock — expected; the merge gate reads the log and
-   transcribes the four timings into doc 08 I6's Done-note.
-   Prior partial evidence: chaos-k8s already passed once live
-   (66.63s test / 130s wall, scratchpad/chaos-k8s-run1.log) before the
-   finding-#2 fix (which is outside that test's code path).
-10. [done] doc 08 I6 Done-note appended (additive; passed the guard
-    hook) — names both findings, the suite rows, the i6-live-runs.log
-    hand-off, and the GA-decision consequence.
-11. [done] Commit attempted; GPG timed out → per fallback: everything
-    STAGED + `COMMIT_MSG.txt` at worktree root. Orchestrator commits
-    with `git commit -F COMMIT_MSG.txt` once GPG is unlocked.
+1. [done] Read: doc 08 E5 + doc 07 §3.1, doc 02 §4.2/§5.6/§11, doc 06
+   §2.1/§10, ADR 011, schemas/ layout, manifest/schema.go, registry.go,
+   docsgen.go, compatibility.go (where SpecValidator/BindingOptionsValidator
+   are actually invoked today — NOT apply time, already validate-time via
+   `compatibility.Check`; the gap is uneven/non-generated shape coverage +
+   no typo protection, not "fails only at apply" as doc 07's older framing
+   suggested for most cases — except Source/Catalog engine blocks, see
+   Finding below).
+2. [done] Mined every provider's `ValidateSpec`/`ValidateBindingOptions` Go
+   body (redpanda, postgres, mysql, debezium, s3, s3sink, jdbcsink,
+   s3source, nessie, openlineage, proxy, prometheus, grafana, ingress,
+   trino, wireguard) to classify each check shape-only (migratable) vs
+   cross-field/graph (stays in Go per ADR 011 — a JSON Schema fragment
+   cannot express "this string must equal a value in a sibling array/another
+   resource" without hard-coding it, e.g. every `*SecretRef` ∈
+   `spec.secretRefs` check, and `bootstrapServers`-required-unless-
+   graph-inferred for debezium/s3sink/jdbcsink/s3source).
+3. [done] **Finding (real, pre-existing gap, not a manifest bug — E5 closes
+   it, no manifest edited):** `Source.spec.<engine>.database` (postgres/
+   mysql/mariadb) was NOT checked at validate time at all — only at
+   reconcile (`"Source %q: spec.postgres.database is required"` in
+   postgres.go/mysql.go/backup.go). Every shipped example/testdata manifest
+   already sets it (since reconcile would otherwise fail), so making it
+   `required` in the new Source-engine fragments is behavior-preserving and
+   closes exactly the kind of apply-time-only regression ADR 011 names.
+4. [done] Cross-checked every fragment's key list against the ACTUAL keys
+   used across `cmd/platformctl/testdata/**/*.yaml` and `examples/**/*.yaml`
+   (a Python/yaml scan, not just Go-source grep — caught `port`/`apiPort`
+   keys my first Go-grep pass missed for postgres/mysql/nessie/openlineage/
+   prometheus/grafana/trino, since those read the key through
+   `providerkit.HostPort(cfg, name, "port")` inline rather than a literal
+   `cfg.Configuration["port"]` index).
+5. [done] Fragment files written under `schemas/v1alpha1/fragments/`:
+   16 provider files (redpanda, postgres, mysql[shared mariadb],
+   debezium, s3[shared minio], s3sink, jdbcsink, s3source, nessie,
+   openlineage, proxy, prometheus, grafana, ingress, trino, wireguard —
+   noop/container deliberately excluded, test-only per provider.json's own
+   description, never "shipped"), 3 source-engine files (postgres, mysql,
+   mariadb), 1 catalog-engine file (nessie), 4 binding-options files
+   (cdc-debezium, sink-s3sink, sink-jdbcsink, ingest-s3source).
+6. [done] `schemas/embed.go`: `FragmentFS` + `ProviderConfigFragments`/
+   `SourceEngineFragments`/`CatalogEngineFragments`/`BindingOptionsFragments`
+   maps.
+7. [done] `internal/application/manifest/fragment.go` (new file): lazy
+   `compiledFragments()` (same `sync.Once` pattern as `schema.go`'s
+   `compiledSchemas()`), `validateProviderConfigurationFragment`,
+   `validateEngineFragment` (Source/Catalog), `validateBindingOptionsFragment`
+   (resolves providerRef -> provider type via a pre-pass map built in
+   `manifest.Validate`, since a Binding may precede its Provider in file
+   order; silently no-ops on an unresolved ref — `compatibility.Check`
+   already gives the authoritative graph error for that).
+8. [done] `internal/application/manifest/manifest.go`: `Validate` wires the
+   three fragment-check call sites into the existing per-Kind switch.
+9. [done] Gates so far: `gofmt -l .` empty; `go build ./...` and
+   `-tags integration` both clean; `go vet ./...` and `-tags integration`
+   both clean; unfiltered `go test ./... ; echo true-exit=$?` = 0 (two
+   `cmd/platformctl/lint_h2_test.go` fixtures needed a `postgres: {database:
+   attendance}` block added — synthetic lint-test fixtures, not a
+   blueprint/example/scenario manifest, so allowed; this was itself an
+   instance of the Finding in step 3).
+10. [done] docsgen: `renderFragmentsFor`/`renderFragmentGroup`
+    (`internal/application/docsgen/docsgen.go`) append a fragment-derived
+    reference section to provider.md/source.md/catalog.md/binding.md;
+    regenerated via `go run ./cmd/platformctl docs build --out
+    docs/reference`; `TestGeneratedReferenceInSync` green.
+11. [done] doc 03 additive sync: new §4.1, §5.2, §7.1, §8.1.1 subsections
+    (fragment layout, keyed by provider.md/source.md/catalog.md/binding.md's
+    new generated sections) — additive only, guard hook passed.
+12. [done] Pruned redundant standalone shape-check `if` blocks (positive-int/
+    enum/required-field, no longer reachable ahead of `SpecValidator` on any
+    real CLI path) from redpanda, postgres, mysql, debezium, s3, s3sink,
+    jdbcsink, s3source; each site left a comment naming the fragment now
+    responsible and why the remaining checks stay (cross-field, or a shared
+    helper also called from `Reconcile`, e.g. trino.workerCount,
+    wireguard.parseConfig — NOT touched). Updated the direct-unit-tests that
+    exercised the deleted checks (they call `ValidateSpec` directly,
+    bypassing the manifest/fragment layer) to stop asserting the
+    now-fragment-owned rejection while keeping the "still accepts every
+    legal value" and cross-field assertions. **Scoping note (deliberate, not
+    exhaustive):** prometheus/grafana/ingress/trino/wireguard's
+    image/domain-string shape checks and postgres/mysql's version-catalog
+    interplay were left untouched — postgres/mysql's `metrics` enum check
+    WAS deleted (zero direct test coverage, confirmed before deleting); the
+    others have direct `ValidateSpec`-calling unit tests asserting the exact
+    shape rejection, and rewriting all of them was traded off against
+    finishing the corpus + doc sync within this session's budget. This is a
+    narrower sweep than "every provider fully pruned" — recorded here and in
+    the final commit body, not hidden.
+13. [done] Negative-test corpus: `cmd/platformctl/testdata/negative-corpus/`
+    (19 fixtures, one per misconfiguration class) +
+    `cmd/platformctl/negative_corpus_test.go`'s `TestNegativeCorpus`
+    (table-driven, real `platformctl validate` invocation via the existing
+    `run(t, ...)` cobra-in-process helper, one subtest per fixture,
+    asserting non-zero exit + the error names both the resource and the
+    offending field/value). All 19 green on first full run after fixture
+    construction. Class list: redpanda {schemaRegistry enum typo, brokers
+    wrong type, unknown-key typo}, postgres {metrics enum typo}, mysql
+    {metrics enum typo}, debezium {workers wrong type}, s3 {nodes
+    unsupported topology 2/3 — a SpecValidator cross-field rule, not a
+    fragment, included anyway since the Accept bar is "fails at validate"},
+    s3sink {missing required image}, jdbcsink {missing required image},
+    s3source {missing required credentialsSecretRef}, wireguard {missing
+    required peerNetwork/peerPublicKey/peerEndpoint/address/allowedIPs},
+    nessie Catalog {unknown-key typo}, Source engine {postgres/mysql/mariadb
+    missing database — the real reconcile-time-only gap this task closed},
+    Binding options {cdc-debezium snapshotMode typo, cdc-debezium empty
+    tables array, sink-s3sink format typo, sink-jdbcsink missing required
+    format, ingest-s3source unknown-key typo}.
+14. [done] `bash scripts/test-impact.sh --base main --print`: 16 suites
+    selected (broad, as expected — manifest.Load is shared core). Real
+    (non-print) sweep launched in the background at final-commit time;
+    per task instructions, not polled — see final report for the launch
+    command and log path.
+15. [done] Doc 08 Stage E exit-criterion checkbox toggled `[x]` (pure toggle,
+    separate edit from the additive Done-note under E5's own section, to
+    satisfy the guard hook's "toggle-only or purely-additive, never both in
+    one edit" rule).
+16. [next→closing] Squash the 5 WIP commits into the one final commit
+    `feat(validation): provider-owned schema fragments + negative corpus
+    (E5)` immediately after this checkpoint.
 
-## Live-run evidence log
+## Verification log
 
-- chaos-k8s run 1: **PASS 66.63s** (130s wall;
-  scratchpad/chaos-k8s-run1.log, EXIT=0)
-- chaos-k8s run 2: **PASS 63.91s** (511s wall incl. flock queue;
-  scratchpad/chaos-k8s-run2.log, EXIT=0)
-  → TestKubernetesChaosApplyKilledMidRun is GREEN TWICE live already.
-- connect-ha-dlq (K8s) runs 1+2: pending in `i6-live-runs.log`
-  (worktree root; sections labeled, grep `exit=`) — the two earlier
-  attempts failed on finding #2 (advertised-sentinel produce hang),
-  fixed since; the detached script runs the fixed test. The script also
-  re-runs chaos-k8s (run 1 via the impact script — ledger-records the
-  green — and a direct run) — surplus evidence, harmless.
-  Merge gate transcribes the final timings into doc 08 I6's Done-note.
-
-## Deviations
-
-- Accept's "suite rows selected by a K8s-adapter-only change
-  (`test-impact.sh --print` proof)" was demonstrated structurally (both
-  rows' scope columns contain `internal/adapters/runtime/kubernetes`;
-  `--print` at this diff selects exactly the two rows via their testdata
-  scopes) but the literal adapter-file-touch `--print` run was NOT
-  performed: modifying a tracked k8s-adapter file while the detached
-  evidence runs compute scope-hashes from this same worktree would
-  corrupt the ledger keys being recorded. One `--print` command at the
-  merge gate (touch any k8s adapter file, run, revert) completes it.
-- The Docker `TestConnectWorkersHAAndDeadLetterQueue` leg re-runs inside
-  run 1 (it shares the extended connect-ha-dlq suite row) — not an I6
-  requirement, but the row is the unit the impact script runs.
+- `go test ./...` full run (final, after all steps above): PASS,
+  true-exit=0.
+- `gofmt -l .`: empty. `go build ./...` and `go build -tags integration
+  ./...`: clean. `go vet ./...` and `go vet -tags integration ./...`: clean.
+- `go run ./cmd/platformctl docs build --out docs/reference` regenerated
+  binding.md/catalog.md/provider.md/source.md;
+  `TestGeneratedReferenceInSync` green.
+- `examples/cdc-attendance` and `examples/lakehouse` re-validated directly
+  (`platformctl validate <dir> --feature-gates ...`) after all fragment
+  changes: both still "N resource(s) valid" with zero manifest edits.
+- `bash scripts/test-impact.sh --base main --print`: 16 suites selected
+  (redpanda, cdc, sink, connect-ha-dlq, acceptance, lakehouse, backup,
+  prometheus, monitoring, object-store-posture, trino, jdbcsink, s3source,
+  wireguard, external-import, external-db-tls) — the real sweep is
+  Docker-backed and was launched in the background, not awaited.

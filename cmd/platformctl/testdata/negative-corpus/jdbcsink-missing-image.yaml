@@ -1,0 +1,11 @@
+# Class: Provider configuration fragment — required field missing
+# (docs/planning/08 D3; gate JDBCSinkProvider, enabled by the test harness).
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: jsink
+spec:
+  type: jdbcsink
+  runtime: {type: fake}
+  configuration:
+    bootstrapServers: "broker:29092"
