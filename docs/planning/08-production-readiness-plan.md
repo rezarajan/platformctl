@@ -1353,6 +1353,41 @@ note first (per doc 06 §3).
 - **Accept:** lakehouse example uses warehouseRef; Spark/Trino inventory
   snippets pick up the warehouse automatically; ambiguity/negative-path
   tests per the doc 07 §0.2 pattern.
+- **Done (2026-07-21, D8):** `Catalog.spec.warehouseRef` (top-level,
+  kind-checked to Dataset via the plain `refFields` pass — the "no
+  engine-block introspection" simplification the task text predicted,
+  recorded in graph.go's doc comment; D10's `configRefFields` untouched).
+  Reconciliation design + deviations recorded in docs/adr/006's
+  "Implementation notes (D8, added post-implementation)": nessie's
+  warehouse config is container-create-time env, but warehouseRef's facts
+  only resolve after nessie's own Provider-kind reconcile — so the derived
+  config is applied from the *Catalog*-kind reconcile
+  (`ensureDerivedWarehouseConfig` re-`EnsureInstance`s with corrected env;
+  idempotency rides entirely on `EnsureContainer`'s existing spec-hash —
+  recreate once on fact change, zero API calls when unchanged, unit-pinned
+  via the fake runtime's MutationCount). Explicit
+  `configuration.defaultWarehouseLocation`/`warehouseS3*` (D10) kept and
+  always win — additive coexistence. Engine seam:
+  `reconciler.Request.WarehouseFacts` via `resolveWarehouseFacts`
+  (published-facts-only, ADR 015); trino's `resolveCatalogFacts` now
+  prefers the Catalog's warehouseRef chain, then `warehouseProviderRef`,
+  then sole-S3-Provider inference (resolution order unit-pinned). Accept
+  verified live on Docker: lakehouse example adopts warehouseRef with no
+  explicit warehouse fields (`TestLakehouse` 67.89s; bonus
+  `TestLakehouseExampleOnKubernetes` 135.82s green too); `docker inspect`
+  confirms the derived
+  `NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION=s3://warehouse/iceberg/`
+  and `/iceberg/v1/config` answers 200 (500 pre-D8 in this example);
+  `inventory --for spark|trino` reflect the warehouse facts (verified
+  live; `gatherToolFacts` needed no change — already fact-driven); trino
+  e2e green with warehouseRef + warehouseProviderRef coexisting
+  (`TestTrinoComputeEngineEndToEnd` 117.93s, the scenario's explicit
+  nessie warehouse fields replaced by a `trn-warehouse` Dataset);
+  negative path: warehouseRef to a non-Dataset rejected at validate with
+  graph's standard does-not-resolve shape
+  (`TestCatalogWarehouseRefRejectsWrongKind`; ambiguity is impossible for
+  a kind-checked ref beyond the generic duplicate/ambiguity rules already
+  unit-pinned — recorded in that test's doc comment).
 
 ### D9: Compute-engine infrastructure — decision note
 
