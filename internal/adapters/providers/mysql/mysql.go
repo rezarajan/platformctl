@@ -227,13 +227,13 @@ func ensureRootPassword(ctx context.Context, rt runtime.ContainerRuntime, name, 
 		Port:                  3306,
 		NoPreviousOrUnchanged: previousPass == "" || previousPass == desiredPass,
 		PingDesired: func(ctx context.Context, addr string) error {
-			return ping(ctx, dsnAddr(addr, "root", desiredPass, ""))
+			return ping(ctx, dsnAddr(addr, "root", desiredPass, "", nil))
 		},
 		PingPrevious: func(ctx context.Context, addr string) error {
-			return ping(ctx, dsnAddr(addr, "root", previousPass, ""))
+			return ping(ctx, dsnAddr(addr, "root", previousPass, "", nil))
 		},
 		Rotate: func(ctx context.Context, addr string) error {
-			return rotateRootPassword(ctx, dsnAddr(addr, "root", previousPass, ""), desiredPass)
+			return rotateRootPassword(ctx, dsnAddr(addr, "root", previousPass, "", nil), desiredPass)
 		},
 		Exhausted: func(err error) error {
 			return fmt.Errorf("mysql root credentials changed but neither the desired SecretReference nor the previous managed-container environment password can authenticate; manual recovery is required: %w", err)
@@ -266,7 +266,7 @@ func (p *Provider) reconcileSource(ctx context.Context, req reconciler.Request) 
 	}
 
 	if err := waitReadyReachable(ctx, rt, name, 3306, func(addr string) string {
-		return dsnAddr(addr, "root", rootPass, "")
+		return dsnAddr(addr, "root", rootPass, "", nil)
 	}, 30*time.Second); err != nil {
 		return st, err
 	}
@@ -275,7 +275,7 @@ func (p *Provider) reconcileSource(ctx context.Context, req reconciler.Request) 
 		return st, err
 	}
 	defer closeAddr()
-	admin := dsnAddr(addr, "root", rootPass, "")
+	admin := dsnAddr(addr, "root", rootPass, "", nil)
 	if err := ensureDatabase(ctx, admin, dbName); err != nil {
 		return st, err
 	}
@@ -352,7 +352,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 			return err
 		}
 		defer closeAddr()
-		return dropDatabase(ctx, dsnAddr(addr, "root", rootPass, ""), dbName)
+		return dropDatabase(ctx, dsnAddr(addr, "root", rootPass, "", nil), dbName)
 	default:
 		return fmt.Errorf("%s provider cannot destroy kind %s", cfg.Type, res.Kind)
 	}
@@ -401,7 +401,7 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			return st, err
 		}
 		defer closeAddr()
-		admin := dsnAddr(addr, "root", rootPass, "")
+		admin := dsnAddr(addr, "root", rootPass, "", nil)
 		// Full desired configuration, not just liveness (docs/planning/07
 		// §2.1): database exists, binlog is row-format (the CDC-readiness
 		// this provider declares), and the replication user's declared
@@ -425,7 +425,7 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		}
 		if replRefName, _ := cfg.Configuration["replicationSecretRef"].(string); replRefName != "" {
 			if creds, ok := req.Secrets[replRefName]; ok {
-				if err := ping(ctx, dsnAddr(addr, creds["username"], creds["password"], "")); err != nil {
+				if err := ping(ctx, dsnAddr(addr, creds["username"], creds["password"], "", nil)); err != nil {
 					msg := fmt.Sprintf("replication credentials (%s) no longer authenticate", replRefName)
 					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonReplicationCredentialsInvalid, Message: msg}, now)
 					st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonReplicationCredentialsInvalid, Message: msg}, now)

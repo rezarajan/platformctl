@@ -239,13 +239,13 @@ func ensureSuperuser(ctx context.Context, rt runtime.ContainerRuntime, name, des
 		Port:                  5432,
 		NoPreviousOrUnchanged: previousUser == "" || previousPass == "" || (previousUser == desiredUser && previousPass == desiredPass),
 		PingDesired: func(ctx context.Context, addr string) error {
-			return ping(ctx, connStringAddr(addr, desiredUser, desiredPass, "postgres"))
+			return ping(ctx, connStringAddr(addr, desiredUser, desiredPass, "postgres", nil))
 		},
 		PingPrevious: func(ctx context.Context, addr string) error {
-			return ping(ctx, connStringAddr(addr, previousUser, previousPass, "postgres"))
+			return ping(ctx, connStringAddr(addr, previousUser, previousPass, "postgres", nil))
 		},
 		Rotate: func(ctx context.Context, addr string) error {
-			return ensureSuperuserCredentials(ctx, connStringAddr(addr, previousUser, previousPass, "postgres"), desiredUser, desiredPass)
+			return ensureSuperuserCredentials(ctx, connStringAddr(addr, previousUser, previousPass, "postgres", nil), desiredUser, desiredPass)
 		},
 		Exhausted: func(err error) error {
 			return fmt.Errorf("postgres superuser credentials changed but neither the desired SecretReference nor the previous managed-container environment credentials can authenticate; manual recovery is required: %w", err)
@@ -288,7 +288,7 @@ func (p *Provider) reconcileSource(ctx context.Context, req reconciler.Request) 
 	}
 
 	if err := waitReadyReachable(ctx, rt, name, 5432, func(addr string) string {
-		return connStringAddr(addr, suUser, suPass, "postgres")
+		return connStringAddr(addr, suUser, suPass, "postgres", nil)
 	}, 30*time.Second); err != nil {
 		return st, err
 	}
@@ -297,7 +297,7 @@ func (p *Provider) reconcileSource(ctx context.Context, req reconciler.Request) 
 		return st, err
 	}
 	defer closeAddr()
-	admin := connStringAddr(addr, suUser, suPass, "postgres")
+	admin := connStringAddr(addr, suUser, suPass, "postgres", nil)
 	if err := ensureDatabase(ctx, admin, dbName); err != nil {
 		return st, err
 	}
@@ -309,7 +309,7 @@ func (p *Provider) reconcileSource(ctx context.Context, req reconciler.Request) 
 	// The publication lives in the source database itself, created by the
 	// superuser so the replication role never needs table ownership.
 	// "dbz_publication" is Debezium's default publication.name.
-	if err := ensurePublication(ctx, connStringAddr(addr, suUser, suPass, dbName), "dbz_publication"); err != nil {
+	if err := ensurePublication(ctx, connStringAddr(addr, suUser, suPass, dbName, nil), "dbz_publication"); err != nil {
 		return st, err
 	}
 	if err := verifyLogicalWAL(ctx, admin); err != nil {
@@ -375,7 +375,7 @@ func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
 			return err
 		}
 		defer closeAddr()
-		return dropDatabase(ctx, connStringAddr(addr, user, pass, "postgres"), dbName)
+		return dropDatabase(ctx, connStringAddr(addr, user, pass, "postgres", nil), dbName)
 	default:
 		return fmt.Errorf("postgres provider cannot destroy kind %s", res.Kind)
 	}
@@ -424,7 +424,7 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 			return st, err
 		}
 		defer closeAddr()
-		admin := connStringAddr(addr, suUser, suPass, "postgres")
+		admin := connStringAddr(addr, suUser, suPass, "postgres", nil)
 		// Full desired configuration, not just liveness (docs/planning/07
 		// §2.1): the database exists, WAL is logical (the CDC-readiness this
 		// provider declares), and the replication role still exists AND its
@@ -453,7 +453,7 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		if replRefName, _ := cfg.Configuration["replicationSecretRef"].(string); replRefName != "" {
 			creds, ok := req.Secrets[replRefName]
 			if ok {
-				replConn := connStringAddr(addr, creds["username"], creds["password"], dbName)
+				replConn := connStringAddr(addr, creds["username"], creds["password"], dbName, nil)
 				if err := ping(ctx, replConn); err != nil {
 					msg := fmt.Sprintf("replication credentials (%s) no longer authenticate", replRefName)
 					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonReplicationCredentialsInvalid, Message: msg}, now)

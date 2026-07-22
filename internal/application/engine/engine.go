@@ -881,7 +881,32 @@ func (e *Engine) resolveConnectionRef(ctx context.Context, connRef resource.Name
 	return fmt.Errorf("connectionRef %q does not resolve to a Connection or SecretReference in namespace %q", connName, connRef.NamespaceOr(defaultNamespace))
 }
 
+// externalDatabaseTLSGate decodes env (when it is a Connection) and, if it
+// declares an external-side spec.tls.mode, checks the ExternalDatabaseTLS
+// gate (docs/planning/08 I2) — mirrors resolveRequest's TLSTermination
+// check above, but a bare external Connection carries no providerRef and so
+// never reaches resolveRequest at all (kind_handler.go routes it to
+// reconcileExternal/externalConnectionStatus instead); this is their
+// equivalent chokepoint. ok is false only when the gate is declared-and-
+// disabled; msg then names it, mirroring registry.RequireGate's own message.
+func (e *Engine) externalDatabaseTLSGate(env resource.Envelope) (msg string, ok bool) {
+	if env.Kind != "Connection" {
+		return "", true
+	}
+	conn, err := connection.FromEnvelope(env)
+	if err != nil || !conn.External || conn.TLS == nil {
+		return "", true
+	}
+	if gerr := e.Registry.RequireGate("ExternalDatabaseTLS"); gerr != nil {
+		return gerr.Error(), false
+	}
+	return "", true
+}
+
 func (e *Engine) reconcileExternal(ctx context.Context, entry plan.Entry, env resource.Envelope, byKey map[resource.Key]resource.Envelope, deps DependencyGraph, st *state.State) error {
+	if msg, ok := e.externalDatabaseTLSGate(env); !ok {
+		return fmt.Errorf("%s: %s", env.Key(), msg)
+	}
 	// Reconcile is the "make it so" path: give a just-started external system
 	// (or its forwarder) a bounded window to come up before declaring it
 	// unreachable, rather than failing on the first dial. Drift/status use

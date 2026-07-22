@@ -1453,6 +1453,54 @@ is consumed as-is (§3).
    admin connection) is doc 08 **I2** — until it lands, providers dial
    plaintext (`sslmode=disable`) and cannot reach a TLS-requiring
    endpoint; this is a known, tracked gap, not a configuration problem.
+
+   **I2 shipped:** `spec.tls.mode` on the External Connection declares the
+   outbound posture (gate `ExternalDatabaseTLS`, Alpha/enabled):
+
+   ```yaml
+   apiVersion: datascape.io/v1alpha1
+   kind: Connection
+   metadata:
+     name: prod-rds
+   spec:
+     external: true
+     host: prod-db.abcdefg.us-east-1.rds.amazonaws.com
+     port: 5432
+     secretRef:
+       name: prod-rds-creds
+     tls:
+       mode: verify-full             # require | verify-ca | verify-full
+       caSecretRef:
+         name: prod-rds-ca            # SecretReference, key "ca" — the CA bundle PEM
+   ```
+
+   `spec.tls` absent entirely preserves the pre-I2 plaintext behavior
+   (`sslmode=disable`-equivalent) — fully back-compat. Declared, `mode` is
+   required (one of `require`, `verify-ca`, `verify-full` — libpq's own
+   vocabulary, reused as-is rather than inventing a parallel one):
+   `require` encrypts the transport with no certificate verification at
+   all; `verify-ca` additionally verifies the server certificate chains to
+   a trusted CA (`caSecretRef`, or the consuming process's system trust
+   store when omitted — sufficient for a public CA-issued cert, e.g. most
+   Cloud SQL/Azure Database endpoints) but does not check the hostname;
+   `verify-full` additionally verifies the certificate's hostname matches
+   the address actually dialed — the strongest posture, and the one every
+   cloud vendor's own connection-string documentation recommends.
+   `caSecretRef` names a `SecretReference` whose `spec.keys` include `ca`
+   (a PEM-encoded CA bundle, e.g. an RDS regional bundle or a private
+   CA's root) — like every other `secretRef` a Connection carries, it
+   only resolves when the **consuming** Provider (the one actually
+   dialing the database: `debezium`, `jdbcsink`, `postgres`, `mysql`)
+   lists it in its own `spec.secretRefs`. The posture threads through
+   every consumer that dials the database: the CDC preflight and the
+   registered connector's own `database.sslmode`/`database.ssl.mode`
+   properties (`debezium`), the sink's JDBC URL (`jdbcsink`), and the
+   admin/replication connection a self-hosted engine's own provider makes
+   (`postgres`, `mysql`/`mariadb`) — see those providers' own doc entries
+   for the exact parameter each one sets. A wrong or unparseable CA bundle
+   fails at the CDC preflight (before a connector is ever registered,
+   ADR 011 — never mid-apply) with the real TLS error surfaced, not a
+   generic timeout.
 2. **Behind a cloud auth proxy** (Cloud SQL Auth Proxy, RDS IAM
    sidecars — the IAM/token-auth pattern): run the cloud's own proxy
    (your process or a container you declare); it handles IAM token

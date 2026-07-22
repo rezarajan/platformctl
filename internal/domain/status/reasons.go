@@ -47,6 +47,23 @@ const (
 	ReasonExternalEndpointReachable            = "ExternalEndpointReachable"
 )
 
+// --- Outbound database TLS (docs/planning/08 I2, docs/adr/025) -------------
+// Set by a database-dialing provider (debezium, postgres, mysql) when an
+// External Connection's spec.tls.mode declares an outbound posture that
+// fails at preflight/probe time — distinct from the generic
+// ExternalEndpointUnreachable above, which never attempted a TLS handshake
+// at all.
+const (
+	// ReasonDatabaseTLSCAInvalid: spec.tls.caSecretRef resolved, but its "ca"
+	// key did not parse as a PEM-encoded certificate (or certificate bundle).
+	ReasonDatabaseTLSCAInvalid = "DatabaseTLSCAInvalid"
+	// ReasonDatabaseTLSVerifyFailed: the TLS handshake completed but
+	// certificate verification failed under verify-ca/verify-full (chain
+	// does not lead to a trusted CA, or — verify-full only — the
+	// certificate's hostname does not match the dialed address).
+	ReasonDatabaseTLSVerifyFailed = "DatabaseTLSVerifyFailed"
+)
+
 // --- Lineage (docs/planning/02-architecture.md §5.5) -----------------------
 
 // ReasonLineageNotConsumed is the informational reason recorded when a

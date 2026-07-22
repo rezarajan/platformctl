@@ -96,6 +96,7 @@ s3source|internal/adapters/providers/s3source internal/adapters/providers/s3sink
 wireguard|internal/adapters/providers/wireguard internal/adapters/providers/debezium internal/adapters/providers/postgres internal/ports/runtime internal/domain/connection cmd/platformctl/testdata/wireguard-scenario SHARED_CORE|go test -tags integration -count=1 -run 'TestWireGuardTunnelEndToEnd' -timeout 2400s ./cmd/platformctl/
 compose|internal/application/compose internal/cliutil internal/application/blueprint cmd/platformctl/add.go cmd/platformctl/wire.go cmd/platformctl/expose.go cmd/platformctl/compose_shared.go SHARED_CORE|go test -tags integration -count=1 -run 'TestComposeOwnerScenario' -timeout 1200s ./cmd/platformctl/
 external-import|internal/adapters/providers/postgres internal/adapters/providers/redpanda internal/adapters/providers/debezium internal/application/compatibility cmd/platformctl/testdata/import-scenario cmd/platformctl/testdata/external-scenario SHARED_CORE|go test -tags integration -count=1 -run 'TestImportEndToEnd|TestExternalSourceEndToEnd' -timeout 1200s ./cmd/platformctl/
+external-db-tls|internal/domain/connection internal/adapters/providers/providerkit internal/adapters/providers/debezium internal/adapters/providers/jdbcsink internal/adapters/providers/postgres internal/adapters/providers/mysql internal/adapters/kafkaconnect cmd/platformctl/testdata/external-db-tls-scenario SHARED_CORE|go test -tags integration -count=1 -run 'TestExternalDatabaseTLSEndToEnd' -timeout 1200s ./cmd/platformctl/
 EOF
 }
 

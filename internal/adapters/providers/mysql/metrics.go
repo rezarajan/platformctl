@@ -108,7 +108,7 @@ func ensureExporter(ctx context.Context, rt runtime.ContainerRuntime, namespace,
 	if err != nil {
 		return endpoint.Endpoint{}, err
 	}
-	adminConn := dsnAddr(addr, "root", rootPass, "")
+	adminConn := dsnAddr(addr, "root", rootPass, "", nil)
 	closeErr := closeAddr()
 	if err := ensureMonitoringUser(ctx, adminConn, monitorUser, monitorPass); err != nil {
 		return endpoint.Endpoint{}, err

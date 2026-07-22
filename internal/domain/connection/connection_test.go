@@ -98,16 +98,101 @@ func TestTLSExactlyOneOf(t *testing.T) {
 	}
 }
 
-func TestTLSRefusedOnExternalConnection(t *testing.T) {
+func TestManagedOnlyTLSFieldsRefusedOnExternalConnection(t *testing.T) {
 	spec := map[string]any{
 		"external": true,
 		"host":     "warehouse.corp.internal",
 		"port":     float64(9000),
-		"scheme":   "https",
 		"tls":      map[string]any{"selfSigned": true},
 	}
 	if _, err := FromEnvelope(envelope(spec)); err == nil {
-		t.Fatal("expected error: spec.tls on an external connection")
+		t.Fatal("expected error: managed-only spec.tls.selfSigned on an external connection")
+	}
+}
+
+func baseExternalSpec() map[string]any {
+	return map[string]any{
+		"external": true,
+		"host":     "rds.us-east-1.amazonaws.com",
+		"port":     float64(5432),
+	}
+}
+
+func TestExternalTLSModeRequireParses(t *testing.T) {
+	spec := baseExternalSpec()
+	spec["tls"] = map[string]any{"mode": "require"}
+	c, err := FromEnvelope(envelope(spec))
+	if err != nil {
+		t.Fatalf("FromEnvelope: %v", err)
+	}
+	if c.TLS == nil || c.TLS.Mode != "require" {
+		t.Fatalf("TLS = %+v, want mode=require", c.TLS)
+	}
+	if c.TLS.CASecretRef != nil {
+		t.Errorf("CASecretRef = %v, want nil", c.TLS.CASecretRef)
+	}
+}
+
+func TestExternalTLSModeVerifyFullWithCASecretRefParses(t *testing.T) {
+	spec := baseExternalSpec()
+	spec["tls"] = map[string]any{"mode": "verify-full", "caSecretRef": map[string]any{"name": "rds-ca"}}
+	c, err := FromEnvelope(envelope(spec))
+	if err != nil {
+		t.Fatalf("FromEnvelope: %v", err)
+	}
+	if c.TLS == nil || c.TLS.Mode != "verify-full" {
+		t.Fatalf("TLS = %+v, want mode=verify-full", c.TLS)
+	}
+	if c.TLS.CASecretRef == nil || *c.TLS.CASecretRef != "rds-ca" {
+		t.Fatalf("CASecretRef = %v, want rds-ca", c.TLS.CASecretRef)
+	}
+}
+
+func TestExternalTLSModeVerifyCAParses(t *testing.T) {
+	spec := baseExternalSpec()
+	spec["tls"] = map[string]any{"mode": "verify-ca", "caSecretRef": map[string]any{"name": "rds-ca"}}
+	c, err := FromEnvelope(envelope(spec))
+	if err != nil {
+		t.Fatalf("FromEnvelope: %v", err)
+	}
+	if c.TLS == nil || c.TLS.Mode != "verify-ca" {
+		t.Fatalf("TLS = %+v, want mode=verify-ca", c.TLS)
+	}
+}
+
+func TestExternalTLSRequiresMode(t *testing.T) {
+	spec := baseExternalSpec()
+	spec["tls"] = map[string]any{"caSecretRef": map[string]any{"name": "rds-ca"}}
+	if _, err := FromEnvelope(envelope(spec)); err == nil {
+		t.Fatal("expected error: spec.tls declared without spec.tls.mode on an external connection")
+	}
+}
+
+func TestExternalTLSRejectsUnknownMode(t *testing.T) {
+	spec := baseExternalSpec()
+	spec["tls"] = map[string]any{"mode": "trust-me"}
+	if _, err := FromEnvelope(envelope(spec)); err == nil {
+		t.Fatal("expected error: unknown spec.tls.mode on an external connection")
+	}
+}
+
+func TestExternalConnectionWithoutTLSStaysPlaintext(t *testing.T) {
+	spec := baseExternalSpec()
+	c, err := FromEnvelope(envelope(spec))
+	if err != nil {
+		t.Fatalf("FromEnvelope: %v", err)
+	}
+	if c.TLS != nil {
+		t.Errorf("TLS = %+v, want nil (absent spec.tls preserves plaintext back-compat)", c.TLS)
+	}
+}
+
+func TestManagedTLSRejectsModeAndCASecretRef(t *testing.T) {
+	spec := baseManagedSpec()
+	spec["scheme"] = "https"
+	spec["tls"] = map[string]any{"selfSigned": true, "mode": "require"}
+	if _, err := FromEnvelope(envelope(spec)); err == nil {
+		t.Fatal("expected error: external-only spec.tls.mode on a managed connection")
 	}
 }
 

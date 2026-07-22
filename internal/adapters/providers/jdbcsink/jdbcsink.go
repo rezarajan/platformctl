@@ -32,7 +32,6 @@ package jdbcsink
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net"
 	"net/url"
@@ -42,13 +41,10 @@ import (
 	"strings"
 	"time"
 
-	// Registers the MySQL database/sql driver for connector preflight.
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/jackc/pgx/v5"
-
 	"github.com/rezarajan/platformctl/internal/adapters/kafkaconnect"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/domain/binding"
+	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/eventstream"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
@@ -191,6 +187,9 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 				"CONNECT_CONSUMER_METADATA_MAX_AGE_MS": "10000",
 			},
 			Ports: connectPorts(cfg, name, workers),
+			// CA trust files (docs/planning/08 I2) — mirrors debezium's
+			// identical worker-level mount; see providerkit.CATrustDir.
+			Files: providerkit.CATrustFileMounts(cfg, req.Secrets),
 			HealthCheck: &runtime.HealthCheck{
 				Test:     []string{"CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"},
 				Interval: 3 * time.Second,
@@ -240,6 +239,12 @@ type desiredConnector struct {
 	preflightConnectionName string
 	credsUser               string
 	credsPass               string
+	// tlsPosture is the target Source's Connection's outbound TLS posture
+	// (docs/planning/08 I2) — nil preserves the pre-I2 plaintext preflight
+	// dial byte-for-byte; jdbcURL's own TLS query params are set directly on
+	// connection.url instead (the live Connect worker's JDBC driver reads
+	// them from there, not from this Go process's own dial).
+	tlsPosture *providerkit.DatabaseTLS
 }
 
 // enginePortFor returns the JDBC dialect's conventional default port —
@@ -257,14 +262,69 @@ func enginePortFor(engine string) (int, error) {
 	}
 }
 
-func jdbcURL(engine, host string, port int, dbName string) (string, error) {
+// jdbcURL builds the connection.url property, appending the outbound TLS
+// query params tlsPosture calls for (docs/planning/08 I2) — nil appends
+// nothing, the pre-I2 plaintext behavior.
+func jdbcURL(engine, host string, port int, dbName string, tlsPosture *providerkit.DatabaseTLS) (string, error) {
 	switch engine {
 	case "postgres":
-		return fmt.Sprintf("jdbc:postgresql://%s:%d/%s", host, port, dbName), nil
+		return fmt.Sprintf("jdbc:postgresql://%s:%d/%s", host, port, dbName) + postgresJDBCTLSParams(tlsPosture), nil
 	case "mysql", "mariadb":
-		return fmt.Sprintf("jdbc:mysql://%s:%d/%s", host, port, dbName), nil
+		return fmt.Sprintf("jdbc:mysql://%s:%d/%s", host, port, dbName) + mysqlJDBCTLSParams(tlsPosture), nil
 	default:
 		return "", fmt.Errorf("no JDBC dialect mapping for sink engine %q", engine)
+	}
+}
+
+// postgresJDBCTLSParams builds the "?sslmode=...&sslrootcert=..." suffix for
+// a pgjdbc connection.url — pgjdbc accepts the same sslmode vocabulary
+// libpq does, matching connection.TLSModeRequire/VerifyCA/VerifyFull
+// exactly. The CA bundle a worker-level reconcile already mounted
+// (providerkit.CATrustFileMounts) is referenced by its fixed, deterministic
+// path.
+func postgresJDBCTLSParams(tlsPosture *providerkit.DatabaseTLS) string {
+	if tlsPosture == nil {
+		return ""
+	}
+	q := url.Values{}
+	q.Set("sslmode", tlsPosture.Mode)
+	if tlsPosture.CASecretRefName != "" {
+		q.Set("sslrootcert", providerkit.CAFilePath(tlsPosture.CASecretRefName))
+	}
+	return "?" + q.Encode()
+}
+
+// mysqlJDBCTLSParams builds the Connector/J TLS query suffix. Unlike
+// Debezium's own MySQL binlog client (debezium.applyTLSConfig's MySQL
+// half, which needs a Java truststore Datascape does not build), Connector/J
+// — the actual JDBC driver the Kafka Connect JDBC sink connector uses —
+// accepts a raw PEM CA directly via trustCertificateKeyStoreType=PEM (since
+// Connector/J 8.0.22), so full CA verification is supported here.
+func mysqlJDBCTLSParams(tlsPosture *providerkit.DatabaseTLS) string {
+	if tlsPosture == nil {
+		return ""
+	}
+	q := url.Values{}
+	q.Set("sslMode", mysqlJDBCSSLMode(tlsPosture.Mode))
+	if tlsPosture.CASecretRefName != "" {
+		q.Set("trustCertificateKeyStoreType", "PEM")
+		q.Set("trustCertificateKeyStoreUrl", "file:"+providerkit.CAFilePath(tlsPosture.CASecretRefName))
+	}
+	return "?" + q.Encode()
+}
+
+// mysqlJDBCSSLMode maps our libpq-derived mode vocabulary to Connector/J's
+// own sslMode enum.
+func mysqlJDBCSSLMode(mode string) string {
+	switch mode {
+	case connection.TLSModeRequire:
+		return "REQUIRED"
+	case connection.TLSModeVerifyCA:
+		return "VERIFY_CA"
+	case connection.TLSModeVerifyFull:
+		return "VERIFY_IDENTITY"
+	default:
+		return "PREFERRED"
 	}
 }
 
@@ -339,7 +399,16 @@ func buildDesiredConnector(req reconciler.Request) (desiredConnector, error) {
 		return d, fmt.Errorf("Binding %q: jdbcsink Provider %q has no resolved credentials — declare the target Source's Connection secretRef or configuration.credentialsSecretRef in spec.secretRefs", res.Metadata.Name, naming.RuntimeObjectName(req.Provider))
 	}
 
-	url, err := jdbcURL(tgt.Engine, dbHost, dbPort, dbName)
+	// Outbound TLS posture (docs/planning/08 I2): nil when the target
+	// Source's Connection is managed or declares no spec.tls — the pre-I2
+	// plaintext preflight/connection.url byte-for-byte unchanged.
+	tlsPosture, err := providerkit.ResolveDatabaseTLS(req, cfg, ep)
+	if err != nil {
+		return d, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
+	}
+	d.tlsPosture = tlsPosture
+
+	url, err := jdbcURL(tgt.Engine, dbHost, dbPort, dbName, tlsPosture)
 	if err != nil {
 		return d, fmt.Errorf("Binding %q: %w", res.Metadata.Name, err)
 	}
@@ -542,7 +611,7 @@ func (p *Provider) reconcileConnector(ctx context.Context, req reconciler.Reques
 	}
 
 	if d.preflightHost != "" {
-		if err := verifyDatabaseConnection(ctx, d.engine, d.preflightHost, d.preflightPort, d.dbName, d.credsUser, d.credsPass); err != nil {
+		if err := providerkit.VerifyDatabaseConnection(ctx, d.engine, d.preflightHost, d.preflightPort, d.dbName, d.credsUser, d.credsPass, d.tlsPosture); err != nil {
 			return st, fmt.Errorf("Binding %q: target database connection preflight failed before registering connector: %w", res.Metadata.Name, err)
 		}
 	} else if d.preflightConnectionName != "" {
@@ -552,7 +621,7 @@ func (p *Provider) reconcileConnector(ctx context.Context, req reconciler.Reques
 		}
 		host, port, ok := hostPort(addr)
 		if ok {
-			err = verifyDatabaseConnection(ctx, d.engine, host, port, d.dbName, d.credsUser, d.credsPass)
+			err = providerkit.VerifyDatabaseConnection(ctx, d.engine, host, port, d.dbName, d.credsUser, d.credsPass, d.tlsPosture)
 		}
 		closeAddr()
 		if !ok {
@@ -600,43 +669,6 @@ func hostPort(address string) (string, int, bool) {
 		return "", 0, false
 	}
 	return host, port, true
-}
-
-// verifyDatabaseConnection mirrors debezium's identical helper, restricted
-// to this provider's own SupportedSinkEngines (postgres, mysql).
-func verifyDatabaseConnection(ctx context.Context, engine, host string, port int, dbName, user, pass string) error {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	switch engine {
-	case "postgres":
-		u := url.URL{
-			Scheme: "postgres",
-			User:   url.UserPassword(user, pass),
-			Host:   host + ":" + strconv.Itoa(port),
-			Path:   "/" + dbName,
-		}
-		q := u.Query()
-		q.Set("sslmode", "disable")
-		u.RawQuery = q.Encode()
-		conn, err := pgx.Connect(ctx, u.String())
-		if err != nil {
-			return fmt.Errorf("connect to postgres %s:%d/%s as %q: %w", host, port, dbName, user, err)
-		}
-		defer conn.Close(ctx)
-		return nil
-	case "mysql", "mariadb":
-		db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?timeout=10s", user, pass, host, port, dbName))
-		if err != nil {
-			return fmt.Errorf("connect to mysql %s:%d/%s as %q: %w", host, port, dbName, user, err)
-		}
-		defer db.Close()
-		if err := db.PingContext(ctx); err != nil {
-			return fmt.Errorf("connect to mysql %s:%d/%s as %q: %w", host, port, dbName, user, err)
-		}
-		return nil
-	default:
-		return nil
-	}
 }
 
 func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {

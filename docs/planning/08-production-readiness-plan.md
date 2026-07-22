@@ -2512,6 +2512,61 @@ unless a dependency is stated.
   consumers, all modes.
 - **Gate:** new `ExternalDatabaseTLS` (Alpha, enabled — additive
   opt-in field; absent field = unchanged behavior).
+- **Done (2026-07-22):** `Connection.spec.tls` gained the external-only
+  `mode`/`caSecretRef` shape (`internal/domain/connection`, the previous
+  "tls only meaningful on managed" branch replaced with mode-shape
+  validation for external — managed's exactly-one-of unchanged); schema +
+  doc 03 §8.2.4 in the same commit; `docs/reference` regenerated. Gate
+  `ExternalDatabaseTLS` checked at the one chokepoint a bare external
+  Connection actually reaches — `externalDatabaseTLSGate`
+  (`internal/application/engine`), wired into `reconcileExternal` and the
+  `ExternalNoProvider` probe hook, since such a Connection has no
+  providerRef and never reaches `resolveRequest` (TLSTermination's own
+  chokepoint) at all. A new `providerkit` seam
+  (`internal/adapters/providers/providerkit/tls.go`): `DatabaseTLS` +
+  `ResolveDatabaseTLS` (secretRefs-discipline CA resolution),
+  `CATrustFileMounts`/`CAFilePath` (CA bundles mounted into a
+  Connect-worker-style container, keyed by secretRef name — resolved
+  worker-level from the Provider's own secretRefs, read back
+  deterministically at Binding-reconcile time with no coordination beyond
+  the shared name), and `VerifyDatabaseConnection` (the shared Go-side
+  preflight dial — collapsed from byte-identical duplicates that
+  previously lived separately in debezium.go and jdbcsink.go). A pure,
+  stdlib-only `connection.ClientTLSConfig` builds the actual `*tls.Config`
+  (require/verify-ca/verify-full — verify-ca hand-rolled via
+  `VerifyPeerCertificate`, since crypto/tls has no chain-only-no-hostname
+  toggle). All four named consumers wired: postgres/mysql admin-conn DSN
+  builders (`sslmode`/go-sql-driver `tls=`+`RegisterTLSConfig`) generalized
+  to accept a posture — always nil in practice today, since both providers
+  only ever administer a self-hosted instance with no external Connection
+  to resolve one from (documented explicitly at each call site, not a gap);
+  debezium's preflight AND its connector's `database.sslmode`/
+  `database.sslrootcert` (postgres — full support) and `database.ssl.mode`
+  (mysql/mariadb — Debezium's own binlog client needs a Java truststore for
+  CA verification Datascape does not build; `require` is fully supported,
+  `verify-ca`/`verify-full` set the mode but fall back to the JVM's default
+  trust store, an explicitly recorded scope boundary mirroring ADR 025's
+  posture on IAM auth); jdbcsink's JDBC URL (`sslmode`/`sslrootcert` for
+  postgres; `sslMode`+`trustCertificateKeyStoreType=PEM` for mysql/mariadb
+  — Connector/J, unlike Debezium's own client, accepts a raw PEM CA
+  directly, so full verification is supported there). Two new status
+  reasons (`DatabaseTLSCAInvalid`, `DatabaseTLSVerifyFailed`) + catalog
+  entries for `explain`. e2e
+  (`cmd/platformctl/external_db_tls_integration_test.go`,
+  `testdata/external-db-tls-scenario`): a real TLS-required Postgres (test
+  CA + server cert, `ssl=on`, a custom `pg_hba.conf` with no plaintext
+  rule) on a fixed-IP/fixed-subnet Docker network (one address reachable
+  identically from the CLI process and from inside the debezium container
+  — the one addressing shape that made the engine's own C10 dual-vantage
+  reachability check and the TLS posture agree without a second override)
+  — no-tls refused (real server error surfaced), wrong CA fails
+  certificate verification at preflight, verify-full + correct CA succeeds
+  with the CDC connector RUNNING and an idempotent re-apply. Unit tests
+  across `internal/domain/connection`, `providerkit`, `postgres`, `mysql`,
+  `debezium`, `jdbcsink` cover DSN/property construction for all four
+  consumers, all three modes. `scripts/test-impact.sh` suite row
+  `external-db-tls` added. `go build`/`vet` (both tag sets) clean;
+  unfiltered `go test ./...` exit 0.
 
 ### I3: Settledness NFR + async-correctness audit backlog
 

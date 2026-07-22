@@ -76,6 +76,17 @@ var kindHandlers = []*kindHandler{
 			return e.reconcileExternal(ctx, entry, env, byKey, deps, st)
 		},
 		probe: func(e *Engine, ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope, _ state.ResourceState, _ *state.State) status.Status {
+			// externalDatabaseTLSGate (docs/planning/08 I2): mirrors
+			// probeOneAgainstState's own ReasonProbeFailed conversion of a
+			// resolveRequest gate error — this handler's probe never goes
+			// through resolveRequest, so it degrades the same way here.
+			if msg, ok := e.externalDatabaseTLSGate(env); !ok {
+				now := e.Clock.Now()
+				gs := status.Status{}
+				gs.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonProbeFailed, Message: msg}, now)
+				gs.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonProbeFailed, Message: msg}, now)
+				return gs
+			}
 			return e.externalConnectionStatus(ctx, env, byKey)
 		},
 		del: deleteStateOnly,

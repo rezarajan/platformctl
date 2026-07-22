@@ -18,15 +18,36 @@ import (
 // a "host:port" this process can dial right now (docs/planning/08 B8: from
 // Provider.reachableAddr/runtime.EnsureReachable, not a hardcoded guess —
 // the only address Docker ever needed, but wrong for Kubernetes).
-func connStringAddr(addr, user, pass, db string) string {
+//
+// tlsPosture is always nil today: this Provider only ever administers a
+// self-hosted, same-network Postgres instance it created itself, which has
+// no external Connection to resolve an outbound TLS posture from
+// (docs/planning/08 I2's mode field is external-Connection-only) — the
+// parameter exists so this DSN builder no longer hardcodes plaintext
+// (the 2026-07 production review's A2 finding named this exact line), and
+// so it's independently unit-testable across every mode the moment a
+// future caller has one to pass.
+func connStringAddr(addr, user, pass, db string, tlsPosture *providerkit.DatabaseTLS) string {
 	u := url.URL{
-		Scheme:   "postgres",
-		User:     url.UserPassword(user, pass),
-		Host:     addr,
-		Path:     "/" + db,
-		RawQuery: "sslmode=disable",
+		Scheme: "postgres",
+		User:   url.UserPassword(user, pass),
+		Host:   addr,
+		Path:   "/" + db,
 	}
+	q := u.Query()
+	q.Set("sslmode", sslmodeFor(tlsPosture))
+	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+// sslmodeFor maps a resolved outbound TLS posture (docs/planning/08 I2) to
+// libpq's own sslmode vocabulary — nil (no posture) preserves the pre-I2
+// plaintext default.
+func sslmodeFor(tlsPosture *providerkit.DatabaseTLS) string {
+	if tlsPosture == nil {
+		return "disable"
+	}
+	return tlsPosture.Mode
 }
 
 func connect(ctx context.Context, conn string) (*pgx.Conn, error) {
