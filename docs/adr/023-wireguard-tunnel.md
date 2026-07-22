@@ -315,6 +315,60 @@ This is recorded as a **deviation** in the D5 commit and `TASK_PROGRESS.md`
 call"), not a silent scope cut — the maintainer may prefer the literal
 addendum wiring once `proxy.go` is back in scope for a future task.
 
+### Closure note (docs/planning/08 I1, 2026-07-22)
+
+The deviation above is closed. `proxy.go` is back in scope and now
+implements `reconciler.ViaConsumingProvider`: a `proxy`-realized Connection
+declaring `spec.via` joins its forwarder ONLY to the named tunnel
+Provider's transit network (`configuration.peerNetwork`) — never the
+consumer workloads, keeping this ADR's blast-minimized framing — and
+dials that tunnel's own per-Connection published address instead of
+`spec.target` directly.
+
+The packet path required one more piece this ADR did not anticipate:
+Docker bridge networking gives no route through another container's
+network namespace merely by sharing a network (`wg0` lives inside the
+tunnel container's own netns) — the only real path in is Decision 4's own
+DNAT mechanism. So `wireguard`'s Provider-kind `reconcileInstance` now
+additionally scans the manifest's resource set for managed Connections
+whose `spec.via` names it, and for each ensures a "via tunnel" container —
+the same wg-quick config and DNAT-forwarder entrypoint script
+`reconcileConnection` already uses, just named `<connection>-via-tunnel`
+(never `naming.RuntimeObjectName`, which stays reserved for the object a
+third party independently re-derives; here `proxy` learns the name only
+via a published fact) and attached to the transit network alone (`Audience:
+internal`, no host publish — nothing outside a transit-network container
+ever dials it). The dial address is published as an endpoint fact named
+`connection.ViaFactName(namespace, name)`, resolved by the engine into
+`reconciler.Request.TunnelFacts` (mirroring `CatalogFacts`/`WarehouseFacts`'s
+published-facts-only discipline, ADR 015) — `proxy` never constructs this
+address itself. A new `via` edge in `internal/domain/graph` orders the
+tunnel Provider's reconcile before the via'd Connection's, the same
+ordering guarantee `warehouseRef` already gives `WarehouseFacts`.
+
+Settledness for a via tunnel deliberately does NOT reuse this ADR's
+Decision 6 handshake-staleness check verbatim: that check (and
+`waitTunnelServing`'s `runtime.WithReachable` dial) verifies reachability
+from *this process's* own host-audience vantage point — the right bar for
+a Connection `wireguard` realizes directly, which platformctl itself
+dials to confirm health. A via tunnel is never host-published and never
+dialed by this process at all; its only real consumer is `proxy`'s
+forwarder, a container on the transit network — so its settledness check
+(`waitViaTunnelServing`) uses `runtime.ProbeReachable` against the transit
+network instead, the same in-network vantage point (ADR 015, docs/planning/08
+C10) the real consumer has.
+
+**Recorded, not silently cut:** this ADR's own Decision 4 drift framing
+("a forwarder found attached to networks beyond \[shared, transit] is
+drift") is not implemented as a live `Probe`-time check for I1 —
+`runtime.ContainerState` has no attached-networks field today, and adding
+one is a real `ContainerRuntime` port change (Docker/Kubernetes/fake
+adapters plus the conformance suite) out of proportion to I1's scope.
+Achieved by construction instead: `reconcileConnection`/`reconcileViaTunnels`
+never attach more than `[shared, transit]` in the first place. A live
+excess-attachment check (catching an out-of-band `docker network connect`)
+is a real, if narrow, follow-up.
+
 ## Relationship to ADR 022 (identity-aware mediation / OpenZiti)
 
 ADR 022 §"Explicit boundaries" already draws this line in the abstract;

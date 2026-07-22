@@ -6,8 +6,14 @@
 // psql, Metabase) use 127.0.0.1:<port>, and only the Connection's
 // spec.target knows where the system actually lives. Credentials never pass
 // through here; spec.secretRef names them, the proxy is transport only.
-// Implements ConnectionCapableProvider (scheme: tcp). Tunnel chaining for
-// VPC reach is deliberately deferred — see docs/adr/002.
+// Implements ConnectionCapableProvider (scheme: tcp) and
+// reconciler.ViaConsumingProvider: a Connection declaring spec.via routes
+// this forwarder's egress through the named tunnel-capable Provider
+// (docs/planning/08 I1, closing docs/adr/023's Scope deviation) — the
+// forwarder joins ONLY the tunnel's transit network in addition to the
+// shared platform network (never the consumer workloads: blast-minimized),
+// and dials the tunnel's own published forward address instead of
+// spec.target directly. See reconcileConnection's doc comment.
 package proxy
 
 import (
@@ -41,6 +47,12 @@ func (p *Provider) Type() string { return "proxy" }
 // forwards raw TCP; anything TCP-framed (postgres, mysql, http, kafka)
 // works through it.
 func (p *Provider) SupportedConnectionSchemes() []string { return []string{"tcp"} }
+
+// ConsumesVia implements reconciler.ViaConsumingProvider (docs/planning/08
+// I1): a proxy-realized Connection whose spec.via names a tunnel-capable
+// Provider routes its forwarder's egress through it (reconcileConnection
+// below) rather than applying via as an inert, unconsumed field.
+func (p *Provider) ConsumesVia() bool { return true }
 
 func image(cfg provider.Provider) string {
 	if img, ok := cfg.Configuration["image"].(string); ok && img != "" {
@@ -83,7 +95,18 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 
 // reconcileConnection runs the Connection's forwarder: one socat container
 // named after the Connection, listening on spec.port (network + host),
-// forwarding to spec.target.
+// forwarding to spec.target — or, when spec.via names a tunnel-capable
+// Provider (docs/planning/08 I1, closing docs/adr/023's Scope deviation),
+// forwarding to that tunnel's own published dial address instead, with the
+// forwarder additionally joined ONLY to the tunnel's transit network
+// (blast-minimized: never the consumer workloads, never the tunnel
+// Provider's own platform network). Which address socat actually dials is
+// decided once, at container-create time (dialTarget below) — Probe's own
+// dial-the-forwarder settle check (probeThroughForwarder,
+// waitForwarderServing) needs no via-awareness at all: it already verifies
+// "does a session held open through the forwarder's listen port stay open,"
+// which is equally true whether the forwarder's own upstream is spec.target
+// directly or a tunnel's forwarder standing in for it.
 func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Request) (status.Status, error) {
 	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
@@ -101,15 +124,29 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: providerkit.Network(cfg), Labels: providerLabels}); err != nil {
 		return st, err
 	}
+	networks := []string{providerkit.Network(cfg)}
+	dialTarget := conn.Target
+	var transitNetwork string
+	if conn.Via != nil {
+		if req.TunnelFacts == nil {
+			return st, fmt.Errorf("Connection %q: spec.via names Provider %q, whose tunnel is not yet published — re-apply once it reconciles", res.Metadata.Name, *conn.Via)
+		}
+		transitNetwork = req.TunnelFacts.TransitNetwork
+		if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: transitNetwork, Labels: providerLabels}); err != nil {
+			return st, err
+		}
+		networks = append(networks, transitNetwork)
+		dialTarget = req.TunnelFacts.Internal
+	}
 	connLabels := runtime.ManagedLabels(res.Metadata.Namespace, res.Kind, name, name)
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
 		Name:  name,
 		Image: image(cfg),
 		Cmd: []string{
 			fmt.Sprintf("tcp-listen:%d,fork,reuseaddr", conn.Port),
-			"tcp-connect:" + conn.Target,
+			"tcp-connect:" + dialTarget,
 		},
-		Networks: []string{providerkit.Network(cfg)},
+		Networks: networks,
 		Ports:    []runtime.PortBinding{{HostPort: conn.Port, ContainerPort: conn.Port, Audience: runtime.AudienceHost}},
 		// A real healthcheck, not just "container Running" (docs/planning/11
 		// B1 finding 3): dial socat's own listener from inside the
@@ -152,6 +189,10 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 		endpoint.Key: endpoint.List{
 			{Name: "forward", Scheme: conn.Scheme, Host: hostAddr, Internal: fmt.Sprintf("%s:%d", host, port), Insecure: true, RuntimeName: name, ContainerPort: conn.Port, Audience: runtime.AudienceHost},
 		}.ToState(),
+	}
+	if conn.Via != nil {
+		st.ProviderState["via"] = *conn.Via
+		st.ProviderState["transit"] = transitNetwork
 	}
 	return st, nil
 }

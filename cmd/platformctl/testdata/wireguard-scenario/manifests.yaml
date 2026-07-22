@@ -1,11 +1,13 @@
-# D5 integration scenario (docs/planning/08 D5, docs/adr/023): a CDC Binding
-# against a database that lives in an isolated "VPC" Docker network,
-# reachable only through a wireguard-realized Connection. The VPC network,
-# the WireGuard responder (the VPC's own gateway), and the database itself
-# are raw, unmanaged test fixtures stood up by
-# wireguard_integration_test.go — nothing in this file creates them; see
-# that test for the topology. Host ports: Kafka 19199, Connect 18189,
-# tunnel Connection 25599.
+# D5/I1 integration scenario (docs/planning/08 D5, I1; docs/adr/023): a CDC
+# Binding against a database that lives in an isolated "VPC" Docker network,
+# reachable only through a `proxy`-realized Connection whose spec.via
+# chains its forwarder's egress through the `wireguard` tunnel Provider
+# (I1, closing ADR 023's Scope deviation) — never a Connection realized
+# directly by `wireguard`. The VPC network, the WireGuard responder (the
+# VPC's own gateway), and the database itself are raw, unmanaged test
+# fixtures stood up by wireguard_integration_test.go — nothing in this
+# file creates them; see that test for the topology. Host ports: Kafka
+# 19199, Connect 18189, tunnel Connection 25599.
 apiVersion: datascape.io/v1alpha1
 kind: SecretReference
 metadata:
@@ -41,11 +43,23 @@ spec:
     allowedIPs: [10.13.13.10/32]
 ---
 apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: wg-edge
+spec:
+  type: proxy
+  runtime:
+    type: docker
+    network: datascape-wg-net
+---
+apiVersion: datascape.io/v1alpha1
 kind: Connection
 metadata:
   name: wg-orders-db-conn
 spec:
   providerRef:
+    name: wg-edge
+  via:
     name: wg-tunnel
   scheme: tcp
   port: 25599

@@ -2484,6 +2484,24 @@ unless a dependency is stated.
   declared-but-inert egress control applied as a plain forwarder is a
   silent security failure (doc 11 Phase A finding). I1 deletes the
   refusal and replaces its test with the realization contract.
+- **Done (2026-07-22):** `proxy` implements `reconciler.ViaConsumingProvider`;
+  `via` chains its forwarder through the named tunnel Provider's transit
+  network, dialing the tunnel's own per-Connection published address
+  (`reconciler.Request.TunnelFacts`, engine-resolved, ADR 015) instead of
+  `spec.target` directly. `wireguard`'s Provider-kind reconcile grows
+  `reconcileViaTunnels`: one DNAT-forwarder tunnel container per via'd
+  Connection it services, transit-network-only, settled via
+  `runtime.ProbeReachable` from that same vantage point (not the
+  host-audience check D5's own directly-realized Connections use — see
+  ADR 023's closure note for why those differ). `internal/domain/graph`
+  gained a `via` -> Provider edge (mirrors `warehouseRef`) so the tunnel
+  reconciles first. Compatibility's blanket via-refusal is replaced by a
+  pairing check (`ViaConsumingProvider`), doc 02 §4.2 error-message
+  format. Deviation recorded, not silently cut: "excess network
+  attachment is drift" (this task's Do-text) is achieved by construction,
+  not a live `Probe`-time check — `runtime.ContainerState` carries no
+  attached-networks field, and adding one is a real port-wide change out
+  of proportion to this task; see ADR 023's closure note.
 
 ### I2: Outbound database TLS — reach TLS-requiring (cloud-managed) databases
 

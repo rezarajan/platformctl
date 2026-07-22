@@ -18,8 +18,13 @@ import (
 // warehouseRef (Catalog -> Dataset, docs/planning/08 D8) is top-level by
 // design — the task text is explicit that it belongs beside providerRef/
 // connectionRef, not inside the engine block, specifically so no
-// configRefFields-style nested-ref introspection is needed for it.
-var refFields = []string{"providerRef", "sourceRef", "targetRef", "connectionRef", "secretRef", "warehouseRef"}
+// configRefFields-style nested-ref introspection is needed for it. via
+// (Connection -> the tunnel-capable Provider it chains through,
+// docs/planning/08 I1) is the same shape: the tunnel Provider must publish
+// its per-Connection endpoint fact (reconciler.Request.TunnelFacts)
+// before the via'd Connection's own reconcile can resolve it, exactly the
+// ordering warehouseRef -> Dataset already guarantees for WarehouseFacts.
+var refFields = []string{"providerRef", "sourceRef", "targetRef", "connectionRef", "secretRef", "warehouseRef", "via"}
 
 // configRefField pairs a ref field nested one level under spec.configuration
 // with the Kind(s) it must resolve to.
@@ -400,6 +405,8 @@ func allowedKinds(field string) map[string]bool {
 		return map[string]bool{"SecretReference": true}
 	case "warehouseRef":
 		return map[string]bool{"Dataset": true}
+	case "via":
+		return map[string]bool{"Provider": true}
 	default:
 		return nil
 	}

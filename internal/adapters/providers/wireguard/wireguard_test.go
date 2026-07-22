@@ -7,6 +7,8 @@ import (
 	"time"
 
 	fakeruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/fake"
+	"github.com/rezarajan/platformctl/internal/domain/connection"
+	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
@@ -100,3 +102,136 @@ func TestReconcileConnectionFailsHonestlyWhenUpstreamNeverAnswers(t *testing.T) 
 		t.Error("status must not report Ready when the upstream never answered")
 	}
 }
+
+// TestReconcileInstanceCreatesViaTunnelForChainedConnection is docs/planning/08
+// I1's producer-side contract: reconciling the wireguard Provider itself
+// (Kind == "Provider") ensures one via-tunnel container per managed
+// Connection in req.Resources whose spec.via names this Provider —
+// deterministically named (never naming.RuntimeObjectName(res), which
+// would collide with the forwarder proxy realizes for the same
+// Connection), attached ONLY to the transit network, and its dial address
+// published as an endpoint fact named connection.ViaFactName(ns, name) —
+// the exact fact the engine resolves into Request.TunnelFacts for the
+// via'd Connection's own (proxy) reconcile.
+func TestReconcileInstanceCreatesViaTunnelForChainedConnection(t *testing.T) {
+	shrinkTunnelSettle(t)
+
+	ctx := context.Background()
+	rt := fakeruntime.New()
+	p := New()
+
+	provEnv := tunnelProviderEnvelope("vpc-tunnel", 0)
+	viaConn := resource.Envelope{
+		GroupVersionKind: resource.GroupVersionKind{Kind: "Connection"},
+		Metadata:         resource.Metadata{Name: "private-db"},
+		Spec: map[string]any{
+			"providerRef": map[string]any{"name": "edge"},
+			"scheme":      "tcp",
+			"port":        15999,
+			"target":      "10.10.0.5:5432",
+			"via":         map[string]any{"name": "vpc-tunnel"},
+		},
+	}
+
+	req := reconciler.Request{
+		Resource: provEnv,
+		Provider: provEnv,
+		Runtime:  rt,
+		Secrets:  map[string]map[string]string{"wg-key": {"privateKey": "cHJpdmF0ZScga2V5"}},
+		Resources: map[resource.Key]resource.Envelope{
+			provEnv.Key(): provEnv,
+			viaConn.Key(): viaConn,
+		},
+	}
+
+	st, err := p.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !st.IsReady() {
+		t.Error("expected the Provider to be Ready once its via tunnel settles")
+	}
+
+	tunnelName := "private-db-via-tunnel"
+	if _, found, err := rt.Inspect(ctx, tunnelName); err != nil || !found {
+		t.Fatalf("via tunnel container %q not created: found=%v err=%v", tunnelName, found, err)
+	}
+	wantTarget := tunnelName + ":15999"
+	if err := rt.ProbeReachable(ctx, "wg-net", wantTarget); err != nil {
+		t.Errorf("via tunnel not reachable from its own transit network: %v", err)
+	}
+
+	facts := endpoint.FromState(st.ProviderState[endpoint.Key])
+	wantName := connection.ViaFactName("", "private-db")
+	var got *endpoint.Endpoint
+	for i := range facts {
+		if facts[i].Name == wantName {
+			got = &facts[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("no published endpoint fact named %q; facts=%+v", wantName, facts)
+	}
+	if got.Internal != wantTarget {
+		t.Errorf("published fact Internal = %q, want %q", got.Internal, wantTarget)
+	}
+}
+
+// TestReconcileInstanceFailsHonestlyWhenViaTunnelUpstreamUnreachable mirrors
+// TestReconcileConnectionFailsHonestlyWhenUpstreamNeverAnswers above for the
+// via path: a via tunnel that never becomes reachable from the transit
+// network must fail the Provider's own reconcile honestly, not report
+// Ready from the container healthcheck alone.
+func TestReconcileInstanceFailsHonestlyWhenViaTunnelUpstreamUnreachable(t *testing.T) {
+	shrinkTunnelSettle(t)
+
+	ctx := context.Background()
+	// A runtime whose ProbeReachable always refuses — simulating a via
+	// tunnel container that never becomes dialable from the transit
+	// network (e.g. the DNAT rule never took effect).
+	rt := &alwaysUnreachableProbeRuntime{Runtime: fakeruntime.New()}
+	p := New()
+
+	provEnv := tunnelProviderEnvelope("vpc-tunnel", 0)
+	viaConn := resource.Envelope{
+		GroupVersionKind: resource.GroupVersionKind{Kind: "Connection"},
+		Metadata:         resource.Metadata{Name: "private-db"},
+		Spec: map[string]any{
+			"providerRef": map[string]any{"name": "edge"},
+			"scheme":      "tcp",
+			"port":        15999,
+			"target":      "10.10.0.5:5432",
+			"via":         map[string]any{"name": "vpc-tunnel"},
+		},
+	}
+	req := reconciler.Request{
+		Resource: provEnv,
+		Provider: provEnv,
+		Runtime:  rt,
+		Secrets:  map[string]map[string]string{"wg-key": {"privateKey": "cHJpdmF0ZScga2V5"}},
+		Resources: map[resource.Key]resource.Envelope{
+			provEnv.Key(): provEnv,
+			viaConn.Key(): viaConn,
+		},
+	}
+
+	_, err := p.Reconcile(ctx, req)
+	if err == nil {
+		t.Fatal("expected Reconcile to fail honestly when the via tunnel never becomes reachable")
+	}
+	if !strings.Contains(err.Error(), "did not settle") {
+		t.Errorf("error = %q, want it to name the settle timeout (honest failure)", err.Error())
+	}
+}
+
+type alwaysUnreachableProbeRuntime struct {
+	*fakeruntime.Runtime
+}
+
+func (r *alwaysUnreachableProbeRuntime) ProbeReachable(ctx context.Context, network, target string) error {
+	return errString("simulated: never reachable")
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }

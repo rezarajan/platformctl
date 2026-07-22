@@ -1267,6 +1267,7 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 		CatalogFacts:          e.resolveCatalogFacts(env, p, byKey, st),
 		PrometheusURL:         e.resolvePrometheusURL(env, p, byKey, st),
 		WarehouseFacts:        e.resolveWarehouseFacts(env, byKey, st),
+		TunnelFacts:           e.resolveTunnelFacts(env, byKey, st),
 	}, nil
 }
 
@@ -1454,6 +1455,50 @@ func (e *Engine) resolveWarehouseFacts(env resource.Envelope, byKey map[resource
 		S3Internal:  s3Internal,
 		S3SecretRef: s3SecretRef,
 	}
+}
+
+// resolveTunnelFacts resolves a managed Connection's spec.via
+// (docs/planning/08 I1, closing docs/adr/023's Scope deviation) into
+// reconciler.TunnelFacts — see that type's doc comment for the exact shape.
+// TransitNetwork is read directly off the named Provider's own static
+// spec.configuration.peerNetwork (no state read needed — it cannot change
+// between manifest load and reconcile, the same reasoning
+// resolveKafkaBootstrapServers's graph-resolved fact relies on). Internal
+// is the tunnel Provider's own published per-Connection endpoint fact
+// (connection.ViaFactName), read via publishedEndpointFact exactly like
+// resolveProviderS3Fact reads a Dataset's "s3" fact above — the tunnel
+// provider's own reconcile (wireguard's reconcileViaTunnels) is what writes
+// it; this function only ever reads. Populated only for a managed
+// Connection-kind Resource declaring spec.via; nil otherwise, or when the
+// named Provider does not resolve or has not yet published the fact —
+// graph.Build's via -> Provider edge means the latter case does not arise
+// within the same apply.
+func (e *Engine) resolveTunnelFacts(env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) *reconciler.TunnelFacts {
+	if st == nil || env.Kind != "Connection" {
+		return nil
+	}
+	c, err := connection.FromEnvelope(env)
+	if err != nil || c.External || c.Via == nil {
+		return nil
+	}
+	viaRef := resource.RefFromSpec(env.Spec, "via")
+	viaEnv, ok := byKey[viaRef.Key(env.Metadata.Namespace, "Provider")]
+	if !ok {
+		return nil
+	}
+	viaProv, err := provider.FromEnvelope(viaEnv)
+	if err != nil {
+		return nil
+	}
+	transitNetwork, _ := viaProv.Configuration["peerNetwork"].(string)
+	if transitNetwork == "" {
+		return nil
+	}
+	internal := e.publishedEndpointFact(viaEnv.Key(), connection.ViaFactName(env.Metadata.Namespace, env.Metadata.Name), st)
+	if internal == "" {
+		return nil
+	}
+	return &reconciler.TunnelFacts{TransitNetwork: transitNetwork, Internal: internal}
 }
 
 // resolveDatasetS3Facts resolves a Dataset's own realizing Provider's

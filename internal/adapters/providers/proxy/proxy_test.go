@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -172,5 +173,108 @@ func TestReconcileConnectionSucceedsWhenUpstreamAnswers(t *testing.T) {
 	}
 	if !st.IsReady() {
 		t.Error("expected Ready once the upstream answers through the forwarder")
+	}
+}
+
+// TestReconcileConnectionViaFailsHonestlyWithoutTunnelFacts is docs/planning/08
+// I1's honest-failure bar: a Connection declaring spec.via must never
+// silently realize as a plain, untunneled forwarder just because the
+// engine hasn't published TunnelFacts yet (e.g. the tunnel Provider hasn't
+// reconciled this apply) — graph.Build's via -> Provider edge means this
+// should not arise in practice, but reconcile must still refuse rather than
+// guess if it somehow does.
+func TestReconcileConnectionViaFailsHonestlyWithoutTunnelFacts(t *testing.T) {
+	ctx := context.Background()
+	rt := fakeruntime.New()
+	p := New()
+
+	provEnv := providerEnvelope("edge")
+	connEnv := connectionEnvelope("private-db", "edge", 58234, "10.8.0.10:5432")
+	connEnv.Spec["via"] = map[string]any{"name": "vpc-tunnel"}
+
+	req := reconciler.Request{Resource: connEnv, Provider: provEnv, Runtime: rt}
+	_, err := p.Reconcile(ctx, req)
+	if err == nil {
+		t.Fatal("expected Reconcile to fail honestly when spec.via is set but TunnelFacts is nil")
+	}
+	if !strings.Contains(err.Error(), "vpc-tunnel") || !strings.Contains(err.Error(), "not yet published") {
+		t.Errorf("error = %q, want it to name the via Provider and say facts are not yet published", err.Error())
+	}
+}
+
+// TestReconcileConnectionViaJoinsTransitNetworkAndDialsTunnel is docs/planning/08
+// I1's core realization behavior: a via'd Connection's forwarder joins ONLY
+// the shared platform network plus the tunnel's own transit network (never
+// a third network — blast-minimized), and settles Ready using the exact
+// same dial-through-forwarder check as an untunneled Connection (Probe
+// symmetry, I4) — via-awareness lives entirely in which address the
+// forwarder was built to dial, not in a separate settledness path.
+func TestReconcileConnectionViaJoinsTransitNetworkAndDialsTunnel(t *testing.T) {
+	shrinkForwarderSettle(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	go func() {
+		c, aerr := ln.Accept()
+		if aerr != nil {
+			return
+		}
+		defer c.Close()
+		time.Sleep(2 * time.Second)
+	}()
+
+	ctx := context.Background()
+	rt := fakeruntime.New()
+	p := New()
+
+	provEnv := providerEnvelope("edge")
+	connEnv := connectionEnvelope("private-db", "edge", port, "10.8.0.10:5432")
+	connEnv.Spec["via"] = map[string]any{"name": "vpc-tunnel"}
+
+	req := reconciler.Request{
+		Resource: connEnv,
+		Provider: provEnv,
+		Runtime:  rt,
+		TunnelFacts: &reconciler.TunnelFacts{
+			TransitNetwork: "datascape-vpc-transit",
+			// The fake runtime never actually dials a socat Cmd — the
+			// settle check dials ctr.HostAddr(conn.Port) directly (the
+			// same trick TestReconcileConnectionSucceedsWhenUpstreamAnswers
+			// above uses), so this value only needs to be a plausible
+			// "host:port" string, never actually dialed by this test.
+			Internal: "wg-private-db-via-tunnel:5432",
+		},
+	}
+	st, err := p.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !st.IsReady() {
+		t.Error("expected Ready for a via'd Connection whose TunnelFacts are populated and upstream answers")
+	}
+
+	name := "private-db"
+	dial := fmt.Sprintf("%s:%d", name, port)
+	if err := rt.ProbeReachable(ctx, "datascape", dial); err != nil {
+		t.Errorf("forwarder not attached to the shared platform network: %v", err)
+	}
+	if err := rt.ProbeReachable(ctx, "datascape-vpc-transit", dial); err != nil {
+		t.Errorf("forwarder not attached to the tunnel's transit network: %v", err)
+	}
+	if err := rt.ProbeReachable(ctx, "some-other-network", dial); err == nil {
+		t.Error("forwarder must not be attached to any network beyond [shared, transit] (blast radius)")
+	}
+
+	via, _ := st.ProviderState["via"].(string)
+	if via != "vpc-tunnel" {
+		t.Errorf("ProviderState[via] = %q, want %q", via, "vpc-tunnel")
+	}
+	transit, _ := st.ProviderState["transit"].(string)
+	if transit != "datascape-vpc-transit" {
+		t.Errorf("ProviderState[transit] = %q, want %q", transit, "datascape-vpc-transit")
 	}
 }
