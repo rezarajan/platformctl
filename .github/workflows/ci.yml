@@ -44,7 +44,10 @@ jobs:
       # in lockstep with any local `go run .../golangci-lint@<version>`
       # invocation so CI and a developer's machine agree on findings.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        # action v7+ is required for golangci-lint v2.x configs — v6 only
+        # accepts v1 version strings (found live: CI failed at prepare with
+        # "golangci-lint v2 is not supported by golangci-lint-action v6").
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
 
