@@ -18,6 +18,14 @@ type Catalog struct {
 	External      bool
 	ConnectionRef *string        // required when External
 	EngineConfig  map[string]any // the spec.<engine> sub-block, validated by a per-engine schema fragment
+	// WarehouseRef names a Dataset holding this Catalog's Iceberg warehouse
+	// location (docs/planning/08 D8) — top-level, not nested inside
+	// EngineConfig, so graph.Build's plain refFields pass (kind-checked to
+	// Dataset) orders it with no engine-block introspection. Optional: a
+	// realizing provider that knows how to derive warehouse config from a
+	// Dataset (nessie today) consumes it via the engine-resolved
+	// reconciler.Request.WarehouseFacts; engines that don't, ignore it.
+	WarehouseRef *string
 }
 
 // FromEnvelope decodes a Catalog from a validated Envelope.
@@ -34,6 +42,9 @@ func FromEnvelope(e resource.Envelope) (Catalog, error) {
 	}
 	if ref := refName(e.Spec, "connectionRef"); ref != "" {
 		c.ConnectionRef = &ref
+	}
+	if ref := refName(e.Spec, "warehouseRef"); ref != "" {
+		c.WarehouseRef = &ref
 	}
 	if engine != "" {
 		if block, ok := e.Spec[engine].(map[string]any); ok {

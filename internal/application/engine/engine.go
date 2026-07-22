@@ -1248,6 +1248,7 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 		KafkaBootstrapServers: e.resolveKafkaBootstrapServers(provEnv, p, byKey),
 		MetricsTargets:        e.resolveMetricsTargets(env, st),
 		CatalogFacts:          e.resolveCatalogFacts(env, p, byKey, st),
+		WarehouseFacts:        e.resolveWarehouseFacts(env, byKey, st),
 	}, nil
 }
 
@@ -1274,29 +1275,34 @@ func (e *Engine) resolveCatalogFacts(env resource.Envelope, p provider.Provider,
 		return nil
 	}
 
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
-
-	restInternal := ""
-	if rs, ok := st.Resources[catEnv.Key()]; ok {
-		for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
-			if ep.Name == "iceberg-rest" && ep.Internal != "" {
-				restInternal = ep.Internal
-			}
-		}
-	}
+	restInternal := e.publishedEndpointFact(catEnv.Key(), "iceberg-rest", st)
 	if restInternal == "" {
 		return nil
 	}
 
-	// Resolve the warehouse-backing S3/MinIO Provider: an explicit
-	// configuration.warehouseProviderRef wins; otherwise the sole
-	// s3/minio-typed Provider in the manifest's namespace. Left unresolved
-	// (nil, same as "not yet published") when 0 or >1 candidates exist —
-	// the trino provider's own ValidateSpec/Reconcile surfaces that
-	// ambiguity explicitly rather than this engine seam guessing (D10's
-	// TASK_PROGRESS.md design note: no Catalog.spec.warehouseRef exists yet
-	// on main, D8 not implemented).
+	// Resolve the warehouse-backing S3/MinIO Provider, in this order
+	// (docs/planning/08 D8's recorded resolution order):
+	//  1. the referenced Catalog's own spec.warehouseRef chain (Catalog ->
+	//     Dataset -> the Dataset's realizing Provider) — canonical once the
+	//     Catalog declares it (D8).
+	//  2. this Provider's own explicit configuration.warehouseProviderRef
+	//     disambiguator (D10, unchanged) — becomes unnecessary once (1)
+	//     applies, but not removed: additive coexistence.
+	//  3. the sole S3/MinIO-typed Provider in the manifest's namespace,
+	//     auto-inferred (D10, unchanged); left unresolved (nil) when 0 or >1
+	//     candidates exist — this provider's own ValidateSpec/Reconcile
+	//     surfaces that ambiguity explicitly rather than this engine seam
+	//     guessing.
+	if whRef := resource.RefFromSpec(catEnv.Spec, "warehouseRef"); whRef.Name != "" {
+		if dsEnv, ok := byKey[whRef.Key(catEnv.Metadata.Namespace, "Dataset")]; ok {
+			if ds, err := dataset.FromEnvelope(dsEnv); err == nil {
+				if s3Internal, s3SecretRef, ok := e.resolveDatasetS3Facts(ds, dsEnv, byKey, st); ok {
+					return &reconciler.CatalogFacts{RestInternal: restInternal, S3Internal: s3Internal, S3SecretRef: s3SecretRef}
+				}
+			}
+		}
+	}
+
 	var s3Env resource.Envelope
 	s3Found := false
 	if whRef := resource.RefFromSpec(p.Configuration, "warehouseProviderRef"); whRef.Name != "" {
@@ -1326,23 +1332,9 @@ func (e *Engine) resolveCatalogFacts(env resource.Envelope, p provider.Provider,
 		return nil
 	}
 
-	s3Internal := ""
-	if rs, ok := st.Resources[s3Env.Key()]; ok {
-		for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
-			if ep.Name == "s3" && ep.Internal != "" {
-				s3Internal = ep.Internal
-			}
-		}
-	}
-	if s3Internal == "" {
+	s3Internal, s3SecretRef, ok := e.resolveProviderS3Fact(s3Env, st)
+	if !ok {
 		return nil
-	}
-	s3SecretRef := ""
-	if s3p, err := provider.FromEnvelope(s3Env); err == nil {
-		s3SecretRef, _ = s3p.Configuration["rootSecretRef"].(string)
-		if s3SecretRef == "" && len(s3p.SecretRefs) > 0 {
-			s3SecretRef = s3p.SecretRefs[0]
-		}
 	}
 
 	return &reconciler.CatalogFacts{
@@ -1350,6 +1342,100 @@ func (e *Engine) resolveCatalogFacts(env resource.Envelope, p provider.Provider,
 		S3Internal:   s3Internal,
 		S3SecretRef:  s3SecretRef,
 	}
+}
+
+// resolveWarehouseFacts resolves Catalog.spec.warehouseRef (docs/planning/08
+// D8) into reconciler.WarehouseFacts — see that type's doc comment for the
+// exact shape and the published-facts-only discipline (ADR 015); mirrors
+// resolveCatalogFacts above, but for a Catalog-kind Resource's own
+// warehouseRef rather than a trino-like Provider's configuration.catalogRef.
+// Populated only for env.Kind == "Catalog" declaring spec.warehouseRef; nil
+// otherwise, or when the referenced Dataset or its realizing Provider is
+// missing or has not yet published its "s3" endpoint fact — a provider
+// reading this field must treat nil as "not ready", never construct a
+// substitute. graph.Build's warehouseRef -> Dataset edge (plus the Dataset's
+// own pre-existing providerRef edge) means this is, in practice, always
+// non-nil by the time a Catalog with a valid warehouseRef reconciles within
+// the same apply.
+func (e *Engine) resolveWarehouseFacts(env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) *reconciler.WarehouseFacts {
+	if st == nil || env.Kind != "Catalog" {
+		return nil
+	}
+	whRef := resource.RefFromSpec(env.Spec, "warehouseRef")
+	if whRef.Name == "" {
+		return nil
+	}
+	dsEnv, ok := byKey[whRef.Key(env.Metadata.Namespace, "Dataset")]
+	if !ok {
+		return nil
+	}
+	ds, err := dataset.FromEnvelope(dsEnv)
+	if err != nil {
+		return nil
+	}
+	s3Internal, s3SecretRef, ok := e.resolveDatasetS3Facts(ds, dsEnv, byKey, st)
+	if !ok {
+		return nil
+	}
+	return &reconciler.WarehouseFacts{
+		Bucket:      ds.Bucket,
+		Prefix:      ds.Prefix,
+		S3Internal:  s3Internal,
+		S3SecretRef: s3SecretRef,
+	}
+}
+
+// resolveDatasetS3Facts resolves a Dataset's own realizing Provider's
+// published "s3" endpoint fact plus its credential SecretReference *name* —
+// the shared tail end of resolveWarehouseFacts above and resolveCatalogFacts's
+// warehouseRef-chain preference (docs/planning/08 D8).
+func (e *Engine) resolveDatasetS3Facts(ds dataset.Dataset, dsEnv resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) (s3Internal, s3SecretRef string, ok bool) {
+	if ds.ProviderRef == "" {
+		return "", "", false
+	}
+	s3Env, found := byKey[resource.Key{Namespace: resource.NormalizeNamespace(dsEnv.Metadata.Namespace), Kind: "Provider", Name: ds.ProviderRef}]
+	if !found {
+		return "", "", false
+	}
+	return e.resolveProviderS3Fact(s3Env, st)
+}
+
+// resolveProviderS3Fact reads an S3/MinIO-typed Provider's published "s3"
+// endpoint fact plus its credential SecretReference *name* (its own
+// configuration.rootSecretRef, or the first entry of its spec.secretRefs) —
+// the state-reading tail shared by resolveCatalogFacts's warehouseProviderRef/
+// auto-infer path and resolveDatasetS3Facts above.
+func (e *Engine) resolveProviderS3Fact(s3Env resource.Envelope, st *state.State) (s3Internal, s3SecretRef string, ok bool) {
+	s3Internal = e.publishedEndpointFact(s3Env.Key(), "s3", st)
+	if s3Internal == "" {
+		return "", "", false
+	}
+	if s3p, err := provider.FromEnvelope(s3Env); err == nil {
+		s3SecretRef, _ = s3p.Configuration["rootSecretRef"].(string)
+		if s3SecretRef == "" && len(s3p.SecretRefs) > 0 {
+			s3SecretRef = s3p.SecretRefs[0]
+		}
+	}
+	return s3Internal, s3SecretRef, true
+}
+
+// publishedEndpointFact reads a single named endpoint fact's Internal
+// address from key's published state — the shared, lock-guarded primitive
+// resolveCatalogFacts/resolveWarehouseFacts's fact lookups build on (ADR
+// 015: published facts, never constructed).
+func (e *Engine) publishedEndpointFact(key resource.Key, name string, st *state.State) string {
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	rs, ok := st.Resources[key]
+	if !ok {
+		return ""
+	}
+	for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
+		if ep.Name == name && ep.Internal != "" {
+			return ep.Internal
+		}
+	}
+	return ""
 }
 
 // resolveKafkaBootstrapServers mirrors resolveSchemaRegistryURL's seam

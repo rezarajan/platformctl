@@ -1,104 +1,143 @@
-# D3 (jdbcsink) + D4 (s3source) — task progress
+# D8: First-class Catalog↔warehouse reference — TASK_PROGRESS
 
-Doc 08 §2.1 protocol. Step 0 checkpoint file.
+Doc: docs/planning/08-production-readiness-plan.md §6, D8. Protocol: doc 08
+§2.1 (this file is step 0). Supersedes the prior D3/D4 checkpoint content
+below this task's own history (that work is already merged on main;
+`git log -- TASK_PROGRESS.md` has the prior content if needed).
 
-## Plan
+## Pre-reading done
 
-1. [done] git merge main --no-edit (brought in D1/D2/C3/D6 dependencies).
-2. [done] Read: CLAUDE.md, doc 08 D3/D4 entries + §2.1, ADR 001/009/016,
-   s3sink.go + debezium.go in full, kafkaconnect client, providerkit,
-   registry/main.go wiring, compatibility.go (capability checks already
-   exist for both pairings), doc 03 §7.1/§7.2, doc 04 §12, doc 08 §8,
-   scripts/test-impact.sh format, guard-planning-docs.sh (additive edits
-   pass), sink_integration_test.go pattern.
-3. [done] Connector/jar research (live, pinned):
-   - jdbcsink: Confluent kafka-connect-jdbc v10.9.6 (confluentinc
-     kafka-connect-jdbc, Confluent Hub zip) — connector class
-     io.confluent.connect.jdbc.JdbcSinkConnector. Bundles postgresql JDBC
-     driver (42.7.11); mysql-connector-j 9.7.0 added separately (Maven
-     Central, not bundled).
-   - s3source: Aiven's s3-source-connector-for-apache-kafka v3.4.2 (repo
-     Aiven-Open/cloud-storage-connectors-for-apache-kafka — the old
-     s3-connector-for-apache-kafka repo s3sink uses was archived
-     2024-09-11 and development moved here). Connector class
-     io.aiven.kafka.connect.s3.source.S3SourceConnector. Bundles its own
-     Confluent Avro converter + parquet/hadoop jars.
-   - CRITICAL FINDING (verified against kafka-connect-jdbc source,
-     FieldsMetadata.java): the JDBC sink connector cannot write ANY value
-     column from a fully schemaless (Map-typed) Kafka record — it only
-     extracts fields from a Struct valueSchema. Debezium's own json path
-     (debezium.applyConverterConfig, read-only) hardcodes
-     schemas.enable=false always. Consequence: jdbcsink is only usable
-     with schema-carrying options.format (avro/protobuf) — NOT an
-     optional nicety, a hard technical requirement. jdbcsink.
-     ValidateBindingOptions rejects unset/"json" format accordingly.
-     Documented in jdbcsink.go doc comments + will be noted in doc 03 and
-     the final report as a deviation from "options.format optional
-     everywhere".
-4. [done] Implement internal/adapters/providers/jdbcsink (D3) — commit 615b5ed.
-5. [done] Implement internal/adapters/providers/s3source (D4) — commit 615b5ed.
-6. [done] Unit tests for both (mirror s3sink_test.go pattern) — all green.
-7. [done] testdata Dockerfiles: jdbcsink-image, s3source-image — both build
-   clean (verified: `docker build` succeeded for both).
-8. [done] Registry + main.go wiring + feature gates (JDBCSinkProvider,
-   IngestProvider — Alpha/disabled).
-9. [done] schemas/v1alpha1/provider.json, binding.json additive updates +
-   docs/reference/ regenerated (TestGeneratedReferenceInSync green).
-10. [done] docs/planning/03 §7.2 additive update — commit 50ab8c8.
-11. [done] docs/planning/04 §12 rows appended — commit 50ab8c8.
-12. [done] docs/planning/08: additive "Done" status blocks under D3/D4 +
-    Stage D exit-criteria checkboxes 2 and 4 checked (with evidence).
-13. [done] scripts/test-impact.sh: two new suite rows (jdbcsink, s3source).
-14. [done] Live integration tests, both green against real Docker:
-    - TestS3SourceIngestEndToEnd (246.9s) + TestS3SourceValidateCapability
-      ErrorExact: PASS first try, no bugs found.
-    - TestJDBCSinkEndToEnd (63.3s, after fixing two bugs found live — see
-      commit 5f0641b) + TestJDBCSinkValidateCapabilityErrorExact: PASS.
-      Bugs found+fixed: (a) topics.regex vs literal topics (Debezium
-      writes to a per-table topic, not the bare EventStream name); (b)
-      missing CONNECT_CONSUMER_METADATA_MAX_AGE_MS (s3sink's own doc
-      comment already named this exact gotcha; jdbcsink was missing the
-      identical setting).
-15. [done] gofmt / go build / go vet / go test ./... all clean.
-    scripts/test-impact.sh --base main: jdbcsink suite recorded green in
-    the ledger (66.1s); s3source suite was mid-run (contending for the
-    shared Docker daemon flock with a concurrent agent's own
-    test-impact.sh run) at the time this task's work was finalized —
-    same code/test already independently verified green at 246.9s
-    moments earlier (commit 36baa48's status note), so this is a ledger-
-    recording formality expected to complete on its own, not a
-    correctness risk.
-16. [done] Final commit.
+- D8's full entry (doc 08 §6).
+- ADR 006's "Implementation notes (D10, added post-implementation)" —
+  D10's four recorded deviations + five live-caught fixes, in particular:
+  `configRefFields` (nested-ref graph extraction under `spec.configuration`)
+  and `warehouseProviderRef` (trino's own S3-provider disambiguator, added
+  *because* D8 wasn't implemented yet).
+- `internal/domain/graph/graph.go`: `refFields` (top-level, a slice) vs
+  `configRefFields` (nested under `spec.configuration`, D10's mechanism).
+  D8's `warehouseRef` is **top-level** on Catalog (task text is explicit:
+  "not inside the engine block, so the graph needs no engine-block
+  introspection after all") — so it belongs in `refFields`, not
+  `configRefFields`. `configRefFields` stays untouched.
+- `internal/adapters/providers/nessie/nessie.go` in full: `defaultWarehouseEnv`
+  reads `spec.configuration.defaultWarehouseLocation`/`warehouseS3Endpoint`/
+  `warehouseS3SecretRef` (Provider-level, static) at `reconcileInstance`
+  (Kind==Provider) container-create time.
+- `internal/adapters/providers/trino/catalogconfig.go` + `trino.go`:
+  `CatalogFacts` resolution lives entirely in
+  `internal/application/engine/engine.go`'s `resolveCatalogFacts`, not in
+  the trino package itself — trino only *consumes* `req.CatalogFacts`.
 
-## Resume point if this session dies
+## The reconciliation-ordering problem (why this isn't a trivial field add)
 
-Read this file + `git log --oneline -10` first. If step 14's live Docker
-legs haven't completed: re-run
-`go test -tags integration -run TestS3SourceIngestEndToEnd -v -timeout 600s ./cmd/platformctl/`
-and
-`go test -tags integration -run TestJDBCSinkEndToEnd -v -timeout 900s ./cmd/platformctl/`
-(the jdbcsink one needs both testdata/avro-connect-image and
-testdata/jdbcsink-image built first — the test does this itself). Fix any
-failures found (most likely culprit: the s3source connector's exact output
-shape for jsonl input — the test uses substring assertions specifically to
-tolerate uncertainty here, documented in s3source_integration_test.go).
-Once both pass, finish steps 12/16: append doc 08 D3/D4 status blocks with
-real timings (mirror D1/D2/D6's "Done (2026-07-2X, merged): ..." shape),
-check the Stage D exit-criterion box for "Lake data can be replayed... and
-an EventStream can be served into a relational Source", then the final
-consolidated commit per the task's required subject line.
+Catalog already depends on its `providerRef` (nessie Provider) — so nessie's
+own Provider-kind reconcile (which boots the container) necessarily runs
+**before** any Catalog that references it. But `Catalog.spec.warehouseRef`
+lives on the Catalog, naming a Dataset — info only available *after* the
+Catalog resolves its own dependency. Nessie's Iceberg REST personality needs
+its default-warehouse + S3-credential config baked in as **container env at
+create time** (Quarkus config, no REST endpoint to set it dynamically) — so
+there's a real chicken-and-egg: the facts needed to configure nessie's
+container aren't known until after nessie's own Provider-kind reconcile has
+already run.
 
-## Notes / open questions
+Resolution (recorded as the design, see ADR 006 addendum + code comments):
+- Graph: add `warehouseRef` to `refFields` (top-level), kind-checked to
+  `Dataset`. Catalog -> Dataset edge; Dataset already has its own
+  `providerRef` edge to its realizing (s3/minio) Provider. So by the time
+  Catalog reconciles, both the Dataset and its Provider have already
+  reconciled and published state, in the *same* apply.
+- Engine: new `reconciler.Request.WarehouseFacts` (mirrors `CatalogFacts`'s
+  published-facts-only discipline, ADR 015), resolved **for Catalog-kind
+  Resources only** (`resolveWarehouseFacts`), non-nil whenever warehouseRef
+  is set and its chain is published — which, thanks to the graph edge above,
+  is always true on a normal single apply.
+- nessie's `reconcileCatalog` (Kind==Catalog step, runs strictly after the
+  Provider-kind step that first booted the container) computes the desired
+  warehouse env from `req.WarehouseFacts` (skipped when the Provider already
+  sets an explicit `defaultWarehouseLocation` — override wins, additive
+  coexistence, no removal) and calls `providerkit.EnsureInstance` **again**
+  with the same Image/Network/Ports but corrected Env. `EnsureContainer`'s
+  existing spec-hash idempotency (`docker.go`'s `specHash`/`specGenLabel`)
+  is the *only* mechanism needed for idempotency here: first Catalog
+  reconcile after warehouseRef is introduced recreates the container once
+  (spec hash changes); every later reconcile with unchanged facts is a
+  zero-Docker-API-call no-op — no new drift-fingerprint bookkeeping
+  required. `Probe` is intentionally not extended to detect out-of-band
+  drift of the *derived* warehouse env — recorded as a follow-up (out of
+  D8's scope; the pre-existing explicit-config path had no such detection
+  either).
 
-- jdbcsink target-DB preflight mirrors debezium's buildDesiredConnector
-  Connection-resolution exactly (per task instruction), renamed for the
-  TARGET (sink) direction.
-- jdbcsink needs a Debezium-envelope-unwrap SMT to write sane rows from a
-  CDC-sourced topic (io.debezium.transforms.ExtractNewRecordState, bundled
-  in the debezium/connect base image already) — added as
-  options.unwrap: bool (default false), documented as necessary plumbing
-  beyond the task's literal option list, called out in the final report.
-- s3source: SupportedIngestFormats = jsonl, avro, parquet (not literal
-  "json" — the connector's input.format enum has no whole-file-JSON-array
-  mode, only jsonl; documented deviation from the task text's "json at
-  minimum" phrasing).
+Trino's own `warehouseProviderRef` resolution order (`resolveCatalogFacts`
+in engine.go), recorded per the task's instruction: (1) the referenced
+Catalog's own `warehouseRef` chain (Catalog -> Dataset -> Dataset's
+realizing Provider) — canonical once set; (2) trino's own
+`configuration.warehouseProviderRef` explicit disambiguator (pre-D8, kept,
+becomes unnecessary once (1) applies); (3) auto-infer the sole S3/MinIO
+Provider in the namespace. `resolveDatasetS3Facts` factors the shared tail
+(Dataset -> Provider -> published "s3" fact + secretRef name) used by both
+`resolveWarehouseFacts` and this fallback chain.
+
+## Step plan
+
+1. [done] Read CLAUDE.md, doc 08 §2.1 + D8 entry, ADR 006 Implementation
+   notes, graph.go, nessie.go, catalogconfig.go/trino.go, doc 03 §8.1,
+   lakehouse example, trino-scenario testdata, engine.go's
+   resolveCatalogFacts/resolveMetricsTargets precedent, reconciler.go
+   Request/CatalogFacts, TestResolveCatalogFactsFromCatalogRef fixture
+   style, TestLakehouse integration test, gatherToolFacts (confirmed:
+   already fact-driven, no changes needed for the inventory accept item).
+2. [done] This file — reconciliation design recorded.
+3. [in-progress] Implement:
+   - `internal/domain/catalog/catalog.go`: `WarehouseRef *string`.
+   - `internal/domain/graph/graph.go`: `warehouseRef` -> `Dataset` in
+     `refFields`/`allowedKinds`.
+   - `schemas/v1alpha1/catalog.json` + doc 03 §8.1: additive `warehouseRef`.
+   - `internal/ports/reconciler/reconciler.go`: `WarehouseFacts` type +
+     `Request.WarehouseFacts` field.
+   - `internal/application/engine/engine.go`: `resolveWarehouseFacts`,
+     `resolveDatasetS3Facts` (shared), `resolveCatalogFacts` gains the
+     warehouseRef-chain-first precedence.
+   - `internal/adapters/providers/nessie/nessie.go`: `instanceSpec` factor,
+     `warehouseFactsEnv`, `reconcileCatalog` wiring.
+   - `examples/lakehouse/catalog-and-connections.yaml`: `warehouseRef:
+     {name: warehouse}` (the pre-existing, previously-unwired `warehouse`
+     Dataset).
+   - `cmd/platformctl/testdata/trino-scenario/manifests.yaml`: prove the
+     resolution order live (warehouseRef present alongside
+     warehouseProviderRef, same target — see manifest comment).
+   - ADR 006: additive "Implementation notes (D8, added post-implementation)"
+     section.
+4. [pending] Tests: graph_test.go (ordering + negative path), catalog
+   decode test, engine_test.go (WarehouseFacts resolution + trino
+   precedence order), nessie unit test (new file) for `warehouseFactsEnv`.
+5. [pending] Verify: gofmt, build, vet, go test ./..., scripts/test-impact.sh
+   --base main, targeted integration (TestLakehouse, trino e2e).
+6. [pending] Commit.
+
+## Verification log
+
+- gofmt -l . / go build ./... / go vet ./... — clean.
+- go test ./... — all green, including new tests: graph_test.go (2 new:
+  ordering + wrong-kind rejection), catalog_test.go (new file, 2 tests),
+  nessie_test.go (new file, 5 tests: env derivation, secretRef error,
+  skip-without-facts, skip-with-explicit-override,
+  recreate-once-then-idempotent via fake runtime MutationCount),
+  engine_test.go (2 new: WarehouseFacts resolves within one apply;
+  warehouseRef-chain-first precedence over warehouseProviderRef).
+- docs/reference regenerated (go run ./cmd/platformctl docs build --out
+  docs/reference) — TestGeneratedReferenceInSync green.
+- `go run ./cmd/platformctl validate examples/lakehouse` — 20 resources
+  valid (warehouseRef wired, no schema/graph errors).
+- `go run ./cmd/platformctl validate --feature-gates=TrinoProvider=true,...
+  cmd/platformctl/testdata/trino-scenario` — 17 resources valid.
+- **Live Docker: TestTrinoComputeEngineEndToEnd — PASS (117.93s), zero live
+  bugs found this run.** Confirmed via docker inspect that the nessie
+  container's env carries the warehouseRef-derived
+  NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION=s3://raw-events/
+  iceberg-warehouse/ (matching the new trn-warehouse Dataset, not the old
+  hardcoded Provider-level fields, which were removed from the scenario) —
+  the D8 derivation path is genuinely exercised, not just present in code.
+  Full accept list (Ready, scale 2->3 in place, drift-heal, idempotent
+  re-apply "no changes", validate rejection) all still green.
+- Live Docker: TestLakehouse — running (see below for result).

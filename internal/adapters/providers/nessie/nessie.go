@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
@@ -103,6 +104,63 @@ func defaultWarehouseEnv(name string, cfg provider.Provider, secrets map[string]
 	return env, nil
 }
 
+// warehouseFactsEnv mirrors defaultWarehouseEnv's Quarkus env-var shape but
+// derives the warehouse location + S3 endpoint/credentials from
+// Catalog.spec.warehouseRef's resolved facts (docs/planning/08 D8) instead
+// of the Provider's own static spec.configuration.defaultWarehouseLocation/
+// warehouseS3* fields — reconcileCatalog's automatic-derivation path. The
+// two are mutually exclusive per Catalog: an explicit Provider-level
+// default always wins outright (see reconcileCatalog) — additive
+// coexistence with defaultWarehouseEnv above, no removal.
+func warehouseFactsEnv(facts *reconciler.WarehouseFacts, secrets map[string]map[string]string) (map[string]string, error) {
+	loc := fmt.Sprintf("s3://%s/%s", facts.Bucket, strings.TrimPrefix(facts.Prefix, "/"))
+	env := map[string]string{
+		"NESSIE_CATALOG_DEFAULT_WAREHOUSE":                            "warehouse",
+		"NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION":                loc,
+		"NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ENDPOINT":          "http://" + facts.S3Internal,
+		"NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_PATH_STYLE_ACCESS": "true",
+		"NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION":            "us-east-1",
+		"NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_AUTH_TYPE":         "STATIC",
+		"NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ACCESS_KEY_NAME":   "warehouse-creds",
+	}
+	creds, ok := secrets[facts.S3SecretRef]
+	if !ok {
+		return nil, fmt.Errorf("Catalog spec.warehouseRef resolved a warehouse SecretReference %q, but it is not listed in the nessie Provider's own spec.secretRefs for the engine to resolve — add it there", facts.S3SecretRef)
+	}
+	env["NESSIE_CATALOG_SECRETS_WAREHOUSE_CREDS_NAME"] = creds["username"]
+	env["NESSIE_CATALOG_SECRETS_WAREHOUSE_CREDS_SECRET"] = creds["password"]
+	return env, nil
+}
+
+// instanceSpec builds this Provider's own container shape — the
+// Namespace/Name/Network/Image/Ports reconcileInstance creates on Provider
+// reconcile, and reconcileCatalog may re-Ensure with a corrected Env
+// (docs/planning/08 D8: warehouseFactsEnv's derivation can only run once the
+// Catalog referencing this Provider has resolved its own warehouseRef, which
+// is strictly after this Provider's own reconcile — see reconcileCatalog).
+// Factored out so both call sites build byte-identical specs, differing
+// only in env — EnsureContainer's own spec-hash idempotency
+// (internal/adapters/runtime/docker's specHash/specGenLabel) is what makes
+// a repeated call with the same env a no-op and a changed env a clean
+// recreate, with no new drift-fingerprint bookkeeping needed here.
+func instanceSpec(provEnv resource.Envelope, cfg provider.Provider, name string, env map[string]string) providerkit.InstanceSpec {
+	image, _ := cfg.Configuration["image"].(string)
+	if image == "" {
+		image = defaultImage
+	}
+	return providerkit.InstanceSpec{
+		Namespace: provEnv.Metadata.Namespace,
+		Name:      name,
+		Network:   providerkit.Network(cfg),
+		Container: runtime.ContainerSpec{
+			Image: image,
+			Env:   env,
+			Ports: []runtime.PortBinding{{HostPort: providerkit.HostPort(cfg, name, "port"), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
+		},
+		WaitTimeout: 120 * time.Second,
+	}
+}
+
 // reachableAPIURL is providerkit.ReachableURL with the "/api/v2" base
 // appended — Nessie's REST API is stateless HTTP with no broker-style
 // redirect, so the resolved address can be used directly for one call.
@@ -160,27 +218,13 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 		return st, err
 	}
 	name := containerName(req.Provider)
-	image, _ := cfg.Configuration["image"].(string)
-	if image == "" {
-		image = defaultImage
-	}
 	warehouseEnv, err := defaultWarehouseEnv(name, cfg, req.Secrets)
 	if err != nil {
 		return st, err
 	}
 	// No in-container healthcheck: the distroless Quarkus image ships no
 	// shell/curl. Readiness is verified from the host against the REST API.
-	ctrState, err := providerkit.EnsureInstance(ctx, rt, providerkit.InstanceSpec{
-		Namespace: req.Provider.Metadata.Namespace,
-		Name:      name,
-		Network:   providerkit.Network(cfg),
-		Container: runtime.ContainerSpec{
-			Image: image,
-			Env:   warehouseEnv,
-			Ports: []runtime.PortBinding{{HostPort: providerkit.HostPort(cfg, name, "port"), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
-		},
-		WaitTimeout: 120 * time.Second,
-	})
+	ctrState, err := providerkit.EnsureInstance(ctx, rt, instanceSpec(req.Provider, cfg, name, warehouseEnv))
 	if err != nil {
 		return st, err
 	}
@@ -212,9 +256,52 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	return st, nil
 }
 
+// ensureDerivedWarehouseConfig applies Catalog.spec.warehouseRef's derived
+// warehouse env (docs/planning/08 D8) to this Catalog's realizing nessie
+// Provider container, when applicable. Skipped entirely when req.
+// WarehouseFacts is nil (no warehouseRef, or its chain isn't resolved yet)
+// or when the Provider itself already sets an explicit
+// configuration.defaultWarehouseLocation (that field always wins outright —
+// additive coexistence with the pre-D8 explicit path, never overridden).
+//
+// This has to run from the Catalog-kind reconcile, not reconcileInstance's
+// Provider-kind one: nessie's own Provider necessarily reconciles *before*
+// any Catalog referencing it (Catalog depends on providerRef), so the very
+// first time a Catalog declares warehouseRef, the container that already
+// exists needs re-creating with the now-known server config. Calling
+// providerkit.EnsureInstance again here — with the identical
+// Image/Network/Ports instanceSpec builds, differing only in Env — is safe
+// and idempotent purely because EnsureContainer's own spec-hash comparison
+// already treats "same desired spec" as a no-op and "different desired
+// spec" as a clean recreate; this function adds no drift-fingerprint
+// bookkeeping of its own. Probe does not separately check this derived
+// config for out-of-band drift (a follow-up — the pre-D8 explicit-config
+// path had no such check either).
+func ensureDerivedWarehouseConfig(ctx context.Context, req reconciler.Request, name string) error {
+	if req.WarehouseFacts == nil {
+		return nil
+	}
+	cfg, err := provider.FromEnvelope(req.Provider)
+	if err != nil {
+		return err
+	}
+	if loc, _ := cfg.Configuration["defaultWarehouseLocation"].(string); loc != "" {
+		return nil
+	}
+	env, err := warehouseFactsEnv(req.WarehouseFacts, req.Secrets)
+	if err != nil {
+		return err
+	}
+	_, err = providerkit.EnsureInstance(ctx, req.Runtime, instanceSpec(req.Provider, cfg, name, env))
+	return err
+}
+
 // reconcileCatalog realizes a Catalog(engine: nessie): the REST API must
 // answer and the declared default branch must exist (created from main when
-// missing).
+// missing). Also where Catalog.spec.warehouseRef's derived config (docs/
+// planning/08 D8) takes effect — see ensureDerivedWarehouseConfig's doc
+// comment for why this, not the Provider-kind reconcileInstance step above,
+// is where it has to happen.
 func (p *Provider) reconcileCatalog(ctx context.Context, req reconciler.Request) (status.Status, error) {
 	rt := req.Runtime
 	st := status.Status{}
@@ -223,6 +310,9 @@ func (p *Provider) reconcileCatalog(ctx context.Context, req reconciler.Request)
 		return st, err
 	}
 	name := containerName(req.Provider)
+	if err := ensureDerivedWarehouseConfig(ctx, req, name); err != nil {
+		return st, err
+	}
 	if err := waitAPIReady(ctx, rt, name, "/config", 60*time.Second); err != nil {
 		return st, err
 	}

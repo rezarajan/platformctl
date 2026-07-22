@@ -13,7 +13,11 @@ import (
 // refFields are the spec fields that create dependency edges. The referencing
 // resource depends on the referenced one. secretRef is the single-reference
 // form used by Connection; Provider's plural secretRefs is handled below.
-var refFields = []string{"providerRef", "sourceRef", "targetRef", "connectionRef", "secretRef"}
+// warehouseRef (Catalog -> Dataset, docs/planning/08 D8) is top-level by
+// design — the task text is explicit that it belongs beside providerRef/
+// connectionRef, not inside the engine block, specifically so no
+// configRefFields-style nested-ref introspection is needed for it.
+var refFields = []string{"providerRef", "sourceRef", "targetRef", "connectionRef", "secretRef", "warehouseRef"}
 
 // configRefField pairs a ref field nested one level under spec.configuration
 // with the Kind(s) it must resolve to.
@@ -320,6 +324,8 @@ func allowedKinds(field string) map[string]bool {
 		return map[string]bool{"Connection": true, "SecretReference": true}
 	case "secretRef":
 		return map[string]bool{"SecretReference": true}
+	case "warehouseRef":
+		return map[string]bool{"Dataset": true}
 	default:
 		return nil
 	}

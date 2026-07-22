@@ -14,7 +14,8 @@
         "engine": { "type": "string", "minLength": 1, "description": "Open-ended catalog engine discriminator (nessie, hive, glue, ...). Names the sibling engine-specific block; the realizing provider must declare it in SupportedCatalogEngines()." },
         "providerRef": { "$ref": "meta.json#/$defs/nameRef", "description": "The catalog-capable Provider realizing this catalog. Required unless external." },
         "external": { "type": "boolean", "description": "The catalog service lives outside the platform; Datascape never creates or deletes it." },
-        "connectionRef": { "$ref": "meta.json#/$defs/nameRef", "description": "A Connection (preferred) or SecretReference describing how to reach an external catalog. Required when external." }
+        "connectionRef": { "$ref": "meta.json#/$defs/nameRef", "description": "A Connection (preferred) or SecretReference describing how to reach an external catalog. Required when external." },
+        "warehouseRef": { "$ref": "meta.json#/$defs/nameRef", "description": "A Dataset holding this Catalog's warehouse location (docs/planning/08 D8). Kind-checked to Dataset and graph-ordered before this Catalog. Optional; a realizing provider that knows how to derive warehouse config from a Dataset (nessie) uses it automatically. An engine-specific explicit override on the realizing Provider (e.g. nessie's Provider(type: nessie).spec.configuration.defaultWarehouseLocation) always wins when also set." }
       },
       "required": ["engine"],
       "additionalProperties": { "type": "object", "description": "Engine-specific block named after spec.engine (e.g. nessie: {defaultBranch})." },

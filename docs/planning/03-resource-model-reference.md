@@ -466,6 +466,27 @@ Field notes:
   vars) — without them, creating a namespace or table under the warehouse fails with `"Missing
   access key and secret for STATIC authentication mode"` even though `/iceberg/v1/config` itself
   already answers correctly.
+- **Automatic derivation from `Catalog.spec.warehouseRef`** (docs/planning/08
+  D8, additive — the two bullets above's explicit
+  `configuration.defaultWarehouseLocation`/`warehouseS3*` fields are unchanged
+  and always win when set): when a `Catalog(engine: nessie)` declares
+  `warehouseRef` (§8.1) and the `nessie` Provider sets no explicit
+  `defaultWarehouseLocation`, the referenced `Dataset`'s `bucket`/`prefix`
+  plus its realizing Provider's published `"s3"` endpoint fact and credential
+  `SecretReference` name (which must also be listed in the `nessie`
+  Provider's own `spec.secretRefs`, same convention as the explicit fields
+  above) drive the identical env vars. Resolved by the engine's
+  `resolveWarehouseFacts` (`reconciler.Request.WarehouseFacts`, Catalog-kind
+  requests only — published-facts-only, ADR 015) and applied from the
+  `Catalog`-kind reconcile step, not the `Provider`-kind one: nessie's own
+  Provider reconcile necessarily runs *before* any `Catalog` referencing it,
+  so the derived config can only take effect once the `Catalog` (and,
+  transitively, the `Dataset` it names) have reconciled — `reconcileCatalog`
+  re-`EnsureInstance`s the container with the corrected env in that case,
+  relying on `EnsureContainer`'s existing spec-hash idempotency rather than
+  new drift-tracking (a one-time recreate the first time `warehouseRef`'s
+  facts are introduced or change; a no-op on every later reconcile with
+  unchanged facts).
 - **`prometheus` monitoring provider** (docs/planning/08 C9, gate `MonitoringStackProvider`,
   Alpha/disabled): reconciles a managed Prometheus container whose scrape config is *generated*
   from every other Provider's published `"metrics"`-named endpoint fact in state (never
@@ -534,6 +555,19 @@ Field notes:
   Nessie + MinIO wiring) by having Trino itself `CREATE TABLE`/`INSERT` the same row content produced
   by the D2 scenario as a genuine Iceberg table through the coordinator, then `SELECT` it back —
   recorded here as a finding for a maintainer decision, not a silent scope change.
+
+**Update (docs/planning/08 D8, 2026-07-21):** `Catalog.spec.warehouseRef`
+(§8.1) has landed — the "D8-context language" deviation two paragraphs above
+described the state before this task and is left as historical record
+(additive doc policy). `resolveCatalogFacts`'s warehouse-backing S3/MinIO
+`Provider` resolution now tries, in order: (1) the referenced `Catalog`'s own
+`warehouseRef` chain (`Catalog` -> `Dataset` -> the `Dataset`'s realizing
+`Provider`) when the `Catalog` declares it; (2) this `trino` `Provider`'s own
+`configuration.warehouseProviderRef`, unchanged from D10; (3) the sole
+S3/MinIO-typed `Provider` in the namespace, auto-inferred, unchanged from
+D10. `warehouseProviderRef` is not removed and remains fully functional on
+its own — it simply becomes redundant once the `Catalog` in question declares
+`warehouseRef`.
 
 ## 5. Kind: `Source`
 
@@ -1061,6 +1095,47 @@ spec:
   connectionRef:
     name: prod-glue                # a Connection; Datascape never creates/deletes the catalog
 ```
+
+**`warehouseRef`** (docs/planning/08 D8, top-level — deliberately *not* nested
+inside the engine block, so `graph.Build`'s plain `refFields` pass, kind-checked
+to `Dataset`, orders it with no engine-block introspection):
+
+```yaml
+spec:
+  engine: nessie
+  providerRef:
+    name: catalog-svc
+  warehouseRef:
+    name: warehouse                # a Dataset; graph-ordered before this Catalog
+```
+
+Optional. Names a `Dataset` holding this Catalog's Iceberg warehouse location.
+`nessie` is the first engine to consume it: its realizing `Provider`'s own
+Provider-kind reconcile necessarily runs *before* any `Catalog` referencing
+it (the reverse of `warehouseRef`'s own direction), so the derived warehouse
+config can only take effect from the *Catalog*-kind reconcile step — which,
+thanks to the `Dataset`'s own `providerRef` edge, always runs after both the
+`Dataset` and its realizing (s3/minio) `Provider` have already reconciled and
+published their `"s3"` endpoint fact in the same apply. `nessie`'s
+`reconcileCatalog` computes `s3://<bucket>/<prefix>` plus the resolved S3
+endpoint/credentials from `reconciler.Request.WarehouseFacts` (an
+engine-resolved, published-facts-only field — ADR 015 — mirroring
+`CatalogFacts`) and re-`EnsureInstance`s the Nessie container with the
+corrected env; `EnsureContainer`'s existing spec-hash idempotency means this
+only ever recreates the container once, the first time the derived facts
+differ from what's running. A realizing `Provider`'s own explicit override
+(nessie's `configuration.defaultWarehouseLocation`/`warehouseS3Endpoint`/
+`warehouseS3SecretRef`, pre-D8) always wins outright when also set — additive
+coexistence, `warehouseRef` is not required and does not remove the explicit
+path. A `warehouseRef` naming a resource that is not a `Dataset` is rejected
+at validate with the standard "does not resolve to any resource" shape (the
+same structural kind-check `providerRef`/D10's `catalogRef` already use).
+`trino`'s `configuration.warehouseProviderRef`/auto-inference (see the
+`trino` bullet below) still works unmodified but becomes unnecessary once
+the referenced `Catalog` itself declares `warehouseRef`: `resolveCatalogFacts`
+now prefers the referenced `Catalog`'s own `warehouseRef` chain first,
+falling back to `warehouseProviderRef`, then to auto-inferring the sole
+S3/MinIO Provider in the namespace, in that order.
 
 ## 8.2 Kind: `Connection`
 

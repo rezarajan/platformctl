@@ -1,7 +1,12 @@
 # The Iceberg catalog, as a noun: orchestrators reference "the catalog of
 # this platform", not a technology. Nessie is the engine realizing it; the
 # engine block carries engine-specific facts. nessie.defaultBranch is
-# omitted — see README.md#defaults.
+# omitted — see README.md#defaults. warehouseRef (docs/planning/08 D8) wires
+# the pre-existing `warehouse` Dataset (sources-and-datasets.yaml) as this
+# catalog's Iceberg warehouse: nessie derives the warehouse location and its
+# S3 endpoint/credentials from that Dataset's bucket/prefix and its
+# realizing lake-minio Provider's published "s3" endpoint fact — no
+# Provider-level defaultWarehouseLocation/warehouseS3* fields needed here.
 apiVersion: datascape.io/v1alpha1
 kind: Catalog
 metadata:
@@ -9,6 +14,7 @@ metadata:
 spec:
   engine: nessie
   providerRef: {name: catalog-svc}
+  warehouseRef: {name: warehouse}
 ---
 # The stable entrypoint to the external orders database. In-network
 # consumers (the CDC connector) address orders-db:15999; host tools

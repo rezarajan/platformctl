@@ -120,3 +120,49 @@ func TestWarehouseProviderRefResolves(t *testing.T) {
 		t.Fatalf("deps = %v, want [%s]", deps, minio.Key())
 	}
 }
+
+// TestCatalogWarehouseRefResolvesAndOrders covers docs/planning/08 D8:
+// Catalog.spec.warehouseRef is top-level (unlike trino's configuration-
+// nested catalogRef/warehouseProviderRef above) — it belongs in the plain
+// refFields pass, kind-checked to Dataset, so a Catalog reconciles after the
+// Dataset it names.
+func TestCatalogWarehouseRefResolvesAndOrders(t *testing.T) {
+	ds := graphEnv("default", "Dataset", "warehouse", map[string]any{})
+	cat := graphEnv("default", "Catalog", "lakehouse-catalog", map[string]any{
+		"warehouseRef": map[string]any{"name": "warehouse"},
+	})
+	g, err := Build([]resource.Envelope{ds, cat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := g.Edges[cat.Key()]
+	if len(deps) != 1 || deps[0] != ds.Key() {
+		t.Fatalf("deps = %v, want [%s]", deps, ds.Key())
+	}
+	levels := g.TopologicalLevels()
+	if len(levels) != 2 {
+		t.Fatalf("levels = %v, want 2 (Dataset before Catalog)", levels)
+	}
+	if levels[0][0] != ds.Key() {
+		t.Errorf("level 0 = %v, want Dataset first", levels[0])
+	}
+}
+
+// TestCatalogWarehouseRefRejectsWrongKind covers D8's negative-path accept
+// item: a warehouseRef naming a resource that exists but is not a Dataset
+// is rejected at Build (i.e. at validate) with the same structural
+// "does not resolve to any resource" shape D10's catalogRef negative test
+// established — not a capability-error shape.
+func TestCatalogWarehouseRefRejectsWrongKind(t *testing.T) {
+	notADataset := graphEnv("default", "Provider", "warehouse", map[string]any{})
+	cat := graphEnv("default", "Catalog", "lakehouse-catalog", map[string]any{
+		"warehouseRef": map[string]any{"name": "warehouse"},
+	})
+	_, err := Build([]resource.Envelope{notADataset, cat})
+	if err == nil || !strings.Contains(err.Error(), "does not resolve to any resource") {
+		t.Fatalf("Build error = %v, want a kind-mismatch rejection", err)
+	}
+	if !strings.Contains(err.Error(), "warehouseRef") {
+		t.Errorf("error does not name spec.warehouseRef: %v", err)
+	}
+}

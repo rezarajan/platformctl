@@ -1,10 +1,17 @@
-# docs/planning/08 D10 integration scenario: the same CDC->Redpanda->
-# s3sink(parquet) spine as ../parquet-sink-scenario (D2), renamed to the
-# "trn" prefix, plus a Nessie Catalog and a trino compute-engine Provider
-# with catalogRef wired to it and warehouseProviderRef naming the MinIO
-# Provider explicitly. Host ports: Postgres 15647, Debezium Connect 18286,
-# Kafka 19296, schema registry 18584, MinIO 19104, sink Connect 18190,
-# Nessie API 19122, Trino coordinator 18091.
+# docs/planning/08 D10 integration scenario (D8-updated): the same CDC->
+# Redpanda->s3sink(parquet) spine as ../parquet-sink-scenario (D2), renamed
+# to the "trn" prefix, plus a Nessie Catalog and a trino compute-engine
+# Provider with catalogRef wired to it. The Catalog's warehouseRef (docs/
+# planning/08 D8) is the live proof that automatic warehouse derivation
+# works end to end: nessie no longer sets any explicit
+# configuration.defaultWarehouseLocation/warehouseS3* — the warehouse
+# location and S3 endpoint/credentials come entirely from the trn-warehouse
+# Dataset via warehouseRef. trino's own warehouseProviderRef is kept,
+# naming the same MinIO Provider warehouseRef's own chain resolves to,
+# proving D8's recorded resolution order (warehouseRef first) without
+# changing the resolved facts. Host ports: Postgres 15647, Debezium Connect
+# 18286, Kafka 19296, schema registry 18584, MinIO 19104, sink Connect
+# 18190, Nessie API 19122, Trino coordinator 18091.
 apiVersion: datascape.io/v1alpha1
 kind: SecretReference
 metadata:
@@ -118,15 +125,29 @@ spec:
     network: datascape-trn-net
   configuration:
     port: 19122
-    # Required for the Iceberg REST catalog personality to answer
-    # /v1/config at all, and to associate a namespace/table location with
-    # an object store (found live wiring this scenario, not documented
-    # anywhere in Nessie's own defaults) — see nessie.go's
-    # defaultWarehouseEnv doc comment.
-    defaultWarehouseLocation: s3://raw-events/iceberg-warehouse/
-    warehouseS3Endpoint: http://datascape-trn-minio:9000
-    warehouseS3SecretRef: trn-minio-root
+  # secretRefs lists trn-minio-root (unchanged from pre-D8) so the engine
+  # can resolve the warehouse Dataset's realizing Provider's credential
+  # values for trn-catalog's warehouseRef-derived warehouse config below —
+  # docs/planning/08 D8 replaces this Provider's own former explicit
+  # configuration.defaultWarehouseLocation/warehouseS3Endpoint/
+  # warehouseS3SecretRef fields (still supported, just unused here) with
+  # the Catalog-level warehouseRef wiring, proven live by this scenario.
   secretRefs: [trn-minio-root]
+---
+# The Iceberg warehouse location, as a Dataset (docs/planning/08 D8) —
+# deliberately distinct from trn-attendance-raw below (same bucket, a
+# different prefix) so Nessie/Trino's own Iceberg object layout never
+# collides with the plain-Parquet objects the CDC->sink pipeline writes.
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: trn-warehouse
+spec:
+  providerRef:
+    name: datascape-trn-minio
+  bucket: raw-events
+  prefix: iceberg-warehouse/
+  format: parquet
 ---
 apiVersion: datascape.io/v1alpha1
 kind: Catalog
@@ -136,6 +157,8 @@ spec:
   engine: nessie
   providerRef:
     name: datascape-trn-nessie
+  warehouseRef:
+    name: trn-warehouse
 ---
 apiVersion: datascape.io/v1alpha1
 kind: Provider
@@ -160,6 +183,11 @@ spec:
     workers: 2
     catalogRef:
       name: trn-catalog
+    # warehouseProviderRef kept, deliberately naming the same Provider
+    # trn-catalog's own warehouseRef chain now resolves to — proves D8's
+    # recorded resolution order (warehouseRef first) and D10's disambiguator
+    # coexist without conflict: this field is redundant once warehouseRef is
+    # set, but not removed (docs/planning/08 D8, docs/planning/03 §4).
     warehouseProviderRef:
       name: datascape-trn-minio
   secretRefs: [trn-minio-root]
