@@ -2892,6 +2892,26 @@ Connect-worker HA (workers>1) remains I7's gap.
   workers>1 carve-out.
 - **Gate:** none (bug fix under existing gates).
 
+### I8: Redpanda K8s HA produce-during-kill window is contention-fragile (doc 11 flake register)
+
+- **Size:** S. **Depends:** none. **Why:** TestRedpandaHAKubernetesEndToEnd's
+  "during-kill" produce failed twice under host load ≥3.9 (140.7s, 119.8s)
+  and passed at 81.6s when quieter — `produce "during-kill": context
+  deadline exceeded`, with the log showing the client still dialing the
+  KILLED pod's port-forward. The 90s helper window is not the root cause;
+  the client's forward set is resolved once and not re-established when a
+  member dies — machine-speed/contention dependence in the TEST client
+  (NFR-11 applied to test helpers).
+- **Do:** rpHAK8sProduceConsume (and its client builder): re-resolve
+  port-forwards per attempt on produce failure (the re-resolve-per-attempt
+  discipline runtime.WithReachable codifies), bounded overall deadline
+  unchanged; do NOT simply bump the 90s window. Assert the survivor
+  forwards are used after a member kill.
+- **Accept:** suite green twice on a deliberately loaded host (run
+  concurrently with another suite-scale workload); flake register entry
+  in doc 11 closed.
+- **Gate:** none (test-robustness fix).
+
 
 
 
