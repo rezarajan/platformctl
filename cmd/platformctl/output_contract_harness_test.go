@@ -299,6 +299,12 @@ var commandScenarios = map[string]commandScenario{
 			}
 		},
 	},
+	"lint": {
+		structured: true,
+		run: func(t *testing.T) {
+			runBothFormats(t, "lint", "lint", "testdata/noop-scenario")
+		},
+	},
 	"docs build": {
 		structured: false,
 		reason:     "docs has no -o json|yaml support (renders markdown/HTML files, not a data payload) — still exercised as a smoke check.",

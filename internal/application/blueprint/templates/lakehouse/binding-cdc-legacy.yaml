@@ -7,6 +7,14 @@ metadata:
   name: legacy-to-events
   observers:
     - name: lineage
+  # DL013 (docs/adr/020-design-lints.md): legacy-events intentionally has
+  # no sink Binding in this blueprint — it demonstrates a second,
+  # independent CDC-only capture path (e.g. consumed directly by an
+  # external Kafka client or orchestrator) alongside the app-db → lake
+  # pipeline. Add a sink Binding here if lake delivery for legacy data is
+  # wanted.
+  annotations:
+    lint.datascape.io/waive: "DL013: demonstrates a CDC-only capture path with no sink in this blueprint; not dead code"
 spec:
   mode: cdc
   sourceRef:

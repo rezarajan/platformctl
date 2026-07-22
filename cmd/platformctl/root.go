@@ -143,6 +143,7 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 		newGraphCmd(a),
 		newInventoryCmd(a),
 		newExplainCmd(a),
+		newLintCmd(a),
 		newDocsCmd(),
 		newGCCmd(a),
 		newStateCmd(a),
@@ -402,8 +403,9 @@ func (a *app) newEngine() (*engine.Engine, error) {
 }
 
 type validateOutput struct {
-	Valid     bool `json:"valid" yaml:"valid"`
-	Resources int  `json:"resources" yaml:"resources"`
+	Valid          bool `json:"valid" yaml:"valid"`
+	Resources      int  `json:"resources" yaml:"resources"`
+	DesignFindings *int `json:"designFindings,omitempty" yaml:"designFindings,omitempty"`
 }
 
 func newValidateCmd(a *app) *cobra.Command {
@@ -412,14 +414,29 @@ func newValidateCmd(a *app) *cobra.Command {
 		Short: "Schema + graph + compatibility validation only; no state, no mutating runtime calls (a kubernetes-runtime Provider gets a fast, read-only connectivity/permission check)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envelopes, _, err := a.loadAndValidate(pathArg(args))
+			envelopes, g, err := a.loadAndValidate(pathArg(args))
 			if err != nil {
 				return err
 			}
-			if isStructured(a.output) {
-				return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, validateOutput{Valid: true, Resources: len(envelopes)}, nil)
+			out := validateOutput{Valid: true, Resources: len(envelopes)}
+			// The DesignLints gate exists to switch this summary off, not to
+			// hide the `lint` command itself (docs/planning/08 H1) — a
+			// lint failure here (e.g. state unreadable) never fails
+			// validate; it just omits the summary's second clause.
+			if a.gates.Enabled("DesignLints") {
+				if findings, err := a.runLint(cmd.Context(), envelopes, g); err == nil {
+					n := len(findings)
+					out.DesignFindings = &n
+				}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%d resource(s) valid\n", len(envelopes))
+			if isStructured(a.output) {
+				return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, out, nil)
+			}
+			if out.DesignFindings != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "%d resource(s) valid; %d design finding(s) — run `platformctl lint`\n", out.Resources, *out.DesignFindings)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "%d resource(s) valid\n", out.Resources)
+			}
 			return nil
 		},
 	}

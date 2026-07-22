@@ -13,3 +13,4 @@ spec:
   bucket: warehouse
   prefix: iceberg/
   format: parquet
+  deletionPolicy: retain

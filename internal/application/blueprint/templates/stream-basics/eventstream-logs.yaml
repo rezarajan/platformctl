@@ -2,6 +2,10 @@ apiVersion: datascape.io/v1alpha1
 kind: EventStream
 metadata:
   name: logs
+  # DL010 (docs/adr/020-design-lints.md): see eventstream-events.yaml's
+  # identical note — stream-basics ships no Binding by design.
+  annotations:
+    lint.datascape.io/waive: "DL010: stream-basics is a bare broker+topics blueprint with no Binding by design; see README.md"
 spec:
   providerRef:
     name: broker

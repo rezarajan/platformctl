@@ -987,4 +987,203 @@ var Catalog = []CatalogEntry{
 			"Verify spec.target is reachable from the peer's own network independently of platformctl.",
 		},
 	},
+	// --- design lints (docs/adr/020-design-lints.md) ---------------------
+	// Kind "lintCode" — a third explain vocabulary alongside conditionType
+	// and reason (docs/planning/08 H1). Every code `internal/application/
+	// lint` or a provider's DesignLinter can produce must have exactly one
+	// entry here; internal/application/lint's BuiltinCodes and each
+	// provider's own LintCodes list are what the completeness guard
+	// (cmd/platformctl/lint_catalog_test.go) checks this against.
+	{
+		Token: "DL000", Area: "lint", Kind: "lintCode",
+		Meaning: "A metadata.annotations[\"lint.datascape.io/waive\"] entry names a lint code but gives no reason. ADR 020 §2 makes a waiver's reason mandatory: an empty one does not suppress the finding it names and is itself flagged as this warning.",
+		Causes: []string{
+			"The annotation value is just a code (\"DL010\") with no \": reason\" suffix.",
+			"The reason after the colon is blank or only whitespace.",
+		},
+		Remedies: []string{
+			"Add a reason: metadata.annotations[\"lint.datascape.io/waive\"]: \"DL010: <why this is intentional>\".",
+			"platformctl lint -o json to see which resource/code the malformed waiver is on.",
+		},
+	},
+	{
+		Token: "DL001", Area: "lint", Kind: "lintCode",
+		Meaning: "Duplicate capture: two or more cdc Bindings share a sourceRef with overlapping effective table sets (unset options.tables means \"all\", which overlaps everything) — separate replication slots/streams over the same tables.",
+		Causes: []string{
+			"Two Bindings were created independently against the same Source without noticing the overlap.",
+			"A wide, unset-tables Binding coexists with a narrower one against the same Source.",
+		},
+		Remedies: []string{
+			"Consolidate into one cdc Binding with a wider options.tables list.",
+			"If the overlap is intentional (e.g. two independent consumers), waive DL001 on each Binding with a reason.",
+		},
+	},
+	{
+		Token: "DL002", Area: "lint", Kind: "lintCode",
+		Meaning: "Sink collision: two or more sink Bindings write the same Dataset bucket+prefix (or the same Source+table for a sink-into-database pairing) — object-key or row collisions between independently-managed connectors.",
+		Causes: []string{
+			"Two sink Bindings were pointed at the same Dataset/table without noticing.",
+			"A shared landing location is genuinely intended (e.g. two streams merging into one prefix).",
+		},
+		Remedies: []string{
+			"Give each sink Binding its own bucket/prefix or target table.",
+			"If the shared target is intentional, waive DL002 on each Binding with a reason.",
+		},
+	},
+	{
+		Token: "DL003", Area: "lint", Kind: "lintCode",
+		Meaning: "A resource declares metadata.observers but its own realizing Provider implements no LineageAware capability — the forwarded lineage event is a runtime no-op (see ReasonLineageNotConsumed), predicted here at validate time instead of only discovered live.",
+		Causes: []string{
+			"The realizing Provider's technology has no lineage integration yet.",
+			"metadata.observers was copied from another manifest without checking the provider type.",
+		},
+		Remedies: []string{
+			"Remove metadata.observers if lineage isn't actually expected for this resource.",
+			"Point the Binding at a LineageAware-capable Provider (debezium, in v1) if lineage is expected.",
+		},
+	},
+	{
+		Token: "DL004", Area: "lint", Kind: "lintCode",
+		Meaning: "Plaintext boundary: a managed Connection uses a plaintext scheme while its realizing Provider also advertises a TLS-capable scheme (\"https\") — a safer realization exists but wasn't chosen.",
+		Causes: []string{
+			"The Connection was written before its Provider gained TLS support.",
+			"Plaintext was chosen for local development and never revisited for a shared/production environment.",
+		},
+		Remedies: []string{
+			"Set spec.scheme to the TLS-capable scheme if this Connection serves non-loopback traffic.",
+			"If plaintext is intentional (local-only), waive DL004 with a reason.",
+		},
+	},
+	{
+		Token: "DL010", Area: "lint", Kind: "lintCode",
+		Meaning: "Orphaned EventStream: no Binding reads or writes it — inert infrastructure that will be provisioned, billed, and monitored for nothing.",
+		Causes: []string{
+			"The EventStream was scaffolded ahead of the Binding that will use it.",
+			"A Binding that used to reference it was removed.",
+		},
+		Remedies: []string{
+			"Add the Binding(s) that should read/write it, or remove the EventStream if it's no longer needed.",
+			"If it's deliberately provisioned ahead of use, waive DL010 with a reason.",
+		},
+	},
+	{
+		Token: "DL011", Area: "lint", Kind: "lintCode",
+		Meaning: "Unreferenced Catalog: no catalogRef/warehouse consumer and no Connection routes to it — inert infrastructure.",
+		Causes: []string{
+			"No compute-engine Provider (e.g. trino) has been wired to consume it yet.",
+			"The Catalog exists only for `platformctl inventory` to point future tooling at.",
+		},
+		Remedies: []string{
+			"Wire a consumer (a compute-engine Provider's configuration.catalogRef) to it.",
+			"If it's deliberately provisioned ahead of a consumer, waive DL011 with a reason.",
+		},
+	},
+	{
+		Token: "DL012", Area: "lint", Kind: "lintCode",
+		Meaning: "Unused SecretReference / Connection / Provider: nothing in the manifest set resolves it.",
+		Causes: []string{
+			"The resource was scaffolded ahead of what will consume it.",
+			"Something that used to reference it was removed.",
+			"A managed Connection or Provider exists purely for host-side/external tool access, with no in-graph consumer.",
+		},
+		Remedies: []string{
+			"Wire a consumer to it, or remove it if it's no longer needed.",
+			"If it's deliberately unreferenced in-graph (e.g. a host-access Connection), waive DL012 with a reason.",
+		},
+	},
+	{
+		Token: "DL013", Area: "lint", Kind: "lintCode",
+		Meaning: "Dead-end pipeline: a cdc Binding's EventStream has no downstream sink/ingest Binding — frequently intentional (e.g. consumed directly by an external Kafka client or orchestrator), hence info rather than warning.",
+		Causes: []string{
+			"The capture is consumed by something outside this manifest set (an external Kafka client, an orchestrator).",
+			"A sink/ingest Binding that used to consume it was removed.",
+		},
+		Remedies: []string{
+			"Add the downstream Binding if delivery within this manifest set is expected.",
+			"If external consumption is intentional, waive DL013 with a reason.",
+		},
+	},
+	{
+		Token: "DL014", Area: "lint", Kind: "lintCode",
+		Meaning: "Single-replica data path where the HA field exists (spec.configuration.brokers/workers/nodes explicitly set to 1) and the HighAvailability gate is enabled — a single replica has no failover.",
+		Causes: []string{
+			"HighAvailability was enabled platform-wide, but this Provider was left at its single-replica default.",
+			"A single replica is intentional for this Provider (e.g. a scratch/dev instance).",
+		},
+		Remedies: []string{
+			"Raise the replica count if this Provider should be highly available.",
+			"If a single replica is intentional, waive DL014 with a reason.",
+		},
+	},
+	{
+		Token: "DL020", Area: "lint", Kind: "lintCode",
+		Meaning: "spec.deletionPolicy is unset on a data-bearing kind (Dataset/Source) — the default is \"retain\", but explicitness is the best practice for data that can be destroyed.",
+		Causes: []string{
+			"The manifest was written before deletionPolicy was a habit, or copied from an older example.",
+		},
+		Remedies: []string{
+			"Set spec.deletionPolicy explicitly (\"retain\" or \"delete\").",
+		},
+	},
+	{
+		Token: "DL021", Area: "lint", Kind: "lintCode",
+		Meaning: "metadata.protect is unset on a data-bearing kind (Dataset/Source) in a manifest set whose plan would also perform an authoritative delete elsewhere (state has a resource no longer in the current set) — plan-aware.",
+		Causes: []string{
+			"The manifest set is mid-refactor: some resources were removed while data-bearing ones nearby were never explicitly protected.",
+		},
+		Remedies: []string{
+			"Set metadata.protect: true on the data-bearing resource if it must never be deleted by an authoritative apply/destroy.",
+			"If the resource is genuinely safe to delete, no action is needed beyond confirming the authoritative delete is intentional.",
+		},
+	},
+
+	// --- provider-contributed design lints (docs/adr/020-design-lints.md
+	// §5, docs/planning/08 H2) — DL-<type>-NNN, one Area per contributing
+	// technology.
+	{
+		Token: "DL-debezium-001", Area: "lint", Kind: "lintCode",
+		Meaning: "N cdc Bindings, each realized by a debezium-typed Provider, capture from Source resources backed by the same physical Postgres/MySQL Provider — each Binding is a separate Debezium connector, and each connector opens its own replication slot against that one server, independent of DL001's table-overlap condition (different Source resources, so DL001 never fires here).",
+		Causes: []string{
+			"Several independent Source resources on one physical database instance each got their own cdc Binding.",
+			"A migration in progress: an old and a new cdc Binding both point at the same server.",
+		},
+		Remedies: []string{
+			"Consolidate into fewer Debezium connectors (wider table lists) if these are really one capture concern.",
+			"If independent replication slots are intentional (isolated failure domains per consumer), waive DL-debezium-001 with a reason.",
+		},
+	},
+	{
+		Token: "DL-debezium-002", Area: "lint", Kind: "lintCode",
+		Meaning: "Two cdc Bindings on the same sourceRef whose options.tables entries overlap only once Debezium's own table.include.list regex semantics are applied (e.g. a pattern like \"ord.*\" against a literal \"orders\") — DL001's generic, technology-agnostic form only compares literal table names.",
+		Causes: []string{
+			"One Binding uses a regex-shaped table pattern that happens to also match another Binding's explicit table list.",
+		},
+		Remedies: []string{
+			"Narrow the pattern, or consolidate into one Binding with a single wider table list.",
+			"If the overlapping patterns are intentional, waive DL-debezium-002 with a reason.",
+		},
+	},
+	{
+		Token: "DL-redpanda-001", Area: "lint", Kind: "lintCode",
+		Meaning: "A multi-broker redpanda cluster (spec.configuration.brokers > 1) hosts an EventStream whose spec.replication is lower than the broker count — a durability shape hint, not a hazard on DL001-004's level (an intentionally low replication factor for a scratch/throwaway topic is entirely reasonable), hence info like DL014's identically-shaped single-replica hint.",
+		Causes: []string{
+			"The EventStream's spec.replication was left at its 1-copy default after the broker count was raised.",
+			"A low replication factor is intentional for this topic (non-critical data, cost/throughput tradeoff).",
+		},
+		Remedies: []string{
+			"Raise spec.replication toward the broker count for better durability.",
+			"If a low replication factor is intentional, waive DL-redpanda-001 with a reason.",
+		},
+	},
+	{
+		Token: "DL-s3sink-001", Area: "lint", Kind: "lintCode",
+		Meaning: "Refines the generic DL002 (exact bucket+prefix match): two sink Bindings realized by s3sink write into the same bucket with prefixes where one is a path-hierarchy prefix of the other (e.g. \"events/\" and \"events/raw/\") — S3 prefixes are hierarchical, so their object keys still overlap even though the prefix strings differ, which DL002's plain equality check cannot see.",
+		Causes: []string{
+			"Two sink Bindings were given nested prefixes under the same bucket without noticing the overlap.",
+		},
+		Remedies: []string{
+			"Give each sink Binding a disjoint prefix tree.",
+			"If the nested layout is intentional, waive DL-s3sink-001 with a reason.",
+		},
+	},
 }

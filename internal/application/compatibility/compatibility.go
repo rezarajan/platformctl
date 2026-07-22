@@ -540,6 +540,34 @@ func joinSorted(list []string) string {
 	return strings.Join(sorted, ", ")
 }
 
+// Index is a read-only accessor over the same name-resolution index
+// compatibility.Check builds and uses internally (manifestIndex) —
+// internal/application/lint reuses it so lint runs beside Check without a
+// second resolution pass (docs/adr/020-design-lints.md: "the compatibility
+// layer stays the single validate-time seam; lint runs beside it, reusing
+// its resolved index"). Exported as a minimal, additive wrapper: NewIndex
+// builds it exactly like Check's own newIndex call, and Resolve/ResolveKind
+// mirror manifestIndex's own unexported methods verbatim.
+type Index struct{ idx manifestIndex }
+
+// NewIndex builds an Index over envelopes.
+func NewIndex(envelopes []resource.Envelope) Index {
+	return Index{newIndex(envelopes)}
+}
+
+// Resolve resolves ref (namespace-defaulted to from's own namespace) to a
+// single envelope of one of kinds (any kind when kinds is empty), returning
+// (envelope, found, ambiguous) — see manifestIndex.resolve.
+func (i Index) Resolve(from resource.Envelope, ref resource.NameRef, kinds ...string) (resource.Envelope, bool, bool) {
+	return i.idx.resolve(from, ref, kinds...)
+}
+
+// ResolveKind is an exact-kind lookup (e.g. providerRef, which must resolve
+// to exactly Kind "Provider") — see manifestIndex.resolveKind.
+func (i Index) ResolveKind(from resource.Envelope, ref resource.NameRef, kind string) (resource.Envelope, bool) {
+	return i.idx.resolveKind(from, ref, kind)
+}
+
 type manifestIndex struct {
 	byName map[string][]resource.Envelope
 	byKey  map[resource.Key]resource.Envelope

@@ -2,6 +2,13 @@ apiVersion: datascape.io/v1alpha1
 kind: Binding
 metadata:
   name: source-to-events
+  # DL013 (docs/adr/020-design-lints.md): this blueprint's whole point is
+  # "platformctl owns the CDC pipeline downstream of an external database"
+  # (README.md) — change-events is meant to be consumed by whatever you
+  # point at the broker next (a sink Binding, an external Kafka client),
+  # not by anything shipped in this blueprint itself.
+  annotations:
+    lint.datascape.io/waive: "DL013: this blueprint only demonstrates capture into Redpanda; delivery is added downstream, see README.md"
 spec:
   mode: cdc
   sourceRef:

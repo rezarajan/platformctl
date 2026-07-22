@@ -9,3 +9,4 @@ spec:
   postgres:
     database: appdb
     # schema omitted: defaults to "public" (docs/planning/08 E2).
+  deletionPolicy: retain
