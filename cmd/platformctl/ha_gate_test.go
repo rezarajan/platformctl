@@ -162,3 +162,49 @@ spec:
 		t.Errorf("error does not name the pinned key: %v", err)
 	}
 }
+
+const haTrinoWorkersManifest = `
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: trino-ha-gate-test
+spec:
+  type: trino
+  runtime:
+    type: fake
+  configuration:
+    workers: 3
+`
+
+// TestValidateRefusesTrinoWorkersWithoutHighAvailabilityGate covers
+// docs/planning/08 D10's extension of checkHighAvailabilityGate's field
+// list: spec.configuration.workers > 1 (trino) fails validate exactly like
+// configuration.brokers > 1 (redpanda) — same gate, same error shape.
+func TestValidateRefusesTrinoWorkersWithoutHighAvailabilityGate(t *testing.T) {
+	dir := writeHAManifest(t, haTrinoWorkersManifest)
+	_, err, code := run(t, "validate", dir, "--feature-gates", "TrinoProvider=true")
+	if err == nil {
+		t.Fatal("validate accepted workers: 3 with the HighAvailability gate disabled")
+	}
+	if code == 0 {
+		t.Fatalf("validate exit code = %d, want non-zero", code)
+	}
+	if !strings.Contains(err.Error(), "HighAvailability") {
+		t.Errorf("error does not name the gate: %v", err)
+	}
+	if !strings.Contains(err.Error(), "workers") {
+		t.Errorf("error does not name the declaring field: %v", err)
+	}
+}
+
+// TestValidateAcceptsTrinoWorkersWithHighAvailabilityGate: the same manifest
+// validates once both gates are enabled — TrinoProvider (the provider type
+// itself, Alpha/disabled per ADR 006) and HighAvailability (the replica
+// count).
+func TestValidateAcceptsTrinoWorkersWithHighAvailabilityGate(t *testing.T) {
+	dir := writeHAManifest(t, haTrinoWorkersManifest)
+	out, err, code := run(t, "validate", dir, "--feature-gates", "TrinoProvider=true,HighAvailability=true")
+	if err != nil || code != 0 {
+		t.Fatalf("validate failed (code %d): %v\n%s", code, err, out)
+	}
+}

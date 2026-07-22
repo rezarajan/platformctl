@@ -46,6 +46,63 @@ func (p *Provider) SupportedCatalogEngines() []string { return []string{"nessie"
 
 func containerName(provEnv resource.Envelope) string { return naming.RuntimeObjectName(provEnv) }
 
+// defaultWarehouseEnv reads spec.configuration.defaultWarehouseLocation (an
+// S3-shaped URI, e.g. "s3://bucket/prefix/") plus warehouseS3Endpoint and
+// warehouseS3SecretRef, and, when all three are set, configures Nessie's own
+// Iceberg REST Catalog personality with them via its Quarkus env-var config
+// surface. Missing prerequisites, found live wiring docs/planning/08 D10's
+// trino provider against a real Nessie instance (neither documented
+// anywhere in Nessie's own container defaults nor needed by anything in
+// this codebase before D10 — nothing previously spoke to Nessie's Iceberg
+// REST personality, only its native branch API):
+//
+//   - NESSIE_CATALOG_DEFAULT_WAREHOUSE/NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_
+//     LOCATION: without a default warehouse, Nessie's `/iceberg/v1/config`
+//     answers 500 "No default-warehouse configured" for every request,
+//     including a client's first catalog-init call.
+//   - NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_*: even with a warehouse
+//     location configured, creating a namespace/table under it fails
+//     ("Malformed request: ... Missing access key and secret for STATIC
+//     authentication mode") unless Nessie itself also has S3 endpoint +
+//     credentials to associate with that location — the location alone
+//     names *where*, not *how to reach it*. NESSIE_CATALOG_SECRETS_
+//     WAREHOUSE_CREDS_NAME/_SECRET carry the actual resolved credential
+//     values (never state/providerState — the same "config surface, not
+//     state" placement every other provider's secret-bearing config uses).
+//
+// All empty (the pre-D10 default) leaves Nessie's behavior byte-for-byte
+// unchanged for every deployment that never pairs it with a compute engine.
+func defaultWarehouseEnv(name string, cfg provider.Provider, secrets map[string]map[string]string) (map[string]string, error) {
+	loc, _ := cfg.Configuration["defaultWarehouseLocation"].(string)
+	if loc == "" {
+		return nil, nil
+	}
+	env := map[string]string{
+		"NESSIE_CATALOG_DEFAULT_WAREHOUSE":             "warehouse",
+		"NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION": loc,
+	}
+	s3Endpoint, _ := cfg.Configuration["warehouseS3Endpoint"].(string)
+	if s3Endpoint == "" {
+		return env, nil
+	}
+	env["NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ENDPOINT"] = s3Endpoint
+	env["NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_PATH_STYLE_ACCESS"] = "true"
+	env["NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION"] = "us-east-1"
+	env["NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_AUTH_TYPE"] = "STATIC"
+	env["NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ACCESS_KEY_NAME"] = "warehouse-creds"
+	secretRef, _ := cfg.Configuration["warehouseS3SecretRef"].(string)
+	if secretRef == "" {
+		return nil, fmt.Errorf("Provider %q (type: nessie): configuration.warehouseS3Endpoint is set but configuration.warehouseS3SecretRef is not — Nessie needs credentials to associate the warehouse location with an object store", name)
+	}
+	creds, ok := secrets[secretRef]
+	if !ok {
+		return nil, fmt.Errorf("Provider %q (type: nessie): configuration.warehouseS3SecretRef %q must also be listed in spec.secretRefs for the engine to resolve it", name, secretRef)
+	}
+	env["NESSIE_CATALOG_SECRETS_WAREHOUSE_CREDS_NAME"] = creds["username"]
+	env["NESSIE_CATALOG_SECRETS_WAREHOUSE_CREDS_SECRET"] = creds["password"]
+	return env, nil
+}
+
 // reachableAPIURL is providerkit.ReachableURL with the "/api/v2" base
 // appended — Nessie's REST API is stateless HTTP with no broker-style
 // redirect, so the resolved address can be used directly for one call.
@@ -107,6 +164,10 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	if image == "" {
 		image = defaultImage
 	}
+	warehouseEnv, err := defaultWarehouseEnv(name, cfg, req.Secrets)
+	if err != nil {
+		return st, err
+	}
 	// No in-container healthcheck: the distroless Quarkus image ships no
 	// shell/curl. Readiness is verified from the host against the REST API.
 	ctrState, err := providerkit.EnsureInstance(ctx, rt, providerkit.InstanceSpec{
@@ -115,6 +176,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 		Network:   providerkit.Network(cfg),
 		Container: runtime.ContainerSpec{
 			Image: image,
+			Env:   warehouseEnv,
 			Ports: []runtime.PortBinding{{HostPort: providerkit.HostPort(cfg, name, "port"), ContainerPort: apiPort, Audience: runtime.AudienceHost}},
 		},
 		WaitTimeout: 120 * time.Second,

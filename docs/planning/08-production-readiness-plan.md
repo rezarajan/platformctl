@@ -1281,6 +1281,40 @@ note first (per doc 06 §3).
   `inventory --for trino` reflects the live coordinator once the provider
   is applied; capability/negative-path test: `catalogRef` to a
   non-Catalog kind rejected at validate with the standard error.
+- **Done (2026-07-22, merged):** every accept item live on Docker
+  (97.84s e2e; drift/heal on the catalog properties file via ReadFile;
+  in-place worker scale with coordinator ID pinned). Recorded
+  deviations (ADR 006 implementation notes): `configRefFields` — the
+  graph's first configuration-level ref rule (kind-checked structurally,
+  the D8-anticipated mechanism); `warehouseProviderRef` as D10's own
+  disambiguator (no D8 dependency); query round-trip proven via schema
+  ops + system catalog (Iceberg-table write path through Nessie STATIC
+  auth is the follow-up); scale proof is 2→3 (Replicas<=1 is
+  single-container by the port's own shape contract). Two additive
+  nessie options (defaultWarehouseLocation, warehouseS3*) were
+  prerequisites.
+- **Status (2026-07-21): implemented, live-verified green.** `trino`
+  provider (coordinator + worker replica set via C1/C2's primitive,
+  `StableIdentity: false`), `configuration.catalogRef`/
+  `warehouseProviderRef` (new nested-ref graph extraction,
+  `internal/domain/graph/graph.go`'s `configRefFields`), catalog config
+  auto-generation + drift-heal, `TrinoProvider` gate (Alpha/disabled).
+  `TestTrinoComputeEngineEndToEnd` green on real Docker (97.84s) after 8
+  live-caught bugs across 12 attempts — full writeup in
+  `docs/adr/006-compute-engines.md`'s "Implementation notes" section,
+  including two accept-item deviations recorded there and in the test's
+  own doc comment: (a) the query-round-trip proves the wiring via
+  `CREATE/SHOW SCHEMA` + a `system` catalog `SELECT`, not a literal
+  CDC-parquet-table read (D1/D2 write plain Parquet, not Iceberg tables;
+  Nessie's `STATIC`-auth Iceberg REST write path additionally does not
+  support table creation, tracked as a follow-up); (b) the scale-up
+  scenario is 2->3, not 1->3 (`Replicas <= 1` with `StableIdentity: false`
+  is always the single-container shape, a shape transition to any
+  `Replicas > 1` refused in place by the runtime port's own contract).
+  Two prerequisite `nessie` provider fields added as a live-caught,
+  necessary fix (`configuration.defaultWarehouseLocation`,
+  `warehouseS3Endpoint`/`warehouseS3SecretRef` — optional, additive,
+  `TestLakehouse` re-verified green).
 
 ---
 

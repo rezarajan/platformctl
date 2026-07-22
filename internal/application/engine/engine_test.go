@@ -997,6 +997,114 @@ func TestResolveMetricsTargetsFromPublishedEndpoints(t *testing.T) {
 	}
 }
 
+// fakeCatalogProvider stands in for nessie: its Catalog-kind reconcile
+// publishes an "iceberg-rest" endpoint fact (docs/planning/08 D10).
+type fakeCatalogProvider struct {
+	noop.Provider
+	internalAddr string
+}
+
+func (p *fakeCatalogProvider) Type() string { return "fakecatalog" }
+
+func (p *fakeCatalogProvider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	st, err := p.Provider.Reconcile(ctx, req)
+	if err != nil || req.Resource.Kind != "Catalog" {
+		return st, err
+	}
+	st.ProviderState = map[string]any{
+		endpoint.Key: endpoint.List{{Name: "iceberg-rest", Scheme: "http", Internal: p.internalAddr}}.ToState(),
+	}
+	return st, nil
+}
+
+// fakeWarehouseProvider stands in for s3/minio: its Provider-kind reconcile
+// publishes an "s3" endpoint fact and reports type "s3" (the type check
+// resolveCatalogFacts uses to auto-infer the sole warehouse candidate).
+type fakeWarehouseProvider struct {
+	noop.Provider
+	internalAddr string
+}
+
+func (p *fakeWarehouseProvider) Type() string { return "s3" }
+
+func (p *fakeWarehouseProvider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	st, err := p.Provider.Reconcile(ctx, req)
+	if err != nil || req.Resource.Kind != "Provider" {
+		return st, err
+	}
+	st.ProviderState = map[string]any{
+		endpoint.Key: endpoint.List{{Name: "s3", Scheme: "http", Internal: p.internalAddr}}.ToState(),
+	}
+	return st, nil
+}
+
+// fakeTrinoLikeProvider stands in for trino: it records whatever
+// req.CatalogFacts the engine resolved for its own Provider reconcile.
+type fakeTrinoLikeProvider struct {
+	noop.Provider
+	got *reconciler.CatalogFacts
+}
+
+func (p *fakeTrinoLikeProvider) Type() string { return "faketrino" }
+
+func (p *fakeTrinoLikeProvider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
+	if req.Resource.Kind == "Provider" {
+		p.got = req.CatalogFacts
+	}
+	return p.Provider.Reconcile(ctx, req)
+}
+
+// TestResolveCatalogFactsFromCatalogRef covers docs/planning/08 D10's
+// engine wiring end to end: configuration.catalogRef graph-orders a
+// Catalog before the trino-like Provider that reads it (a real dependency
+// edge, unlike the metrics test above), but the warehouse-backing S3
+// Provider has no such edge to it (warehouseProviderRef is left unset here
+// to exercise the "sole s3/minio Provider in the manifest" auto-inference
+// path) — so a second Apply is still needed for that fact to already be
+// published, the same two-phase shape TestResolveMetricsTargetsFromPublishedEndpoints
+// documents.
+func TestResolveCatalogFactsFromCatalogRef(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	reg := registry.New(gates)
+	cat := &fakeCatalogProvider{internalAddr: "catalog-svc:19120/iceberg"}
+	minio := &fakeWarehouseProvider{internalAddr: "lake-minio:9000"}
+	trino := &fakeTrinoLikeProvider{}
+	reg.RegisterProvider("fakecatalog", func() reconciler.Provider { return cat }, "")
+	reg.RegisterProvider("s3", func() reconciler.Provider { return minio }, "")
+	reg.RegisterProvider("faketrino", func() reconciler.Provider { return trino }, "")
+	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+
+	eng := newTestEngine(t, reg)
+	infra := []resource.Envelope{
+		envelope("Provider", "catalog-svc", map[string]any{"type": "fakecatalog", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Provider", "lake-minio", map[string]any{"type": "s3", "runtime": map[string]any{"type": "fake"}}),
+		envelope("Catalog", "lakehouse-catalog", map[string]any{"engine": "nessie", "providerRef": map[string]any{"name": "catalog-svc"}}),
+	}
+	applyAll(t, eng, infra)
+
+	all := append(append([]resource.Envelope{}, infra...),
+		envelope("Provider", "lake-trino", map[string]any{
+			"type":    "faketrino",
+			"runtime": map[string]any{"type": "fake"},
+			"configuration": map[string]any{
+				"catalogRef": map[string]any{"name": "lakehouse-catalog"},
+			},
+		}))
+	applyAll(t, eng, all)
+
+	if trino.got == nil {
+		t.Fatal("CatalogFacts is nil, want it resolved")
+	}
+	if trino.got.RestInternal != "catalog-svc:19120/iceberg" {
+		t.Errorf("RestInternal = %q, want %q", trino.got.RestInternal, "catalog-svc:19120/iceberg")
+	}
+	if trino.got.S3Internal != "lake-minio:9000" {
+		t.Errorf("S3Internal = %q, want %q", trino.got.S3Internal, "lake-minio:9000")
+	}
+}
+
 // TestExternalConnectionInNetworkReachability covers docs/planning/08 C10:
 // an external Connection consumed by an in-network Binding (here, a CDC
 // Binding whose sourceRef is the external Source declaring the

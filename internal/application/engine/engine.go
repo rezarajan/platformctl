@@ -1247,7 +1247,109 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 		SchemaRegistryURL:     e.resolveSchemaRegistryURL(env, byKey, st),
 		KafkaBootstrapServers: e.resolveKafkaBootstrapServers(provEnv, p, byKey),
 		MetricsTargets:        e.resolveMetricsTargets(env, st),
+		CatalogFacts:          e.resolveCatalogFacts(env, p, byKey, st),
 	}, nil
+}
+
+// resolveCatalogFacts resolves Provider(type: trino).spec.configuration.
+// catalogRef (docs/planning/08 D10) into the published facts the trino
+// provider needs to write etc/catalog/lakehouse.properties — see
+// reconciler.CatalogFacts's doc comment for the exact shape and the
+// published-facts-only discipline (ADR 015), same as
+// resolveSchemaRegistryURL/resolveMetricsTargets above. Populated only for a
+// Provider-kind env declaring configuration.catalogRef; nil whenever the
+// referenced Catalog, or the resolved warehouse-backing S3/MinIO Provider,
+// has not yet published its endpoint in st — a provider reading this field
+// must treat nil as "not ready yet", never construct a substitute.
+func (e *Engine) resolveCatalogFacts(env resource.Envelope, p provider.Provider, byKey map[resource.Key]resource.Envelope, st *state.State) *reconciler.CatalogFacts {
+	if st == nil || env.Kind != "Provider" {
+		return nil
+	}
+	catalogRef := resource.RefFromSpec(p.Configuration, "catalogRef")
+	if catalogRef.Name == "" {
+		return nil
+	}
+	catEnv, ok := byKey[catalogRef.Key(env.Metadata.Namespace, "Catalog")]
+	if !ok {
+		return nil
+	}
+
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+
+	restInternal := ""
+	if rs, ok := st.Resources[catEnv.Key()]; ok {
+		for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
+			if ep.Name == "iceberg-rest" && ep.Internal != "" {
+				restInternal = ep.Internal
+			}
+		}
+	}
+	if restInternal == "" {
+		return nil
+	}
+
+	// Resolve the warehouse-backing S3/MinIO Provider: an explicit
+	// configuration.warehouseProviderRef wins; otherwise the sole
+	// s3/minio-typed Provider in the manifest's namespace. Left unresolved
+	// (nil, same as "not yet published") when 0 or >1 candidates exist —
+	// the trino provider's own ValidateSpec/Reconcile surfaces that
+	// ambiguity explicitly rather than this engine seam guessing (D10's
+	// TASK_PROGRESS.md design note: no Catalog.spec.warehouseRef exists yet
+	// on main, D8 not implemented).
+	var s3Env resource.Envelope
+	s3Found := false
+	if whRef := resource.RefFromSpec(p.Configuration, "warehouseProviderRef"); whRef.Name != "" {
+		s3Env, s3Found = byKey[whRef.Key(env.Metadata.Namespace, "Provider")]
+	} else {
+		ns := resource.NormalizeNamespace(env.Metadata.Namespace)
+		ambiguous := false
+		for _, cand := range byKey {
+			if cand.Kind != "Provider" || resource.NormalizeNamespace(cand.Metadata.Namespace) != ns {
+				continue
+			}
+			t, _ := cand.Spec["type"].(string)
+			if t != "s3" && t != "minio" {
+				continue
+			}
+			if s3Found {
+				ambiguous = true
+				break
+			}
+			s3Env, s3Found = cand, true
+		}
+		if ambiguous {
+			s3Found = false
+		}
+	}
+	if !s3Found {
+		return nil
+	}
+
+	s3Internal := ""
+	if rs, ok := st.Resources[s3Env.Key()]; ok {
+		for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
+			if ep.Name == "s3" && ep.Internal != "" {
+				s3Internal = ep.Internal
+			}
+		}
+	}
+	if s3Internal == "" {
+		return nil
+	}
+	s3SecretRef := ""
+	if s3p, err := provider.FromEnvelope(s3Env); err == nil {
+		s3SecretRef, _ = s3p.Configuration["rootSecretRef"].(string)
+		if s3SecretRef == "" && len(s3p.SecretRefs) > 0 {
+			s3SecretRef = s3p.SecretRefs[0]
+		}
+	}
+
+	return &reconciler.CatalogFacts{
+		RestInternal: restInternal,
+		S3Internal:   s3Internal,
+		S3SecretRef:  s3SecretRef,
+	}
 }
 
 // resolveKafkaBootstrapServers mirrors resolveSchemaRegistryURL's seam
