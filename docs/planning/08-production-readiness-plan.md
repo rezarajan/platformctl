@@ -1670,6 +1670,19 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
   TUI-confinement archtest proven by a fixture violation.
 - **Gate:** none (file-generation only, the init precedent — recorded in
   ADR 024).
+- **Done (2026-07-22):** `internal/application/compose` (headless engine:
+  LoadTolerant, candidates, patch/collision/idempotency, the five
+  composites, wire, expose); `platformctl add source|pipeline|sink|
+  catalog|monitoring`, `wire <mode>`, `expose <Kind>/<name>`
+  (cmd/platformctl); huh/v2 prompt helpers confined to internal/cliutil,
+  proven by internal/archtest's charm-confinement test (fixture violation,
+  not committed). Owner-scenario integration test
+  (`TestComposeOwnerScenario`) ran live on Docker: init → engine-level
+  reuse-candidate assertion → add pipeline (reusing broker+sink worker,
+  `--sink-prefix other/`) → expose Source/app-db --scheme tcp → validates
+  green → applies to Ready → zero-drift plan → idempotent re-add →
+  destroy clean. Lint-clean is deferred-pending-H1: `internal/application/
+  lint` has not merged into this tree as of this task.
 
 ### E10: Visual composer (optional; spin-off candidate)
 

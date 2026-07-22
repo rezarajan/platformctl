@@ -8,6 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
+
+	"github.com/rezarajan/platformctl/internal/application/blueprint"
 )
 
 // This file is the generic command-output harness docs/planning/08 A7 (doc
@@ -387,6 +389,92 @@ var commandScenarios = map[string]commandScenario{
 			assertJSON(t, "state unlock -o json", out)
 		},
 	},
+	// add/wire/expose (docs/planning/08 E9, docs/adr/024-interactive-
+	// composition.md): file-generation only, no runtime/state touched, so
+	// every scenario below runs against a fresh cdc-to-lake blueprint
+	// fixture (composeFixtureDir) with --dry-run — the same "prints the
+	// exact files/diffs and writes nothing" contract A7 asks every new CLI
+	// surface to honor. The live owner-scenario (init -> add pipeline ->
+	// expose -> apply -> idempotent re-add -> destroy) is a separate
+	// integration-tagged suite (compose_integration_test.go); this harness
+	// only proves the -o json|yaml contract and basic flag wiring.
+	"add source": {
+		structured: true,
+		run: func(t *testing.T) {
+			dir := composeFixtureDir(t)
+			runBothFormats(t, "add source", "add", "source", dir, "--name", "legacy", "--engine", "mysql", "--dry-run")
+		},
+	},
+	"add pipeline": {
+		structured: true,
+		run: func(t *testing.T) {
+			dir := composeFixtureDir(t)
+			runBothFormats(t, "add pipeline", "add", "pipeline", dir,
+				"--name", "second", "--engine", "postgres",
+				"--broker", "existing:broker", "--sink", "existing:raw-lake", "--sink-prefix", "other/",
+				"--dry-run")
+		},
+	},
+	"add sink": {
+		structured: true,
+		run: func(t *testing.T) {
+			dir := composeFixtureDir(t)
+			runBothFormats(t, "add sink", "add", "sink", dir,
+				"--name", "extra", "--stream", "app-events", "--sink", "existing:raw-lake",
+				"--dry-run")
+		},
+	},
+	"add catalog": {
+		structured: true,
+		run: func(t *testing.T) {
+			dir := composeFixtureDir(t)
+			runBothFormats(t, "add catalog", "add", "catalog", dir, "--name", "lakehouse-catalog", "--dry-run")
+		},
+	},
+	"add monitoring": {
+		structured: true,
+		run: func(t *testing.T) {
+			dir := composeFixtureDir(t)
+			runBothFormats(t, "add monitoring", "add", "monitoring", dir, "--name", "monitoring", "--dry-run")
+		},
+	},
+	"wire": {
+		structured: true,
+		run: func(t *testing.T) {
+			dir := composeFixtureDir(t)
+			// No --provider: proves reuse-first auto-selects the fixture's
+			// sole existing s3sink worker Provider ("sink").
+			runBothFormats(t, "wire", "wire", "sink", "--dir", dir,
+				"--from", "EventStream/app-events", "--to", "Dataset/raw-lake",
+				"--name", "app-events-to-raw-lake-again",
+				"--dry-run")
+		},
+	},
+	"expose": {
+		structured: true,
+		run: func(t *testing.T) {
+			dir := composeFixtureDir(t)
+			// No --provider: proves reuse-first's "zero candidates -> new"
+			// default, the same shape the owner scenario's live
+			// `expose Source/<first> --scheme tcp` uses.
+			runBothFormats(t, "expose", "expose", "Source/app-db", "--dir", dir,
+				"--scheme", "tcp", "--port", "25432",
+				"--dry-run")
+		},
+	},
+}
+
+// composeFixtureDir writes the real cdc-to-lake blueprint (the same
+// embedded templates `platformctl init cdc-to-lake` writes) into a fresh
+// temp directory, giving add/wire/expose scenarios a realistic existing
+// manifest set to compute candidates and patches against.
+func composeFixtureDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if _, err := blueprint.Write("cdc-to-lake", dir, false); err != nil {
+		t.Fatalf("writing cdc-to-lake fixture: %v", err)
+	}
+	return dir
 }
 
 // TestOutputContractHarness runs every registered scenario.

@@ -1,95 +1,109 @@
-# E8 (release engineering and CI matrix) — task progress
+# E9 (interactive composition — add/wire/expose) — task progress
 
-Doc 08 §2.1 protocol. Step 0 checkpoint file (overwrites the previous
-task's D3/D4 file per convention — that work is already committed on
-main, `git log` has it, commit 2fca03e).
+Doc 08 §2.1 protocol. Step 0 checkpoint file (overwrites the previous task's
+E8 file per convention — that work is already committed on main).
+
+Task: docs/planning/08-production-readiness-plan.md §7 E9. Design in
+docs/adr/024-interactive-composition.md (read in full; implement literally).
+**The one rule:** composition compiles to manifest patches only. Never
+applies, never bypasses files.
+
+## Resumption note
+
+If resuming mid-task: read this file + `git log --oneline -20` first. Do not
+re-read the full context; continue from the first step below marked
+`[ ]`/`next`.
 
 ## Plan
 
-1. [done] `git merge main --no-edit` — fast-forwarded 80b5bf6..c497530
-   (docs(06) §10.7 addition only, unrelated to E8). NOTE: an earlier
-   attempt was run with an explicit `cd` into the *shared* checkout path
-   (`/home/cascadura/git/platformctl`, not this worktree) and reported
-   "already up to date" against a stale ref before another agent
-   advanced `main`; corrected by re-running the merge from the actual
-   worktree cwd. All further shell commands in this task use this
-   worktree's cwd, never the shared checkout path.
-2. [done] Read: CLAUDE.md; doc 08 §2.1 protocol + full E8 entry; §10
-   execution order (confirms Step 0's C1/D1/C6 branch-landing items are
-   other agents' worktrees, out of scope here — file fence says work
-   only in this worktree); ADR README index (no new ADR needed — E8 is
-   Size M, not L, and B8/A10 its named deps are both already shipped);
-   `.github/workflows/ci.yml` (unit / integration / integration-k8s
-   jobs, G7 test-impact wiring) + `refresh-digests.yml` (existing weekly
-   cron pattern: `0 6 * * 1`); `cmd/platformctl/main.go`'s `version` var
-   (`-ldflags -X main.version=...`) and `root.go`'s cobra wiring;
-   `docs/history/checkpoint.md` "Release mechanics" section;
-   `scripts/pinned-images.txt`; `docs/README.md`; `docs/adr/README.md`.
-3. [done] Confirmed already-existing coverage (do not duplicate):
-   - example-validate: unit job's "Validate examples" step
-     (cdc-attendance + lakehouse) + `TestInitBlueprintValidatesWithNoEdits`
-     (cmd/platformctl/init_test.go, no build tag, runs under
-     `go test ./...` in the unit job) covers every blueprint (currently
-     just cdc-to-lake and lakehouse per internal/application/blueprint's
-     catalog).
-   - machine-output harness (A7):
-     `cmd/platformctl/output_contract_harness_test.go`, no build tag,
-     already runs under `go test ./...`.
-   - Kubernetes leg (B8): `integration-k8s` job, minimal-RBAC, already
-     exists.
-   - Digest refresh (A10): `refresh-digests.yml`, already exists.
-4. [done] Timed `go test -race -count=1 ./...` locally: ~41s wall
-   (vs ~5.5s plain `go test -count=1 ./...`) — cheap enough for a CI leg
-   scoped to unit tests (no `-tags integration`, so it never touches
-   adapters needing Docker/K8s).
-5. [done] `go run github.com/goreleaser/goreleaser/v2@latest --version`
-   resolved v2.17.0 (network install available).
-6. [done] `.goreleaser.yaml` — linux/darwin x amd64/arm64,
-   CGO_ENABLED=0 -trimpath, version stamped via `-ldflags -X
-   main.version={{.Tag}}` (keeps the "vX.Y.Z" shape `main.go` already
-   uses — goreleaser's `.Version` strips the leading "v", `.Tag` does
-   not), archives + checksums. Validated: `goreleaser check` clean;
-   `goreleaser release --snapshot --clean` built all 4 targets, archived,
-   checksummed (64-hex sha256 verified). Found+removed a
-   `before.hooks: go mod tidy` step from the first draft — it silently
-   rewrote go.mod/go.sum (pulled in other in-flight branches' indirect
-   test deps as direct requires); reverted with `git checkout -- go.mod
-   go.sum` and re-validated clean without the hook.
-7. [done] `.github/workflows/release.yml` — triggers on `v*.*.*` tags,
-   `verify` job re-runs the unit job's checks against the tagged commit,
-   then `goreleaser` job (needs verify) runs `goreleaser-action@v6`.
-8. [done] ci.yml additive edits: `Race detector` step in the `unit` job
-   (`go test -race ./...`, ~41s measured vs ~5.5s plain), and a
-   `schedule: cron: "0 7 * * 1"` trigger added to `on:` (offset from
-   refresh-digests.yml's `0 6 * * 1`) — the existing `integration` job's
-   `if event_name == pull_request` branch already falls through to
-   `--full` for any non-pull_request event including `schedule`, and
-   `integration-k8s` has no event gating at all, so adding the schedule
-   trigger alone reproduces "test-impact --full + the K8s job" weekly
-   with zero restructuring of G7's wiring.
-9. [done] `docs/releasing.md` — preconditions, tag command, what the
-   workflow does, post-release verification, doc 08 §10 milestone-tagging
-   convention. Additive link from docs/README.md's Process section.
-10. [done] Local end-to-end version-stamp proof:
-    `go build -ldflags "-X main.version=v9.9.9-test"` → `--version`
-    printed "platformctl version v9.9.9-test" exactly.
-11. [done] Verify: gofmt clean, build/vet/`go test ./...` green (sanity
-    only, no Go source touched); `go run
-    github.com/rhysd/actionlint/cmd/actionlint@latest` (network install
-    available, v1.7.12) against all three workflow files — zero findings.
-12. [done] doc 08 additive E8 status note (pure insertion, hook-verified
-    additive via `git diff`); final commit.
+0. [done] `git merge main --no-edit` (fast-forward, brought in ADR 024,
+   goreleaser/CI files — no conflicts). Read CLAUDE.md, doc 08 §2.1 protocol
+   in full, doc 08 E9 entry, ADR 024 in full, internal/application/blueprint
+   (template stock — the "validates with zero edits" bar and exact YAML
+   shapes for source/provider/eventstream/binding/dataset/secret/connection),
+   cmd/platformctl/root.go's `loadAndValidate`, internal/domain/resource,
+   internal/domain/graph, internal/application/manifest, internal/application/
+   compatibility (Check + ResolveKafkaBootstrapAddress — the graph-inferable
+   bootstrapServers pattern compose's generated Providers reuse), ADR
+   README index for the Connection-realization ADRs (018 = ingress routing;
+   confirmed **https is NOT yet supported**: internal/adapters/providers/
+   ingress/ingress.go `SupportedConnectionSchemes() []string { return
+   []string{"http"} }` — C8/TLS has not merged into this tree, so `expose
+   --scheme https` must degrade with a clear message, never crash).
+   Read cmd/platformctl/output_contract_harness_test.go in full: every new
+   leaf cobra command needs a `commandScenarios` entry or
+   `TestOutputContractHarnessCoversEveryCommand` fails.
+1. [done] `go get charm.land/huh/v2@v2.0.3` — resolved cleanly from
+   proxy.golang.org. Pins recorded below. `go mod tidy` deferred to just
+   before the final verification pass (after all code is in) so the diff
+   reviewed for "no other in-flight branch's deps leak in" is the real one.
+2. [done] internal/application/compose (headless engine — see file list
+   below for what landed).
+3. [done] cmd/platformctl: add.go, wire.go, expose.go, compose_shared.go
+   (shared --dry-run/-o json contract + reuse-first/prompt glue) + root.go
+   registration + commandScenarios entries (8 new leaf paths: add
+   source|pipeline|sink|catalog|monitoring, wire, expose).
+4. [done] internal/cliutil: huh-based prompt helpers (prompt.go).
+5. [done] internal/archtest: charm confinement test
+   (charm_confinement_test.go) + fixture-violation proof (described in
+   commit/report, not committed as a real violation).
+6. [done] gofmt/build/vet/go test ./... green (unit + -tags integration
+   build).
+7. [done] Live Docker owner-scenario integration test
+   (cmd/platformctl/compose_integration_test.go, `//go:build integration`,
+   `TestComposeOwnerScenario`) — ran live, PASS (65.5s): init -> engine-
+   level candidate assertion (broker+raw-lake listed) -> add pipeline
+   (flags, reuse + --sink-prefix other/) -> expose Source/app-db --scheme
+   tcp -> validate green -> apply to Ready (24 resources) -> plan
+   zero-drift -> idempotent add pipeline rerun (changed=false via -o json,
+   "no changes" human) -> destroy clean (0 labeled leftovers). Also
+   manually smoke-tested the CLI binary directly (dry-run diffs, non-TTY
+   hard error listing exact missing flags, https degrade both with and
+   without the IngressProvider gate enabled).
+8. [done] scripts/test-impact.sh --base main — added ONE new "compose" row
+   (existing rows untouched); TestIntegrationSuiteMapCoversEveryTest green.
+9. [done] go.mod tidy pass: reviewed the diff — only charm.land/huh/v2 and
+   golang.org/x/term (already-indirect, now directly imported) flipped to
+   direct requires; go.sum gained hash-completion entries for modules
+   already in the build list (huh's own transitive graph, plus
+   already-present indirects like twpayne/go-geom's own test deps) — no
+   new production dependency beyond the charm.land/huh/v2 tree. Manually
+   reverted `go mod tidy`'s incidental reclassification of
+   github.com/parquet-go/parquet-go (indirect -> direct): it's only
+   imported by an unrelated pre-existing integration-tagged test file, not
+   by anything this task touched, so it was put back under `// indirect`
+   to keep the go.mod/go.sum diff scoped to charm deps only, per the file
+   fence.
+10. [done] Final commit.
 
-## Resume point if this session dies
+## Dependency pins (`go get charm.land/huh/v2@v2.0.3`)
 
-Read this file + `git log --oneline -10` first. Files touched:
-`.goreleaser.yaml`, `.github/workflows/release.yml`,
-`.github/workflows/ci.yml` (additive only), `docs/releasing.md`,
-`docs/README.md` (additive line), this file, and an additive doc 08 E8
-status note. No `internal/**` changes (none expected/needed for E8).
+- charm.land/huh/v2 v2.0.3
+- charm.land/bubbletea/v2 v2.0.2
+- charm.land/bubbles/v2 v2.0.0
+- charm.land/lipgloss/v2 v2.0.3
+- github.com/charmbracelet/ultraviolet bumped to
+  v0.0.0-20260205113103-524a6607adb8 (was already an indirect dep at an
+  older pseudo-version)
+- new indirects: github.com/atotto/clipboard v0.1.4,
+  github.com/catppuccin/go v0.2.0, github.com/mitchellh/hashstructure/v2
+  v2.0.2, github.com/charmbracelet/x/exp/{strings,ordered}
+- golang.org/x/term v0.43.0 was already indirect (k8s client-go) — reused
+  for non-TTY detection, no new dependency class introduced for that.
 
-## Notes / open questions
+## File map
 
-- Doc 08 §10's "Step 0" (merge C1/D1/C6 branches) is a maintainer action
-  on *other* agents' worktrees — out of scope here per the file-fence
-  instruction to work only in this worktree.
+- internal/application/compose/{compose,patch,candidates,templates,source,
+  pipeline,sink,catalog,monitoring,wire,expose}.go + _test.go siblings.
+- cmd/platformctl/{add,wire,expose}.go
+- internal/cliutil/prompt.go
+- internal/archtest/charm_confinement_test.go
+- cmd/platformctl/compose_integration_test.go (owner scenario, live Docker)
+- scripts/test-impact.sh: one new row for the compose integration suite.
+
+## Open findings / deviations
+
+- H1 (lint, internal/application/lint) has not merged into this tree as of
+  this session — confirmed absent. The Accept criterion's "if H1 has
+  merged, assert lint-clean" is therefore deferred-pending-H1; recorded in
+  the final report and as a doc-08 status note.
