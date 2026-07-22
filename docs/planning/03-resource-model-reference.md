@@ -1197,6 +1197,13 @@ spec:
 - The forwarder is `iptables` DNAT inside the tunnel container (one rule
   per Connection naming this Provider), not a second forwarder tool —
   docs/adr/023 Decision 4.
+- Each Connection realized by this Provider gets its own tunnel container
+  (named after the Connection itself, mirroring `proxy`'s own "one
+  forwarder container per route" shape) — not one container shared across
+  every Connection naming the same Provider. Every existing consumer of a
+  managed Connection (e.g. a CDC Binding's provider resolving its Source's
+  address) dials the runtime object named after the *Connection*, so this
+  is the only shape that keeps that resolution working.
 - Key rotation (a new `SecretReference` value) recreates the tunnel
   container (the same spec-hash mechanism every `ContainerSpec.Files`
   change already triggers) rather than a live in-place key swap —
