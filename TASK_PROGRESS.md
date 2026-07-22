@@ -32,22 +32,22 @@ already merged (commit 80b5bf6) — this replaces it for D5.
      it," implemented with the tunnel container's own iptables (already
      required for wg-quick/routing) instead of a second tool (socat) the
      pinned image doesn't ship. Recorded as ADR 023 Decision 4.
-4. [in-progress] ADR 023 (docs/adr/023-wireguard-tunnel.md) — decisions
+4. [done] ADR 023 (docs/adr/023-wireguard-tunnel.md) — decisions
    left open by the task: image + pin, key lifecycle, handshake-recency
    probe thresholds, test-rig design, the DNAT-not-socat call, and the
    `via` scope-vs-file-fence resolution (see "Deviations" below).
-5. [next] `internal/ports/runtime`: `ContainerSpec.Sysctls map[string]string`
+5. [done] `internal/ports/runtime`: `ContainerSpec.Sysctls map[string]string`
    (additive); Docker adapter wires it to `HostConfig.Sysctls`; fake
    adapter records it (round-trips via Inspect for tests) but doesn't
    interpret it; Kubernetes adapter leaves it unimplemented (documented —
    K8s pod sysctls need node-level allowlisting; out of scope, doc 08
    status note says so).
-6. [next] `internal/ports/reconciler`: `TunnelCapableProvider` interface
+6. [done] `internal/ports/reconciler`: `TunnelCapableProvider` interface
    (structural marker for `Connection.spec.via`).
-7. [next] Connection schema + domain: additive `spec.via` (nameRef,
-   managed-only). doc 03 §8.2 additive edit. compatibility.go: validate
+7. [done] Connection schema + domain: additive `spec.via` (nameRef,
+   managed-only). doc 03 §8.2.2 additive edit. compatibility.go: validate
    `via` resolves to a `TunnelCapableProvider`.
-8. [next] `internal/adapters/providers/wireguard` (new): Provider(type:
+8. [done] `internal/adapters/providers/wireguard` (new): Provider(type:
    wireguard) is the tunnel initiator; `reconcileInstance` scans
    `req.Resources` for every Connection naming it via `providerRef`,
    builds one wg-quick conf (private key file-mounted, never env) + one
@@ -56,11 +56,16 @@ already merged (commit 80b5bf6) — this replaces it for D5.
    container, the same trade-off ADR 018 documents for `prometheus`'s
    scrape config). `reconcileConnection` is a thin status/endpoint
    publisher (the container already carries its rule). Probe: handshake
-   recency (`wg show ... latest-handshakes`) + upstream dial through the
-   forwarder (`runtime.WithReachable`).
-9. [next] main.go: register `wireguard` provider + `TunnelProvider` gate
-   (Alpha, disabled). scripts/pinned-images.txt: add the pinned image.
-   doc 04 §12: append the `TunnelProvider` row.
+   recency (`wg show ... latest-handshakes`, read back via a background
+   poller file + `runtime.ReadFile` — no exec primitive exists) + upstream
+   dial through the forwarder (`runtime.WithReachable`).
+9. [done] main.go: registered `wireguard` provider + `TunnelProvider` gate
+   (Alpha, disabled). scripts/pinned-images.txt: added the pinned image.
+   doc 04 §12: appended the `TunnelProvider` row. provider.json: added
+   `wireguard` to the type enum + configuration docs. New wireguard
+   `Reason*` constants in status/{reasons,catalog}.go.
+   Commits: 990703f (checkpoint), 39093a9 (ADR 023), fd46f14 (seam:
+   Sysctls/TunnelCapableProvider/via), 237793c (provider implementation).
 10. [next] Integration test + testdata: raw (unmanaged) Docker VPC network
     + Postgres + WireGuard responder fixture; managed wireguard Provider +
     Connection + external Source + CDC Binding. Negative reachability via
@@ -74,7 +79,12 @@ already merged (commit 80b5bf6) — this replaces it for D5.
 
 ## Verification log
 
-(filled in as steps complete)
+- Through step 9: `gofmt -l .` empty; `go build ./... && go vet ./...`
+  clean; `go test ./...` green (including `internal/archtest`'s catalog
+  completeness + no-constructed-address checks);
+  `go run ./cmd/platformctl docs build --out docs/reference` re-run after
+  each schema/reason change, clean diff each time.
+- Steps 10-13: pending — see below once the live rig runs.
 
 ## Deviations (recorded, not silently worked around)
 
