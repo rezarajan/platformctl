@@ -273,6 +273,32 @@ var commandScenarios = map[string]commandScenario{
 			assertYAML(t, "inventory --for -o yaml", out)
 		},
 	},
+	"explain": {
+		structured: true,
+		run: func(t *testing.T) {
+			// Unique exact match.
+			runBothFormats(t, "explain (exact)", "explain", "WALNotLogical")
+
+			// Ambiguous fallback: a valid document (candidates, no entry),
+			// nonzero exit — runSplit ignores the error like plan's
+			// pending-changes case does.
+			out, _, err := runSplit(t, "explain", "Broker", "-o", "json")
+			if err == nil {
+				t.Fatal("explain Broker: expected a nonzero exit for an ambiguous match")
+			}
+			assertJSON(t, "explain (ambiguous) -o json", out)
+			var parsed struct {
+				Matched    bool     `json:"matched"`
+				Candidates []string `json:"candidates"`
+			}
+			if jsonErr := json.Unmarshal([]byte(out), &parsed); jsonErr != nil {
+				t.Fatalf("explain (ambiguous) -o json: %v", jsonErr)
+			}
+			if parsed.Matched || len(parsed.Candidates) < 2 {
+				t.Errorf("explain (ambiguous) -o json: matched=%v candidates=%v, want matched=false with 2+ candidates", parsed.Matched, parsed.Candidates)
+			}
+		},
+	},
 	"docs build": {
 		structured: false,
 		reason:     "docs has no -o json|yaml support (renders markdown/HTML files, not a data payload) — still exercised as a smoke check.",

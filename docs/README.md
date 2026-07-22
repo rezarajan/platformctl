@@ -42,7 +42,7 @@ only, never identifiers).
 | Run my first pipeline | [onboarding/users.md](onboarding/users.md) → README quickstart (`platformctl init cdc-to-lake`) |
 | Understand a Kind's fields | [reference/](reference/index.md) (generated, always current), depth in [planning/03](planning/03-resource-model-reference.md) |
 | Know what a command does / exit codes | [onboarding/users.md](onboarding/users.md) §workflow; `platformctl <cmd> --help` |
-| Diagnose a condition/reason or error | `platformctl explain <reason>` (once merged; until then the reason constants in `internal/domain/status/reasons.go` are documented inline) |
+| Diagnose a condition/reason or error | `platformctl explain <reason-or-type>` — accepts constants (`WALNotLogical`), pasted dynamic reasons (`"PartitionCountMismatch(3!=5)"`), and case-insensitive prefixes; `-o json`; static catalog in [reference/explain.md](reference/explain.md) |
 | Connect an external system (prod DB, cloud bucket) | [planning/03](planning/03-resource-model-reference.md) §3 lifecycles + §8.2 Connection; [adr/005](adr/005-database-ha-posture.md) (databases), doc 08's C4 notes (object stores) |
 | Wire Spark/Trino/dbt/Dagster/Grafana to the platform | `platformctl inventory --for <tool>`; [onboarding/users.md](onboarding/users.md) |
 | Decide platformctl vs Terraform | README's "platformctl and Terraform"; full page: [positioning/terraform.md](positioning/terraform.md) |

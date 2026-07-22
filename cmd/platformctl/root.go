@@ -142,6 +142,7 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 		newRestoreCmd(a),
 		newGraphCmd(a),
 		newInventoryCmd(a),
+		newExplainCmd(a),
 		newDocsCmd(),
 		newGCCmd(a),
 		newStateCmd(a),
@@ -956,6 +957,7 @@ func newStatusCmd(a *app) *cobra.Command {
 				Lifecycle string `json:"lifecycle"`
 			}
 			var data []statusRow
+			nonReady := false
 			for _, e := range envelopes {
 				key := e.Key()
 				row := statusRow{Resource: key.String(), Ready: "Unknown", Drift: "-", Lifecycle: resource.LifecycleOf(e, false).String()}
@@ -973,10 +975,23 @@ func newStatusCmd(a *app) *cobra.Command {
 				} else {
 					row.Reason = "NotApplied"
 				}
+				if row.Ready != string(status.True) {
+					nonReady = true
+				}
 				data = append(data, row)
 				rows = append(rows, []string{row.Resource, row.Ready, row.Drift, row.Reason, row.Message, row.Lifecycle})
 			}
-			return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, data, rows)
+			if err := cliutil.WriteOutput(cmd.OutOrStdout(), a.output, data, rows); err != nil {
+				return err
+			}
+			// Footnote (docs/planning/08 E4): only in table mode, so -o
+			// json|yaml stays exactly one document, and only when a
+			// resource isn't Ready — a fully healthy platform gets no
+			// nudge to run explain.
+			if !isStructured(a.output) && nonReady {
+				fmt.Fprintln(cmd.OutOrStdout(), "\nrun `platformctl explain <reason>` for the meaning, likely causes, and remedies of any non-Ready reason above")
+			}
+			return nil
 		},
 	}
 }

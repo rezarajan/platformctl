@@ -117,7 +117,7 @@ Beyond the core loop:
 - **`graph`** — render the platform's architecture (data-flow pipelines, not the internal
   reconcile order) as a tree, `dot`, or `mermaid` diagram; useful for a README or a design
   review: `platformctl graph ./platform/ --format mermaid`.
-- **diagnostic help** — `platformctl explain` is an in-progress diagnostic-catalog command for
+- **diagnostic help** — `platformctl explain <reason>` (paste any reason from `status`/`drift` output verbatim — dynamic ones like `ConnectorStateFAILED` resolve by prefix) is an in-progress diagnostic-catalog command for
   turning an error or a topic into a fuller explanation; it is not in every build yet, so run
   `platformctl --help` first to see whether your binary has it before relying on it.
 - **`backup`/`restore`** (Alpha, `BackupRestore` gate) — stream a data-bearing resource

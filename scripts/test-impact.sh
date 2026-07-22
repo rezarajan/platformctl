@@ -4,11 +4,22 @@
 # serialized on the shared Docker daemon.
 #
 #   scripts/test-impact.sh [--base <ref>] [--print] [--force] [--full]
+#   scripts/test-impact.sh --prune <days>
 #
 # --base <ref>  diff against <ref> (default: main) to select affected suites
 # --print       list the selected suites and their ledger status; run nothing
 # --force       ignore ledger hits (re-run even if this content-state passed)
 # --full        select every suite regardless of the diff
+# --prune <days>
+#               delete ledger entries older than <days> days (by mtime) and
+#               exit — a standalone maintenance action, run nothing else
+#               (docs/planning/08 G7). The ledger has no automatic expiry:
+#               scope-hash keys accumulate forever otherwise (harmless
+#               correctness-wise — a stale key just never gets hit again once
+#               its content-state is gone — but unbounded in a long-lived
+#               shared git common dir). Not run automatically by CI; a
+#               maintainer runs it periodically, or wires it into a
+#               scheduled job.
 #
 # Suite selection: each suite declares the path scope that can affect it.
 # Ledger: a pass is recorded under (suite, scope-hash) where scope-hash
@@ -18,7 +29,11 @@
 # common dir). A change outside a suite's scope cannot invalidate its green.
 #
 # The suite<->scope map below is the contract; when adding a suite or moving
-# files, update it in the same commit (doc 08 G7 adds the completeness guard).
+# files, update it in the same commit. Completeness (every integration
+# Test* function matched by some suite's -run pattern, or explicitly
+# exempted) is enforced by internal/archtest/test_impact_completeness_test.go
+# (docs/planning/08 G7), which parses this file rather than duplicating the
+# map — it always reads whatever rows exist here.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -27,16 +42,29 @@ LEDGER="$COMMON_DIR/platformctl-itest-ledger"
 LOCK="/tmp/platformctl-itest.lock"
 mkdir -p "$LEDGER"
 
-BASE="main"; PRINT=0; FORCE=0; FULL=0
+BASE="main"; PRINT=0; FORCE=0; FULL=0; PRUNE_DAYS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --base) BASE="$2"; shift 2 ;;
     --print) PRINT=1; shift ;;
     --force) FORCE=1; shift ;;
     --full) FULL=1; shift ;;
+    --prune) PRUNE_DAYS="$2"; shift 2 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
+
+# --prune is a standalone maintenance action: prune and exit, without
+# touching the diff-based suite selection below.
+if [[ -n "$PRUNE_DAYS" ]]; then
+  removed=0
+  while IFS= read -r -d '' entry; do
+    rm -f -- "$entry"
+    removed=$((removed+1))
+  done < <(find "$LEDGER" -maxdepth 1 -type f -mtime "+$PRUNE_DAYS" -print0)
+  echo "pruned $removed ledger entry(ies) older than $PRUNE_DAYS day(s) from $LEDGER"
+  exit 0
+fi
 
 # suite id | scope (space-separated pathspecs) | test command
 # Scopes deliberately include the shared surfaces every suite depends on

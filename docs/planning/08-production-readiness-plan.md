@@ -1876,6 +1876,15 @@ renderer dispatch, the 96-line registry indirection, and `meta.json`
 - **Accept:** guard test proven by a deliberately unmapped fixture test
   failing it; PR CI time drops measurably for docs-only/scoped changes;
   full sweep still runs on main.
+- **Done (2026-07-22, merged, with E4):** completeness guard
+  (`internal/archtest`, parses the map out of the script — single source
+  of truth), `--prune`, CI adoption (PR = `--base origin/main`, main
+  push = `--full`; K8s job untouched). Finding: the guard surfaced 23
+  pre-existing unmapped integration tests, exempted in-test with
+  per-cause reasons (accounting in the branch checkpoint) — widening the
+  map's `-run` patterns to absorb the exemption list is the small
+  follow-up, best done when the current provider wave's map rows have
+  all merged.
 
 ---
 
