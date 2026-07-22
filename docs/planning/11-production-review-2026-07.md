@@ -54,9 +54,10 @@ static. Dimensions, each producing findings verified before fixing:
       machine-speed dependence)
 - [x] B2 GA-bar audit: every gate marked GA/enabled vs its actual
       test evidence and error-path behavior
-- [ ] B3 production-scenario walkthroughs: external cloud DB (TLS,
+- [x] B3 production-scenario walkthroughs: external cloud DB (TLS,
       secured connector), VPC-via-tunnel (A1 outcome), each exercised
       end-to-end or explicitly documented as gapped
+      (closed by I1+I2 e2e + doc 03 §8.2.4 + README scenario gallery)
 - [x] B4 coding practices: error wrapping, context propagation,
       goroutine lifecycle/leaks, lint debt beyond golangci defaults
 - [x] B5 fix waves for confirmed findings, impact-gated per doc 06 §10
@@ -409,3 +410,18 @@ static. Dimensions, each producing findings verified before fixing:
   ExternalResourceConfiguration GA) and the sequenced tail (E6→E7,
   H5→H6, I9, small follow-ups: fragment-completeness unit sweep, slog,
   dbjob revisit-before-backup-GA).
+- 2026-07-22: HANDOFF SNAPSHOT (pushed). The review goal's remaining
+  work, fully specced in doc 08 for any agent to pick up cold:
+  E6 (provider-author guide proof — teach I9's generic facts form),
+  E7 (retire ContainerProvider gate), H5 (domains, ADR 022 Ring 0-1),
+  H6 (mediated connections, OpenZiti), I9 (generic facts query on
+  Request — land BEFORE third-party provider work), I10
+  (fragment-completeness unit sweep), I11 (slog/NFR-4), I12 (dbjob
+  hardening — blocks BackupRestore GA). Owner decisions open:
+  KubernetesRuntime GA (evidence complete), v1.3.0 tag
+  (docs/releasing.md), ExternalResourceConfiguration GA. Process rules
+  for the next orchestrator: doc 06 §2.1 (checkpointing) + §8.4
+  (minimal RBAC, mint 8h) + §10 (impact economy, one flock);
+  memory/active-wave-handoff.md lists the operational lessons
+  (no idle-polling, bounded watchers, git -C for worktrees, unfiltered
+  exit checks, kill sweeps WITH their watchers).

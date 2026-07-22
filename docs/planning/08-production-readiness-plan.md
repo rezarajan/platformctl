@@ -3105,6 +3105,59 @@ Connect-worker HA (workers>1) remains I7's gap.
   fact fields on Request (list frozen).
 - **Gate:** none (internal port evolution; Request stays addition-only).
 
+### I10: Fragment-completeness sweep as a unit test (final-gate blind spot, doc 11)
+
+- **Size:** S. **Depends:** E5 (merged).
+- **Why:** E5's fragments were validated against examples/blueprints
+  only; `httpsPort` — used solely by the ingress-tls integration
+  scenario — escaped and failed live at the day's closing gate. The
+  systematic check that found it (every `spec.configuration` key used in
+  ANY shipped manifest vs every fragment's allowed properties) ran once
+  by hand and must become a guard.
+- **Do:** a unit test (archtest-style) that walks
+  cmd/platformctl/testdata/**, examples/**, and the blueprint templates,
+  collects Provider configuration keys per type (plus Source/Catalog
+  engine-block and Binding options keys, same discriminators E5 uses),
+  and fails naming any key a fragment with additionalProperties:false
+  rejects — EXCEPT files under testdata/negative-corpus (their rejection
+  is the point). Keep it pure-Go (yaml walk), no Docker.
+- **Accept:** test green on main; deleting httpsPort from the ingress
+  fragment makes it fail naming the field and the file.
+
+### I11: log/slog behind the engine's logging seam (NFR-4 made literal)
+
+- **Size:** S. **Depends:** none.
+- **Why:** NFR-4 promises structured reconciliation events; today that
+  is the Reporter interface (structured, CLI-consumed) plus printf-style
+  `Engine.logf` prose. Adopting stdlib log/slog behind the existing seam
+  makes the claim literal at zero dependency cost.
+- **Do:** replace logf's implementation with slog (JSON handler behind
+  a `--log-format json|text` flag, text default preserving current UX);
+  every reconciliation action logs resource/action/outcome/duration
+  attributes (NFR-4's exact list). Reporter is untouched — it is the
+  progress-rendering channel, not the log.
+- **Accept:** `--log-format json` emits one parseable event per action
+  covering NFR-4's fields (asserted in a cmd-level test); default output
+  byte-compatible with today's (output-contract harness green).
+
+### I12: dbjob pipeline hardening (precondition for BackupRestore GA)
+
+- **Size:** M. **Depends:** none; BLOCKS any BackupRestore graduation.
+- **Why:** the backup/restore data path is a hand-rolled two-container
+  FIFO pipeline (`sh -c` + mkfifo + exit-code files, dbjob.sideSpec) —
+  reviewed and accepted for Alpha (doc 11 build-vs-buy), but its failure
+  modes (producer dies mid-stream, consumer never starts, exit-file
+  races) are protocol-by-convention. Before GA: either harden (explicit
+  timeouts per side, checksum of streamed bytes recorded in the backup
+  Manifest, partial-object cleanup on failure, both-sides-exit
+  verification) or replace the transport with a supervised single
+  container running the dump and the upload in one process tree.
+  Decide via a short ADR-007 addendum first.
+- **Accept:** a fault-injection test per failure mode (kill producer
+  mid-stream, kill consumer pre-start, corrupt exit file) each ending in
+  a clean, named error and no partial object left behind — plus the
+  existing backup suite green on both engines.
+
 ## 8. New feature gates introduced by this plan
 
 Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
