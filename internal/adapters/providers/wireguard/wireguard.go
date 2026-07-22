@@ -254,6 +254,22 @@ func connectionsForProvider(providerEnv resource.Envelope, resources map[resourc
 	return rules, nil
 }
 
+// checkNoDuplicatePorts rejects two Connections naming the same wireguard
+// Provider with the same spec.port — since every such Connection's
+// forwarder rule lives on the one shared container, two rules publishing
+// the same host port would collide at container-create time with an
+// opaque Docker error; this fails with a clear one instead.
+func checkNoDuplicatePorts(rules []forwardRule) error {
+	seen := map[int]bool{}
+	for _, r := range rules {
+		if seen[r.port] {
+			return fmt.Errorf("more than one Connection declares spec.port %d — every Connection realized by the same wireguard Provider needs a distinct port", r.port)
+		}
+		seen[r.port] = true
+	}
+	return nil
+}
+
 func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request) (status.Status, error) {
 	rt := req.Runtime
 	st := status.Status{}
@@ -273,6 +289,9 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	rules, err := connectionsForProvider(req.Provider, req.Resources)
 	if err != nil {
 		return st, err
+	}
+	if err := checkNoDuplicatePorts(rules); err != nil {
+		return st, fmt.Errorf("Provider %q (type: wireguard): %w", name, err)
 	}
 
 	platformNetwork := providerkit.Network(cfg)
@@ -327,20 +346,14 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 		return st, err
 	}
 
+	// DriftDetected is Probe's job, not Reconcile's (matching every other
+	// provider in this codebase — proxy/postgres/ingress never set it from
+	// their own Reconcile path): a stale handshake right after a fresh
+	// EnsureContainer is expected (the background poller may not have
+	// written its first line yet) and does not block Ready here.
 	now := time.Now()
-	age, handshaked := handshakeAge(ctx, rt, name)
-	switch {
-	case !handshaked:
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTunnelSurfaceReady}, now)
-		st.SetCondition(status.Condition{Type: status.Progressing, Status: status.True, Reason: status.ReasonTunnelSurfaceReady}, now)
-	case age > time.Duration(tc.keepalive*handshakeStaleFactor)*time.Second:
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTunnelSurfaceReady}, now)
-		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonHandshakeStale}, now)
-		st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
-	default:
-		st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTunnelSurfaceReady}, now)
-		st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
-	}
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonTunnelSurfaceReady}, now)
+	st.SetCondition(status.Condition{Type: status.Progressing, Status: status.False, Reason: status.ReasonReconcileComplete}, now)
 	// Never the private key, never Env — only host/observed facts.
 	st.ProviderState = map[string]any{
 		"containerId": ctrState.ID,
