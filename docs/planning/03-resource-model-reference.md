@@ -1692,3 +1692,57 @@ exist for diagnosis, not routine polling.
 | `StorageClass`, `PersistentVolume`, `PersistentVolumeClaim`, `VolumeMountBinding` | Deferred past v1 | Docker volumes are managed internally by the Docker runtime adapter via `ContainerSpec.Volumes`. Revisit if/when a second runtime needs a shared storage vocabulary. |
 | `Warehouse`, `Table`, `Pipeline`, `LineageSink`, `AuditStore` | Out of scope, not modeled | Downstream of "infrastructure exists and is configured" — orchestration/transformation territory. |
 | `ResourceDefinition`, `ProviderInstance`, `BindingDefinition`, generic `Binding` | Retained conceptually, narrowed | The typed `Binding` kind above replaces the generic one for v1 use cases; a generic extension mechanism for custom bindings is a candidate for a later phase alongside out-of-process provider plugins, not v1. |
+
+## 13. Policy — a sibling reference, not a governed-set kind (docs/adr/021)
+
+`Policy` (`apiVersion: policy.datascape.io/v1alpha1`, `kind: Policy`) is
+**not** one of the kinds in §1's `datascape.io/v1alpha1` set documented
+above — it is a distinct governance input, loaded from its own channel
+(`--policies <dir>` or the conventional `.datascape/policies/` directory),
+never from the manifest set it governs (docs/adr/021-policy-engine-zero-
+trust.md §1: "putting them inside the governed set would let the set amend
+its own guardrails"). Its schema lives at `schemas/policy/v1alpha1/policy.json`
+— a parallel embed (`schemas.PolicyFS`/`PolicyKindFiles`), deliberately kept
+out of `schemas.KindFiles` (§1's resource-kind schema set) for the same
+reason.
+
+```yaml
+apiVersion: policy.datascape.io/v1alpha1
+kind: Policy
+metadata:
+  name: prod-zero-trust
+spec:
+  rules:
+    - id: no-plaintext-connections        # globally unique across every loaded policy
+      match: {kind: Connection}           # kind (string or list) / label / name selectors
+      assert: {field: spec.scheme, in: [https]}  # field/equals/notEquals/in/absent/matches
+      effect: deny                        # deny | warn
+      exemptible: true                    # honor metadata.annotations["policy.datascape.io/exempt"]
+      message: "prod requires TLS-terminated Connections"
+    - id: escalate-duplicate-capture
+      matchFinding: {code: DL001}         # promotes an ADR 020 lint code to enforcement
+      effect: deny
+    - id: no-dataset-deletes-in-ci
+      matchPlan: {action: delete, kind: Dataset}  # evaluated at plan/apply/destroy only
+      effect: deny
+```
+
+A rule sets exactly one of `(match + assert)`, `matchFinding`, or
+`matchPlan` — never more than one. `assert`'s field selector reads the raw,
+undecoded envelope (the same "raw spec map, not the FromEnvelope-defaulted
+value" convention `internal/application/lint`'s DL020/DL021 checks use); a
+field the resource never declared is `nil`, and each operator's own
+ordinary comparison semantics decide the outcome (see
+`internal/domain/policy.Assert`'s doc comment for the full worked-example
+table) — there is no separate "field is absent" special case except the
+`absent` operator itself. Deny-wins: `assert.Equals`/`In`/`Matches`'s
+absent-fails-by-default posture means an *unset* field is exactly as
+non-compliant as an explicit non-conforming value; `NotEquals`'s
+absent-passes posture means an unset field has opted out of nothing.
+
+`platformctl policy init zero-trust` writes the built-in starter pack
+(docs/adr/021-policy-engine-zero-trust.md §4) for local tailoring;
+`platformctl policy test [path]` evaluates a `--policies` set against a
+manifest set without the rest of `validate`. Gated by `PolicyEngine`
+(Alpha, disabled by default — docs/planning/04-roadmap-and-feature-gates.md
+§12).

@@ -22,3 +22,21 @@ var KindFiles = map[string]map[string]string{
 		"Connection":      "v1alpha1/connection.json",
 	},
 }
+
+// PolicyFS embeds the Policy kind's schema (docs/adr/021-policy-engine-zero-
+// trust.md §1) — a deliberately parallel directory, never merged into FS/
+// KindFiles above: Policy is not a datascape.io/v1alpha1 resource kind, and
+// must never be validated as one (a policy governing the manifest set can't
+// also be a member of the set it governs).
+//
+//go:embed policy/v1alpha1/*.json
+var PolicyFS embed.FS
+
+// PolicyKindFiles maps the one Policy kind to its schema path within
+// PolicyFS, per its own apiVersion — the policy-schema counterpart of
+// KindFiles, kept as a separate map on purpose (see PolicyFS's doc comment).
+var PolicyKindFiles = map[string]map[string]string{
+	"policy.datascape.io/v1alpha1": {
+		"Policy": "policy/v1alpha1/policy.json",
+	},
+}

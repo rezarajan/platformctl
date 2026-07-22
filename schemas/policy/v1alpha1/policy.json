@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/policy/v1alpha1/policy.json",
+  "title": "Policy",
+  "description": "docs/adr/021-policy-engine-zero-trust.md: a typed governance rule set, loaded from a separate channel (--policies / .datascape/policies/), never from the governed manifest set. Deliberately NOT under apiVersion datascape.io/v1alpha1 and NOT registered in schemas.KindFiles (ADR 021 §1) — Policy is a distinct input, not a resource kind.",
+  "type": "object",
+  "properties": {
+    "apiVersion": { "const": "policy.datascape.io/v1alpha1" },
+    "kind": { "const": "Policy" },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 }
+      },
+      "required": ["name"]
+    },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "description": "Exactly one of (match+assert), matchFinding, or matchPlan must be set — a Go-level invariant (internal/domain/policy.Validate), not expressible as a plain JSON Schema oneOf without duplicating every property branch.",
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "description": "Globally unique across every loaded policy — the explain-catalog key and the exemption-annotation key." },
+              "match": {
+                "type": "object",
+                "description": "Selects which resources a match+assert rule applies to. Kind/label/name selectors only — no spec-field selector (that's assert's job).",
+                "properties": {
+                  "kind": {
+                    "description": "A single Kind (\"Connection\") or a list (\"[Dataset, Source]\").",
+                    "oneOf": [
+                      { "type": "string", "minLength": 1 },
+                      { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 }
+                    ]
+                  },
+                  "label": { "type": "object", "additionalProperties": { "type": "string" } },
+                  "name": { "type": "string" }
+                },
+                "additionalProperties": false
+              },
+              "assert": {
+                "type": "object",
+                "description": "The condition match's selected resources must satisfy. Exactly one of equals/notEquals/in/absent/matches (internal/domain/policy.Validate enforces this).",
+                "properties": {
+                  "field": { "type": "string", "minLength": 1, "description": "A dotted path into the resolved envelope, e.g. spec.scheme, metadata.protect, spec.configuration.image." },
+                  "equals": {},
+                  "notEquals": {},
+                  "in": { "type": "array", "minItems": 1 },
+                  "absent": { "type": "boolean" },
+                  "matches": { "type": "string", "minLength": 1, "description": "An RE2 regular expression, matched against the field's stringified value." }
+                },
+                "required": ["field"],
+                "additionalProperties": false
+              },
+              "matchFinding": {
+                "type": "object",
+                "description": "Escalates every design-lint finding (docs/adr/020) with this code to this rule's effect.",
+                "properties": {
+                  "code": { "type": "string", "minLength": 1 }
+                },
+                "required": ["code"],
+                "additionalProperties": false
+              },
+              "matchPlan": {
+                "type": "object",
+                "description": "Selects plan entries by action x kind, evaluated at plan/apply/destroy time (never at validate, since no plan exists yet).",
+                "properties": {
+                  "action": { "type": "string", "enum": ["create", "update", "configure", "no-op", "delete"] },
+                  "kind": { "type": "string", "description": "Empty/absent matches every kind." }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+              },
+              "effect": { "type": "string", "enum": ["deny", "warn"] },
+              "exemptible": { "type": "boolean", "description": "Whether metadata.annotations[\"policy.datascape.io/exempt\"] may waive this rule. Defaults to false — a non-exemptible deny has no in-manifest escape (ADR 021 §3)." },
+              "message": { "type": "string", "description": "Human-readable text shown alongside the rule id and resource when this rule fires." }
+            },
+            "required": ["id", "effect"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["rules"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false
+}

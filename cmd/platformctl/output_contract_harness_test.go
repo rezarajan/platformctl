@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,15 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/application/blueprint"
 )
+
+// writePolicyFixture writes a single-file Policy document into dir for the
+// "policy test" harness scenario.
+func writePolicyFixture(t *testing.T, dir, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "policy.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // This file is the generic command-output harness docs/planning/08 A7 (doc
 // 07 §0.5/§3.2) called for: graph/validate/inventory --for already had
@@ -305,6 +315,37 @@ var commandScenarios = map[string]commandScenario{
 		structured: true,
 		run: func(t *testing.T) {
 			runBothFormats(t, "lint", "lint", "testdata/noop-scenario")
+		},
+	},
+	"policy test": {
+		structured: true,
+		run: func(t *testing.T) {
+			dir := t.TempDir()
+			writePolicyFixture(t, dir, `
+apiVersion: policy.datascape.io/v1alpha1
+kind: Policy
+metadata:
+  name: harness-test
+spec:
+  rules:
+    - id: no-plaintext-connections
+      match: {kind: Connection}
+      assert: {field: spec.scheme, in: [https]}
+      effect: warn
+`)
+			runBothFormats(t, "policy test", "policy", "test", "testdata/noop-scenario",
+				"--policies", dir, "--feature-gates", "PolicyEngine=true")
+		},
+	},
+	"policy init": {
+		structured: true,
+		run: func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "policies")
+			out, _, err := runSplit(t, "policy", "init", "zero-trust", "--dir", dir, "-o", "json")
+			if err != nil {
+				t.Fatalf("policy init zero-trust -o json: %v", err)
+			}
+			assertJSON(t, "policy init -o json", out)
 		},
 	},
 	"docs build": {

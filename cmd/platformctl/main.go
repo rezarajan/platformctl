@@ -182,6 +182,14 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// not to hide the `lint` command itself, so it defaults enabled.
 	gates.Register("DesignLints", featuregate.Alpha, true)
 
+	// docs/planning/08 H3 (ADR 021): the typed-rule policy engine — unlike
+	// DesignLints, disabled means a full no-op (no directory read, no
+	// evaluation at all), and a deny blocks validate/plan/apply/destroy, so
+	// this defaults off until the zero-trust pack has soaked (doc 04 §12's
+	// graduation intent: "Beta after the zero-trust pack soaks in this
+	// repo's own CI").
+	gates.Register("PolicyEngine", featuregate.Alpha, false)
+
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
 	reg.RegisterProvider("container", func() reconciler.Provider { return placeholder.New() }, "ContainerProvider")

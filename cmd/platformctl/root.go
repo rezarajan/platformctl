@@ -29,6 +29,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/cliutil"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/graph"
+	domainpolicy "github.com/rezarajan/platformctl/internal/domain/policy"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/secret"
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -43,6 +44,12 @@ type app struct {
 	output       string
 	envFile      string
 	wire         wiringFunc
+
+	// policies is --policies: an explicit directory of Policy documents
+	// (docs/adr/021-policy-engine-zero-trust.md §1's "separate channel").
+	// Empty means "use the conventional .datascape/policies/ directory if
+	// it exists" — see policiesDir.
+	policies string
 
 	// Shared/remote state backend (docs/adr/003, gated
 	// SharedStateBackend). stateFile above remains the "local" backend's
@@ -120,6 +127,7 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 	root.PersistentFlags().StringVar(&a.featureGates, "feature-gates", "", "comma-separated Name=true|false overrides")
 	root.PersistentFlags().StringVarP(&a.output, "output", "o", "table", "output format: table|json|yaml")
 	root.PersistentFlags().StringVar(&a.envFile, "env-file", "", "load KEY=VALUE lines from a file into the environment before resolving secrets (shell environment wins on conflict)")
+	root.PersistentFlags().StringVar(&a.policies, "policies", "", "directory of Policy documents (docs/adr/021), evaluated at validate/plan/apply/destroy when the PolicyEngine gate is enabled; default: .datascape/policies/ if it exists")
 	root.PersistentFlags().StringVar(&a.stateBackend, "state-backend", "local", "state backend: local|s3 (s3 requires the SharedStateBackend gate, see docs/adr/003-shared-state.md)")
 	root.PersistentFlags().StringVar(&a.stateBucket, "state-bucket", "", "s3 backend: bucket holding state.json and the lock object")
 	root.PersistentFlags().StringVar(&a.statePrefix, "state-prefix", "", "s3 backend: object key prefix (e.g. \"team-a/\")")
@@ -144,6 +152,7 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 		newInventoryCmd(a),
 		newExplainCmd(a),
 		newLintCmd(a),
+		newPolicyCmd(a),
 		newDocsCmd(),
 		newGCCmd(a),
 		newStateCmd(a),
@@ -407,6 +416,13 @@ func (a *app) loadAndValidate(path string) ([]resource.Envelope, *graph.Graph, e
 	if err := a.kubernetesPreflight(envelopes); err != nil {
 		return nil, nil, err
 	}
+	// docs/planning/08 §7.7 H3: policy evaluation is wired in after
+	// compatibility (checked above) and lint (computed, best-effort,
+	// inside enforcePolicies itself — see its doc comment) — the last
+	// validate-time gate before any command proceeds.
+	if err := a.enforcePolicies(envelopes, g); err != nil {
+		return nil, nil, err
+	}
 	return envelopes, g, nil
 }
 
@@ -439,6 +455,12 @@ type validateOutput struct {
 	Valid          bool `json:"valid" yaml:"valid"`
 	Resources      int  `json:"resources" yaml:"resources"`
 	DesignFindings *int `json:"designFindings,omitempty" yaml:"designFindings,omitempty"`
+	// PolicyWarnings is the count of unexempted warn-effect policy
+	// decisions (docs/planning/08 H3) — populated only when the
+	// PolicyEngine gate is enabled and at least one policy is loaded;
+	// deny-effect decisions never reach here (loadAndValidate already
+	// failed the command via the standard validation-error exit path).
+	PolicyWarnings *int `json:"policyWarnings,omitempty" yaml:"policyWarnings,omitempty"`
 }
 
 func newValidateCmd(a *app) *cobra.Command {
@@ -462,12 +484,34 @@ func newValidateCmd(a *app) *cobra.Command {
 					out.DesignFindings = &n
 				}
 			}
+			// PolicyEngine's own gate exists to switch evaluation off
+			// entirely (docs/planning/08 H3) — enforcePolicies already ran
+			// inside loadAndValidate and would have failed the command on
+			// any unexempted deny, so only warn-effect decisions can reach
+			// here; a policy load/evaluation failure never fails validate a
+			// second time, matching DesignLints' own tolerance above.
+			if decisions, err := a.evaluatePolicies(envelopes, g); err == nil {
+				n := 0
+				for _, d := range decisions {
+					if d.Effect == domainpolicy.Warn && !d.Exempted {
+						n++
+					}
+				}
+				if len(decisions) > 0 {
+					out.PolicyWarnings = &n
+				}
+			}
 			if isStructured(a.output) {
 				return cliutil.WriteOutput(cmd.OutOrStdout(), a.output, out, nil)
 			}
-			if out.DesignFindings != nil {
+			switch {
+			case out.DesignFindings != nil && out.PolicyWarnings != nil:
+				fmt.Fprintf(cmd.OutOrStdout(), "%d resource(s) valid; %d design finding(s) — run `platformctl lint`; %d policy warning(s) — run `platformctl policy test`\n", out.Resources, *out.DesignFindings, *out.PolicyWarnings)
+			case out.DesignFindings != nil:
 				fmt.Fprintf(cmd.OutOrStdout(), "%d resource(s) valid; %d design finding(s) — run `platformctl lint`\n", out.Resources, *out.DesignFindings)
-			} else {
+			case out.PolicyWarnings != nil:
+				fmt.Fprintf(cmd.OutOrStdout(), "%d resource(s) valid; %d policy warning(s) — run `platformctl policy test`\n", out.Resources, *out.PolicyWarnings)
+			default:
 				fmt.Fprintf(cmd.OutOrStdout(), "%d resource(s) valid\n", out.Resources)
 			}
 			return nil
@@ -497,6 +541,9 @@ func newPlanCmd(a *app) *cobra.Command {
 			p, err := planpkg.Compute(envelopes, st, g)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
+			}
+			if err := a.enforcePlanPolicies(envelopes, p.Entries); err != nil {
+				return err
 			}
 			if err := printPlan(cmd, a.output, p); err != nil {
 				return err
@@ -554,6 +601,9 @@ func newApplyCmd(a *app) *cobra.Command {
 			p, err := planpkg.ComputeWithSecretHashes(envelopes, st, g, secretHashes)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
+			}
+			if err := a.enforcePlanPolicies(envelopes, p.Entries); err != nil {
+				return err
 			}
 			healDrift := a.gates.Enabled("DriftDetection")
 			if !p.HasChanges() {
@@ -656,6 +706,9 @@ func newDestroyCmd(a *app) *cobra.Command {
 			p, err := planpkg.ComputeDestroy(envelopes, st, g, includeExternal, includeImported)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
+			}
+			if err := a.enforcePlanPolicies(envelopes, p.Entries); err != nil {
+				return err
 			}
 			if isStructured(a.output) {
 				if err := printPlanTo(cmd.ErrOrStderr(), "table", p); err != nil {
