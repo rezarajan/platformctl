@@ -287,3 +287,12 @@ static. Dimensions, each producing findings verified before fixing:
   frame), keep protect-data non-exemptible with the examples'
   known-baseline. To be applied at H4's merge gate with an ADR 021
   addendum; Stage H criterion 2 pack-half ticked then.
+- 2026-07-22: E5 reported (commit 732500c): 24 provider/engine/options
+  schema fragments (Go-composed by discriminator, core Kind schemas
+  untouched), 19-class negative corpus all green, docsgen renders
+  per-provider reference from fragments. LATENT BUG found+closed:
+  Source engine `database` was apply-time-only (ADR 011 violation) —
+  now required at validate; zero shipped manifests needed edits.
+  Honest scoping note: 5 providers' single-field checks kept as
+  defense-in-depth. Stage E exit criterion 1 ticked by the agent with
+  evidence. Sweep launched (16 suites, queued).
