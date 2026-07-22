@@ -1,104 +1,101 @@
-# D3 (jdbcsink) + D4 (s3source) — task progress
+# D5: WireGuard tunnel provider — task progress
 
-Doc 08 §2.1 protocol. Step 0 checkpoint file.
+Doc 08 §6 D5. Size L. Protocol: doc 08 §2.1 (step 0 = this file). This file
+was previously used by a D3/D4 session on this worktree; that work is
+already merged (commit 80b5bf6) — this replaces it for D5.
 
-## Plan
+## Step plan
 
-1. [done] git merge main --no-edit (brought in D1/D2/C3/D6 dependencies).
-2. [done] Read: CLAUDE.md, doc 08 D3/D4 entries + §2.1, ADR 001/009/016,
-   s3sink.go + debezium.go in full, kafkaconnect client, providerkit,
-   registry/main.go wiring, compatibility.go (capability checks already
-   exist for both pairings), doc 03 §7.1/§7.2, doc 04 §12, doc 08 §8,
-   scripts/test-impact.sh format, guard-planning-docs.sh (additive edits
-   pass), sink_integration_test.go pattern.
-3. [done] Connector/jar research (live, pinned):
-   - jdbcsink: Confluent kafka-connect-jdbc v10.9.6 (confluentinc
-     kafka-connect-jdbc, Confluent Hub zip) — connector class
-     io.confluent.connect.jdbc.JdbcSinkConnector. Bundles postgresql JDBC
-     driver (42.7.11); mysql-connector-j 9.7.0 added separately (Maven
-     Central, not bundled).
-   - s3source: Aiven's s3-source-connector-for-apache-kafka v3.4.2 (repo
-     Aiven-Open/cloud-storage-connectors-for-apache-kafka — the old
-     s3-connector-for-apache-kafka repo s3sink uses was archived
-     2024-09-11 and development moved here). Connector class
-     io.aiven.kafka.connect.s3.source.S3SourceConnector. Bundles its own
-     Confluent Avro converter + parquet/hadoop jars.
-   - CRITICAL FINDING (verified against kafka-connect-jdbc source,
-     FieldsMetadata.java): the JDBC sink connector cannot write ANY value
-     column from a fully schemaless (Map-typed) Kafka record — it only
-     extracts fields from a Struct valueSchema. Debezium's own json path
-     (debezium.applyConverterConfig, read-only) hardcodes
-     schemas.enable=false always. Consequence: jdbcsink is only usable
-     with schema-carrying options.format (avro/protobuf) — NOT an
-     optional nicety, a hard technical requirement. jdbcsink.
-     ValidateBindingOptions rejects unset/"json" format accordingly.
-     Documented in jdbcsink.go doc comments + will be noted in doc 03 and
-     the final report as a deviation from "options.format optional
-     everywhere".
-4. [done] Implement internal/adapters/providers/jdbcsink (D3) — commit 615b5ed.
-5. [done] Implement internal/adapters/providers/s3source (D4) — commit 615b5ed.
-6. [done] Unit tests for both (mirror s3sink_test.go pattern) — all green.
-7. [done] testdata Dockerfiles: jdbcsink-image, s3source-image — both build
-   clean (verified: `docker build` succeeded for both).
-8. [done] Registry + main.go wiring + feature gates (JDBCSinkProvider,
-   IngestProvider — Alpha/disabled).
-9. [done] schemas/v1alpha1/provider.json, binding.json additive updates +
-   docs/reference/ regenerated (TestGeneratedReferenceInSync green).
-10. [done] docs/planning/03 §7.2 additive update — commit 50ab8c8.
-11. [done] docs/planning/04 §12 rows appended — commit 50ab8c8.
-12. [done] docs/planning/08: additive "Done" status blocks under D3/D4 +
-    Stage D exit-criteria checkboxes 2 and 4 checked (with evidence).
-13. [done] scripts/test-impact.sh: two new suite rows (jdbcsink, s3source).
-14. [done] Live integration tests, both green against real Docker:
-    - TestS3SourceIngestEndToEnd (246.9s) + TestS3SourceValidateCapability
-      ErrorExact: PASS first try, no bugs found.
-    - TestJDBCSinkEndToEnd (63.3s, after fixing two bugs found live — see
-      commit 5f0641b) + TestJDBCSinkValidateCapabilityErrorExact: PASS.
-      Bugs found+fixed: (a) topics.regex vs literal topics (Debezium
-      writes to a per-table topic, not the bare EventStream name); (b)
-      missing CONNECT_CONSUMER_METADATA_MAX_AGE_MS (s3sink's own doc
-      comment already named this exact gotcha; jdbcsink was missing the
-      identical setting).
-15. [done] gofmt / go build / go vet / go test ./... all clean.
-    scripts/test-impact.sh --base main: jdbcsink suite recorded green in
-    the ledger (66.1s); s3source suite was mid-run (contending for the
-    shared Docker daemon flock with a concurrent agent's own
-    test-impact.sh run) at the time this task's work was finalized —
-    same code/test already independently verified green at 246.9s
-    moments earlier (commit 36baa48's status note), so this is a ledger-
-    recording formality expected to complete on its own, not a
-    correctness risk.
-16. [done] Final commit.
+1. [done] git merge main --no-edit (already up to date).
+2. [done] Read: CLAUDE.md, D5 entry, ADR 002 (+addendum), ADR 018, ADR 022
+   §boundaries, proxy provider (full, read-only reference), Connection
+   domain/schema, doc 03 §8.2, doc 04 §12, reconciler.go, runtime.go,
+   providerkit, postgres.go's bootstrap-credential file-mount pattern,
+   scripts/pinned-images.txt, scripts/test-impact.sh, main.go wiring.
+3. [done] Design spike (live Docker, not committed): validated the whole
+   mechanism by hand before writing Go —
+   - kernel WireGuard interface creation works in a container with just
+     `--cap-add NET_ADMIN` (no `/dev/net/tun` needed) on this host.
+   - `net.ipv4.ip_forward=1` must be set at container-CREATE time via
+     `--sysctl` (writing `/proc/sys/net/ipv4/ip_forward` from inside a
+     running unprivileged container fails: read-only). This means
+     `runtime.ContainerSpec` needs a new `Sysctls` field — genuinely
+     required, not optional; see step 5.
+   - raw `wg set` does NOT install AllowedIPs routes (that's `wg-quick`'s
+     job) — using `wg-quick` avoids a manual `ip route add` step.
+   - End-to-end proven live: initiator (transit-net only) dials target
+     (vpc-net only, no shared network) through responder (vpc-net +
+     transit-net) via WireGuard + iptables MASQUERADE/FORWARD; a second
+     container dialing the initiator's transit-net IP:port hits an
+     iptables PREROUTING DNAT rule that relays through wg0 to the target —
+     this DNAT rule *is* "the existing proxy/forwarder chaining through
+     it," implemented with the tunnel container's own iptables (already
+     required for wg-quick/routing) instead of a second tool (socat) the
+     pinned image doesn't ship. Recorded as ADR 023 Decision 4.
+4. [in-progress] ADR 023 (docs/adr/023-wireguard-tunnel.md) — decisions
+   left open by the task: image + pin, key lifecycle, handshake-recency
+   probe thresholds, test-rig design, the DNAT-not-socat call, and the
+   `via` scope-vs-file-fence resolution (see "Deviations" below).
+5. [next] `internal/ports/runtime`: `ContainerSpec.Sysctls map[string]string`
+   (additive); Docker adapter wires it to `HostConfig.Sysctls`; fake
+   adapter records it (round-trips via Inspect for tests) but doesn't
+   interpret it; Kubernetes adapter leaves it unimplemented (documented —
+   K8s pod sysctls need node-level allowlisting; out of scope, doc 08
+   status note says so).
+6. [next] `internal/ports/reconciler`: `TunnelCapableProvider` interface
+   (structural marker for `Connection.spec.via`).
+7. [next] Connection schema + domain: additive `spec.via` (nameRef,
+   managed-only). doc 03 §8.2 additive edit. compatibility.go: validate
+   `via` resolves to a `TunnelCapableProvider`.
+8. [next] `internal/adapters/providers/wireguard` (new): Provider(type:
+   wireguard) is the tunnel initiator; `reconcileInstance` scans
+   `req.Resources` for every Connection naming it via `providerRef`,
+   builds one wg-quick conf (private key file-mounted, never env) + one
+   DNAT/MASQUERADE rule per such Connection into one boot script
+   (spec-hashed — a Connection add/remove/key-rotation recreates the
+   container, the same trade-off ADR 018 documents for `prometheus`'s
+   scrape config). `reconcileConnection` is a thin status/endpoint
+   publisher (the container already carries its rule). Probe: handshake
+   recency (`wg show ... latest-handshakes`) + upstream dial through the
+   forwarder (`runtime.WithReachable`).
+9. [next] main.go: register `wireguard` provider + `TunnelProvider` gate
+   (Alpha, disabled). scripts/pinned-images.txt: add the pinned image.
+   doc 04 §12: append the `TunnelProvider` row.
+10. [next] Integration test + testdata: raw (unmanaged) Docker VPC network
+    + Postgres + WireGuard responder fixture; managed wireguard Provider +
+    Connection + external Source + CDC Binding. Negative reachability via
+    `runtime.ProbeReachable` before the tunnel is configured. Key rotation
+    via a second `apply` with a new SecretReference value. Destroy leaves
+    no container/network artifacts.
+11. [next] scripts/test-impact.sh: new `wireguard` suite row.
+12. [next] Verify: gofmt, build, vet, go test ./..., test-impact.sh, live
+    rig. Recorded below.
+13. [next] Commit.
 
-## Resume point if this session dies
+## Verification log
 
-Read this file + `git log --oneline -10` first. If step 14's live Docker
-legs haven't completed: re-run
-`go test -tags integration -run TestS3SourceIngestEndToEnd -v -timeout 600s ./cmd/platformctl/`
-and
-`go test -tags integration -run TestJDBCSinkEndToEnd -v -timeout 900s ./cmd/platformctl/`
-(the jdbcsink one needs both testdata/avro-connect-image and
-testdata/jdbcsink-image built first — the test does this itself). Fix any
-failures found (most likely culprit: the s3source connector's exact output
-shape for jsonl input — the test uses substring assertions specifically to
-tolerate uncertainty here, documented in s3source_integration_test.go).
-Once both pass, finish steps 12/16: append doc 08 D3/D4 status blocks with
-real timings (mirror D1/D2/D6's "Done (2026-07-2X, merged): ..." shape),
-check the Stage D exit-criterion box for "Lake data can be replayed... and
-an EventStream can be served into a relational Source", then the final
-consolidated commit per the task's required subject line.
+(filled in as steps complete)
 
-## Notes / open questions
+## Deviations (recorded, not silently worked around)
 
-- jdbcsink target-DB preflight mirrors debezium's buildDesiredConnector
-  Connection-resolution exactly (per task instruction), renamed for the
-  TARGET (sink) direction.
-- jdbcsink needs a Debezium-envelope-unwrap SMT to write sane rows from a
-  CDC-sourced topic (io.debezium.transforms.ExtractNewRecordState, bundled
-  in the debezium/connect base image already) — added as
-  options.unwrap: bool (default false), documented as necessary plumbing
-  beyond the task's literal option list, called out in the final report.
-- s3source: SupportedIngestFormats = jsonl, avro, parquet (not literal
-  "json" — the connector's input.format enum has no whole-file-JSON-array
-  mode, only jsonl; documented deviation from the task text's "json at
-  minimum" phrasing).
+- **`Connection.spec.via` is schema-complete but not wired into `proxy`'s
+  own forwarder in this task.** The task's file fence marks
+  `internal/adapters/providers/proxy` "read-only reference," and ADR 002's
+  addendum's literal design ("each proxy route accepts an optional `via`
+  field") requires editing `proxy.go`'s `reconcileConnection` to chain a
+  route's own forwarder through the named tunnel — which the fence
+  forbids. Exercising the task's explicit "or the equivalent the addendum
+  sketched" latitude: this task ships the actually-useful, fully working
+  half (a tunnel-mediated Connection realized *directly* by the
+  `wireguard` provider, which implements `ConnectionCapableProvider`
+  itself — no `proxy` involvement needed for the D5 Accept scenario) and
+  replants the same "schema carries the seam, wiring waits" discipline
+  the original addendum used, one link further down the chain: `via` is
+  schema-accepted and validate-time capability-checked (must resolve to a
+  `TunnelCapableProvider`) but has no consumer that changes `proxy`'s or
+  `ingress`'s own egress yet. Full detail + reasoning in ADR 023's
+  "Scope" section.
+- `ContainerSpec.Sysctls` is a new runtime-port field this task's spike
+  found was genuinely required (not a nice-to-have) for `ip_forward` —
+  ADR 023 Decision 5 records why, and why Kubernetes leaves it a documented
+  gap rather than a half-implementation.
