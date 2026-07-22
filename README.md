@@ -48,8 +48,10 @@ applied: 14 succeeded, 0 failed, 0 skipped
   Kafka-Connect S3 sink, Nessie (Iceberg REST catalog), Marquez
   (OpenLineage backend), Trino (query engine, Alpha), Prometheus (managed
   monitoring, Alpha), an ingress provider (HTTP routing on the `Connection`
-  seam, Alpha), and a proxy surface giving external systems stable
-  platform-owned entrypoints. Rows inserted into Postgres land as
+  seam, Alpha), a JDBC database sink and an S3 ingest source (both
+  Kafka-Connect-based, Alpha), a WireGuard tunnel provider (VPN egress on
+  the `Connection` seam, Alpha), and a proxy surface giving external
+  systems stable platform-owned entrypoints. Rows inserted into Postgres land as
   schema-carrying Parquet objects in a bucket with nothing hand-wired in
   between — `examples/cdc-attendance/` ships `Dataset.spec.format: parquet`
   as its acceptance shape, not just JSON.
@@ -239,8 +241,13 @@ bin/platformctl destroy cdc-to-lake --auto-approve
 |---|---|
 | `init <blueprint> [--dir]` | Scaffold a ready-to-apply manifest set + `.env` template + README from an embedded blueprint (`cdc-to-lake`, `lakehouse`, `stream-basics`, `external-cdc`). `--list` enumerates blueprints (`-o json\|yaml` for the machine-readable form). |
 | `validate <dir>` | Schema + graph (cycles) + Binding capability checks. No state, no runtime calls. |
+| `lint [dir]` | Deterministic design lints over a valid set (ADR 020): built-in DL codes + provider-contributed checks; waivable per-resource with a reason; `--strict` exits `1` on warnings. |
+| `explain <token>` | Explain any condition type, status reason, or lint code from the built-in catalog: meaning, likely causes, remedies. |
 | `plan <dir>` | Deterministic diff of manifests vs. state. Exit `1` when changes are pending. |
 | `apply <dir>` | Reconcile in topological order; state persisted after every resource. |
+| `add <composite> [path]` | Compose a new building block (`source`, `pipeline`, `sink`, `catalog`, `monitoring`) into an existing manifest set — reusing compatible resources via prompts or flags; emits blueprint-quality YAML, never applies (ADR 024). |
+| `wire <mode> --from <ref> --to <ref>` | Connect two existing blocks with a Binding (+ any missing glue). |
+| `expose <Kind>/<name>` | Emit a stable entrypoint (Connection + realizing provider) for an existing block, scheme-selected. |
 | `status <dir>` | Per-resource `Ready`/`DRIFT`/conditions/lifecycle from recorded state. |
 | `drift <dir>` | Probe live infrastructure, record observed conditions into state, report drift. Exit `1` when drift is found; run `apply` to heal it. |
 | `backup <Kind/name> [dir] --to ...` | Stream a `BackupCapableProvider` resource's contents (postgres, mysql, s3) to a `Dataset` or an object-store URL. Alpha, `BackupRestore` gate. |

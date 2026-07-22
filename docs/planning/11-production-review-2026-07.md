@@ -41,8 +41,8 @@ and extended by the full pass):
 | A5 | Timing-dependence review (slow vs fast machines): timeouts/cadences are constants (e.g. `topicSettleTimeout=45s`) with no stated budget rationale | providers' probe code | Phase B audit item; doc the timeout policy |
 | A6 | Zero-trust runtime posture (policy H3–H6, mediation ADR 022) is sequenced but unimplemented — GA claims must not imply it | doc 04 §12 gates | Verify gate table + README make maturity honest; no new work beyond H-sequence |
 
-- [ ] Full docs pass (each doc 01–10, ADR index) against goal areas
-- [ ] Amendments committed (additive; guard-compatible)
+- [x] Full docs pass (each doc 01–10, ADR index) against goal areas
+- [x] Amendments committed (additive; guard-compatible)
 
 ## Phase B — codebase conformance review (blocked on Phase 0)
 
@@ -84,3 +84,29 @@ static. Dimensions, each producing findings verified before fixing:
   gate running, ledger-recorded on green). Owner decisions now open:
   KubernetesRuntime GA + v1.3.0 tag. Phase B unblocked once the D8 gate
   is green.
+- 2026-07-22: Phase A COMPLETE. Full docs inventory (delegated) verified
+  the register: A6 ruled out (gate table matches main.go exactly), A1/A2
+  held up, plus new findings. Amendments landed in one batch: NFR-11
+  Settledness added to doc 01 (I3 executed) + scale-envelope note;
+  `validate` now REFUSES Connection.spec.via until I1 (compatibility.go
+  + TestConnectionViaNotConsumedRefused — closes the silent-security-
+  no-op); ADR 025 scopes cloud IAM DB auth out (auth-proxy topology is
+  the supported pattern); doc 03 §8.2.4 worked cloud-DB walkthrough
+  (+ fixed duplicate §8.2.2 numbering); README CLI table gained
+  lint/explain/add/wire/expose + jdbcsink/s3source/wireguard in
+  Highlights, and TestREADMECLISurfaceInSync now guards the F-003
+  recurrence class both directions; users.md gained the mid-apply-crash/
+  stuck-lock runbook entry; Stage H exit-criterion 1 ticked (third
+  "checkbox truth" instance); doc 10 narrative caught up; ADR index
+  reordered. Remaining from inventory, deliberately NOT doc work:
+  ContainerProvider stale code comment (B4 nit).
+- 2026-07-22: Phase B1 audit report received: 4 findings, ONE class —
+  Reconcile sets Ready from a weaker signal than Probe verifies
+  (wireguard CONFIRMED tunnel-up-without-handshake; ingress-docker and
+  proxy same asymmetry, narrower windows; ingress-k8s symmetric-shallow,
+  deferred). Clean: redpanda/postgres/mysql/s3/trino/prometheus/nessie/
+  openlineage/debezium/jdbcsink/s3sink/kafkaconnect/both runtimes/
+  engine; no goroutine leaks; 2 time.Sleep both test-harness-only.
+  Fix wave next: reuse each provider's existing probe fn in reconcile
+  before Ready (findings 1-3); finding 4 recorded as deferred with
+  reason.

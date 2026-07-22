@@ -2325,7 +2325,7 @@ tasks here carry sizes/acceptance only — the design content lives in the
 ADRs and is not restated.
 
 **Stage exit criteria:**
-- [ ] `platformctl lint` reports the ADR 020 built-in set deterministically
+- [x] `platformctl lint` reports the ADR 020 built-in set deterministically
       (byte-identical on identical input), waivers are auditable, every
       shipped blueprint lints clean in CI, and every lint code resolves in
       `platformctl explain`.
@@ -2469,6 +2469,11 @@ unless a dependency is stated.
   key rotation mid-stream recovers; destroy leaves no transit
   attachments.
 - **Gate:** reuses `TunnelProvider` (Alpha, disabled) — no new gate.
+- **Interim (2026-07-22):** until I1 lands, `validate` REFUSES a
+  Connection declaring `spec.via` (compatibility check + test) — a
+  declared-but-inert egress control applied as a plain forwarder is a
+  silent security failure (doc 11 Phase A finding). I1 deletes the
+  refusal and replaces its test with the realization contract.
 
 ### I2: Outbound database TLS — reach TLS-requiring (cloud-managed) databases
 

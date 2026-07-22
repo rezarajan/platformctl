@@ -1004,3 +1004,72 @@ func TestDeadLetterQueueOnCDCBindingRejected(t *testing.T) {
 		t.Fatal("Check accepted options.deadLetter on a cdc-mode Binding")
 	}
 }
+
+type tunnelStub struct{ stubProvider }
+
+func (tunnelStub) SupportsTunnelChaining() []string { return []string{"tcp"} }
+
+func viaManifests(viaTarget string) []resource.Envelope {
+	return []resource.Envelope{
+		envelope("Provider", "edge", map[string]any{
+			"type":    "proxy",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Provider", "vpc-tunnel", map[string]any{
+			"type":    "wireguard",
+			"runtime": map[string]any{"type": "fake"},
+		}),
+		envelope("Connection", "private-db", map[string]any{
+			"providerRef": map[string]any{"name": "edge"},
+			"scheme":      "tcp",
+			"port":        15999,
+			"target":      "10.8.0.10:5432",
+			"via":         map[string]any{"name": viaTarget},
+		}),
+	}
+}
+
+func typedResolver(byType map[string]reconciler.Provider) ProviderResolver {
+	return func(typ string) (reconciler.Provider, error) {
+		impl, ok := byType[typ]
+		if !ok {
+			return nil, fmt.Errorf("no provider registered for type %q", typ)
+		}
+		return impl, nil
+	}
+}
+
+// TestConnectionViaNotConsumedRefused: spec.via passes the structural +
+// tunnel-capability checks but is consumed by no realizing provider yet
+// (docs/planning/08 I1) — validate must refuse rather than let apply
+// realize a plain forwarder while the manifest claims confined egress
+// (a silent security failure). This test inverts when I1 lands: replace
+// the refusal assertion with the realization contract.
+func TestConnectionViaNotConsumedRefused(t *testing.T) {
+	impls := map[string]reconciler.Provider{
+		"proxy":     connStub{stubProvider{"proxy"}},
+		"wireguard": tunnelStub{stubProvider{"wireguard"}},
+	}
+	err := Check(viaManifests("vpc-tunnel"), typedResolver(impls))
+	if err == nil {
+		t.Fatal("validate accepted a Connection whose spec.via no provider consumes")
+	}
+	if !strings.Contains(err.Error(), "spec.via is not consumed by any provider yet (docs/planning/08 I1)") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// A via naming a non-tunnel-capable Provider fails the capability
+	// check first, with the documented message shape.
+	impls["wireguard"] = connStub{stubProvider{"wireguard"}}
+	err = Check(viaManifests("vpc-tunnel"), typedResolver(impls))
+	if err == nil || !strings.Contains(err.Error(), "does not support tunnel chaining") {
+		t.Errorf("want tunnel-capability error, got: %v", err)
+	}
+
+	// A via that resolves to nothing fails structurally.
+	impls["wireguard"] = tunnelStub{stubProvider{"wireguard"}}
+	err = Check(viaManifests("no-such-provider"), typedResolver(impls))
+	if err == nil || !strings.Contains(err.Error(), "does not resolve to a Provider") {
+		t.Errorf("want resolution error, got: %v", err)
+	}
+}

@@ -153,6 +153,14 @@ a later add-on.
 | NFR-8 (Performance) | Cold-start reconciliation of the full worked acceptance scenario (10 resources — see the v1 spec) completes in under 4 minutes on a typical developer laptop with images already pulled. |
 | NFR-9 (Recoverability) | State is written atomically (temp file + rename, or transactional store); a crash mid-apply never corrupts state into an unreadable file. |
 | NFR-10 (Mechanism correctness without a real backend) | The `observers`/`LineageAware` path must be fully testable — and tested — using a fake `LineageAware` provider, so its correctness does not depend on a real lineage backend being implemented first. |
+| NFR-11 (Settledness) | A resource reported `Ready` answers its declared protocol at that moment, and a probe run immediately after `apply` reports no drift. Wait loops poll an observable condition under an overall deadline (with an honest timeout error naming the last observed state); fixed-duration sleeps that assume completion are forbidden — correctness must not depend on machine speed. (Added by the 2026-07 production review, doc 08 I3; the redpanda settle fix `93fbf14` is the motivating instance.) |
+
+**Scale envelope (2026-07 note):** NFR-8's budget is stated for the
+10-resource acceptance scenario only. Behavior at 100s of resources
+(sequential per-resource reconciliation, the local JSON state file, the
+graph walk) is *not yet characterized* — treat that as a known,
+deliberate gap until a scale test exists (tracked by the production
+review, doc 11), not an implicit promise.
 
 ## 9. Constraints and assumptions
 

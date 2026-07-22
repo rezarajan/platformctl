@@ -1373,7 +1373,7 @@ spec:
   `Insecure` fields every other endpoint already uses — no separate
   rendering path).
 - Gate `TLSTermination` (Alpha, disabled) — doc 04 §12.
-### 8.2.2 Tunnel-mediated connections (the `wireguard` provider, docs/planning/08 D5, docs/adr/023)
+### 8.2.3 Tunnel-mediated connections (the `wireguard` provider, docs/planning/08 D5, docs/adr/023)
 
 A third realization of the `Connection` shape: a `wireguard`-typed
 `Provider` is itself a `ConnectionCapableProvider` (scheme `tcp`) whose
@@ -1438,6 +1438,35 @@ spec:
   reasoning. The example above does not use `via` — a Connection realized
   directly by a `wireguard` Provider (as shown) needs no `via`, since the
   `providerRef` already names the tunnel.
+
+### 8.2.4 Reaching cloud-managed databases (worked topologies, docs/adr/025)
+
+Three production topologies for a database Datascape does not run, in
+increasing order of network isolation. In every case the database enters
+the model as an **External Connection** (`spec.external: true`) plus a
+`SecretReference` for its credentials — nothing is created, the address
+is consumed as-is (§3).
+
+1. **Directly reachable, TLS required** (public/peered RDS, Cloud SQL,
+   Azure Database): declare the External Connection at the cloud
+   endpoint. Transport TLS from consumers (Debezium, exporters, the
+   admin connection) is doc 08 **I2** — until it lands, providers dial
+   plaintext (`sslmode=disable`) and cannot reach a TLS-requiring
+   endpoint; this is a known, tracked gap, not a configuration problem.
+2. **Behind a cloud auth proxy** (Cloud SQL Auth Proxy, RDS IAM
+   sidecars — the IAM/token-auth pattern): run the cloud's own proxy
+   (your process or a container you declare); it handles IAM token
+   refresh + TLS outbound and presents a plain local socket. Declare the
+   External Connection at the **proxy's** address. This is the supported
+   IAM-auth topology — Datascape deliberately does not mint or refresh
+   cloud tokens itself (docs/adr/025: a resident refresher contradicts
+   the one-shot posture, and the clouds ship the refresher as a proxy).
+3. **VPN-only VPC** (no public endpoint, no peering): the `wireguard`
+   tunnel provider (§8.2.3) realizes a managed Connection whose upstream
+   is only reachable through the tunnel; `spec.via` (chaining another
+   provider's Connection through the tunnel, blast-minimized to the
+   forwarder alone) is doc 08 **I1** — until it lands, `validate`
+   refuses `via` rather than silently realizing an untunneled forwarder.
 
 ## 9. Lineage / observability schema
 

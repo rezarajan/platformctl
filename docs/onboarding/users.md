@@ -181,6 +181,17 @@ fails at `validate`, not partway through `apply` — see Troubleshooting.
 
 ## Troubleshooting
 
+### `apply` was killed mid-run (CI job cancelled, laptop slept, crash)
+
+State is written after every resource (NFR-9: atomically), so nothing is
+lost — re-run `platformctl apply <dir>`; reconciliation is idempotent and
+converges from wherever it stopped. If the run died hard enough to leave
+the state lock held: `platformctl state unlock` force-releases it (safe
+only when you know the holder is dead), then `platformctl state doctor`
+reports any defects and `platformctl state repair` applies the safe
+fixes. `platformctl gc plan` lists any labeled runtime objects no state
+entry accounts for.
+
 **1. "feature gate ... is disabled"** — you used a Provider type or manifest feature that's
 still Alpha/off by default (Trino, ingress, backup/restore, ...). Exact shape:
 ```

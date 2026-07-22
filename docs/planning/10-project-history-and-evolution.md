@@ -361,6 +361,31 @@ Two post-Stage-F fixes are the ratchet's first exemplars (both
   lower-capability agent sessions) and §7.6 Stage G (the structural-debt
   register from the 2026-07-21 code survey).
 
+### 5.x The 2026-07-22 wave — Stages C and D close; guardrails and composition land
+
+A six-agent orchestrated wave (doc 06's process at full stretch) merged,
+in one day: the WireGuard tunnel provider (D5, ADR 023 — negative
+reachability proven in-network), the design-lint engine + provider lints
+(H1+H2, ADR 020 — `platformctl lint`, 15 codes, blueprints lint-clean),
+interactive composition (E9, ADR 024 — `add`/`wire`/`expose` compiling
+to manifests, huh v2 confined by archtest), the monitoring completion
+(C9 — postgres/mysql exporters with dedicated least-privilege users +
+grafana; **Stage C closed**), and `Catalog.spec.warehouseRef` (D8 —
+WarehouseFacts on the stateless Request, closing D10's inference gap).
+Two composition-with-lints co-evolution bugs were caught at merge gates,
+not after: composed output tripping DL020, and an archtest sweeping
+agent worktrees. Evidence discipline: one 18-suite impact sweep at the
+final content-state (0 failed) instead of per-merge sweeps — the ledger
+economy (doc 06 §10) working as designed. The same day, the owner opened
+the **production review** (doc 11): Phase A promoted three findings to
+Stage I tasks — `spec.via` consumption (I1; until then `validate`
+refuses the field rather than silently realizing an untunneled
+forwarder), outbound database TLS (I2; `sslmode=disable` was hardcoded
+in every database-facing consumer), and the Settledness NFR-11 (I3,
+applied to doc 01). ADR 025 scoped cloud IAM database auth out
+(composable today via the clouds' own auth proxies; doc 03 §8.2.4 is
+the worked walkthrough).
+
 ## 7. Where knowledge lives
 
 | You want... | Read |
