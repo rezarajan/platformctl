@@ -1,0 +1,109 @@
+# I6 (docs/planning/08 §7.8): the Kubernetes leg of TestChaosApplyKilledMidRun
+# — a small CDC pipeline (redpanda + postgres + debezium, no minio/s3sink)
+# mirroring testdata/cdc-scenario's shape byte-for-byte at the resource-graph
+# level, just on runtime: kubernetes instead of docker. Small on purpose
+# (docs/planning/06 §10 rule 5, minikube's limited memory): the mid-apply-kill
+# assertion only needs enough resources in the graph for a SIGKILL to land
+# mid-sequence and a re-apply to have real remaining work to finish.
+# access: node-port throughout, same as the proven
+# TestCDCAttendanceExampleOnKubernetes fixture — the platformctl process
+# itself (running outside the cluster) makes CLI-side admin calls (postgres
+# superuser bootstrap, the debezium Connect REST registration) that need a
+# real, externally-dialable address per provider.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: chaosk8s-pg-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: chaosk8s-pg-repl
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chaosk8s-rp
+spec:
+  type: redpanda
+  runtime:
+    type: kubernetes
+    network: datascape-chaosk8s-test-ns
+    access: node-port
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chaosk8s-pg
+spec:
+  type: postgres
+  runtime:
+    type: kubernetes
+    network: datascape-chaosk8s-test-ns
+    access: node-port
+  configuration:
+    version: "16"
+    superuserSecretRef: chaosk8s-pg-admin
+    replicationSecretRef: chaosk8s-pg-repl
+  secretRefs: [chaosk8s-pg-admin, chaosk8s-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-chaosk8s-dbz
+spec:
+  type: debezium
+  runtime:
+    type: kubernetes
+    network: datascape-chaosk8s-test-ns
+    access: node-port
+  configuration:
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
+    bootstrapServers: datascape-chaosk8s-rp:29092
+    replicationSecretRef: chaosk8s-pg-repl
+  secretRefs: [chaosk8s-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: chaosk8s-students
+spec:
+  engine: postgres
+  providerRef:
+    name: datascape-chaosk8s-pg
+  postgres:
+    database: attendance
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: chaosk8s-attendance-events
+spec:
+  providerRef:
+    name: datascape-chaosk8s-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: chaosk8s-students-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: chaosk8s-students
+  targetRef:
+    name: chaosk8s-attendance-events
+  providerRef:
+    name: datascape-chaosk8s-dbz
+  options:
+    tables: [students]
+    snapshotMode: initial

@@ -2810,6 +2810,59 @@ unless a dependency is stated.
   proof). GA graduation of KubernetesRuntime (owner decision) can then
   be unconditional.
 - **Gate:** none (evidence for an existing gate's graduation).
+- **Done (2026-07-22, test-only):**
+  `TestKubernetesChaosApplyKilledMidRun`
+  (cmd/platformctl/chaos_kubernetes_integration_test.go +
+  testdata/chaos-k8s-scenario, the runtime:kubernetes mirror of
+  testdata/cdc-scenario) — build binary, apply on the live cluster,
+  SIGKILL on the first "✓" progress line, state valid, re-apply
+  converges, status all-Ready, drift clean, destroy clean. First live
+  pass 66.63s (test), 130s wall.
+  `TestKubernetesConnectDeadLetterQueueAndWorkerResilience`
+  (cmd/platformctl/connect_ha_dlq_kubernetes_integration_test.go +
+  testdata/connect-ha-dlq-k8s-scenario) — D6's DLQ assertions in full
+  (pre-poison record lands in MinIO, poison record routed to the
+  declared DLQ topic, sink connector RUNNING throughout, post-poison
+  record still lands, live connector config carries the DLQ keys) plus
+  an out-of-band worker-pod delete healed by the Deployment controller
+  with drift (never apply) observing the recovery. Suite rows:
+  `chaos-k8s` added; `connect-ha-dlq` scope + -run extended
+  (scripts/test-impact.sh); archtest suite-map completeness green;
+  unfiltered `go test ./...` exit 0. Both tests' two-green-runs
+  evidence: see `i6-live-runs.log` at the I6 worktree root (runs were
+  queued behind other agents' sweeps on the shared flock at commit
+  time; the merge gate transcribes the four timings here).
+  **Two live findings, recorded not worked around (§2.1 deviation
+  clause):** (1) C3's `workers > 1` Connect-worker set has NO working
+  Kubernetes leg — `providerkit.ReachableURLs`' per-ordinal addressing
+  (`runtime.OrdinalName` → `EnsureReachable`) resolves only
+  StatefulSet-ordinal names, which the Deployment-shaped
+  (`StableIdentity: false`, docs/adr/004) worker sets never get, so a
+  Binding on a `workers: 2` debezium/s3sink Provider fails at apply
+  with `no member of "<name>" (2 ordinals) is currently reachable`
+  (reproduced live; full entry in doc 07's per-runtime differences).
+  The K8s DLQ test therefore runs single-worker and proves
+  Deployment-controller self-heal, not C3's two-worker failover claim.
+  (2) A host-side Kafka produce/consume against the legacy
+  single-broker redpanda shape on Kubernetes must redirect dials away
+  from the broker's advertised loopback sentinel
+  (redpanda.advertisedAddr, docs/adr/017 §a.4) — metadata-only calls
+  work via the seed, but produce follows the advertised address; the
+  test now uses the same dialer-redirect trick as the provider's own
+  admin client (proven live: a plain client's ProduceSync hangs until
+  deadline). No new RBAC verbs: role.yaml/preflight already cover both
+  scenarios. **Consequence for the GA decision (owner's call):**
+  KubernetesRuntime GA-parity evidence is complete for the
+  mid-apply-kill (gap 1) and DLQ (gap 2's D6 half) claims; an
+  unconditional GA claim should either exclude Connect-worker HA
+  (`workers > 1`) on Kubernetes or wait for the finding-(1) fix.
+
+**I6 evidence transcription (2026-07-22, at merge):** all four live
+legs green — run 1 of both suites via the impact wrapper
+(ledger-recorded, script total 992s), chaos-k8s run 2 in 164s,
+connect-ha-dlq-k8s run 2 in 269s. With B2's earlier findings, chaos
+recoverability and DLQ are now evidence-complete on Kubernetes;
+Connect-worker HA (workers>1) remains I7's gap.
 
 ### I7: Connect-worker HA (`workers > 1`) is broken on Kubernetes (I6 finding 1)
 

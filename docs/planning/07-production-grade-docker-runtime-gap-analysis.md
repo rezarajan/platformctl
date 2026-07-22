@@ -221,6 +221,34 @@ unless truly technology-specific" standard):
       anti-affinity — this adapter targets "one Pod per managed container,"
       matching Docker's model, deliberately not more. Still open; not part
       of Stage B's scope.
+  - **Dated finding (2026-07-22, docs/planning/08 I6):** the specific
+    multi-replica gap this predicted is real and reproduced live.
+    `debezium`/`s3sink`'s `spec.configuration.workers > 1` (C3's
+    Deployment-shaped, `StableIdentity: false` worker set,
+    docs/adr/004) has no working Kubernetes leg:
+    `providerkit.ReachableURLs`' per-ordinal addressing
+    (`runtime.OrdinalName(name, i)` -> `EnsureReachable(ctx, "<name>-<i>",
+    ...)`) assumes a literal ordinal-named object, which only the
+    StatefulSet (`StableIdentity: true`) shape provides on Kubernetes —
+    redpanda's `brokers`/minio's `nodes` ordinals resolve for exactly this
+    reason, Connect workers do not. A Kubernetes Deployment never creates
+    an object literally named `<name>-0`/`<name>-1`
+    (`internal/adapters/runtime/kubernetes/container_remove.go`'s
+    `findOrdinalPod` doc comment), so every ordinal fails to resolve and a
+    Binding wired to a `workers > 1` debezium/s3sink Provider fails
+    outright at apply — `no member of "<name>" (2 ordinals) is currently
+    reachable` — not merely a `ProbeConnectWorkerSet` drift misreport.
+    Reproduced live against a real cluster (I6's probe manifest); the K8s
+    integration suite (`cmd/platformctl/
+    connect_ha_dlq_kubernetes_integration_test.go`) is scoped to
+    single-worker D6 (dead-letter-queue) evidence plus native Kubernetes
+    Deployment self-heal instead, since C3's actual claim ("a second
+    worker keeps serving without downtime") cannot be demonstrated until
+    this is fixed. Not fixed by I6 (test-only, docs/planning/08 §2.1's
+    "deviation you cannot avoid" clause — recorded, not worked around);
+    left for a follow-up production task, and named in I6's Done-note as a
+    reason KubernetesRuntime GA should not be read as unconditionally
+    covering Connect-worker HA specifically.
 - [ ] Terraform/external adapters remain untouched — this work only
       addresses the Kubernetes half of the goal. `registry.PlannedRuntimes`
       still rejects `external`/`terraform` construction. Still open; Phase 8.
