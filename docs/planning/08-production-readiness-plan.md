@@ -2918,6 +2918,59 @@ Connect-worker HA (workers>1) remains I7's gap.
   3.08: full redpanda suite green 111.9s, ledger-recorded. Run 2
   queued; transcribed here when green.
 
+- **Done (2026-07-22):** decision (a) taken, per the "Do" list above —
+  ordinal-free, any-member addressing. Mechanism (docs/adr/004's I7
+  addendum has the full rationale): a new optional `ContainerRuntime`
+  capability, `runtime.MemberSetRuntime`
+  (`AddressesMembersCollectively() bool`), following
+  `IngressCapableRuntime`'s exact type-assert-an-optional-capability
+  pattern. The Kubernetes adapter implements it (`return true`) with
+  **zero changes to its actual reachability code** — `EnsureReachable`/
+  `Inspect`, called with a Deployment-shaped set's own bare `Name` (not an
+  ordinal name), already resolved correctly (Service/label-selector picks
+  a live member; `Inspect(name)` already reports the Deployment's
+  aggregate `ReadyReplicas`); the only missing piece was `providerkit`
+  knowing when to prefer that over the ordinal loop. Docker/the fake do
+  not implement the capability at all, so their per-ordinal path in
+  `providerkit.ReachableURLs`/`ProbeConnectWorkerSet` is byte-for-byte
+  unchanged. `application/registry.haGuardRuntime` got an explicit
+  delegating `AddressesMembersCollectively` method in the same commit —
+  read docs/adr/018's 2026-07-21 addendum *before* writing any code this
+  time, so the embedded-interface promotion gotcha that bit
+  `IngressCapableRuntime` live was avoided rather than reproduced; pinned
+  by `TestRuntime_PromotesMemberSetRuntime`
+  (`internal/application/registry/registry_test.go`).
+  `ProbeConnectWorkerSet`'s collective branch
+  (`probeConnectWorkerSetCollective`) reports a ready/expected count in
+  `ConnectWorkerMissing`'s appended detail (`"1/2 ready"`) rather than
+  ordinal names, since none exist on this runtime — documented on
+  `status.ReasonConnectWorkerMissing` itself (`internal/domain/status/
+  reasons.go`, `catalog.go`).
+  `cmd/platformctl/connect_ha_dlq_kubernetes_integration_test.go` upgraded
+  to `workers: 2` (`testdata/connect-ha-dlq-k8s-scenario`, gates
+  `KubernetesRuntime=true,HighAvailability=true`) with the C3 assertion:
+  kill one of two debezium worker pods out-of-band, `drift` immediately
+  reports the CDC Binding still `Ready=True` (the survivor answers
+  Connect's REST API for the whole group — I7's collective addressing)
+  and the `Provider` worker set `Ready=False` naming
+  `ConnectWorkerMissing(1/2 ready)`; a record produced right after the
+  kill still lands in the object store (pipeline kept flowing); the
+  Deployment controller then self-heals back to 2/2 with no `apply`
+  needed, same as before. Unit tests:
+  `internal/adapters/providers/providerkit/providerkit_test.go`'s
+  `collectiveRuntime` fixture covers the new branch in both functions
+  (all-ready and one-member-down) without a live cluster.
+  Verified: gofmt clean; `go vet ./...` clean (plain and `-tags
+  integration`); `go build` clean (plain and `-tags integration`);
+  unfiltered `go test ./...` exit 0; `test-impact.sh --print --base main`
+  selects the `connect-ha-dlq` row (among others — this change also
+  touches `internal/ports/runtime`/`internal/application/registry`,
+  `SHARED_CORE` for most suites) via its existing
+  `internal/adapters/providers/providerkit`/`internal/adapters/runtime/
+  kubernetes` scope entries, no suite-map edit needed. Live-run evidence
+  (flock-serialized, queued behind sibling agents' sweeps per doc 06
+  §8.4/§10): see `i7-live-runs.log` at the worktree root — the merge gate
+  transcribes final timings here once the queue clears.
 
 
 

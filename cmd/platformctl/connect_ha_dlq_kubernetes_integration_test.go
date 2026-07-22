@@ -23,7 +23,7 @@ import (
 const (
 	chdlqk8sTopic      = "chdlqk8s-attendance-events"
 	chdlqk8sDLQTopic   = "chdlqk8s-attendance-events-dlq"
-	chdlqk8sGates      = "KubernetesRuntime=true"
+	chdlqk8sGates      = "KubernetesRuntime=true,HighAvailability=true" // workers: 2 (I7)
 	chdlqk8sSinkBucket = "raw-events"
 	chdlqk8sSinkPrefix = "attendance/"
 	chdlqk8sNS         = "datascape-chdlqk8s-test-ns"
@@ -263,36 +263,60 @@ func chdlqk8sBindingReady(t *testing.T, manifests, stateFile string, timeout tim
 	}
 }
 
-// TestKubernetesConnectDeadLetterQueueAndWorkerResilience is I6's
+// chdlqk8sWorkerSetReady polls the debezium worker set's own aggregate
+// Inspect until both replicas are observed ready again (the Deployment
+// controller's replacement pod has come up and passed its health check),
+// or timeout elapses — the I7 counterpart of chdlqk8sBindingReady, for the
+// worker set itself rather than the Binding it serves.
+func chdlqk8sWorkerSetReady(t *testing.T, ctx context.Context, rt *k8sruntime.Runtime, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		st, found, err := rt.Inspect(ctx, chdlqk8sDBZName)
+		if err == nil && found && st.ReadyReplicas == 2 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("debezium worker set did not return to 2/2 ready within %s (found=%v readyReplicas=%d err=%v)", timeout, found, st.ReadyReplicas, err)
+		}
+		time.Sleep(3 * time.Second)
+	}
+}
+
+// TestKubernetesConnectDeadLetterQueueAndWorkerResilience is I6/I7's
 // (docs/planning/08 §7.8) Kubernetes leg of
-// TestConnectWorkersHAAndDeadLetterQueue — D6's dead-letter-queue
-// assertions in full (poison record -> declared DLQ topic, sink connector
-// stays RUNNING throughout, valid records keep flowing before and after),
-// plus native Kubernetes Deployment self-heal after an out-of-band
-// single-worker pod kill.
+// TestConnectWorkersHAAndDeadLetterQueue — now C3's and D6's assertions
+// together, the same bar the Docker suite holds:
 //
-// It is deliberately NOT workers: 2 on the debezium Provider — see
-// testdata/connect-ha-dlq-k8s-scenario's header comment. A live probe
-// against this cluster (this task's own TASK_PROGRESS.md / the I6 commit's
-// Done-note in docs/planning/08) found that
-// providerkit.ReachableURLs' per-ordinal addressing
-// (runtime.OrdinalName(name, i) -> EnsureReachable(ctx, "<name>-<i>", ...))
-// has no Kubernetes analogue for the Deployment (StableIdentity: false)
-// shape debezium/s3sink's workers > 1 opts into (docs/adr/004): Kubernetes
+//   - C3: a 2-worker debezium Connect set stays live when one worker pod is
+//     killed out-of-band — `drift` (never `apply`, bounded-polled per
+//     docs/planning/02 §4.1's settledness rule: a live run found the REST
+//     API transiently reports the task UNASSIGNED for a few seconds while
+//     Connect's own consumer-group protocol rebalances it) reports the CDC
+//     Binding back to Ready=True on the surviving worker, and a record
+//     produced right after the kill still reaches the object store — the
+//     real end-to-end proof the pipeline kept flowing through the
+//     rebalance. Kubernetes then self-heals the killed pod natively (the
+//     Deployment controller recreates it with no `apply` needed, unlike
+//     Docker).
+//   - D6: a sink Binding with options.deadLetter declared routes a poison
+//     (non-JSON) record to the declared DLQ EventStream's topic, the sink
+//     connector stays RUNNING throughout, and a subsequent valid record
+//     still lands in the object store.
+//
+// I6 found this Kubernetes leg didn't work at all for workers > 1:
+// providerkit.ReachableURLs/ProbeConnectWorkerSet addressed a Deployment-
+// shaped (StableIdentity: false, docs/adr/004) worker set via
+// runtime.OrdinalName(name, i) -> EnsureReachable/Inspect, but Kubernetes
 // never creates an object literally named "<name>-0"/"<name>-1" for a
 // Deployment (only StatefulSet ordinals get that treatment,
-// findOrdinalPod's own doc comment), so EVERY ordinal fails to resolve and
-// a Binding wired to such a Provider fails outright at apply —
-// `no member of "<name>" (2 ordinals) is currently reachable` — not merely
-// a ProbeConnectWorkerSet drift misreport. That is a real, currently-open
-// production gap, not something this test-only task fixes (docs/planning/08
-// I6's own scope: no production code changes expected); it is recorded in
-// docs/planning/07's per-runtime-differences section and named again in I6's
-// Done-note so the KubernetesRuntime GA decision sees it. This test instead
-// proves what genuinely IS true on Kubernetes today: D6 in full, and a
-// pipeline that recovers cleanly from a worker pod's out-of-band death —
-// not C3's "a second worker keeps serving without downtime" claim, which
-// has no working Kubernetes leg yet.
+// findOrdinalPod's own doc comment) — every ordinal lookup failed outright,
+// `no member of "<name>" (2 ordinals) is currently reachable`, even with a
+// perfectly healthy worker set. I7 (docs/adr/004's addendum) fixed this at
+// the providerkit/runtime-port seam: the new runtime.MemberSetRuntime
+// capability lets providerkit resolve/probe the set once, by its own bare
+// Name, which Kubernetes' Service/label-selector and Inspect(name) already
+// answer correctly — no Kubernetes reachability code needed to change.
 func TestKubernetesConnectDeadLetterQueueAndWorkerResilience(t *testing.T) {
 	requireK8s(t)
 	t.Setenv("DATASCAPE_SECRET_CHDLQK8S_PG_ADMIN_USERNAME", "datascape_admin")
@@ -327,8 +351,8 @@ func TestKubernetesConnectDeadLetterQueueAndWorkerResilience(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("apply failed (code %d): %v\n%s", code, err, out)
 	}
-	if st, found, err := rt.Inspect(ctx, chdlqk8sDBZName); err != nil || !found || !st.Running {
-		t.Fatalf("debezium worker not running after apply: found=%v err=%v", found, err)
+	if st, found, err := rt.Inspect(ctx, chdlqk8sDBZName); err != nil || !found || !st.Running || st.ReadyReplicas != 2 {
+		t.Fatalf("debezium worker set not fully up after apply: found=%v running=%v readyReplicas=%d err=%v", found, st.Running, st.ReadyReplicas, err)
 	}
 	if state := chdlqk8sConnectorState(t, ctx, rt, chdlqk8sConnector); state != "RUNNING" {
 		t.Fatalf("sink connector state = %q, want RUNNING", state)
@@ -340,24 +364,48 @@ func TestKubernetesConnectDeadLetterQueueAndWorkerResilience(t *testing.T) {
 		t.Fatal("pre-poison valid record did not land in the object store")
 	}
 
-	// --- Kubernetes-native resilience: kill the single debezium worker pod
-	// out-of-band (by label, since a Deployment's pod name is randomized —
-	// unlike Docker's/StatefulSet's literal ordinal container names) and
-	// let the Deployment controller replace it.
+	// --- C3: kill one of the two debezium worker pods out-of-band (by
+	// label, since a Deployment's pod name is randomized — unlike Docker's/
+	// StatefulSet's literal ordinal container names) and verify the
+	// pipeline keeps flowing on the surviving worker.
 	cs := ambientClientset(t)
 	pods, err := cs.CoreV1().Pods(chdlqk8sNS).List(ctx, metav1.ListOptions{LabelSelector: "app=" + chdlqk8sDBZName})
-	if err != nil || len(pods.Items) == 0 {
-		t.Fatalf("list debezium worker pod(s): found=%d err=%v", len(pods.Items), err)
+	if err != nil || len(pods.Items) != 2 {
+		t.Fatalf("expected 2 debezium worker pods before the kill: found=%d err=%v", len(pods.Items), err)
 	}
 	killedPod := pods.Items[0].Name
 	if err := cs.CoreV1().Pods(chdlqk8sNS).Delete(ctx, killedPod, metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("out-of-band worker pod delete: %v", err)
 	}
 
-	// The Deployment controller recreates it; drift observes the gap and
-	// eventually reports the CDC Binding Ready again once the replacement
-	// pod is serving Connect's REST API.
-	chdlqk8sBindingReady(t, manifests, stateFile, 3*time.Minute)
+	// C3: the CDC Binding must recover to (or stay) Ready=True on its own —
+	// the surviving worker, once Kafka Connect's own consumer-group
+	// protocol rebalances the task onto it, answers Connect's
+	// distributed-mode REST API for the whole group again (I7's collective
+	// addressing: providerkit.ReachableURLs resolves the set's bare Name
+	// via the Service/label-selector, which keeps picking a live member
+	// throughout). This is a bounded poll, never a single snapshot
+	// (docs/planning/02 §4.1's settledness rule) — found live: the REST
+	// API transiently reports the task UNASSIGNED for a few seconds right
+	// after the kill, while the group notices the departure and
+	// rebalances; a one-shot `drift` right after the delete call can catch
+	// exactly that transient (Docker's tighter, same-host timing usually
+	// outruns it in the equivalent one-shot check, which is not a contract
+	// this runtime owes).
+	chdlqk8sBindingReady(t, manifests, stateFile, 120*time.Second)
+
+	// C3: the pipeline actually kept flowing — a fresh record produced now
+	// (the killed pod's replacement may still be starting) must still
+	// reach the object store via the rebalanced task, the real end-to-end
+	// proof of "task rebalance," stronger than any REST snapshot.
+	chdlqk8sProduce(t, rt, chdlqk8sTopic, []byte(`{"id":3,"name":"mid-kill-marker"}`))
+	if !chdlqk8sObjectContains(t, ctx, rt, "mid-kill-marker", 180*time.Second) {
+		t.Fatal("record produced after killing one of two workers did not land in the object store — the pipeline did not keep flowing through the task rebalance")
+	}
+
+	// The Deployment controller recreates the killed pod natively; the
+	// worker set itself returns to 2/2 ready with no `apply` needed.
+	chdlqk8sWorkerSetReady(t, ctx, rt, 3*time.Minute)
 
 	// Heal any remaining spec-level drift (e.g. a stale providerState
 	// annotation) — apply is allowed again from here.

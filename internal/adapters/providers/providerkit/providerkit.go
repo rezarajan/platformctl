@@ -85,18 +85,31 @@ func ReachableURL(ctx context.Context, rt runtime.ContainerRuntime, name string,
 // real consumer: debezium/s3sink's spec.configuration.workers). members <= 1
 // (the field undeclared, or declared as 1) keeps today's exact single-address
 // ReachableURL path, wrapped in a one-element slice, byte-for-byte; members >
-// 1 iterates ordinals 0..N-1 via EnsureReachable and returns every one that
-// currently resolves, skipping (not failing on) any that don't — a dead
-// member just isn't offered as a failover candidate to the caller, the same
-// "proceed against the survivors" rule redpanda's clusterDial uses for its
-// own multi-broker dial map (docs/adr/017 §a.4). Erroring only when zero
-// members are reachable at all. The returned close func must always be
-// called and closes every opened tunnel.
+// 1 on a runtime that implements runtime.MemberSetRuntime (Kubernetes: no
+// per-ordinal-named object exists for this shape — docs/adr/004's I7
+// addendum, docs/planning/08 §7.8) resolves the set ONCE by its own bare
+// Name instead, since that already means "any one currently live member"
+// there (a Service or ready-pod label selector); every other runtime
+// (Docker, the fake) keeps the original per-ordinal loop: iterates ordinals
+// 0..N-1 via EnsureReachable and returns every one that currently resolves,
+// skipping (not failing on) any that don't — a dead member just isn't
+// offered as a failover candidate to the caller, the same "proceed against
+// the survivors" rule redpanda's clusterDial uses for its own multi-broker
+// dial map (docs/adr/017 §a.4). Erroring only when zero members are
+// reachable at all. The returned close func must always be called and
+// closes every opened tunnel.
 func ReachableURLs(ctx context.Context, rt runtime.ContainerRuntime, name string, port, members int) ([]string, func() error, error) {
 	if members <= 1 {
 		url, closeURL, err := ReachableURL(ctx, rt, name, port)
 		if err != nil {
 			return nil, nil, err
+		}
+		return []string{url}, closeURL, nil
+	}
+	if ms, ok := rt.(runtime.MemberSetRuntime); ok && ms.AddressesMembersCollectively() {
+		url, closeURL, err := ReachableURL(ctx, rt, name, port)
+		if err != nil {
+			return nil, nil, fmt.Errorf("no member of %q (%d-member set) is currently reachable: %w", name, members, err)
 		}
 		return []string{url}, closeURL, nil
 	}
@@ -129,13 +142,22 @@ func ReachableURLs(ctx context.Context, rt runtime.ContainerRuntime, name string
 // reason constants (internal/domain/status's "Shared Kafka Connect
 // connector lifecycle" block), so this is genuinely byte-identical across
 // both callers (docs/planning/08 G1's bar for a providerkit extraction).
-// Mirrors redpanda.probeBrokerSet's presence check: every ordinal must be
-// present and running. There is no Kafka Connect REST equivalent of "list
-// group members" to check further (unlike redpanda's admin-API broker
-// list), so per-ordinal container presence is the whole signal — a live
-// worker's own group membership is Connect's problem to self-heal via its
-// rebalance protocol, not something this probe verifies.
+// On a runtime that implements runtime.MemberSetRuntime (Kubernetes: no
+// per-ordinal-named object exists for this shape — docs/adr/004's I7
+// addendum, docs/planning/08 §7.8), delegates to
+// probeConnectWorkerSetCollective, which asks the set's own aggregate
+// Inspect(name) for ReadyReplicas instead of looping ordinals (there is
+// nothing per-ordinal to Inspect there). Every other runtime (Docker, the
+// fake) keeps mirroring redpanda.probeBrokerSet's presence check: every
+// ordinal must be present and running. There is no Kafka Connect REST
+// equivalent of "list group members" to check further (unlike redpanda's
+// admin-API broker list), so per-ordinal container presence is the whole
+// signal — a live worker's own group membership is Connect's problem to
+// self-heal via its rebalance protocol, not something this probe verifies.
 func ProbeConnectWorkerSet(ctx context.Context, rt runtime.ContainerRuntime, name string, n int, now time.Time) (status.Status, error) {
+	if ms, ok := rt.(runtime.MemberSetRuntime); ok && ms.AddressesMembersCollectively() {
+		return probeConnectWorkerSetCollective(ctx, rt, name, n, now)
+	}
 	st := status.Status{}
 	var missing []string
 	for i := 0; i < n; i++ {
@@ -150,6 +172,33 @@ func ProbeConnectWorkerSet(ctx context.Context, rt runtime.ContainerRuntime, nam
 	}
 	if len(missing) > 0 {
 		reason := fmt.Sprintf("%s(%s)", status.ReasonConnectWorkerMissing, strings.Join(missing, ","))
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: reason}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: reason}, now)
+		return st, nil
+	}
+	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonConnectWorkerHealthy}, now)
+	st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.False, Reason: status.ReasonNoDrift}, now)
+	return st, nil
+}
+
+// probeConnectWorkerSetCollective is ProbeConnectWorkerSet's branch for a
+// runtime.MemberSetRuntime (Kubernetes): the set has exactly one aggregate
+// object to Inspect, whose ReadyReplicas is the runtime's own live count of
+// ready members — no per-ordinal object exists to name individually when
+// some are missing, so the reason names the ready/expected count instead of
+// ordinal names (ReasonConnectWorkerMissing remains a prefix either way).
+func probeConnectWorkerSetCollective(ctx context.Context, rt runtime.ContainerRuntime, name string, n int, now time.Time) (status.Status, error) {
+	st := status.Status{}
+	state, found, err := rt.Inspect(ctx, name)
+	if err != nil {
+		return st, err
+	}
+	ready := 0
+	if found {
+		ready = state.ReadyReplicas
+	}
+	if ready < n {
+		reason := fmt.Sprintf("%s(%d/%d ready)", status.ReasonConnectWorkerMissing, ready, n)
 		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: reason}, now)
 		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: reason}, now)
 		return st, nil

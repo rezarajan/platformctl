@@ -249,6 +249,25 @@ unless truly technology-specific" standard):
     left for a follow-up production task, and named in I6's Done-note as a
     reason KubernetesRuntime GA should not be read as unconditionally
     covering Connect-worker HA specifically.
+  - **Closed (2026-07-22, docs/planning/08 I7):** fixed at the
+    `providerkit`/runtime-port seam, not in the Kubernetes adapter's
+    reachability code (which was already correct for a bare Deployment
+    name — see docs/adr/004's I7 addendum). A new optional
+    `runtime.MemberSetRuntime` capability
+    (`AddressesMembersCollectively() bool`) lets
+    `providerkit.ReachableURLs`/`ProbeConnectWorkerSet` resolve/probe a
+    Deployment-shaped set once, by its own bare `Name`, on any runtime that
+    implements it (Kubernetes: `true`) instead of looping
+    `OrdinalName`; Docker/the fake don't implement it and keep the
+    original per-ordinal behavior, unchanged. `workers: 2` on Kubernetes
+    now applies, drifts (worker-count drift reports a ready/expected count
+    instead of ordinal names, since none exist on this runtime), and
+    self-heals (native Deployment-controller pod replacement) the same way
+    it always has on Docker — the K8s DLQ integration test now runs
+    `workers: 2` and asserts the C3 claim (kill one of two worker pods,
+    `drift` shows the CDC Binding still `Ready=True` and the pipeline kept
+    flowing). This carve-out no longer applies to an unconditional
+    KubernetesRuntime GA claim.
 - [ ] Terraform/external adapters remain untouched — this work only
       addresses the Kubernetes half of the goal. `registry.PlannedRuntimes`
       still rejects `external`/`terraform` construction. Still open; Phase 8.

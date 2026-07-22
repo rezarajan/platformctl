@@ -371,3 +371,101 @@ already established.
 - Ordinal-aware `node-port`/`load-balancer` `EnsureReachable` on
   Kubernetes, if a future provider needs external access to one specific
   stateful replica rather than the set's port-forward default.
+
+## Addendum (2026-07-22) — I7: ordinal-free addressing for Deployment-shaped worker sets
+
+**Found live by I6** (docs/planning/08 §7.8, doc 07's per-runtime-differences
+dated finding): `providerkit.ReachableURLs`/`ProbeConnectWorkerSet` address a
+`Replicas > 1, StableIdentity: false` set's members via
+`runtime.OrdinalName(name, i)` — correct on Docker/the fake, where every
+ordinal is forced onto a literal, separately-named object regardless of
+`StableIdentity` (see "Naming and addressing" above), but wrong on
+Kubernetes: a Deployment is exactly *one* object, and its pods get
+Kubernetes-assigned random name suffixes, never `"<name>-<i>"` (only
+StatefulSet ordinals get that treatment, per `findOrdinalPod`'s own doc
+comment). Every ordinal lookup therefore fails outright on Kubernetes for
+this shape — `no member of "<name>" (N ordinals) is currently reachable` —
+even when the set itself is perfectly healthy. debezium/s3sink's
+`spec.configuration.workers > 1` is this shape's first real consumer
+(docs/planning/08 C3), so a `workers: 2` Binding on Kubernetes failed hard
+at apply.
+
+### The question this addendum answers
+
+docs/planning/08 I7 posed two options: (a) ordinal-free, any-member
+addressing for Deployment-shaped sets on Kubernetes — resolve the set's own
+Service/pod-label-selector instead of synthetic ordinal names; or (b) switch
+Connect worker sets to the `StableIdentity: true` (StatefulSet) shape, which
+already has working ordinal addressing.
+
+### The decision: (a), any-member addressing
+
+Connect workers are interchangeable members of one Kafka-consumer-group
+rebalancing set — they hold no per-worker durable state and no per-worker
+identity a caller could ever need specifically (unlike Redpanda brokers,
+where a client needs the *specific* broker holding a partition leader).
+"Any one live member can serve the group's REST API" is not a compromise for
+this shape, it is the semantically correct address — precisely the same
+reasoning that already made Kubernetes' plain `ClusterIP` Service (rather
+than the `StableIdentity` branch's headless Service) the right choice for
+`StableIdentity: false` sets in this note's original decision. Option (b)
+was rejected for the reason the original decision already gives for keeping
+Connect workers off `StableIdentity`: it would force per-ordinal volumes and
+hostnames onto a workload that needs neither, trading a real simplification
+(Deployment + Service scaling) for a heavier shape solely to work around an
+addressing bug — the same "wastes the simpler, already-correct path" logic
+Option 1 was rejected for above.
+
+### The mechanism: no new Kubernetes reachability code
+
+The fix needed **zero changes** to `internal/adapters/runtime/kubernetes`'s
+actual reachability logic: `EnsureReachable`/`Inspect`, called with a
+Deployment-shaped set's own bare `Name` (not an ordinal name), already
+resolve correctly — the Deployment's `Service` load-balances across every
+ready pod (or, for the default port-forward access mode, a label-selector
+pick of the newest ready pod), and `Inspect(name)` already reports the
+Deployment's own aggregate `ReadyReplicas`. The only thing missing was a way
+for `providerkit` (which must stay runtime-agnostic — it imports only
+`internal/ports/runtime`, never a concrete adapter) to know *when* to prefer
+the set's bare name over the ordinal loop. That seam is a new optional
+`ContainerRuntime` capability, `runtime.MemberSetRuntime`
+(`AddressesMembersCollectively() bool`), following `IngressCapableRuntime`'s
+exact type-assert-an-optional-capability pattern: Kubernetes implements it
+(`return true`); Docker and the fake do not implement it at all, so the
+type assertion fails there and `providerkit`'s original per-ordinal loop
+runs unchanged — the Docker `connect-ha-dlq` suite's behavior and semantics
+are untouched by this change.
+
+**The registry-wrapper gotcha, caught before it repeated:** the 2026-07-21
+addendum to docs/adr/018 recorded that `application/registry.haGuardRuntime`
+embeds `runtime.ContainerRuntime` as an *interface* field, so it only
+promotes that interface's own declared method set — a provider's
+`req.Runtime.(runtime.IngressCapableRuntime)` assertion silently failed for
+every registry-obtained runtime until `haGuardRuntime` grew explicit
+delegating methods. Read before writing any code this time, so
+`AddressesMembersCollectively` got its own explicit delegating method on
+`haGuardRuntime` in the same commit, pinned by
+`TestRuntime_PromotesMemberSetRuntime` (`internal/application/registry/registry_test.go`)
+— never reproduced live.
+
+### Consequence
+
+`providerkit.ReachableURLs`/`ProbeConnectWorkerSet` now resolve/probe a
+Deployment-shaped set once, by its own `Name`, on any runtime implementing
+`MemberSetRuntime`; `ProbeConnectWorkerSet`'s missing-member reason on such a
+runtime names a ready/expected count (`ConnectWorkerMissing(1/2 ready)`)
+rather than ordinal names, since there is nothing per-ordinal to name there
+— documented on `status.ReasonConnectWorkerMissing` itself. `workers: 2` on
+Kubernetes now applies, drifts, and self-heals (native Deployment-controller
+pod replacement) the same way it always has on Docker, closing docs/planning/07's
+dated multi-replica finding and doc 08 I6's "unconditional GA" carve-out for
+Connect-worker HA specifically.
+
+### Cross-references
+
+- docs/planning/08-production-readiness-plan.md §7.8 I7 (this task), I6 (the
+  live finding this closes).
+- docs/planning/07-production-grade-docker-runtime-gap-analysis.md's dated
+  multi-replica finding (closed by this addendum).
+- docs/adr/018-ingress-routing.md's 2026-07-21 addendum (the registry-wrapper
+  pitfall this addendum's mechanism section deliberately avoided repeating).
