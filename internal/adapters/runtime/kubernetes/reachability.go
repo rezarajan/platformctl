@@ -21,21 +21,9 @@ import (
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
 
+	"github.com/rezarajan/platformctl/internal/adapters/runtime/probe"
 	runtimeport "github.com/rezarajan/platformctl/internal/ports/runtime"
 )
-
-// probeImage is a minimal, pinned image (scripts/pinned-images.txt) used for
-// ProbeReachable's ephemeral in-network probe pod — the fallback when no
-// existing managed pod in the namespace can conclusively answer the dial
-// itself (docs/planning/08 C10).
-const probeImage = "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
-
-// tcpDialScript is a portable (BusyBox ash or bash) probe: prefer `nc -z` (a
-// true, no-data connect-and-close scan) and fall back to the /dev/tcp
-// pseudo-device redirection trick for shells with no nc — host/port arrive
-// as $1/$2 (positional args, not string-interpolated) so a target's host
-// component can never be interpreted as shell syntax.
-const tcpDialScript = `nc -z -w3 "$1" "$2" 2>/dev/null || (exec 3<>/dev/tcp/$1/$2) 2>/dev/null`
 
 // ProbeReachable answers "can a pod in namespace network reach target right
 // now" from an in-network vantage point — never from this process
@@ -80,7 +68,7 @@ func (r *Runtime) execProbeCandidate(ctx context.Context, ns string) (*corev1.Po
 	return pod, true
 }
 
-// execTCPDial execs tcpDialScript inside pod's first container and reports
+// execTCPDial execs probe.TCPDialScript inside pod's first container and reports
 // whether it exited zero (dial succeeded). Any exec-layer failure (the
 // pod's image has neither nc nor a /dev/tcp-capable shell, the exec API call
 // itself failed, ...) and a genuine connection failure both surface as a
@@ -91,7 +79,7 @@ func (r *Runtime) execTCPDial(ctx context.Context, ns string, pod *corev1.Pod, h
 		return fmt.Errorf("pod %q declares no containers to exec into", pod.Name)
 	}
 	containerName := pod.Spec.Containers[0].Name
-	_, stderr, err := r.execInPod(ctx, ns, pod.Name, containerName, []string{"sh", "-c", tcpDialScript, "sh", host, port})
+	_, stderr, err := r.execInPod(ctx, ns, pod.Name, containerName, probe.ExecArgs(host, port))
 	if err != nil {
 		return fmt.Errorf("exec dial %s in pod %q: %w (stderr: %s)", net.JoinHostPort(host, port), pod.Name, err, strings.TrimSpace(stderr))
 	}
@@ -113,8 +101,8 @@ func (r *Runtime) ephemeralProbe(ctx context.Context, ns, host, port string) err
 			RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{{
 				Name:    "probe",
-				Image:   probeImage,
-				Command: []string{"nc", "-z", "-w3", host, port},
+				Image:   probe.Image,
+				Command: probe.Command(host, port),
 			}},
 		},
 	}
@@ -279,7 +267,7 @@ func (r *Runtime) serviceReachableAddr(ctx context.Context, ns, name string, con
 		}
 		if ip, port, ok := r.observedHostAddr(ctx, svc, int32(containerPort)); ok {
 			addr := net.JoinHostPort(ip, strconv.Itoa(port))
-			if dialable(addr) {
+			if probe.Dialable(ctx, addr) {
 				return addr, func() error { return nil }, nil
 			}
 		}
@@ -292,16 +280,6 @@ func (r *Runtime) serviceReachableAddr(ctx context.Context, ns, name string, con
 		case <-time.After(1 * time.Second):
 		}
 	}
-}
-
-// dialable reports whether a TCP connection to addr succeeds right now.
-func dialable(addr string) bool {
-	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
 }
 
 // portForwardReachableAddrBySelector resolves the newest ready pod matching
@@ -374,7 +352,7 @@ func (r *Runtime) portForwardToPod(ctx context.Context, ns string, pod *corev1.P
 	// dial through the tunnel before handing the address back; a caller
 	// using runtime.WithReachable (F1) will retry with a fresh tunnel on
 	// this error rather than being handed a dead one to discover later.
-	if !dialable(addr) {
+	if !probe.Dialable(ctx, addr) {
 		closeFn()
 		return "", nil, fmt.Errorf("port-forward to pod %q: tunnel is up but port %d is not currently accepting connections", pod.Name, containerPort)
 	}

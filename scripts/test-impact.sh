@@ -73,8 +73,8 @@ fi
 SHARED_CORE="internal/ports internal/application/engine internal/application/plan internal/application/registry internal/domain go.mod"
 suites() {
   cat <<'EOF'
-docker-conformance|internal/adapters/runtime/docker internal/adapters/runtime/fake internal/ports/runtime|go test -tags integration -count=1 -run Conformance -timeout 900s ./internal/adapters/runtime/docker/
-k8s-adapter|internal/adapters/runtime/kubernetes internal/ports/runtime deploy/kubernetes/rbac|go test -tags integration -count=1 -timeout 1800s ./internal/adapters/runtime/kubernetes/
+docker-conformance|internal/adapters/runtime/docker internal/adapters/runtime/fake internal/adapters/runtime/probe internal/ports/runtime|go test -tags integration -count=1 -run Conformance -timeout 900s ./internal/adapters/runtime/docker/
+k8s-adapter|internal/adapters/runtime/kubernetes internal/adapters/runtime/probe internal/ports/runtime deploy/kubernetes/rbac|go test -tags integration -count=1 -timeout 1800s ./internal/adapters/runtime/kubernetes/
 redpanda|internal/adapters/providers/redpanda internal/adapters/providers/providerkit SHARED_CORE|go test -tags integration -count=1 -run 'TestRedpandaEndToEnd|TestRedpandaHA' -timeout 1800s ./cmd/platformctl/
 cdc|internal/adapters/providers/postgres internal/adapters/providers/mysql internal/adapters/providers/debezium internal/adapters/kafkaconnect internal/adapters/providers/providerkit internal/application/compatibility SHARED_CORE|go test -tags integration -count=1 -run 'TestCDC|TestMariaDBCDCEndToEnd|TestAvroCDCEndToEnd' -timeout 2400s ./cmd/platformctl/
 sink|internal/adapters/providers/s3 internal/adapters/providers/s3sink internal/adapters/kafkaconnect internal/adapters/providers/providerkit cmd/platformctl/testdata/s3sink-image SHARED_CORE|go test -tags integration -count=1 -run 'TestSinkEndToEnd|TestParquetSinkEndToEnd' -timeout 2400s ./cmd/platformctl/
