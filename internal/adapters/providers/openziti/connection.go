@@ -195,6 +195,37 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 		return st, err
 	}
 
+	// Settle to the STABLE, post-enrollment spec within this SAME
+	// reconcile — the same discipline instance.go's reconcileInstance
+	// applies to the router container, for the identical reason:
+	// upsertIdentity's idempotency contract (client.go, mintIdentityWithToken's
+	// own doc comment) means every LATER reconcile, by definition, finds
+	// this consumer's identity already existing and gets back an empty
+	// enrollment JWT — unlike the router's isVerified flag this needs no
+	// bounded wait (identity existence, not a live async handshake, is
+	// what upsertIdentity's "already exists" branch keys on: a second
+	// mint call for the SAME identity returns empty immediately, whether
+	// issued a microsecond or a day later). Leaving the container's
+	// desired spec keyed to the one-time token would violate the
+	// CLAUDE.md EnsureContainer idempotency bar the instant any later
+	// probe/drift/status call recomputes it — found live coupled with the
+	// router's own analogous churn (instance.go's settle comment has the
+	// full account): TestOpenZitiMediatedConnectionOnKubernetesEndToEnd's
+	// post-apply drift restarted this dial-side tunneler mid-test.
+	if dialJWT != "" {
+		stableSpec := spec
+		stableEnv := make(map[string]string, len(spec.Env)-1)
+		for k, v := range spec.Env {
+			if k != "ZITI_ENROLL_TOKEN" {
+				stableEnv[k] = v
+			}
+		}
+		stableSpec.Env = stableEnv
+		if ctrState, err = rt.EnsureContainer(ctx, stableSpec); err != nil {
+			return st, err
+		}
+	}
+
 	// Ready means serving NOW (docs/planning/02 §4.1 NFR-11), not merely
 	// "the container started": the mediated path's first connection(s)
 	// through a freshly-enrolled Ziti circuit can be flaky for a short

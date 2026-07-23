@@ -2840,6 +2840,95 @@ design gap.
 on this session's Docker host (see the live-verified paragraph above); a
 second, back-to-back Docker run and any Kubernetes run are follow-ups.
 
+#### Addendum (2026-07-23): Kubernetes bind-path fixed —
+`TestOpenZitiMediatedConnectionOnKubernetesEndToEnd` green
+
+The Kubernetes follow-up above turned up two real defects, both confined to
+`internal/adapters/providers/openziti/{instance,connection}.go` — no
+runtime/port/engine edit needed, the decoupling contract held throughout.
+
+**Root cause #1 (the actual blocker — corrects an orchestrator hypothesis
+raised before this session): the router had no Kubernetes Service, not a
+missing target-namespace FQDN.** The working theory going in was that
+`upsertTransportTerminator`'s bind-side address (`conn.Target`, e.g.
+`zk8s-pg:5432`) would need namespace-qualifying for a router and target
+living in different domains. Live diagnosis (router logs, `kubectl exec`
+DNS checks, and the dial-side tunneler's own log —
+`dial tcp: lookup zk8s-mesh-router on ...: no such host`,
+`"no edge routers connected in time"`) showed the failure happens before
+any bind-side dial is ever attempted: the accept scenario is
+single-namespace by design (`datascape-zk8s` for every Provider), so
+`conn.Target`'s bare name already resolves correctly via in-namespace K8s
+DNS — confirmed live with `kubectl exec ... getent hosts zk8s-pg`. The
+real defect: `instance.go`'s router `ContainerSpec` declared no `Ports` at
+all. `internal/ports/runtime.AudienceInternal`'s own doc comment states
+Kubernetes "still creates a Service port for it (in-cluster DNS needs
+one)" — Docker has no such requirement (its embedded DNS resolves any
+container name on a shared network regardless of published ports, which is
+exactly why this shipped working on Docker and broke silently on
+Kubernetes). With no declared port, `kubernetes/container.go`'s
+`ensureOneService` skips Service creation entirely
+(`len(desired.Spec.Ports) == 0`), so `ZITI_ROUTER_ADVERTISED_ADDRESS`
+(`routerNm`) — the name the controller hands every connecting client — had
+no DNS record. Fix: declare the router's edge/link listener port
+(`ic.RouterPort`, `AudienceInternal`) in its `ContainerSpec.Ports`. Inert on
+Docker (`AudienceInternal` only affects `ExposedPorts` metadata there,
+docs/planning/08 F2); on Kubernetes it is what makes
+`ensureOneService` create the Service at all. The domain-of-record
+FQDN/`buildCrossDomainIngressPolicy`-hole mechanism the original hypothesis
+described remains architecturally correct for a FUTURE cross-domain
+mediated Connection (this adapter's `conn.Target` bypasses
+`domainRuntime`'s translation entirely, since it is handed to the Ziti
+REST API directly rather than through `EnsureContainer`/`EnsureNetwork`) —
+recorded as a design note for that follow-up, not built here: the current
+accept scenario never exercises it, and shipping it unexercised would
+violate this task's own live-verification bar.
+
+**Root cause #2 (found only once #1 was fixed and the test ran far enough
+to reach a second reconcile): a `CLAUDE.md` idempotency violation
+triggered by `drift`/`status` immediately after `apply`.** Both the
+router's and the dial-side tunneler's `ContainerSpec.Env` conditionally
+carried a one-time Ziti enrollment JWT (`ZITI_ENROLL_TOKEN`) whose presence
+depended on a live, mutable fact re-queried fresh on every reconcile: the
+router's controller-side `isVerified` flag (flips true asynchronously,
+once the router container completes its own enrollment handshake) and
+`upsertIdentity`'s "does this identity entity already exist" check. A
+`Probe` call minutes (or, live, sometimes seconds) after `apply` would
+recompute a *different* desired spec than the one `apply` had used,
+tripping `EnsureContainer`'s hash-mismatch update path and forcing an
+unwanted Kubernetes Deployment rollout — observed live restarting both the
+router and the dial-side tunneler mid-test, which the test's own
+`assertAllStatusReady` (no retry) occasionally caught mid-restart
+("container not running" during a port-forward, one resource transiently
+not Ready). Fix: both `reconcileInstance` and `reconcileConnection` now
+settle to the token-stripped, steady-state spec **within the same
+reconcile that created the token-bearing one** — the router via a bounded
+poll (`waitEdgeRouterVerified`, `runtime.ScaledWait`-scoped, mirroring
+`waitControllerServing`'s existing shape in the same file) for the real
+async enrollment handshake to complete, the dial-side tunneler via an
+immediate second `mintIdentityWithToken` call (no wait needed —
+`upsertIdentity`'s "already exists" branch is a synchronous REST idempotency
+check, not an async fact, so a second call in the same reconcile reliably
+returns the empty JWT any later, independent reconcile would also see) —
+followed in both cases by a second `EnsureContainer` call carrying the
+stripped `Env`. `waitMediatedServing`'s existing settle-poll (unchanged)
+absorbs the resulting one-time restart before `apply` itself returns
+Ready, so no later `drift`/`status`/`apply` ever observes a spec change
+again. Verified live: three repeated `drift` invocations against the same
+applied state showed zero pod restarts (previously: a router/tunneler
+rollout on the very first post-apply probe, reliably reproduced 2/2 direct
+repro attempts before the fix).
+
+**Live evidence:** `TestOpenZitiMediatedConnectionOnKubernetesEndToEnd`
+green twice, back-to-back, each a fresh `-count=1` run against the shared
+minikube cluster (minted minimal-RBAC kubeconfig) — 77.34s and 76.41s,
+both passing all three proofs (apply→Ready, CDC `RUNNING` through the
+mediated Connection, wrong-identity dial refused). Docker leg
+(`TestOpenZitiMediatedConnectionEndToEnd`) reran green post-change, 27.84s,
+confirming the fix is substrate-additive only — no Docker-observable
+behavior changed. `go test ./...` unfiltered: true-exit=0. gofmt/`go vet`
+(both tag sets)/golangci-lint (pinned v2.12.2): clean.
+
 ### H8: Layer-2 enforcement observation — isolation honesty probe (ADR 027)
 
 - **Size:** S. **Depends:** none (precedes any GA language about
