@@ -4509,6 +4509,114 @@ evidence pattern every leg reuses.
 - **Accept:** stage criterion 5; an edge with no nameable justification
   is a test failure.
 
+## 7.11 Stage L — Mediation as the default transport (ADR 034)
+
+Theme: every declared edge is identity-mediated unless the manifest
+explicitly says `transport: direct` (lint-flagged, policy-deniable).
+Batteries-included: the fabric is platform-owned infrastructure the
+engine ensures; providers change ZERO lines (the facts chokepoint is
+the mechanism — ADR 034 "Why the engine can do this"). Sequencing is
+strict: L1 -> L2 -> L3 -> L4 -> L5. Depends on H9/H10 (evidence
+pattern + hardened client) and K4 (attributes) joining at L3. Gate:
+MediatedTransport (Alpha, disabled, byte-identical off).
+
+**Stage exit criteria:**
+- [ ] With the gate on, a scenario's every declared edge dials through
+      the mediator (positive mediator-state evidence, H9-style), the
+      targets publish NO underlay port, and the H6 canary class is
+      refused on EVERY edge — on both runtimes.
+- [ ] `transport: direct` is the only way to get an unmediated edge;
+      it lints; the zero-trust pack denies it; plan shows per-edge
+      transport changes on migration.
+- [ ] Fabric loss behavior is measured and documented: established
+      sessions vs new dials during controller/router outage (chaos
+      suite), controller HA shape decided and shipped.
+- [ ] Data-plane overhead measured on the standing CDC + lakehouse
+      scenarios; the number is in the ADR 027 claims table.
+- [ ] Gate off: byte-identical (pinned); providers diff-clean vs main
+      (the zero-provider-change bar, verified mechanically).
+
+### L1: The transport seam — engine-owned edge mediation requests (design spike, code-proven)
+
+- **Size:** M. **Depends:** —. **Why:** ADR 034's central claim — the
+  engine can mediate an edge by rewriting resolved endpoint facts at
+  one chokepoint with zero provider changes — must be PROVEN in code
+  before L2-L4 build on it, against a fake mediator, fast-tier.
+- **Do:** define the edge-transport resolution step in the engine:
+  for each declared edge (the ADR 026 derivation), when the gate is
+  on and the edge is not `transport: direct`, request mediation
+  through the MediationProvider port (extended if needed — port-only,
+  adapter untouched in this task) and substitute the mediated address
+  into the SAME facts/graph resolution the consumer already reads
+  (SchemaRegistryURL/KafkaBootstrapServers wrappers included where
+  graph-resolved). A fake MediationProvider (testkit or fake package,
+  honest per ADR 028) proves: consumer's resolved address IS the
+  mediated one; direct edges resolve unchanged; gate-off byte-identical
+  (pinned). Schema: `transport: direct` field lands where edges are
+  declared (Connection + Binding + refs — decide and document the
+  exact surface in this task, doc 03 same commit), inert without the
+  gate.
+- **Accept:** fast-tier proof of the substitution seam; zero adapter
+  edits; gate-off pin green.
+
+### L2: Platform-owned fabric — ensure the mesh like we ensure networks
+
+- **Size:** L. **Depends:** L1. **Why:** batteries-included means no
+  manifest declares the controller/router; the engine ensures them.
+- **Do:** fabric provisioning as an engine facility (registry-resolved
+  mediation runtime infra): controller + router ensured idempotently
+  per deployment when the gate is on and at least one mediated edge
+  exists; owned/labeled/GC-visible like every managed object; ADR 013
+  bar for implicit infrastructure (plan shows fabric creation;
+  destroy tears it down only when no mediated edges remain); H10's
+  pinned-CA client is the only client. Admin credential: engine-minted
+  secret, never user-declared, file-mounted (H10 discipline).
+- **Accept:** apply on a gate-on scenario stands the fabric up exactly
+  once; second apply zero API calls (conformance bar); destroy of the
+  last mediated edge removes it; gc sees orphans.
+
+### L3: Every edge mediated — identities, services, policies from the graph
+
+- **Size:** L. **Depends:** L2, K4. **Why:** the default flip itself.
+- **Do:** per-workload identity + tunneler sidecar (J5-bounded), per-
+  target service + bind, per-edge dial policies carrying K4 label
+  attributes; enrollment per H10 (file-mounted one-time tokens, settle
+  discipline); targets stop publishing underlay ports when every
+  consumer edge is mediated (dark-by-default); graph-scoped underlay
+  walls REMAIN as defense-in-depth. H9-style positive mediator-state
+  assertions + per-edge canary refusal, both runtimes.
+- **Accept:** stage criteria 1-2 on a multi-edge scenario (cdc +
+  lakehouse shapes), both runtimes.
+
+### L4: Protocol hard cases — redirect-shaped services (Kafka first)
+
+- **Size:** M-L. **Depends:** L3. **Why:** ADR 034 cost 3 — brokers
+  hand clients advertised addresses; the intercept must own them.
+- **Do:** advertised-listener alignment through the overlay for
+  redpanda (EventStream edges): brokers advertise the mediated names,
+  per-broker services/terminators for the ordinal set; prove CDC
+  end-to-end through fully mediated Kafka. Document the pattern for
+  future redirect-shaped providers (a providerkit note, not per-
+  provider code).
+- **Accept:** the cdc scenario green with EventStream edges mediated;
+  no provider-code change outside configuration surface redpanda
+  already owns.
+
+### L5: Production hardening — HA, chaos, and the measured tax
+
+- **Size:** M. **Depends:** L3 (L4 for full claims). **Why:** ADR 034
+  costs 1 and 4; the fabric is now the data plane's critical path.
+- **Do:** controller HA shape (decide: ziti controller clustering vs
+  fast-recreate + persisted PKI/state — record as ADR 034 addendum);
+  chaos suite: kill controller/router mid-stream, assert established
+  sessions vs new dials behavior matches the documented claim;
+  before/after throughput+latency on cdc + lakehouse standing
+  scenarios; ADR 027 claims table updated with measured numbers; gate
+  promotion criteria written (Alpha -> Beta needs all stage criteria;
+  GA needs owner sign-off on the measured tax).
+- **Accept:** stage criteria 3-4; claims table row cites the chaos
+  test and the benchmark by name.
+
 ## 8. New feature gates introduced by this plan
 
 Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
