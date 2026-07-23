@@ -618,3 +618,20 @@ static. Dimensions, each producing findings verified before fixing:
   rerun). H8's isolation note in failing output was a red herring
   (warn-only, working as designed). Wave-5 status: J1/E6/E7/I14
   reported (4 of 6); H7 and I13+I15 building.
+- 2026-07-23: MERGE TRAIN COMPLETE — all six wave-5 branches on main,
+  each merged with the protocol (rm TASK_PROGRESS.md, unfiltered
+  `go test ./...` true-exit=0, golangci 0 issues, docs/reference
+  regenerated): ziti-K8s-fix 5eeadb5, H7 05cf6cc, J1 f6df7f4,
+  E6 540ef3c, E7 82452e0, I14 377d3f1 (+ExecCapableRuntime joined the
+  wrapper-completeness guard with delegations in BOTH wrappers, per the
+  comment left at the guard's creation), I13+I15 4a29050
+  (+JobCapableRuntime — 6 methods incl. NodeNameOf — into the guard;
+  the branch had delegated haGuardRuntime itself, domainRuntime added
+  at the gate; the guard caught the missing NodeNameOf before any
+  runtime path could). The guard protocol worked exactly as designed
+  twice in one afternoon: merge a capability, extend the list, the
+  reflect sweep names what's missing. Next: live
+  TestBackupRestoreKubernetesPostgresRoundTrip under the minted
+  I15 RBAC (jobs.batch verbs applied to the shared cluster), then ONE
+  merged-state sweep; then the board is the owner's (push, minikube
+  Calico recreation, KubernetesRuntime GA call, v1.3.0).
