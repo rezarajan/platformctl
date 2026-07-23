@@ -209,7 +209,11 @@ Kubernetes if you only talk through the port. Start from
 `internal/adapters/providers/nessie` (small) or `wireguard` (recent,
 demonstrates the full settle/probe discipline);
 [docs/onboarding/developers.md](docs/onboarding/developers.md) is the
-step-by-step.
+step-by-step, and
+[docs/contributing/provider-authoring.md](docs/contributing/provider-authoring.md)
+is the executable contract: lifecycle semantics, the capability-interface
+index, and the `internal/ports/reconciler/conformance` suite your provider
+must pass — the acceptance bar, not a demo.
 
 ## 🚀 Quickstart
 

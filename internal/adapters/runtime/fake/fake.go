@@ -61,6 +61,18 @@ func New() *Runtime {
 	}
 }
 
+// Mutations implements internal/ports/runtime/conformance's and
+// internal/ports/reconciler/conformance's identical MutationCounter
+// interface — an exported production method (not test-only) because a
+// provider's own reconciler-conformance exemplar test, in a different
+// package, needs to observe it through that interface (a package-external
+// importer cannot see a method defined in another package's _test.go file).
+func (r *Runtime) Mutations() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.MutationCount
+}
+
 func (r *Runtime) EnsureNetwork(_ context.Context, spec runtime.NetworkSpec) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -89,8 +89,12 @@ Accept. §2.1 is the literal execution protocol every task follows, in order —
 
 ## Your first contribution: adding a provider
 
-The full author guide + conformance suite is doc 08's task E6 (not yet landed) — until then,
-this is the recipe (docs/planning/02-architecture.md §11):
+**[docs/contributing/provider-authoring.md](../contributing/provider-authoring.md)**
+is the full author guide (doc 08's task E6, ADR 028) — lifecycle semantics,
+the capability-interface index, `Request`/`Facts`, endpoint publication, and
+the `internal/ports/reconciler/conformance` suite that is the actual
+acceptance bar (passing it, not "it reconciled once in a demo"). The recipe
+below (docs/planning/02-architecture.md §11) is the short version:
 
 1. **Implement `reconciler.Provider`** (`Type`, `Reconcile`, `Destroy`, `Probe`) plus whichever
    capability interfaces you support (`CDCCapableProvider`, `SinkCapableProvider`,

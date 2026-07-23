@@ -282,6 +282,15 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 	}
 }
 
+// probeReadDeadline bounds probeThroughForwarder's single "does the session
+// stay open" observation below. Var, not const, for the identical reason
+// forwarderSettleTimeout/forwarderSettlePoll are (see their own doc comment
+// just below): the reconciler-conformance suite's proxy exemplar
+// (docs/planning/08 E6, ADR 028 — the fast tier must run in milliseconds)
+// shrinks it so a real, held-open TCP session still proves liveness without
+// paying this wait at its full production duration on every fast-tier run.
+var probeReadDeadline = 1500 * time.Millisecond
+
 // probeThroughForwarder dials the forwarder's published port and holds the
 // connection through a short read deadline. socat closes the accepted
 // session immediately when its upstream connect fails, so a quick
@@ -293,7 +302,7 @@ func probeThroughForwarder(addr string) error {
 		return err
 	}
 	defer c.Close()
-	_ = c.SetReadDeadline(time.Now().Add(1500 * time.Millisecond))
+	_ = c.SetReadDeadline(time.Now().Add(probeReadDeadline))
 	buf := make([]byte, 1)
 	_, err = c.Read(buf)
 	if err == nil {

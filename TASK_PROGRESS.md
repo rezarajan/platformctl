@@ -1,158 +1,216 @@
-# H6 (doc 08 §7.7) AS AMENDED BY ADR 027 — task progress
+# E6 (doc 08 §7, re-scoped by ADR 028 as the fast-tier cornerstone) — task progress
 
-Worktree: agent-abe0640719d3041f0. Branch: worktree-agent-abe0640719d3041f0.
-Started from main @ 7bc49d4 (`git merge main --no-edit` fast-forwarded from
-abbbd1b, pulling in ADR 026/027, I10+I11; H5 is unmerged — a sibling
-worktree — per the orchestrator's handoff; re-check before verification
-phase, build against namespaces if it still hasn't landed).
+Worktree: agent-a6e3c4b7cec38c5e6. Branch: worktree-agent-a6e3c4b7cec38c5e6.
+Started from main @ ed9dffd (`git merge main --no-edit`, fast-forward — pulled
+in ADR 028 test-tiering + the E6 re-scope note).
 
-## Reading done (in the order given)
+This file replaces the prior (H6/openziti, already merged) TASK_PROGRESS.md —
+that task closed and its content is preserved in git history
+(`git log --follow`).
 
-- [x] docs/adr/027-enforcement-layering.md — Layer 1 (identity, THE
-      guarantee) vs Layer 2 (network, best-effort, honestly reported); the
-      claims table; H6 deliverable amendment (MediationProvider port,
-      SPIFFE identity, ADR 026 per-edge authz, dual-runtime proof).
-- [x] docs/adr/022-identity-aware-mediation.md — 3 rings (Ring0 authoring/
-      Ring1 network floor/Ring2 identity mediation); OpenZiti chosen over
-      Consul/mesh sidecar; identity URI `spiffe://datascape/<namespace>/
-      <kind>/<name>`; Lattice raw-TCP lesson (connection-establishment
-      identity, not per-query IAM); dark services; MediatedConnection =
-      the existing Connection realized by a mediator provider instead of a
-      plain forwarder (no new schema flag — providerRef selects the
-      mediator, exactly like ingress/proxy/wireguard today).
-- [x] docs/adr/026-graph-scoped-access.md — the reference graph (already
-      built by internal/domain/graph) IS the access-request set; H7
-      compiles per-edge network policy from it later; H6 only needs the
-      *mediated subset* (edges into a Connection realized by a
-      MediationProvider-capable Provider).
-- [x] docs/planning/08 §7.7 H6 + ADR-027 amendment note (verbatim spec).
-- [x] docs/adr/023-wireguard-tunnel.md — the provider-on-the-Connection-
-      seam precedent: one runtime object per Connection (never shared per
-      Provider), ContainerSpec.Sysctls precedent for additive runtime-port
-      fields, secret-in-file-mount-never-env/state discipline, pinned
-      image-by-digest discipline, TunnelProvider gate posture (Alpha,
-      disabled — "new capability surface" bar MediatedConnections inherits).
-- [x] internal/ports/runtime/runtime.go, internal/ports/reconciler/
-      reconciler.go (capability-interface cluster pattern — marker
-      interfaces embedding Provider, e.g. ConnectionCapableProvider/
-      BackupCapableProvider), internal/application/registry/registry.go
-      (RegisterProvider(type, ctor, gateName); haGuardRuntime's explicit-
-      delegation pattern for runtime capabilities obtained through the
-      registry — precedent for how MediationProvider capability must be
-      reachable through any wrapping).
-- [x] docs/planning/02 §4.1 (settledness/ScaledWait rules), §4.2 (Request
-      struct, capability marker interface catalog).
-- [x] docs/planning/06 §2.1 (task execution protocol), §10 (test-impact
-      economy).
-- [x] internal/domain/naming/naming.go (F4 authority — RuntimeObjectName;
-      this task ADDS a sibling identity-derivation function, doesn't
-      change this one).
-- [x] internal/domain/graph/graph.go — Edges is exactly the ADR 026 request
-      graph (from -> []to, deduped access to build).
-- [x] schemas/v1alpha1/connection.json, schemas/v1alpha1/fragments/
-      provider/wireguard.json + internal/application/manifest/fragment.go
-      (provider-config-fragment registration pattern), schemas/embed.go.
+## Reading done (in order)
+
+- [x] CLAUDE.md.
+- [x] docs/planning/08 §7 task E6 entry (Size L, Depends E5+F5, Context doc
+      07 §3.4, Do/Accept as originally written) + the Stage E exit criteria
+      block (line ~1727) — the unticked bullet is the target of this task's
+      evidence.
+- [x] docs/planning/08 §2.1 (task execution protocol, step 0 checkpoint
+      rule) — doc 06 has no §2.1; the task prompt's "doc 06 §2.1" reference
+      resolves to doc 08 §2.1 (doc 06 §10 is the impact-economy section,
+      correctly named elsewhere).
+- [x] docs/adr/028-test-tiering.md in full — the rescoping ADR: E6's suite
+      IS the fast-tier's provider middle, must run against fakes in
+      milliseconds, "fakes must be honest" (§2), CI is the arbiter.
+- [x] docs/planning/07-production-grade-docker-runtime-gap-analysis.md §3.4
+      (Contributor-Facing Provider Runtime Contract) — the original
+      requirement list this task's Do items trace to.
+- [x] internal/ports/reconciler/reconciler.go in full (681 lines) — Request/
+      Facts doc comments read as the guide's source material per the task
+      prompt; Provider + all capability interfaces (ExternalConfigurer,
+      CDCCapableProvider, SinkCapableProvider, DatabaseSinkCapableProvider,
+      IngestCapableProvider, CatalogCapableProvider,
+      ConnectionCapableProvider, MediationCapableProvider,
+      TunnelCapableProvider, ViaConsumingProvider, VersionedProvider,
+      SpecValidator, BindingOptionsValidator, SchemaRegistryCapableProvider,
+      KafkaBootstrapAddressProvider, StreamReplicationValidator,
+      LineageAware, DesignLinter, BackupCapableProvider).
+- [x] internal/ports/runtime/conformance (all 8 files) — the pattern to
+      mirror: Run(t, rt, namePrefix) driving per-area run*(t, rt, fx)
+      helpers against fixtures; MutationCounter optional interface; adapter
+      test files (fake_test.go, docker_integration_test.go) call
+      conformance.Run with their own constructed adapter instance — the
+      conformance package itself imports ONLY ports, never an adapter
+      (layering). This is the exact shape internal/ports/reconciler/
+      conformance must mirror.
+- [x] docs/planning/02-architecture.md §4.1 (settledness/NFR-11 exact
+      wording, ScaledWait), §4.2 (Provider/capability interfaces, Facts,
+      the five-deprecated-field history), §5.2 (the ONE place an exact
+      error-string format is specified in doc 02 — the Binding compatibility
+      message; owned by internal/application/compatibility, NOT reachable
+      from internal/ports/reconciler/conformance by layering — ports may
+      not import application), §9 (testing strategy — names
+      `runtime.ConformanceSuite` as the existing pattern), §11 (extensibility
+      guide — new-provider recipe).
+- [x] docs/onboarding/developers.md in full — "Your first contribution:
+      adding a provider" section explicitly says "The full author guide +
+      conformance suite is doc 08's task E6 (not yet landed)" — this task
+      updates that line once the guide exists.
+- [x] README.md's "Writing your own provider" section (line 198) — the
+      link target this task's guide fulfils.
+- [x] internal/adapters/providers/noop/noop.go (42 lines, trivial —
+      Reconcile/Destroy/Probe, no runtime calls, no ProviderState).
+- [x] internal/adapters/providers/redpanda/redpanda.go (973 lines) +
+      kafka.go — Provider-kind reconcile (reconcileBroker) is pure
+      container-lifecycle against runtime.ContainerRuntime, no real Kafka
+      wire protocol; EventStream-kind reconcile (reconcileTopic) dials a
+      real Kafka admin client (kadm/kgo) with NO port/interface seam to
+      fake — confirmed by reading redpanda_test.go: existing unit tests
+      (TestReconcileBrokerRegistryDisabled etc.) already only exercise the
+      Provider-kind path against the fake; EventStream is integration-only.
+      This task's redpanda exemplar therefore drives the Provider (broker)
+      kind only — a deliberate, documented scoping decision, not an
+      oversight.
+- [x] internal/adapters/providers/proxy/proxy.go + proxy_test.go — Connection-
+      kind reconcile (reconcileConnection) is the richer exemplar: real
+      settledness logic (waitForwarderServing dials THROUGH the fake
+      container's reported host address). proxy_test.go's own established
+      "fake-technology harness" trick: a real net.Listen("tcp","127.0.0.1:0")
+      stands in for "the upstream", with the Connection's spec.port set to
+      that real listener's port — the fake runtime's EnsureContainer/Inspect
+      never runs a real socat process, but observedPorts reports a
+      dialable 127.0.0.1:<port> HostAddr matching the real listener, so
+      probeThroughForwarder's dial genuinely succeeds. This is the
+      fake-technology-harness pattern the conformance suite's proxy
+      exemplar reuses directly.
+- [x] internal/adapters/runtime/fake/fake.go in full — MutationCount
+      increments ONLY on real state change (idempotent Ensure* calls are
+      confirmed zero-cost) — this is what makes "second-reconcile
+      idempotency (zero mutating runtime calls)" a mechanical assertion
+      (Mutations() delta == 0 across two Reconcile calls).
+- [x] internal/domain/status/status.go (Condition/Status/IsReady/
+      SetCondition), internal/domain/provider/provider.go (FromEnvelope),
+      internal/domain/resource/resource.go (Envelope/Key/Metadata),
+      internal/domain/endpoint/endpoint.go (List/ToState/FromState/Key —
+      the providerState publication decode target), internal/domain/
+      connection/connection.go (Connection/TLS shapes for the proxy
+      fixture).
+- [x] internal/application/registry/registry.go + cmd/platformctl/main.go's
+      defaultWiring (noop/redpanda/proxy RegisterProvider call sites) — the
+      exact `func() reconciler.Provider { return X.New() }` constructor
+      shape the task's "registered constructors" phrase names; the
+      exemplar tests use this identical shape.
 
 ## Design decisions locked in before coding
 
-1. **Port location:** `internal/ports/mediation` (new package, mirrors
-   `internal/ports/runtime`'s standalone-port shape rather than being
-   folded into `reconciler.go`, because its methods are identity/policy
-   CRUD operations invoked by the engine directly — not part of the
-   Reconcile/Destroy/Probe request lifecycle). A capability *marker*
-   interface `MediationCapableProvider` lives in `reconciler.go` next to
-   `ConnectionCapableProvider` (same pattern) so the engine/compatibility
-   layer can type-assert a constructed `reconciler.Provider` the same way
-   it already does for every other capability.
-2. **Identity type:** `mediation.WorkloadIdentity{URI, Fingerprint string}`
-   — URI is the SPIFFE-aligned identity, Fingerprint is a public-key
-   fingerprint for audit/state display. No private key material ever
-   crosses this boundary (ADR 013 discipline) — adapter-internal only.
-3. **Edge type:** `mediation.Edge{From, To WorkloadIdentity; DialAllowed,
-   BindAllowed bool}` — the compiled per-edge authorization the engine
-   hands to `RealizeEdge`.
-4. **Naming:** `internal/domain/naming.WorkloadIdentityURI(env) string`
-   returns `spiffe://datascape/<namespace>/<kind>/<name>` (ADR 022's exact
-   form), deterministic, unit-tested, zero I/O.
-5. **Graph derivation:** `internal/application/graphaccess` (new package)
-   — `DeriveEdges(g *graph.Graph) []Edge` (reusable, H7's own future
-   consumer per the task prompt) + `MediatedSubset(edges, resources,
-   isMediationCapable func(providerType string) bool) []Edge` narrowing to
-   edges terminating in a Connection whose providerRef resolves to a
-   mediation-capable Provider.
-6. **Adapter:** `internal/adapters/providers/openziti` — pinned
-   controller+router images (A10 digest pinning), a minimal hand-rolled
-   REST client against Ziti's Edge Management API (no new SDK dependency,
-   matching this repo's "drive the tool directly" ethos), implements
-   `reconciler.Provider` + `ConnectionCapableProvider` (scheme `tcp`,
-   Connection-seam precedent) + `mediation.MediationProvider`.
-7. **Gate:** `MediatedConnections`, Alpha, disabled.
+1. **Package location:** `internal/ports/reconciler/conformance` — mirrors
+   `internal/ports/runtime/conformance` exactly (ports-only import set:
+   `reconciler`, `runtime`, `resource`, `status`, `endpoint`, `testing`,
+   `context`, `time`; never an adapter — the fake runtime is supplied BY THE
+   CALLER, exactly like runtime/conformance.Run takes an already-constructed
+   `runtime.ContainerRuntime`).
+2. **Harness shape** (the "provided fake-technology harness" the task
+   names): a struct of caller-supplied closures, not an interface a provider
+   package must implement on its own Provider type — keeps the contract
+   test-only and out of the provider's own production API surface.
+   - `NewRuntime func() runtime.ContainerRuntime` — a fresh, isolated fake
+     runtime per subtest (parallel-safe).
+   - `Provider func() reconciler.Provider` — the registered-constructor
+     shape verbatim.
+   - `Resource func(rt runtime.ContainerRuntime, namePrefix string, i int) reconciler.Request`
+     — builds fixture `i`'s Request; `i` (0/1) lets one Harness produce two
+     independently-named fixtures for the statelessness/interleaving
+     subtest. This is where a provider's own "fake-technology" trick
+     (proxy's real net.Listener) lives — entirely in the calling
+     `_test.go` file, never in the conformance package itself.
+   - `CapabilityChecks func(p reconciler.Provider) []CapabilityCheck`
+     (optional/nilable) — doc 02 §4.2 capability-interface error-format
+     checks, for providers that declare an error-returning capability
+     method (SpecValidator, StreamReplicationValidator, ...). nil when a
+     provider declares none (proxy, noop) — the suite must not fabricate a
+     check where the provider doesn't own one; the Binding-vs-Provider
+     compatibility message format (doc 02 §5.2's exact string) is owned by
+     `internal/application/compatibility` and out of reach here by
+     layering (ports must not import application) — noted explicitly in
+     the guide, not silently glossed over.
+3. **Scope is the Reconcile/Probe/Destroy lifecycle contract**, not every
+   capability interface's own behavior (those are provider-specific and
+   already unit-tested per-provider) — the suite proves: settledness
+   (Ready implies immediately probe-clean), idempotency (zero mutating
+   calls on re-reconcile), Probe honesty (point-in-time, no internal
+   wait-loop), Destroy convergence (incl. already-gone), Request
+   statelessness (interleaved fixtures don't cross-contaminate), and —
+   generically, from providerState alone — that any published `endpoint.List`
+   entry carries a real fact (non-empty Host or Internal), never a blank
+   placeholder (ADR 015).
+4. **Exemplars:** noop (trivial — proves the suite doesn't crash on a
+   provider with zero runtime calls and zero ProviderState), redpanda
+   Provider-kind/broker (container-lifecycle shape, exercises
+   CapabilityChecks via SpecValidator+StreamReplicationValidator), proxy
+   Connection-kind (real settledness/dial-through shape, real
+   fake-technology-harness net.Listener trick). Three distinct shapes —
+   this is the "generality" proof the task asks for.
 
 ## Status
 
-- [x] Design locked (this file)
-- [x] internal/domain/naming: WorkloadIdentityURI + tests (upgraded at the
-      H5 merge to include a non-default metadata.domain segment)
-- [x] internal/ports/mediation: port + types
-- [x] reconciler.go: MediationCapableProvider marker (Mediation(ctx, req),
-      request-scoped per F5 — found live that a no-arg Mediation() cannot
-      reach a live controller)
-- [x] internal/application/graphaccess: DeriveEdges + MediatedSubset +
-      CompileMediatedConnections + tests
-- [x] internal/adapters/providers/openziti: adapter + unit tests
-      (httptest-based REST idempotency proofs + identity/config tests)
-- [x] registry.go/main.go wiring + gate registration (MediatedConnections,
-      Alpha, disabled)
-- [x] schema fragment (provider/openziti.json) + doc 03 §8.2.5 same-commit
-- [x] archtest: ziti import fence
-      (internal/archtest/mediation_layering_test.go)
-- [x] doc 04 §12 row, doc 08 H6 Done-note (claims-table language), doc
-      reference regen, explain-catalog (4 new reasons + catalog entries),
-      test-impact.sh row (`openziti` suite)
-- [x] CDC scenario proof — Docker: live-verified (see Done-note in doc 08
-      for the full account: 3 real bugs found+fixed live, positive proof,
-      both negative proofs — reachability and wrong-identity — all live).
-- [ ] CDC scenario proof — Kubernetes: NOT attempted (time budget) —
-      recorded as a deviation below, not silently skipped.
-- [x] gofmt/vet/build (both tag sets)/golangci-lint 0 issues
-- [x] go test ./... unfiltered, true-exit=0 (post H5/H8 merge too)
-- [ ] impact sweep --base main, flock-wrapped, green x2 both runtimes —
-      the `openziti` suite itself was run live (manually + via `go test
-      -tags integration`) and passed on Docker; the formal
-      flock-wrapped script invocation and a second back-to-back run, plus
-      any Kubernetes run, were not completed this session (deviation).
+- [x] Design locked (this file, step 0 commit)
+- [x] internal/ports/reconciler/conformance package (conformance.go) —
+      Harness{NewRuntime, Provider, Resource, CapabilityChecks}, 7 subtests
+      (Settledness, Idempotency, Probe honesty, Destroy convergence,
+      Statelessness, ProviderState publication, CapabilityErrorFormats),
+      all t.Parallel().
+- [x] noop exemplar test (internal/adapters/providers/noop/conformance_test.go)
+      — trivial provider, CapabilityChecks nil, no ProviderState.
+- [x] redpanda exemplar test (.../redpanda/conformance_test.go) — Provider
+      (broker) kind only, deliberately not EventStream (needs real Kafka
+      wire protocol — documented in the file's own doc comment);
+      CapabilityChecks exercises SpecValidator + StreamReplicationValidator.
+- [x] proxy exemplar test (.../proxy/conformance_test.go) — Connection kind,
+      real net.Listener fake-technology harness (reused from proxy_test.go's
+      own established trick). **Found + fixed live:** proxy.go's
+      probeThroughForwarder had a hardcoded 1500ms read-deadline (no var to
+      shrink, unlike forwarderSettleTimeout/forwarderSettlePoll in the same
+      file) — blew the fast-tier sub-second budget (suite measured 6.008s).
+      Extracted it to a package-level `probeReadDeadline` var (default
+      unchanged, 1500ms — zero production behavior change), mirroring the
+      existing forwarderSettleTimeout pattern exactly; the conformance test
+      shrinks it once, before any t.Parallel() subtest starts (never
+      per-subtest — would race). Re-verified: proxy suite now 0.086s.
+      go test -race clean across proxy/redpanda/noop/fake/ports/... after
+      the fix.
+      Also found: fake.Runtime.Mutations() was defined in fake_test.go
+      (test-only), invisible to an external importer's own _test.go file —
+      moved it into fake.go as a proper exported method (same body, now
+      also mutex-guarded for -race safety under concurrent subtests); this
+      is what makes MutationCounter usable from ANY provider's own
+      conformance exemplar, not just fake's own package.
+- [x] docs/contributing/provider-authoring.md — lifecycle semantics,
+      capability-interface index table, Request/Facts (generic form only),
+      fragments (E5), endpoint publication (ADR 015), drift/reason
+      conventions, feature-gate procedure (ADR 014), conformance-suite
+      Harness walkthrough, ADR 028 §2 fake-honesty rule, worked-examples
+      pointer to the three exemplars.
+- [x] README.md "Writing your own provider" section links the guide;
+      developers.md's "not yet landed" line replaced with a link (both
+      files are outside docs/planning/, edited directly — no guard hook).
+- [x] doc 08: Stage E exit criterion ticked (line ~1732) + E6 Done-note
+      appended (additive, guard-hook-passing) — states the scope honestly
+      against the pre-ADR-028 Accept text (3 exemplars, not "all
+      nine-plus"; guide validated via 3 real exemplar conformance_test.go
+      files, not a from-scratch noop rebuild) and names two explicit
+      follow-ups (retrofitting remaining providers; the compiled-in-vs-
+      plugin decision note).
+- [x] gofmt -l . empty; go build/vet ./... and -tags integration ./... all
+      clean; golangci-lint v2.12.2 (CI-pinned) run ./... = 0 issues.
+- [x] go test ./... ; echo true-exit=$? → true-exit=0 (unfiltered, every
+      package, ~15s wall total for the whole repo).
+- [x] Conformance suite runtime reported (see the doc 08 Done-note for the
+      full breakdown): plain `go test -run TestConformance` per exemplar —
+      noop 0.002s, redpanda 0.003s, proxy 0.084s; under -race — noop
+      1.012s, redpanda 1.012s, proxy 1.093s (race instrumentation +
+      startup overhead, not suite logic). All sub-second per the Gates bar.
 - [x] final squashed commit
 
-## Deviations (recorded as found, not silently worked around)
+## Deviations (recorded as found)
 
-1. **Kubernetes not attempted.** H5 (domains) merged mid-task, consuming a
-   large conflict-resolution pass; remaining budget went to fixing and
-   live-verifying the Docker path (3 real bugs found only by running live)
-   rather than starting a second, unverified substrate. The port/adapter
-   design is substrate-agnostic by construction (only calls
-   runtime.ContainerRuntime's Ensure* methods) but this is unverified, not
-   proven, on Kubernetes.
-2. **Known live flake**, reproduced 3/3 runs: `platformctl drift` run
-   immediately after `apply` intermittently reports the external Source
-   `ExternalEndpointUnreachable` (engine.go's generic `probeTCPReachable`,
-   an unretried ~3.75s dial) even though the Binding's own connector is
-   genuinely RUNNING and a direct dial succeeds moments later — a fresh
-   Ziti circuit's first-connection latency occasionally exceeds that
-   budget. This task's own settle-probe (`waitMediatedServing`, ~30s
-   bounded retry) keeps the Connection/Binding's own Ready/drift clean;
-   the generic external-reachability probe (outside this task's file
-   fence) is the residual gap. Not root-caused further given the time
-   budget — full account in doc 08's H6 Done-note.
-3. **`upsertService` does not update `encryptionRequired` on an existing
-   service** (create-only idempotency for that one field) — found live
-   while iterating on the encryptionRequired=false fix; harmless for a
-   fresh apply (the value is set correctly at creation) but a manifest
-   that somehow already had a service created with the old default would
-   need a manual delete. Not exercised by the accept scenario; recorded,
-   not fixed, given time.
-4. **golangci-lint's pre-existing `engine.go:119 logf unused` finding**
-   (present in the branch this task started from, before any of this
-   task's own edits) resolved itself at the H5/H8 merge — main's own
-   commits since then evidently re-used or removed `logf`. Not this
-   task's fix; noted for completeness since an earlier progress commit
-   flagged it as a pre-existing, out-of-scope issue.
+(none yet)
