@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -85,7 +86,17 @@ func TestCrossDomainMediatedPolicyEndToEnd(t *testing.T) {
 
 	const manifestsWith = "testdata/crossdomain-mediated-scenario"
 	const policies = "testdata/crossdomain-mediated-scenario/policies"
-	const gates = "PolicyEngine=true,MediatedConnections=true"
+	// docs/planning/08 K4: LabelScopedAccess is on for this whole test —
+	// the scenario's xd-src/xd-conn labels (manifests.yaml) are inert
+	// without it, and every pre-existing rule shape this test's legs 1/4
+	// exercise (matchEdge.crossDomain) evaluates identically regardless of
+	// this gate (K2's Done-note: "every pre-existing rule shape ...
+	// evaluated exactly as before regardless"), so turning it on adds K4's
+	// attribute-based mediator-state assertion (leg 3) without changing
+	// leg 1/4's policy-denial behavior at all. GraphScopedAccess stays off
+	// (unrelated to this scenario, and K4's own gate rides
+	// LabelScopedAccess independently of it — ADR 033's addendum).
+	const gates = "PolicyEngine=true,MediatedConnections=true,LabelScopedAccess=true"
 
 	manifestBytes, rerr := readFileT(t, manifestsWith+"/manifests.yaml")
 	if rerr != nil {
@@ -222,6 +233,7 @@ type zitiDialPolicyEntity struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
 	Type          string   `json:"type"`
+	Semantic      string   `json:"semantic"`
 	IdentityRoles []string `json:"identityRoles"`
 	ServiceRoles  []string `json:"serviceRoles"`
 }
@@ -344,12 +356,59 @@ func assertMediatorStateExactly(t *testing.T, client *http.Client, ctrlAddr, tok
 	if pol.Name != wantPolicy {
 		t.Errorf("leg3: Dial policy name = %q, want %q", pol.Name, wantPolicy)
 	}
-	if len(pol.IdentityRoles) != 1 || pol.IdentityRoles[0] != "@"+identities[0].ID {
-		t.Errorf("leg3: Dial policy identityRoles = %v, want [@%s]", pol.IdentityRoles, identities[0].ID)
+
+	// docs/planning/08 K4: xd-src (the consumer/"From" identity) declares
+	// label tier=gold and xd-conn (the "To" service) declares label
+	// team=platform (testdata/crossdomain-mediated-scenario/manifests.yaml)
+	// — with LabelScopedAccess on (this test's gates const), the openziti
+	// adapter compiles BOTH sides of this Dial policy by label-derived
+	// role attribute rather than by exact @id, at AllOf semantics
+	// (identity.go's dialRoleRefs doc comment). The identity/service
+	// roleAttributes themselves are asserted first — the fact the mediator
+	// plane actually carries, which the policy's attribute references
+	// depend on — then the policy's own semantic/role-ref shape.
+	wantIdentityAttrs := []string{"datascape-mediated", "label.tier.gold"}
+	if !stringSliceEqualAsSet(identities[0].RoleAttributes, wantIdentityAttrs) {
+		t.Errorf("leg3: identity roleAttributes = %v, want %v (as a set)", identities[0].RoleAttributes, wantIdentityAttrs)
 	}
-	if len(pol.ServiceRoles) != 1 || pol.ServiceRoles[0] != "@"+services[0].ID {
-		t.Errorf("leg3: Dial policy serviceRoles = %v, want [@%s]", pol.ServiceRoles, services[0].ID)
+	wantServiceAttrs := []string{"label.team.platform"}
+	if !stringSliceEqualAsSet(services[0].RoleAttributes, wantServiceAttrs) {
+		t.Errorf("leg3: service roleAttributes = %v, want %v (as a set)", services[0].RoleAttributes, wantServiceAttrs)
 	}
+
+	if pol.Semantic != "AllOf" {
+		t.Errorf("leg3: Dial policy semantic = %q, want AllOf (both sides are label-derived attribute refs)", pol.Semantic)
+	}
+	wantIdentityRoles := []string{"#label.tier.gold"}
+	if !stringSliceEqualAsSet(pol.IdentityRoles, wantIdentityRoles) {
+		t.Errorf("leg3: Dial policy identityRoles = %v, want %v (attribute-based, not @id — the consumer carries labels)", pol.IdentityRoles, wantIdentityRoles)
+	}
+	wantServiceRoles := []string{"#label.team.platform"}
+	if !stringSliceEqualAsSet(pol.ServiceRoles, wantServiceRoles) {
+		t.Errorf("leg3: Dial policy serviceRoles = %v, want %v (attribute-based, not @id — the service carries labels)", pol.ServiceRoles, wantServiceRoles)
+	}
+}
+
+// stringSliceEqualAsSet compares two string slices ignoring order (never
+// mutating either input) — the controller is not assumed to preserve
+// request-body array ordering in its own responses, so the exact-set bar
+// this test's own doc comment states ("not merely non-empty") is checked
+// as a SET, matching internal/adapters/providers/openziti/client.go's own
+// stringSetEqual convergence-comparison helper.
+func stringSliceEqualAsSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	ga := append([]string(nil), got...)
+	wa := append([]string(nil), want...)
+	sort.Strings(ga)
+	sort.Strings(wa)
+	for i := range ga {
+		if ga[i] != wa[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // assertMediatorStateEmpty is leg 5's teardown proof: after removing the

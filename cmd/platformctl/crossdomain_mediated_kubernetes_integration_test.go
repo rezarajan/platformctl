@@ -54,7 +54,11 @@ func TestOpenZitiCrossDomainPolicyOnKubernetesEndToEnd(t *testing.T) {
 
 	const manifestsWith = "testdata/crossdomain-mediated-k8s-scenario"
 	const policies = "testdata/crossdomain-mediated-k8s-scenario/policies"
-	const gates = "PolicyEngine=true,MediatedConnections=true,KubernetesRuntime=true"
+	// docs/planning/08 K4: LabelScopedAccess on — see the Docker test's
+	// own matching comment (crossdomain_mediated_integration_test.go); the
+	// shared assertMediatorStateExactly helper now asserts the
+	// label-derived attribute shape on both runtimes.
+	const gates = "PolicyEngine=true,MediatedConnections=true,KubernetesRuntime=true,LabelScopedAccess=true"
 	stateFile := t.TempDir() + "/state.json"
 
 	// docs/adr/029 (J2 sweep): destroy is this scenario's workhorse
