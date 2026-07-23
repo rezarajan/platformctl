@@ -13,7 +13,7 @@ import (
 	"sort"
 	"time"
 
-	"go.mozilla.org/pkcs7"
+	"github.com/smallstep/pkcs7"
 )
 
 // edgeClient is a minimal, hand-rolled client for OpenZiti's Edge

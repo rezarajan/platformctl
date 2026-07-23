@@ -12,6 +12,7 @@ require (
 	github.com/minio/minio-go/v7 v7.2.1
 	github.com/parquet-go/parquet-go v0.30.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	github.com/smallstep/pkcs7 v0.2.2
 	github.com/spf13/cobra v1.10.2
 	github.com/twmb/franz-go v1.21.5
 	github.com/twmb/franz-go/pkg/kadm v1.18.0
@@ -105,7 +106,6 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
-	go.mozilla.org/pkcs7 v0.9.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
