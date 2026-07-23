@@ -22,7 +22,12 @@ func assertAllStatusReady(t *testing.T, out, context string) {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" ||
 			strings.HasPrefix(trimmed, "network isolation") ||
-			strings.HasPrefix(trimmed, "WARNING:") {
+			strings.HasPrefix(trimmed, "WARNING:") ||
+			// K5 policy decision events (docs/adr/033 decision 5) ride
+			// stderr like every other note; tests capturing combined
+			// output must not read them as status rows — the same H8
+			// placement class that created this helper.
+			strings.HasPrefix(trimmed, "policy ") {
 			continue
 		}
 		if !strings.Contains(line, "True") {
