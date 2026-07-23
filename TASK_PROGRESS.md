@@ -1,158 +1,215 @@
-# H6 (doc 08 §7.7) AS AMENDED BY ADR 027 — task progress
+# I13 + I15 (doc 08 §7.8) — task progress
 
-Worktree: agent-abe0640719d3041f0. Branch: worktree-agent-abe0640719d3041f0.
-Started from main @ 7bc49d4 (`git merge main --no-edit` fast-forwarded from
-abbbd1b, pulling in ADR 026/027, I10+I11; H5 is unmerged — a sibling
-worktree — per the orchestrator's handoff; re-check before verification
-phase, build against namespaces if it still hasn't landed).
+Worktree: agent-a543bc73cd8cd3f5f. Branch: worktree-agent-a543bc73cd8cd3f5f.
+Started from main @ ed9dffd (`git merge main --no-edit`, fast-forward from
+abbbd1b — pulled in ADR 026/027/028, H5-H7, I9-I12 work). This file
+replaces a stale H6-task TASK_PROGRESS.md that arrived via the merge (that
+task is done and merged; content below is this task's own plan).
 
-## Reading done (in the order given)
+Docker daemon: reachable. Kubernetes: reachable at
+KUBECONFIG=/tmp/claude-1000/platformctl-rbac/platformctl.kubeconfig
+(minikube, 1 node Ready). GPG signing: confirmed working live (test sign
+succeeded) — no fallback needed unless it lapses mid-task.
 
-- [x] docs/adr/027-enforcement-layering.md — Layer 1 (identity, THE
-      guarantee) vs Layer 2 (network, best-effort, honestly reported); the
-      claims table; H6 deliverable amendment (MediationProvider port,
-      SPIFFE identity, ADR 026 per-edge authz, dual-runtime proof).
-- [x] docs/adr/022-identity-aware-mediation.md — 3 rings (Ring0 authoring/
-      Ring1 network floor/Ring2 identity mediation); OpenZiti chosen over
-      Consul/mesh sidecar; identity URI `spiffe://datascape/<namespace>/
-      <kind>/<name>`; Lattice raw-TCP lesson (connection-establishment
-      identity, not per-query IAM); dark services; MediatedConnection =
-      the existing Connection realized by a mediator provider instead of a
-      plain forwarder (no new schema flag — providerRef selects the
-      mediator, exactly like ingress/proxy/wireguard today).
-- [x] docs/adr/026-graph-scoped-access.md — the reference graph (already
-      built by internal/domain/graph) IS the access-request set; H7
-      compiles per-edge network policy from it later; H6 only needs the
-      *mediated subset* (edges into a Connection realized by a
-      MediationProvider-capable Provider).
-- [x] docs/planning/08 §7.7 H6 + ADR-027 amendment note (verbatim spec).
-- [x] docs/adr/023-wireguard-tunnel.md — the provider-on-the-Connection-
-      seam precedent: one runtime object per Connection (never shared per
-      Provider), ContainerSpec.Sysctls precedent for additive runtime-port
-      fields, secret-in-file-mount-never-env/state discipline, pinned
-      image-by-digest discipline, TunnelProvider gate posture (Alpha,
-      disabled — "new capability surface" bar MediatedConnections inherits).
-- [x] internal/ports/runtime/runtime.go, internal/ports/reconciler/
-      reconciler.go (capability-interface cluster pattern — marker
-      interfaces embedding Provider, e.g. ConnectionCapableProvider/
-      BackupCapableProvider), internal/application/registry/registry.go
-      (RegisterProvider(type, ctor, gateName); haGuardRuntime's explicit-
-      delegation pattern for runtime capabilities obtained through the
-      registry — precedent for how MediationProvider capability must be
-      reachable through any wrapping).
-- [x] docs/planning/02 §4.1 (settledness/ScaledWait rules), §4.2 (Request
-      struct, capability marker interface catalog).
-- [x] docs/planning/06 §2.1 (task execution protocol), §10 (test-impact
-      economy).
-- [x] internal/domain/naming/naming.go (F4 authority — RuntimeObjectName;
-      this task ADDS a sibling identity-derivation function, doesn't
-      change this one).
-- [x] internal/domain/graph/graph.go — Edges is exactly the ADR 026 request
-      graph (from -> []to, deduped access to build).
-- [x] schemas/v1alpha1/connection.json, schemas/v1alpha1/fragments/
-      provider/wireguard.json + internal/application/manifest/fragment.go
-      (provider-config-fragment registration pattern), schemas/embed.go.
+## Task scope (from doc 08 §7.8 read directly, lines 2954-3011)
 
-## Design decisions locked in before coding
+- **I13** (Size M, depends I12 merged): ADR 007 addendum 2 FIRST, then
+  verify-then-promote restore: stream into SCRATCH db/schema while
+  checksumming; only promote atomically on verified match (postgres:
+  rename-swap in one session; mysql: RENAME TABLE batch); on ANY failure
+  scratch dropped + target untouched; disk-headroom precheck (2x dump size)
+  honest refusal. Fault-injection: corrupt mid-stream -> target
+  byte-identical pre/post (checksum proof). Both engines. Gate: rides
+  BackupRestore.
+- **I15** (Size M-L, depends I12, I13): realize dbjob's producer/consumer
+  (+cleanup one-shot) as Kubernetes Jobs, same-pod two-container Job
+  sharing an emptyDir for the FIFO (protocol unchanged), in the provider's
+  domain namespace. RBAC additions (jobs verbs) -> role.yaml + preflight +
+  README same commit. I12+I13 fault suites parameterized over runtime
+  (extend, don't fork). Gate: BackupRestore GA now requires this parity.
 
-1. **Port location:** `internal/ports/mediation` (new package, mirrors
-   `internal/ports/runtime`'s standalone-port shape rather than being
-   folded into `reconciler.go`, because its methods are identity/policy
-   CRUD operations invoked by the engine directly — not part of the
-   Reconcile/Destroy/Probe request lifecycle). A capability *marker*
-   interface `MediationCapableProvider` lives in `reconciler.go` next to
-   `ConnectionCapableProvider` (same pattern) so the engine/compatibility
-   layer can type-assert a constructed `reconciler.Provider` the same way
-   it already does for every other capability.
-2. **Identity type:** `mediation.WorkloadIdentity{URI, Fingerprint string}`
-   — URI is the SPIFFE-aligned identity, Fingerprint is a public-key
-   fingerprint for audit/state display. No private key material ever
-   crosses this boundary (ADR 013 discipline) — adapter-internal only.
-3. **Edge type:** `mediation.Edge{From, To WorkloadIdentity; DialAllowed,
-   BindAllowed bool}` — the compiled per-edge authorization the engine
-   hands to `RealizeEdge`.
-4. **Naming:** `internal/domain/naming.WorkloadIdentityURI(env) string`
-   returns `spiffe://datascape/<namespace>/<kind>/<name>` (ADR 022's exact
-   form), deterministic, unit-tested, zero I/O.
-5. **Graph derivation:** `internal/application/graphaccess` (new package)
-   — `DeriveEdges(g *graph.Graph) []Edge` (reusable, H7's own future
-   consumer per the task prompt) + `MediatedSubset(edges, resources,
-   isMediationCapable func(providerType string) bool) []Edge` narrowing to
-   edges terminating in a Connection whose providerRef resolves to a
-   mediation-capable Provider.
-6. **Adapter:** `internal/adapters/providers/openziti` — pinned
-   controller+router images (A10 digest pinning), a minimal hand-rolled
-   REST client against Ziti's Edge Management API (no new SDK dependency,
-   matching this repo's "drive the tool directly" ethos), implements
-   `reconciler.Provider` + `ConnectionCapableProvider` (scheme `tcp`,
-   Connection-seam precedent) + `mediation.MediationProvider`.
-7. **Gate:** `MediatedConnections`, Alpha, disabled.
+## Reading done
+
+- [x] docs/planning/08 §7.8 I13 (2954-2991) + I15 (2993-3011) verbatim.
+- [x] docs/planning/08 §2.1 task execution protocol (checkpoint-first rule,
+      read order, verify order).
+- [x] docs/adr/007-backup-restore.md in full, including I12 addendum
+      (hardened dbjob: PipelineSpec.Cleanup, Result{SHA256,Bytes},
+      PersistManifest/ReadManifest sidecar, VerifyIntegrity, per-side
+      deadlines) and Known limitations (a)-(d) — (c) is I15's target,
+      (d) is I13's target.
+- [x] internal/adapters/providers/dbjob/dbjob.go in full (601 lines) —
+      RunPipeline/RunOneShot/sideSpec/waitPipeline/readResult mechanics.
+- [x] internal/adapters/providers/postgres/backup.go,
+      internal/adapters/providers/mysql/backup.go — current Backup/Restore
+      call shape, superuser/rootPassword credential resolution,
+      naming.RuntimeObjectName usage.
+- [x] internal/ports/runtime/runtime.go in full — ContainerRuntime port,
+      IngressCapableRuntime as the precedent for a Kubernetes-only optional
+      capability (type-assert pattern), FileMount/ContainerSpec shapes,
+      ManagedLabels.
+- [ ] internal/adapters/runtime/kubernetes internals (container/inspect/
+      readfile/remove/exec) — IN PROGRESS via research agent, needed to
+      design the Job realization concretely (can containers in a
+      terminated-but-not-deleted pod still be exec'd into? decides whether
+      a keep-alive reader sidecar is needed for post-completion file reads).
+- [ ] docs/planning/02-architecture.md §4.1
+- [ ] internal/domain/backup (Location/Manifest/Ref shapes, RefOf)
+- [ ] deploy/ (role.yaml, preflight) for RBAC precedent
+- [ ] cmd/platformctl/backup_integration_test.go, dbjob fault-injection
+      test file(s) from I12 (find and read — need to extend/parameterize)
+
+## Design decisions (locked as research completes)
+
+1. **ADR 007 addendum 2** (I13): scratch-db verify-then-promote. Must be
+   written and committed BEFORE any I13 code, per doc 08 explicit
+   instruction. Not yet drafted.
+2. **I15 Job realization**: leaning toward a new optional capability
+   `runtime.JobCapableRuntime` (mirrors `IngressCapableRuntime`'s
+   Kubernetes-only, type-asserted pattern) with EnsureJob/InspectJob-style
+   methods taking multiple named containers sharing one volume mount, so
+   `dbjob.RunPipeline`/`RunOneShot` route through it ONLY when `req.Runtime`
+   implements it (Docker/fake byte-for-byte unchanged otherwise). Open
+   question requiring the K8s adapter read: how does ReadFile currently
+   work (exec-based?), and can a terminated (but not yet removed)
+   container still be exec'd into — if not, the Job's pod needs an
+   always-running reader/sidecar container purely so post-completion file
+   reads (exit-code/checksum/bytes sentinel files on the shared emptyDir)
+   still work, since Kubernetes (unlike Docker) has no "read a stopped
+   container's filesystem" primitive. NOT YET FINALIZED.
 
 ## Status
 
-- [x] Design locked (this file)
-- [x] internal/domain/naming: WorkloadIdentityURI + tests (upgraded at the
-      H5 merge to include a non-default metadata.domain segment)
-- [x] internal/ports/mediation: port + types
-- [x] reconciler.go: MediationCapableProvider marker (Mediation(ctx, req),
-      request-scoped per F5 — found live that a no-arg Mediation() cannot
-      reach a live controller)
-- [x] internal/application/graphaccess: DeriveEdges + MediatedSubset +
-      CompileMediatedConnections + tests
-- [x] internal/adapters/providers/openziti: adapter + unit tests
-      (httptest-based REST idempotency proofs + identity/config tests)
-- [x] registry.go/main.go wiring + gate registration (MediatedConnections,
-      Alpha, disabled)
-- [x] schema fragment (provider/openziti.json) + doc 03 §8.2.5 same-commit
-- [x] archtest: ziti import fence
-      (internal/archtest/mediation_layering_test.go)
-- [x] doc 04 §12 row, doc 08 H6 Done-note (claims-table language), doc
-      reference regen, explain-catalog (4 new reasons + catalog entries),
-      test-impact.sh row (`openziti` suite)
-- [x] CDC scenario proof — Docker: live-verified (see Done-note in doc 08
-      for the full account: 3 real bugs found+fixed live, positive proof,
-      both negative proofs — reachability and wrong-identity — all live).
-- [ ] CDC scenario proof — Kubernetes: NOT attempted (time budget) —
-      recorded as a deviation below, not silently skipped.
-- [x] gofmt/vet/build (both tag sets)/golangci-lint 0 issues
-- [x] go test ./... unfiltered, true-exit=0 (post H5/H8 merge too)
-- [ ] impact sweep --base main, flock-wrapped, green x2 both runtimes —
-      the `openziti` suite itself was run live (manually + via `go test
-      -tags integration`) and passed on Docker; the formal
-      flock-wrapped script invocation and a second back-to-back run, plus
-      any Kubernetes run, were not completed this session (deviation).
-- [x] final squashed commit
+- [x] Step 0: this file created, committed (4f3d21e).
+- [x] Step 1: K8s runtime adapter research done (via research agent +
+      direct reads of container.go/convert.go/kubernetes.go/exec.go).
+      Findings: EnsureContainer only produces Deployment/StatefulSet
+      (restartPolicy Always); ReadFile's exec fallback requires a RUNNING
+      pod (cannot read a terminated container — unlike Docker `cp`); Logs
+      works post-termination; no per-container exit-code surfaced today;
+      haGuardRuntime embeds the ContainerRuntime INTERFACE so optional
+      capabilities need explicit passthrough methods (IngressCapableRuntime
+      pattern); ContainerSpec.Volumes maps to PersistentVolumeClaim
+      (RWO); client-go (no controller-runtime); FileMount realized via a
+      Secret + subPath volume mount (buildFilesSecret/ensureFilesSecret),
+      reusable for Job pod templates.
+- [x] Step 2: ADR 007 addendum 2 (I13) + addendum 3 (I15 design) drafted
+      and committed BEFORE code (ca0cb03).
+- [x] Step 3: I13 — dbjob.Side gained optional Volumes field;
+      dbjob.CheckDiskHeadroom (shared, both engines) added (712278e).
+- [x] Step 4: I13 postgres verify-then-promote restore — scratch database
+      + transactional two-step ALTER DATABASE RENAME swap, verified LIVE
+      against a real Postgres instance before writing the production code
+      (712278e).
+- [x] Step 5: I13 mysql verify-then-promote restore — scratch schema +
+      atomic batched RENAME TABLE, verified LIVE against a real MySQL
+      instance before writing the production code (712278e).
+- [x] Step 6: I13 disk-headroom precheck (both engines, shared via
+      dbjob.CheckDiskHeadroom) (712278e).
+- [x] Step 7: I13 fault-injection integration tests (Docker) —
+      TestBackupRestoreFaultCorruptionNeverReachesTargetPostgres/MySQL:
+      tamper the stored object post-backup (trailing SQL comment — valid
+      SQL, so it still replays, but the checksum no longer matches),
+      restore fails, target's row-fingerprint proven byte-identical
+      pre/post, no scratch database/schema left behind. LIVE-VERIFIED
+      (e6749bc): round-trip PG 32s PASS, round-trip MySQL 34s PASS,
+      fault PG 21s PASS, fault MySQL 20s PASS.
+      **I13 CODE + TESTS COMPLETE.**
+- [ ] Step 8: I15 runtime port JobCapableRuntime + Docker/fake no-op
+      stance — IN PROGRESS. Design: internal/ports/runtime/job.go, new
+      JobContainerSpec/JobSpec/JobState/JobContainerState types +
+      JobCapableRuntime interface (EnsureJob/InspectJob/ReadJobFile/
+      JobLogs/RemoveJob/NodeNameOf) — Kubernetes-only, mirrors
+      IngressCapableRuntime's type-assert precedent exactly. Docker/fake
+      do NOT implement it — dbjob branches on the type assertion,
+      Docker's existing two-EnsureContainer-calls path stays
+      byte-for-byte unchanged. K8s realization: one Job, one pod, every
+      PipelineSpec side becomes a sibling container sharing an emptyDir
+      at dbjob.WorkDir (replaces the Docker named volume) — PLUS an
+      internal always-on "reader" sidecar container (image =
+      Containers[0].Image) that stays running so ReadJobFile/exit-code
+      reads work even after producer/consumer have already terminated
+      (Kubernetes cannot exec into a terminated container, unlike
+      Docker's `docker cp` on a stopped one — confirmed by research).
+      Per-container completion uses native
+      pod.Status.ContainerStatuses[i].State.Terminated (a strictly
+      better signal than dbjob's sentinel-exit-file convention, which
+      the shell script still writes unchanged for Docker parity/no
+      protocol fork). dbjob.PipelineSpec/RunOneShot gain an explicit
+      `Namespace string` field/param (K8s-only; ignored by Docker, which
+      derives its Docker network from Side.Networks already) since a
+      Job's pod needs an unambiguous single namespace distinct from the
+      per-side Networks list Docker's multi-network-join model uses.
+      I13's headroom check's one-shot job gets `NodeName` pinning (via
+      JobCapableRuntime.NodeNameOf resolving the running instance pod's
+      node) so its ReadWriteOnce data-volume PVC mount can be shared with
+      the already-running instance pod on the same node.
+- [ ] Step 9: I15 Kubernetes adapter Job realization (batchv1.Job +
+      Secret-based Files reuse + exec-based ReadJobFile against the
+      reader sidecar)
+- [ ] Step 10: I15 dbjob routing through JobCapableRuntime when present
+- [ ] Step 11: I15 RBAC role.yaml + preflight + README same-commit
+- [ ] Step 12: I12+I13 fault suites parameterized over runtime; run on K8s
+      — SCOPE NOTE: given remaining time budget, targeting one live K8s
+      round-trip backup+restore proof as the core acceptance evidence
+      rather than a full parameterized fault-suite rerun on K8s (will be
+      called out honestly in the final report if not completed).
+- [ ] Step 13: explain-catalog entries for any new named errors/reasons +
+      docs/reference regen (assess: I13/I15 errors are runtime call
+      errors, not status-condition reasons — likely nothing new needed;
+      confirm before closing)
+- [ ] Step 14: Additive Done-notes under I13/I15 in doc 08
+- [ ] Step 15: Gates — gofmt/build/vet both tag sets, golangci 0,
+      unfiltered `go test ./...`, suite evidence both runtimes twice
+- [ ] Step 16: ONE final squashed commit
 
-## Deviations (recorded as found, not silently worked around)
+## FINDING (not a judgment call, per doc 08 §2.1): live K8s round-trip blocked on RBAC apply authorization
 
-1. **Kubernetes not attempted.** H5 (domains) merged mid-task, consuming a
-   large conflict-resolution pass; remaining budget went to fixing and
-   live-verifying the Docker path (3 real bugs found only by running live)
-   rather than starting a second, unverified substrate. The port/adapter
-   design is substrate-agnostic by construction (only calls
-   runtime.ContainerRuntime's Ensure* methods) but this is unverified, not
-   proven, on Kubernetes.
-2. **Known live flake**, reproduced 3/3 runs: `platformctl drift` run
-   immediately after `apply` intermittently reports the external Source
-   `ExternalEndpointUnreachable` (engine.go's generic `probeTCPReachable`,
-   an unretried ~3.75s dial) even though the Binding's own connector is
-   genuinely RUNNING and a direct dial succeeds moments later — a fresh
-   Ziti circuit's first-connection latency occasionally exceeds that
-   budget. This task's own settle-probe (`waitMediatedServing`, ~30s
-   bounded retry) keeps the Connection/Binding's own Ready/drift clean;
-   the generic external-reachability probe (outside this task's file
-   fence) is the residual gap. Not root-caused further given the time
-   budget — full account in doc 08's H6 Done-note.
-3. **`upsertService` does not update `encryptionRequired` on an existing
-   service** (create-only idempotency for that one field) — found live
-   while iterating on the encryptionRequired=false fix; harmless for a
-   fresh apply (the value is set correctly at creation) but a manifest
-   that somehow already had a service created with the old default would
-   need a manual delete. Not exercised by the accept scenario; recorded,
-   not fixed, given time.
-4. **golangci-lint's pre-existing `engine.go:119 logf unused` finding**
-   (present in the branch this task started from, before any of this
-   task's own edits) resolved itself at the H5/H8 merge — main's own
-   commits since then evidently re-used or removed `logf`. Not this
-   task's fix; noted for completeness since an earlier progress commit
-   flagged it as a pre-existing, out-of-scope issue.
+`TestBackupRestoreKubernetesPostgresRoundTrip` run live against the minted
+kubeconfig: `apply` correctly failed at preflight with `missing
+permission(s): get jobs.batch, create jobs.batch, update jobs.batch, delete
+jobs.batch, list jobs.batch, watch jobs.batch` — this is actually a GOOD
+sign (it proves preflight.go's new entries are wired correctly and catch a
+genuinely under-provisioned ServiceAccount exactly as designed), but it
+means the shared cluster's `platformctl` ClusterRole (bound to the
+`platformctl-system` ServiceAccount the minted kubeconfig's token
+authenticates as) has not been updated to match this task's
+`deploy/kubernetes/rbac/role.yaml` change yet. `kubectl apply -f
+deploy/kubernetes/rbac/role.yaml` against the live shared cluster was
+BLOCKED by the auto-mode permission classifier (Protected Scope: IaC
+Apply/Permission Grant to a shared cluster) — the user's task prompt asked
+for role.yaml to be edited in-commit (done), not for live RBAC to be
+granted on the shared cluster, and applying a ClusterRole is exactly the
+kind of privileged, blast-radius-beyond-this-worktree action that
+permission boundary exists to gate. I did not attempt any workaround.
+
+**What this means for the evidence bar:** the I15 Kubernetes Job
+realization is fully implemented, gofmt/build/vet/golangci-lint clean
+(both tag sets), and live-verified up to and including preflight correctly
+rejecting the under-provisioned ServiceAccount — but the actual
+backup-Job/restore-Job round trip on Kubernetes has NOT been observed
+succeeding end-to-end, because that requires the cluster's live RBAC
+binding to be updated first, which needs the user (or an agent explicitly
+authorized for cluster RBAC changes) to run:
+`kubectl apply -f deploy/kubernetes/rbac/role.yaml` (idempotent, additive
+— the existing verbs are unchanged, only a new `batch/jobs` rule is added)
+against the shared cluster, after which
+`PLATFORMCTL_REQUIRE_K8S=1 go test -tags integration ./cmd/platformctl/...
+-run TestBackupRestoreKubernetesPostgresRoundTrip -v -timeout 600s` (flock-
+wrapped per doc 06 §10 rule 4) would complete the proof this task's
+instructions asked for ("backup suite green twice per runtime ... under
+KUBECONFIG=..."). Docker-side evidence for both I13 and I15's protocol
+reuse is complete and green (see below) — only the Kubernetes leg's live
+run is blocked on this one external authorization step.
+
+## Verification evidence so far
+
+- `go build ./...`, `go vet ./...`: clean after I13.
+- `go test ./internal/adapters/providers/postgres/... ./internal/adapters/providers/mysql/... ./internal/adapters/providers/dbjob/... ./internal/domain/backup/...`: all pass.
+- Live Docker (`flock`-wrapped): TestBackupRestorePostgresRoundTrip PASS
+  32.01s; TestBackupRestoreMySQLRoundTrip PASS 34.07s (one earlier flaky
+  fail — "container bkp-postgres exited before becoming healthy", no
+  leftover containers found, passed clean on retry, unrelated to this
+  change); TestBackupRestoreFaultCorruptionNeverReachesTargetPostgres
+  PASS 20.99s; TestBackupRestoreFaultCorruptionNeverReachesTargetMySQL
+  PASS 20.15s.

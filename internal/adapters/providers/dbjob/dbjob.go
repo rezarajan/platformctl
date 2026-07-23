@@ -150,6 +150,29 @@ type Side struct {
 	Networks []string
 	Env      map[string]string
 	Files    []runtime.FileMount
+	// Volumes, when set, mounts additional existing named volumes into
+	// this side's container beyond the pipeline's own shared work volume
+	// (RunPipeline) — or, for RunOneShot, the container's only volume
+	// mounts, since a one-shot container has no shared work volume of its
+	// own. Used by the I13 disk-headroom precheck to bind-mount an
+	// instance's own data volume read-only-in-intent from a throwaway
+	// container that just runs `df` against it (docs/adr/
+	// 007-backup-restore.md addendum 2) — nil for every pre-I13 caller,
+	// byte-for-byte unchanged.
+	Volumes []runtime.VolumeMount
+	// Namespace is the Kubernetes namespace RunOneShot schedules this
+	// side's Job in when the runtime implements
+	// runtime.JobCapableRuntime — ignored on Docker/fake, which derive
+	// their own placement from Networks. Unused (may be left empty) on
+	// every RunPipeline side; RunPipeline.Namespace covers the whole
+	// pipeline's Job instead (docs/adr/007-backup-restore.md addendum 3).
+	Namespace string
+	// NodeName, when set, pins this side's one-shot Job to an exact
+	// Kubernetes node (runtime.JobSpec.NodeName) — I13's disk-headroom
+	// precheck uses this to co-locate with the running instance pod so
+	// both can mount the same ReadWriteOnce PersistentVolumeClaim.
+	// Ignored on Docker/fake and by RunPipeline sides.
+	NodeName string
 	// ShellCmd is a POSIX sh command with no pipe redirection of its own:
 	// the producer's stdout is redirected to the shared FIFO, the
 	// consumer's stdin is redirected from it. Its shell exit code is what
@@ -168,10 +191,19 @@ type Side struct {
 type PipelineSpec struct {
 	// JobName must be unique per invocation (callers append a timestamp or
 	// similar) — it names the ephemeral volume and both containers.
-	JobName  string
-	Labels   map[string]string
-	Producer Side
-	Consumer Side
+	JobName string
+	// Namespace is the Kubernetes namespace RunPipeline schedules the
+	// whole pipeline's Job in when the runtime implements
+	// runtime.JobCapableRuntime — "the provider's domain namespace"
+	// (docs/planning/08 I15): the database side's own namespace,
+	// regardless of direction, since a Job's pod lives in exactly one
+	// namespace and Producer/Consumer always run as siblings in it.
+	// Ignored on Docker/fake, which derive per-side placement from each
+	// Side's own Networks instead.
+	Namespace string
+	Labels    map[string]string
+	Producer  Side
+	Consumer  Side
 	// Timeout bounds each side by default; 0 = DefaultTimeout.
 	Timeout time.Duration
 	// ProducerTimeout/ConsumerTimeout override Timeout for one side only
@@ -211,7 +243,19 @@ type Result struct {
 // find later. On failure, both containers are forcibly removed before
 // spec.Cleanup (if set) runs, and the returned error names which side
 // failed and why.
+//
+// When rt implements runtime.JobCapableRuntime (the Kubernetes adapter —
+// docs/adr/007-backup-restore.md addendum 3, docs/planning/08 I15), the
+// whole pipeline instead runs as one Kubernetes Job whose pod runs Producer
+// and Consumer as sibling containers sharing an emptyDir — the FIFO
+// protocol below (sideScript) is identical either way; only how the two
+// sides are scheduled and inspected differs. Docker/fake are completely
+// unaffected: this type assertion always fails for them, so every existing
+// caller's behavior is byte-for-byte unchanged.
 func RunPipeline(ctx context.Context, rt runtime.ContainerRuntime, spec PipelineSpec) (Result, error) {
+	if jrt, ok := rt.(runtime.JobCapableRuntime); ok {
+		return runJobPipeline(ctx, jrt, spec)
+	}
 	producerTimeout := spec.ProducerTimeout
 	if producerTimeout <= 0 {
 		producerTimeout = spec.Timeout
@@ -378,21 +422,22 @@ func pollSide(ctx context.Context, rt runtime.ContainerRuntime, name, exitFile s
 	return sideOutcome{done: true, code: code}
 }
 
-// sideSpec builds one side's ContainerSpec. The producer side (toPipe)
-// tees its stdout through two extra FIFOs (hashFifo/sizeFifo) so a
-// checksum and byte count of the exact bytes crossing PipePath are
-// computed by backgrounded GNU coreutils processes — no process
-// substitution, no landing the payload as a file (docs/adr/
+// sideScript renders one side's shell script — the FIFO/tee/checksum
+// protocol shared byte-for-byte by every realization (Docker's per-side
+// container, docs/adr/007-backup-restore.md addendum 3's Kubernetes Job
+// container): the producer side (toPipe) tees its stdout through two extra
+// FIFOs (hashFifo/sizeFifo) so a checksum and byte count of the exact bytes
+// crossing PipePath are computed by backgrounded GNU coreutils processes —
+// no process substitution, no landing the payload as a file (docs/adr/
 // 007-backup-restore.md's I12 addendum). cmd's own exit status is captured
 // inside a subshell BEFORE tee (the pipeline's last stage) can obscure it:
 // `( cmd; echo $? > cmdrc ) | tee ...` — the subshell always finishes
 // (including writing cmdrc) before the whole pipeline construct returns,
 // regardless of tee's own exit status.
-func sideSpec(name, volName string, labels map[string]string, side Side, toPipe bool) runtime.ContainerSpec {
-	var script string
+func sideScript(toPipe bool, side Side) string {
 	if toPipe {
 		cmdrc := WorkDir + "/producer-cmdrc"
-		script = fmt.Sprintf(
+		return fmt.Sprintf(
 			"mkfifo %s 2>/dev/null; mkfifo %s %s 2>/dev/null; "+
 				"sha256sum < %s | cut -d' ' -f1 > %s/producer-checksum & "+
 				"wc -c < %s | tr -d ' ' > %s/producer-bytes & "+
@@ -404,9 +449,13 @@ func sideSpec(name, volName string, labels map[string]string, side Side, toPipe 
 			side.ShellCmd, cmdrc, hashFifo, sizeFifo, PipePath,
 			cmdrc, WorkDir,
 		)
-	} else {
-		script = fmt.Sprintf("mkfifo %s 2>/dev/null; (%s) < %s; echo $? > %s/consumer-exit", PipePath, side.ShellCmd, PipePath, WorkDir)
 	}
+	return fmt.Sprintf("mkfifo %s 2>/dev/null; (%s) < %s; echo $? > %s/consumer-exit", PipePath, side.ShellCmd, PipePath, WorkDir)
+}
+
+// sideSpec builds one side's Docker ContainerSpec around sideScript.
+func sideSpec(name, volName string, labels map[string]string, side Side, toPipe bool) runtime.ContainerSpec {
+	script := sideScript(toPipe, side)
 	return runtime.ContainerSpec{
 		Name:  name,
 		Image: side.Image,
@@ -425,7 +474,7 @@ func sideSpec(name, volName string, labels map[string]string, side Side, toPipe 
 		Env:        side.Env,
 		Files:      side.Files,
 		Networks:   side.Networks,
-		Volumes:    []runtime.VolumeMount{{VolumeName: volName, MountPath: WorkDir}},
+		Volumes:    append(append([]runtime.VolumeMount{}, side.Volumes...), runtime.VolumeMount{VolumeName: volName, MountPath: WorkDir}),
 		Labels:     labels,
 	}
 }
@@ -456,7 +505,15 @@ func diagnostics(ctx context.Context, rt runtime.ContainerRuntime, producerName,
 // RunPipeline's own Cleanup wiring (best-effort partial-object removal
 // after a failure). If resultPath is non-empty, its content is read back
 // (before the container is removed) and returned on success.
+//
+// When rt implements runtime.JobCapableRuntime, this runs as a
+// single-container Kubernetes Job instead (side.Namespace selects where;
+// side.NodeName optionally pins it — docs/adr/007-backup-restore.md
+// addendum 3). Docker/fake are unaffected.
 func RunOneShot(ctx context.Context, rt runtime.ContainerRuntime, name string, labels map[string]string, side Side, timeout time.Duration, resultPath string) ([]byte, error) {
+	if jrt, ok := rt.(runtime.JobCapableRuntime); ok {
+		return runOneShotJob(ctx, jrt, name, labels, side, timeout, resultPath)
+	}
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
@@ -469,6 +526,7 @@ func RunOneShot(ctx context.Context, rt runtime.ContainerRuntime, name string, l
 		Env:        side.Env,
 		Files:      side.Files,
 		Networks:   side.Networks,
+		Volumes:    side.Volumes,
 		Labels:     labels,
 	}
 	defer func() { _ = rt.Remove(context.WithoutCancel(ctx), name) }()
@@ -512,14 +570,73 @@ func RunOneShot(ctx context.Context, rt runtime.ContainerRuntime, name string, l
 	}
 }
 
+// diskHeadroomTimeout/diskHeadroomResultPath bound and locate
+// CheckDiskHeadroom's precheck job.
+const (
+	diskHeadroomTimeout    = 2 * time.Minute
+	diskHeadroomResultPath = "/tmp/datascape-restore-freekb"
+)
+
+// CheckDiskHeadroom refuses (a named, honest error) unless volumeName (an
+// existing named volume, already mounted by the running instance at
+// mountPath) has at least 2x wantBytes free — I13's precheck
+// (docs/adr/007-backup-restore.md addendum 2), run via a throwaway
+// RunOneShot container that mounts the same volume and runs POSIX `df`
+// (confirmed present in every pinned database image), before a restore's
+// scratch database is even created — postgres and mysql both call this
+// unchanged, the same "dbjob implements it once" shape every other backup/
+// restore mechanic in this package already has.
+// instanceName is the running database instance's own runtime object name
+// (naming.RuntimeObjectName(req.Provider)) — used only to resolve a
+// co-location node via runtime.JobCapableRuntime.NodeNameOf when rt
+// implements it: a Kubernetes ReadWriteOnce PersistentVolumeClaim's access
+// mode guarantees a single NODE may mount it, not a single pod, so this
+// precheck's own throwaway pod must land on the SAME node as the already-
+// running instance pod to mount volumeName alongside it (docs/adr/
+// 007-backup-restore.md addendum 3). namespace is the Kubernetes namespace
+// to schedule into; ignored, like instanceName, on Docker/fake.
+func CheckDiskHeadroom(ctx context.Context, rt runtime.ContainerRuntime, labels map[string]string, jobName, namespace, instanceName, image, volumeName, mountPath string, wantBytes int64) error {
+	side := Side{
+		Image:     image,
+		Namespace: namespace,
+		Volumes:   []runtime.VolumeMount{{VolumeName: volumeName, MountPath: mountPath}},
+		ShellCmd:  fmt.Sprintf("df -Pk %s | tail -1 | awk '{print $4}' > %s", mountPath, diskHeadroomResultPath),
+	}
+	if jrt, ok := rt.(runtime.JobCapableRuntime); ok {
+		node, err := jrt.NodeNameOf(ctx, instanceName)
+		if err != nil {
+			return fmt.Errorf("disk headroom precheck: resolve instance node: %w", err)
+		}
+		side.NodeName = node
+	}
+	out, err := RunOneShot(ctx, rt, jobName+"-headroom", labels, side, diskHeadroomTimeout, diskHeadroomResultPath)
+	if err != nil {
+		return fmt.Errorf("disk headroom precheck: %w", err)
+	}
+	freeKB, perr := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	if perr != nil {
+		return fmt.Errorf("disk headroom precheck: parse free space %q: %w", out, perr)
+	}
+	freeBytes := freeKB * 1024
+	needBytes := 2 * wantBytes
+	if freeBytes < needBytes {
+		return fmt.Errorf("disk headroom precheck: %d bytes free on the instance volume, need at least %d (2x the %d-byte backup) — refusing restore", freeBytes, needBytes, wantBytes)
+	}
+	return nil
+}
+
 // PersistManifest uploads manifest as the JSON sidecar object
 // "<key><manifestSuffix>" next to the backup object it describes — the
 // durable, out-of-band integrity record a later, separate `restore`
 // invocation reads back via ReadManifest before trusting anything it
 // downloads (docs/adr/007-backup-restore.md's I12 addendum). loc must
 // already carry resolved credentials, exactly like every other Location
-// use; key is the exact object key the backup landed at.
-func PersistManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName string, labels map[string]string, loc backup.Location, key string, manifest backup.Manifest) error {
+// use; key is the exact object key the backup landed at. namespace is the
+// Kubernetes namespace this one-shot job schedules into when the runtime
+// implements runtime.JobCapableRuntime (docs/adr/007-backup-restore.md
+// addendum 3) — ignored on Docker/fake; callers pass the same "provider's
+// domain namespace" value they pass to PipelineSpec.Namespace.
+func PersistManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName, namespace string, labels map[string]string, loc backup.Location, key string, manifest backup.Manifest) error {
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("job %q: encode manifest sidecar: %w", jobName, err)
@@ -529,9 +646,10 @@ func PersistManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName s
 		return err
 	}
 	side := Side{
-		Image:    MCImage,
-		Networks: networksFor(loc),
-		Env:      map[string]string{"MC_CONFIG_DIR": MCConfigDir},
+		Image:     MCImage,
+		Networks:  networksFor(loc),
+		Namespace: namespace,
+		Env:       map[string]string{"MC_CONFIG_DIR": MCConfigDir},
 		Files: []runtime.FileMount{
 			{Path: MCConfigPath, Content: mcConfig, Mode: 0o600},
 			{Path: manifestMountPath, Content: data, Mode: 0o600},
@@ -550,18 +668,20 @@ func PersistManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName s
 // named error, not a silently skipped check — a backup made before this
 // hardening landed cannot be integrity-verified, and Restore refuses it
 // outright (docs/adr/007-backup-restore.md's I12 addendum, Known
-// limitation (d)).
-func ReadManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName string, labels map[string]string, loc backup.Location, key string) (backup.Manifest, error) {
+// limitation (d)). namespace is PersistManifest's own parameter, same
+// meaning.
+func ReadManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName, namespace string, labels map[string]string, loc backup.Location, key string) (backup.Manifest, error) {
 	mcConfig, err := MCConfig(loc)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
 	side := Side{
-		Image:    MCImage,
-		Networks: networksFor(loc),
-		Env:      map[string]string{"MC_CONFIG_DIR": MCConfigDir},
-		Files:    []runtime.FileMount{{Path: MCConfigPath, Content: mcConfig, Mode: 0o600}},
-		ShellCmd: fmt.Sprintf("mc cat %s/%s/%s > %s", MCAlias, loc.Bucket, key+manifestSuffix, manifestReadPath),
+		Image:     MCImage,
+		Networks:  networksFor(loc),
+		Namespace: namespace,
+		Env:       map[string]string{"MC_CONFIG_DIR": MCConfigDir},
+		Files:     []runtime.FileMount{{Path: MCConfigPath, Content: mcConfig, Mode: 0o600}},
+		ShellCmd:  fmt.Sprintf("mc cat %s/%s/%s > %s", MCAlias, loc.Bucket, key+manifestSuffix, manifestReadPath),
 	}
 	out, err := RunOneShot(ctx, rt, jobName+"-manifest-read", labels, side, manifestTimeout, manifestReadPath)
 	if err != nil {
@@ -597,4 +717,232 @@ func VerifyIntegrity(resourceName, bucket, key string, want backup.Manifest, got
 		return fmt.Errorf("%q: restore integrity check failed: downloaded sha256:%s (%d bytes) does not match backup manifest sha256:%s (%d bytes) for %s/%s — the object may be corrupted or truncated; treat the target's data as untrustworthy and re-restore from a known-good backup, not as rolled back", resourceName, got.SHA256, got.Bytes, wantSum, want.Bytes, bucket, key)
 	}
 	return nil
+}
+
+// --- Kubernetes Job realization (docs/adr/007-backup-restore.md addendum
+// 3, docs/planning/08 I15) ---
+//
+// The functions below are RunPipeline/RunOneShot's Job-path counterparts,
+// used only when the runtime implements runtime.JobCapableRuntime. They
+// reuse sideScript unchanged (the FIFO/tee/checksum protocol is identical
+// to the Docker path) and never reference any Kubernetes-specific type —
+// everything Kubernetes-shaped lives behind the runtime.JobCapableRuntime
+// port, realized by internal/adapters/runtime/kubernetes/job.go.
+
+const (
+	jobProducerContainerName = "producer"
+	jobConsumerContainerName = "consumer"
+	jobOneShotContainerName  = "oneshot"
+)
+
+// jobContainerSpec builds one side's runtime.JobContainerSpec around
+// sideScript — the Job-path mirror of sideSpec.
+func jobContainerSpec(name string, side Side, toPipe bool) runtime.JobContainerSpec {
+	return runtime.JobContainerSpec{
+		Name:       name,
+		Image:      side.Image,
+		Entrypoint: []string{"sh", "-c"},
+		Cmd:        []string{sideScript(toPipe, side)},
+		Env:        side.Env,
+		Files:      side.Files,
+		Volumes:    side.Volumes,
+	}
+}
+
+// jobDiagnostics pulls a bounded log tail from each named container — the
+// Job-path mirror of diagnostics.
+func jobDiagnostics(ctx context.Context, jrt runtime.JobCapableRuntime, namespace, jobName string, containerNames ...string) string {
+	var sb strings.Builder
+	for _, name := range containerNames {
+		logs, _ := jrt.JobLogs(ctx, namespace, jobName, name, 40)
+		fmt.Fprintf(&sb, "\n%s logs:\n%s", name, logs)
+	}
+	return sb.String()
+}
+
+// runJobPipeline is RunPipeline's Kubernetes Job-path realization: one Job,
+// one pod, Producer and Consumer as sibling containers sharing an emptyDir
+// at WorkDir. Mirrors RunPipeline's own shape (start both sides, wait,
+// force-remove on failure before Cleanup runs) as closely as the
+// port allows.
+func runJobPipeline(ctx context.Context, jrt runtime.JobCapableRuntime, spec PipelineSpec) (Result, error) {
+	producerTimeout := spec.ProducerTimeout
+	if producerTimeout <= 0 {
+		producerTimeout = spec.Timeout
+	}
+	if producerTimeout <= 0 {
+		producerTimeout = DefaultTimeout
+	}
+	consumerTimeout := spec.ConsumerTimeout
+	if consumerTimeout <= 0 {
+		consumerTimeout = spec.Timeout
+	}
+	if consumerTimeout <= 0 {
+		consumerTimeout = DefaultTimeout
+	}
+
+	jobSpec := runtime.JobSpec{
+		Name:      spec.JobName,
+		Namespace: spec.Namespace,
+		Labels:    spec.Labels,
+		Containers: []runtime.JobContainerSpec{
+			jobContainerSpec(jobProducerContainerName, spec.Producer, redirectTo),
+			jobContainerSpec(jobConsumerContainerName, spec.Consumer, redirectFrom),
+		},
+		SharedVolumeMountPath: WorkDir,
+	}
+	if _, err := jrt.EnsureJob(ctx, jobSpec); err != nil {
+		return Result{}, fmt.Errorf("job %q: ensure job: %w", spec.JobName, err)
+	}
+
+	result, err := waitJobPipeline(ctx, jrt, spec.JobName, spec.Namespace, producerTimeout, consumerTimeout)
+	// Whether the pipeline succeeded or failed, the Job (and its
+	// keep-alive reader container) is no longer needed once
+	// waitJobPipeline has already read back the result/diagnostics it
+	// needs — remove it before Cleanup runs, the same "force-remove both
+	// sides first" ordering RunPipeline's Docker path uses to close the
+	// race where a not-yet-killed consumer could still complete an
+	// in-flight multipart upload after Cleanup already ran and found
+	// nothing to delete.
+	_ = jrt.RemoveJob(context.WithoutCancel(ctx), spec.Namespace, spec.JobName)
+	if err == nil {
+		return result, nil
+	}
+	if spec.Cleanup != nil {
+		cleanup := *spec.Cleanup
+		if cleanup.Namespace == "" {
+			cleanup.Namespace = spec.Namespace
+		}
+		if _, cerr := runOneShotJob(ctx, jrt, spec.JobName+"-cleanup", spec.Labels, cleanup, cleanupTimeout, ""); cerr != nil {
+			err = fmt.Errorf("%w (partial-object cleanup after failure also failed: %s)", err, cerr)
+		}
+	}
+	return Result{}, err
+}
+
+// waitJobPipeline polls both sides via InspectJob and returns the moment
+// either one is known to have failed — the Job-path mirror of waitPipeline,
+// reading each container's state (running/terminated/exit code) straight
+// from Kubernetes' own per-container status rather than dbjob's
+// exit-file-sentinel convention (a strictly better signal that works
+// without needing to exec into a container that may have already
+// terminated — docs/adr/007-backup-restore.md addendum 3).
+func waitJobPipeline(ctx context.Context, jrt runtime.JobCapableRuntime, jobName, namespace string, producerTimeout, consumerTimeout time.Duration) (Result, error) {
+	producerDeadline := time.Now().Add(producerTimeout)
+	consumerDeadline := time.Now().Add(consumerTimeout)
+	for {
+		state, found, err := jrt.InspectJob(ctx, namespace, jobName)
+		if err != nil {
+			return Result{}, fmt.Errorf("job %q: %w", jobName, err)
+		}
+		if !found {
+			return Result{}, fmt.Errorf("job %q: disappeared before completing", jobName)
+		}
+		producer := state.Containers[jobProducerContainerName]
+		consumer := state.Containers[jobConsumerContainerName]
+
+		if producer.Terminated && producer.ExitCode != 0 {
+			return Result{}, fmt.Errorf("job %q: producer failed (exit=%d)%s", jobName, producer.ExitCode, jobDiagnostics(ctx, jrt, namespace, jobName, jobProducerContainerName, jobConsumerContainerName))
+		}
+		if consumer.Terminated && consumer.ExitCode != 0 {
+			return Result{}, fmt.Errorf("job %q: consumer failed (exit=%d)%s", jobName, consumer.ExitCode, jobDiagnostics(ctx, jrt, namespace, jobName, jobProducerContainerName, jobConsumerContainerName))
+		}
+		if producer.Terminated && consumer.Terminated {
+			return readJobResult(ctx, jrt, namespace, jobName)
+		}
+		now := time.Now()
+		if !producer.Terminated && now.After(producerDeadline) {
+			return Result{}, fmt.Errorf("job %q: producer did not finish within %s%s", jobName, producerTimeout, jobDiagnostics(ctx, jrt, namespace, jobName, jobProducerContainerName, jobConsumerContainerName))
+		}
+		if !consumer.Terminated && now.After(consumerDeadline) {
+			return Result{}, fmt.Errorf("job %q: consumer did not finish within %s%s", jobName, consumerTimeout, jobDiagnostics(ctx, jrt, namespace, jobName, jobProducerContainerName, jobConsumerContainerName))
+		}
+		select {
+		case <-ctx.Done():
+			return Result{}, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// readJobResult reads back the producer-side checksum/byte-count files via
+// ReadJobFile — the Job-path mirror of readResult.
+func readJobResult(ctx context.Context, jrt runtime.JobCapableRuntime, namespace, jobName string) (Result, error) {
+	sumData, err := jrt.ReadJobFile(ctx, namespace, jobName, WorkDir+"/producer-checksum")
+	if err != nil {
+		return Result{}, fmt.Errorf("job %q: read producer checksum: %w", jobName, err)
+	}
+	bytesData, err := jrt.ReadJobFile(ctx, namespace, jobName, WorkDir+"/producer-bytes")
+	if err != nil {
+		return Result{}, fmt.Errorf("job %q: read producer byte count: %w", jobName, err)
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(string(bytesData)), 10, 64)
+	if err != nil {
+		return Result{}, fmt.Errorf("job %q: parse producer byte count %q: %w", jobName, bytesData, err)
+	}
+	sum := strings.TrimSpace(string(sumData))
+	if sum == "" {
+		return Result{}, fmt.Errorf("job %q: producer checksum file is empty", jobName)
+	}
+	return Result{SHA256: sum, Bytes: n}, nil
+}
+
+// runOneShotJob is RunOneShot's Kubernetes Job-path realization: a
+// single-container Job, no shared volume unless side.Volumes names one.
+func runOneShotJob(ctx context.Context, jrt runtime.JobCapableRuntime, name string, labels map[string]string, side Side, timeout time.Duration, resultPath string) ([]byte, error) {
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	script := fmt.Sprintf("(%s); echo $? > %s", side.ShellCmd, oneShotExitFile)
+	jobSpec := runtime.JobSpec{
+		Name:      name,
+		Namespace: side.Namespace,
+		Labels:    labels,
+		Containers: []runtime.JobContainerSpec{{
+			Name:       jobOneShotContainerName,
+			Image:      side.Image,
+			Entrypoint: []string{"sh", "-c"},
+			Cmd:        []string{script},
+			Env:        side.Env,
+			Files:      side.Files,
+			Volumes:    side.Volumes,
+		}},
+		NodeName: side.NodeName,
+	}
+	defer func() { _ = jrt.RemoveJob(context.WithoutCancel(ctx), side.Namespace, name) }()
+	if _, err := jrt.EnsureJob(ctx, jobSpec); err != nil {
+		return nil, fmt.Errorf("job %q: start: %w", name, err)
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		state, found, err := jrt.InspectJob(ctx, side.Namespace, name)
+		if err != nil {
+			return nil, fmt.Errorf("job %q: inspect: %w", name, err)
+		}
+		if !found {
+			return nil, fmt.Errorf("job %q: disappeared before completing", name)
+		}
+		c := state.Containers[jobOneShotContainerName]
+		if c.Terminated {
+			if c.ExitCode != 0 {
+				return nil, fmt.Errorf("job %q: failed (exit=%d)%s", name, c.ExitCode, jobDiagnostics(ctx, jrt, side.Namespace, name, jobOneShotContainerName))
+			}
+			if resultPath == "" {
+				return nil, nil
+			}
+			out, err := jrt.ReadJobFile(ctx, side.Namespace, name, resultPath)
+			if err != nil {
+				return nil, fmt.Errorf("job %q: read result %q: %w", name, resultPath, err)
+			}
+			return out, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("job %q: did not finish within %s", name, timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
 }
