@@ -180,6 +180,7 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: cdc-rp
+  domain: analytics
 spec:
   type: redpanda
   runtime: {type: docker}
@@ -189,6 +190,7 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: cdc-pg
+  domain: payments
 spec:
   type: postgres
   runtime: {type: docker}

@@ -153,3 +153,28 @@ Lattice docs/FAQ + resource-gateway guides (auth-policy scope; resource
 configurations), OpenZiti documentation and SPIRE-integration posts,
 Consul intentions/permissive-mTLS docs, 2026 data-mesh governance
 surveys (Thoughtworks, Atlan).
+
+## Addendum (2026-07-23): domain-of-record is the realizing Provider's
+
+Found by the no-compromise review (doc 11): H5's decorator initially
+keyed network translation on the RESOURCE's declared domain — but the
+containers a dependent's reconcile addresses belong to its realizing
+Provider, so an EventStream declared in `analytics` on a broker in
+`infra` would have dialed a network its broker is not on. The rule:
+
+1. **Runtime addressing always uses the realizing Provider's domain**
+   (the decorator receives both envelopes; translation keys on the
+   provider's).
+2. **A dependent's own declared domain governs graph/policy edges
+   only** (Ring 0's crossDomain selector reads resource domains — a
+   Binding's edge between a payments-domain Source and an
+   analytics-domain EventStream is still the cross-domain edge policy
+   evaluates, because each of those resources coheres with its own
+   provider).
+3. **Explicit mismatch is refused at validate**: a resource with a
+   providerRef declaring a domain different from its provider's claims
+   a partition the runtime cannot deliver — coherence error naming
+   both. An undeclared domain inherits the provider's silently.
+
+Pinned by TestDomainRuntimeUsesProviderDomainOfRecord and
+TestDomainCoherenceWithProvider.

@@ -65,13 +65,19 @@ type domainRuntime struct {
 // itself was already constructed from, so the decorator and the underlying
 // runtime always agree on which config governs); byKey is the full
 // validated resource set (Request.Resources).
-func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any, env resource.Envelope, byKey map[resource.Key]resource.Envelope) runtime.ContainerRuntime {
+// provEnv is the realizing Provider's envelope — the DOMAIN-OF-RECORD
+// for every runtime object this request touches (docs/adr/022 addendum:
+// containers live in their provider's domain; the dependent's own
+// declared domain governs graph/policy edges only, and validate refuses
+// an explicit mismatch). env is the resource under reconcile — used only
+// for resource-shaped concerns like a Connection's cross-domain holes.
+func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any, provEnv, env resource.Envelope, byKey map[resource.Key]resource.Envelope) runtime.ContainerRuntime {
 	token, pinned := networkToken(runtimeConfig)
 	d := &domainRuntime{
 		ContainerRuntime: rt,
 		token:            token,
 		pinned:           pinned,
-		domain:           resource.NormalizeDomain(env.Metadata.Domain),
+		domain:           resource.NormalizeDomain(provEnv.Metadata.Domain),
 	}
 	if env.Kind == "Connection" {
 		d.holes = consumerDomainHoles(env, byKey)

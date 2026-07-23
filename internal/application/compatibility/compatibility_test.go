@@ -1086,3 +1086,32 @@ func TestConnectionViaRealized(t *testing.T) {
 		t.Errorf("want resolution error, got: %v", err)
 	}
 }
+
+// TestDomainCoherenceWithProvider pins the docs/adr/022 addendum: a
+// dependent explicitly declaring a domain different from its realizing
+// Provider's is refused at validate (runtime objects live in the
+// provider's domain); an undeclared domain inherits silently.
+func TestDomainCoherenceWithProvider(t *testing.T) {
+	prov := envelope("Provider", "broker", map[string]any{
+		"type": "redpanda", "runtime": map[string]any{"type": "fake"},
+	})
+	prov.Metadata.Domain = "infra"
+	es := envelope("EventStream", "events", map[string]any{
+		"providerRef": map[string]any{"name": "broker"},
+	})
+	es.Metadata.Domain = "analytics"
+	err := Check([]resource.Envelope{prov, es}, resolver(stubProvider{"redpanda"}))
+	if err == nil || !strings.Contains(err.Error(), "does not match realizing Provider") {
+		t.Fatalf("want domain-coherence refusal, got: %v", err)
+	}
+	// Undeclared inherits — no error from coherence.
+	es.Metadata.Domain = ""
+	if err := Check([]resource.Envelope{prov, es}, resolver(stubProvider{"redpanda"})); err != nil && strings.Contains(err.Error(), "does not match realizing Provider") {
+		t.Fatalf("undeclared domain must inherit, got refusal: %v", err)
+	}
+	// Matching explicit declaration passes coherence.
+	es.Metadata.Domain = "infra"
+	if err := Check([]resource.Envelope{prov, es}, resolver(stubProvider{"redpanda"})); err != nil && strings.Contains(err.Error(), "does not match realizing Provider") {
+		t.Fatalf("matching domain refused: %v", err)
+	}
+}

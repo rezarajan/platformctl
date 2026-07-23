@@ -1324,7 +1324,14 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 	// logical-token -> domain-scoped-concrete-name translation here, the one
 	// chokepoint every Reconcile/Probe/Destroy/capability call's Runtime
 	// passes through — no provider ever sees a domain-scoped name itself.
-	rt = newDomainRuntime(rt, p.RuntimeConfig, env, byKey)
+	// Domain-of-record is the REALIZING PROVIDER's (docs/adr/022
+	// addendum, 2026-07-23): the containers a dependent resource's
+	// reconcile addresses live in its provider's domain — keying the
+	// translation on the dependent's own declared domain would aim
+	// dials at a network the provider's containers are not on. The
+	// dependent's declared domain governs graph/policy edges only;
+	// an explicit mismatch is refused at validate (coherence check).
+	rt = newDomainRuntime(rt, p.RuntimeConfig, provEnv, env, byKey)
 	// facts is the single state snapshot every published-fact lookup below
 	// reads from (docs/planning/08 I9) — taken once, under one lock
 	// acquisition, rather than each resolve* function separately locking

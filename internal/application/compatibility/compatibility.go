@@ -35,6 +35,31 @@ func Check(envelopes []resource.Envelope, resolve ProviderResolver) error {
 			return err
 		}
 	}
+	// Domain coherence (docs/adr/022 addendum, 2026-07-23): runtime
+	// objects live in the realizing Provider's domain — a dependent
+	// resource EXPLICITLY declaring a different domain claims a
+	// partition the runtime cannot deliver (its containers are the
+	// provider's), so it is refused here. An UNDECLARED domain simply
+	// inherits the provider's; the dependent's own declared domain
+	// otherwise governs graph/policy edges only.
+	for _, e := range envelopes {
+		if e.Metadata.Domain == "" || e.Kind == "Provider" {
+			continue
+		}
+		provRef := resource.RefFromSpec(e.Spec, "providerRef")
+		if provRef.Name == "" {
+			continue
+		}
+		provEnv, ok := idx.resolveKind(e, provRef, "Provider")
+		if !ok {
+			continue // unresolvable providerRef is its own error elsewhere
+		}
+		dm := resource.NormalizeDomain(e.Metadata.Domain)
+		pd := resource.NormalizeDomain(provEnv.Metadata.Domain)
+		if dm != pd {
+			return fmt.Errorf("%s %q: metadata.domain %q does not match realizing Provider %q's domain %q — runtime objects live in the provider's domain (docs/adr/022 addendum); declare the domain on the Provider, or omit it here to inherit", e.Kind, e.Metadata.Name, dm, provRef.Name, pd)
+		}
+	}
 	if err := checkResourceCapabilities(envelopes, idx, resolve); err != nil {
 		return err
 	}

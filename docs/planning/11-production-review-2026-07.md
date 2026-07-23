@@ -577,3 +577,14 @@ static. Dimensions, each producing findings verified before fixing:
   queued. Merged-state gate sweep running. Remaining after the 027
   wave: E6→E7, H7, local-minikube Calico recreation (caveat B), owner
   decisions.
+- 2026-07-23: NO-COMPROMISE REVIEW (owner directive: recorded
+  deviations are debts, not resolutions). FIXED NOW: H5's domain-of-
+  record deviation was a real correctness gap — the decorator keyed on
+  the resource's domain while the containers live in the realizing
+  Provider's; an analytics-domain EventStream on an infra-domain broker
+  would have dialed the wrong network. Rule set (ADR 022 addendum):
+  runtime addressing uses the provider's domain; the dependent's
+  declared domain governs graph/policy edges only; explicit mismatch
+  refused at validate (coherence check; H5's own fixture was caught
+  incoherent and corrected — providers now carry the domains). Pinned
+  at decorator and validate levels; full unit true-exit=0.
