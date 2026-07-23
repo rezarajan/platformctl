@@ -465,3 +465,32 @@ static. Dimensions, each producing findings verified before fixing:
   I9's generic form) → E7 (truth sweep + ContainerProvider retirement),
   H6 (mediated connections, needs H5). Merge order on green: I10+I11
   (smallest surface) → I12 → I9 → H5; then wave 4b.
+- 2026-07-22: DECOUPLING VERIFICATION (owner-directed, orchestrator-
+  executed): can core facilities (routing, access policy) change with
+  ZERO provider edits? Verdict by facility:
+  PASS — addresses/dialing (ADR 015: EnsureReachable/WithReachable,
+  providers never construct addresses; proven by K8s adapter arriving
+  with no provider changes). PASS — access policy (H3: validate-time,
+  provider-invisible; B7 K8s isolation: runtime-side). PASS — port
+  posture (loopback-default binding landed runtime-side, zero provider
+  edits). PASS — published facts (I9's query; accretion frozen). PASS —
+  runtime capabilities (optional interfaces + registry promotion; the
+  ADR 018 promotion gotcha is the known, documented coupling point).
+  PASS — secrets (engine-resolved into Request; backends invisible).
+  FAIL — NETWORK IDENTITY: providerkit.Network hardcodes the shared
+  name, 23 provider Networks: sites choose networks themselves, each
+  provider EnsureNetworks its own, and the engine duplicates the
+  literal a third time (engine.go ~802) — the construct-by-convention
+  class ADR 015 banned for addresses, alive for network names. H5's
+  segmentation would have forced every provider to become domain-aware.
+  REMEDIATION (redirected into H5 mid-flight, before wrong code landed):
+  the name providers pass becomes the LOGICAL platform-network token
+  (zero provider edits, byte-for-byte); internal/domain/naming owns the
+  single logical→concrete mapping (default domain → unchanged = the
+  byte-identical pin; explicit overrides pass verbatim, pin-wins
+  semantics); the engine's per-resource Runtime construction gains a
+  decorating ContainerRuntime translating the token at every
+  network-name-accepting port method; the engine's duplicated literal
+  folds into the same authority. H5's acceptance now includes the
+  zero-provider-diff proof and a decoupling archtest. Once landed, the
+  invariant holds across every audited facility.
