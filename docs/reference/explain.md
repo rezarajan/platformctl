@@ -1346,6 +1346,50 @@ Remedies:
 - platformctl drift <path> to see the exact observed vs. wanted forwarder config.
 - Verify spec.target is reachable from the peer's own network independently of platformctl.
 
+## isolation
+
+### `IsolationEnforced` (reason)
+
+ADR 027 Layer 2 honesty probe: a live cross-namespace canary dial proved this cluster's declared network segmentation actually denies what it claims — or, on Docker, isolation is enforced by construction and needed no probe at all. Layer 2 (network segmentation) is real defense-in-depth here, on top of Layer 1's identity guarantee.
+
+Likely causes:
+
+- N/A — this reason indicates a healthy or successful state, not a problem.
+
+Remedies:
+
+- None required for Layer 2 itself.
+- Layer 1 (identity-attested mediated connections, docs/adr/022) remains the authoritative guarantee regardless of this result — this only confirms Layer 2's best-effort depth is real too.
+
+### `IsolationNotEnforced` (reason)
+
+ADR 027 Layer 2 honesty probe: a canary pod outside a default-deny-walled namespace successfully dialed a listener inside it — this Kubernetes cluster's CNI does not enforce NetworkPolicy at all (common on kindnet and some managed defaults). Layer 2 (network segmentation) is inert here; only Layer 1 (identity-attested mediated connections) protects this platform. Never a hard failure by itself — ADR 027: Layer 1 is the guarantee, Layer 2 is best-effort, honestly reported.
+
+Likely causes:
+
+- The cluster's CNI plugin does not implement NetworkPolicy enforcement (e.g. kindnet, some cloud-managed defaults).
+- A policy-enforcing CNI (Calico, Cilium, ...) is installed but not yet ready/reconciled.
+
+Remedies:
+
+- Switch to a NetworkPolicy-enforcing CNI (e.g. `minikube start --cni=calico`, kind + Calico).
+- Do not rely on Layer 2 alone for isolation until this reports enforced — adopt Layer 1 (mediated connections, docs/adr/022) for the actual guarantee.
+
+### `IsolationUnknown` (reason)
+
+ADR 027 Layer 2 honesty probe: no conclusive observation was possible this run — an unverifiable claim is treated as false, not as hoped-true, so this is reported distinctly from both enforced and not-enforced. The printed detail names the specific reason (e.g. fewer than 2 managed namespaces to cross-check, the canary listener never became ready).
+
+Likely causes:
+
+- Fewer than two managed Kubernetes namespaces provision the default-deny NetworkPolicy pair yet (nothing to cross-namespace probe).
+- The ephemeral canary listener pod did not reach Running within the bounded window (cluster under load, image pull latency).
+- The runtime obtained does not implement IsolationObserver at all.
+
+Remedies:
+
+- Apply at least two isolated Providers on the same cluster, then re-run `platformctl status`/`drift`.
+- Re-run once the cluster is less loaded; widen DATASCAPE_WAIT_SCALE if this is a slow/emulated environment (docs/planning/02 §4.1).
+
 ## lint
 
 ### `DL000` (lintCode)

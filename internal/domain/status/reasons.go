@@ -386,3 +386,35 @@ const (
 	// (same concept, different provider).
 	ReasonTunnelUpstreamUnreachable = "TunnelUpstreamUnreachable"
 )
+
+// --- network isolation observation (Layer 2 honesty probe;
+// docs/adr/027-enforcement-layering.md, docs/planning/08 H8) ---------------
+// These are not a resource's own Ready-condition reasons — no Kind
+// reconciles to a "network isolation" resource — they are the vocabulary
+// runtime.IsolationObserver's tri-state result (internal/ports/runtime's
+// Isolation*/IsolationStatus) maps to for the `status`/`drift`/`inventory`
+// isolation note and apply's preflight warning, so a user can paste the
+// printed token straight into `platformctl explain` the same way they
+// already can for any other reason string.
+const (
+	// ReasonIsolationEnforced: a live cross-namespace canary probe proved
+	// the declared Layer 2 network segmentation (Kubernetes NetworkPolicy,
+	// Docker network membership) actually denies what it claims to — or,
+	// on Docker, is enforced by construction and needed no probe at all.
+	// Layer 2 defense-in-depth is real here, on top of Layer 1's identity
+	// guarantee.
+	ReasonIsolationEnforced = "IsolationEnforced"
+	// ReasonIsolationNotEnforced: the probe's cross-namespace dial through
+	// a declared default-deny NetworkPolicy wall SUCCEEDED — this
+	// cluster's CNI does not enforce NetworkPolicy at all. Only Layer 1
+	// (identity-attested mediated connections, docs/adr/022) protects this
+	// platform; Layer 2 is inert. Never a hard failure — ADR 027: Layer 1
+	// is the guarantee, Layer 2 is best-effort, honestly reported.
+	ReasonIsolationNotEnforced = "IsolationNotEnforced"
+	// ReasonIsolationUnknown: no conclusive observation was possible this
+	// run (too few managed namespaces to cross-check, the canary listener
+	// never became ready, a bounded wait expired) — never treated as
+	// either enforced or not-enforced; the printed detail names the
+	// specific cause.
+	ReasonIsolationUnknown = "IsolationUnknown"
+)
