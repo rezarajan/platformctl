@@ -26,6 +26,9 @@ metadata:
                        # nameRef fields accept an optional namespace for
                        # cross-namespace references.
   labels: {}       # optional, free-form
+                   # (keys/values validated to the Kubernetes label grammar
+                   # at `validate` — docs/planning/08 K1, docs/adr/033
+                   # decision 2; see the paragraph below)
   annotations: {}  # optional, free-form
   observers:       # optional, any data-plane Kind may declare this
     - name: local-marquez   # a Provider this resource's own provider may forward a LineageEndpoint to
@@ -67,6 +70,18 @@ B7); a managed `Connection` realizing an allowed cross-domain path joins exactly
 network plus each distinct consumer domain's network — nothing else. A manifest set that never
 declares a non-`default` domain produces byte-identical runtime objects to before this field
 existed — segmentation is opt-in per domain, never retroactive.
+
+`metadata.labels` (docs/planning/08 K1, docs/adr/033 decision 2) is validated at `validate` time
+to the Kubernetes label grammar: a key is an optional prefix (a lowercase DNS subdomain, at most
+253 characters) followed by `/`, then a name segment (at most 63 characters, alphanumeric/`-`/`_`/`.`,
+starting and ending alphanumeric); a value is empty or at most 63 characters under the same
+name-segment grammar. An invalid key or value is refused at `validate`, naming the offending key
+and the resource Kind/name (`internal/domain/resource.ValidateLabelKey`/`ValidateLabelValue`).
+Labels already flow through to runtime object labels on every runtime (Docker, Kubernetes); a
+value only one runtime happened to reject was the exact docs/adr/030 failure class this grammar
+check closes off at validate time instead of at apply. The policy vocabulary's `matchEdge.selector`
+and `match.selector` (§13) select resources/edges by these same labels — see the accepted-value
+grammar there.
 
 `spec.access` (docs/adr/026-graph-scoped-access.md §2, docs/planning/08 H7) is an additive, optional
 array of `{namespace: <string>}` wide-grant declarations, available on every Kind whose realizing
