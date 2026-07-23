@@ -92,3 +92,64 @@ func TestStarterDashboardHasPinnedUID(t *testing.T) {
 		t.Errorf("starterDashboardJSON missing pinned uid %q", dashboardUID)
 	}
 }
+
+// TestResetAdminPasswordCmdArgs pins the exact grafana-cli invocation I14
+// execs to rotate the live admin password — verified live against the
+// pinned image (docs/planning/08 I14): no old password argument, exactly
+// this argv, so a review of the command construction alone (never a running
+// container) is enough to confirm the vendor-documented, no-old-password-
+// needed mechanism is what actually runs.
+func TestResetAdminPasswordCmdArgs(t *testing.T) {
+	got := resetAdminPasswordCmd("new-secret-pw")
+	want := []string{"grafana-cli", "admin", "reset-admin-password", "new-secret-pw"}
+	if len(got) != len(want) {
+		t.Fatalf("resetAdminPasswordCmd() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("resetAdminPasswordCmd() = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestAdminCredentialChanged covers I14's rotation-detection branch: a
+// rotation is only attempted when a previously observed live credential
+// exists AND differs from what's currently declared — a fresh instance or
+// an unchanged SecretReference must never trigger a live grafana-cli exec.
+func TestAdminCredentialChanged(t *testing.T) {
+	cases := []struct {
+		name                     string
+		hadPrevious              bool
+		prevUser, prevPass       string
+		desiredUser, desiredPass string
+		want                     bool
+	}{
+		{"fresh instance: no previous credential observed", false, "", "", "admin", "newpass", false},
+		{"unchanged: previous equals desired", true, "admin", "samepass", "admin", "samepass", false},
+		{"password rotated", true, "admin", "oldpass", "admin", "newpass", true},
+		{"username changed only", true, "olduser", "samepass", "newuser", "samepass", true},
+		{"both changed", true, "olduser", "oldpass", "newuser", "newpass", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := adminCredentialChanged(tc.hadPrevious, tc.prevUser, tc.prevPass, tc.desiredUser, tc.desiredPass)
+			if got != tc.want {
+				t.Errorf("adminCredentialChanged(%v, %q, %q, %q, %q) = %v, want %v",
+					tc.hadPrevious, tc.prevUser, tc.prevPass, tc.desiredUser, tc.desiredPass, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLiveAdminCredentialFreshInstance: against a fake runtime with no such
+// container yet, liveAdminCredential reports ok=false — the
+// NoPreviousOrUnchanged path ensureAdminCredential takes for a first-ever
+// apply, never attempting rotation against an instance that never had a
+// prior credential to rotate away from.
+func TestLiveAdminCredentialFreshInstance(t *testing.T) {
+	rt := fakeruntime.New()
+	_, _, ok := liveAdminCredential(context.Background(), rt, "graf-does-not-exist")
+	if ok {
+		t.Fatal("liveAdminCredential reported ok=true for a container that was never created")
+	}
+}

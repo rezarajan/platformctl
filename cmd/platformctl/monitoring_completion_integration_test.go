@@ -28,6 +28,9 @@ const (
 //   - `inventory --for prometheus` includes the exporter targets;
 //   - idempotent re-apply (every managed container's ID unchanged,
 //     including both exporter sidecars and grafana);
+//   - grafana admin credential rotation (docs/planning/08 I14): rotating
+//     the SecretReference and re-applying makes the new password log in
+//     and refuses the old one;
 //   - clean destroy.
 //
 // Three apply calls against the same state file, not one — mirroring
@@ -166,6 +169,28 @@ func TestMonitoringStackCompletionEndToEnd(t *testing.T) {
 		if ctrState.ID != before[c] {
 			t.Errorf("container %q was recreated on a no-op re-apply (ID %s -> %s)", c, before[c], ctrState.ID)
 		}
+	}
+
+	// Secret rotation (docs/planning/08 I14): changing the grafana admin
+	// SecretReference must rotate the *live* admin credential, not just the
+	// container's bootstrap password file — Grafana only consumes
+	// GF_SECURITY_ADMIN_PASSWORD__FILE at first boot (initdb-shaped, like
+	// postgres/mysql), so without I14's grafana-cli-exec-and-reprobe path
+	// the live account would silently keep the old password while the
+	// container quietly recreated with a new (unused) file. This is C9's
+	// recorded "rotation after first apply is a documented Grafana
+	// limitation" note, solved: mirrors lakehouse_integration_test.go's own
+	// mysql/postgres rotation proof (rotated accepted, old refused).
+	t.Setenv("DATASCAPE_SECRET_MON_GRAFANA_ADMIN_PASSWORD", "mon-grafana-secret-pw-rotated")
+	out, err, code = run(t, "apply", full, "--state-file", stateFile, "--auto-approve", gateFlag)
+	if err != nil || code != 0 {
+		t.Fatalf("grafana secret rotation apply failed (code %d): %v\n%s", code, err, out)
+	}
+	if !monHTTPOK(t, monGrafanaBase+"/api/org", grafUser, "mon-grafana-secret-pw-rotated") {
+		t.Fatal("rotated grafana admin password not accepted")
+	}
+	if monHTTPOK(t, monGrafanaBase+"/api/org", grafUser, grafPass) {
+		t.Fatal("old grafana admin password still accepted after rotation")
 	}
 
 	// Exit criterion: destroy tears down cleanly.

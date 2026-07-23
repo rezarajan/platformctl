@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
@@ -65,6 +66,100 @@ func adminCredential(cfg provider.Provider, secrets map[string]map[string]string
 	return user, pass, nil
 }
 
+// liveAdminCredential reads the admin username/password currently mounted
+// on the running container — mirroring postgres's liveSuperuser/mysql's
+// liveRootPassword (docs/planning/08 G1). ok is false for a fresh instance
+// (no such container yet) or an incomplete read.
+func liveAdminCredential(ctx context.Context, rt runtime.ContainerRuntime, name string) (user, pass string, ok bool) {
+	ctr, found, err := rt.Inspect(ctx, name)
+	if err != nil || !found {
+		return "", "", false
+	}
+	user = ctr.Env["GF_SECURITY_ADMIN_USER"]
+	if data, ferr := rt.ReadFile(ctx, name, adminPasswordPath); ferr == nil && len(data) > 0 {
+		pass = string(data)
+	}
+	if user == "" || pass == "" {
+		return "", "", false
+	}
+	return user, pass, true
+}
+
+// adminCredentialChanged is I14's rotation-detection branch: true only when
+// a previously observed live credential exists AND differs from the
+// currently declared one — a fresh instance (hadPrevious false) or an
+// unchanged SecretReference both mean "nothing to rotate."
+func adminCredentialChanged(hadPrevious bool, prevUser, prevPass, desiredUser, desiredPass string) bool {
+	return hadPrevious && (prevUser != desiredUser || prevPass != desiredPass)
+}
+
+// resetAdminPasswordCmd is the grafana-cli invocation this package execs
+// inside the container to rotate the live admin password (docs/planning/08
+// I14) — the vendor-provided fix for C9's recorded "rotation after first
+// apply is a documented Grafana limitation" note. Takes no old password:
+// grafana-cli's reset-admin-password subcommand operates via local
+// filesystem/DB access, not an authenticated session — confirmed live
+// against the pinned image. newPassword rides argv, never a logged string;
+// callers must not format this command into any log/error message (ADR 013
+// fingerprints-only discipline).
+func resetAdminPasswordCmd(newPassword string) []string {
+	return []string{"grafana-cli", "admin", "reset-admin-password", newPassword}
+}
+
+// ensureAdminCredential runs providerkit's try-desired → try-previous →
+// rotate-live → retry state machine (docs/planning/08 G1) with grafana's own
+// HTTP-login ping and grafana-cli-exec rotation as the callbacks — the same
+// shape postgres's ensureSuperuser/mysql's ensureRootPassword use, adapted
+// because Grafana's own rotation mechanism is a container exec, not a SQL
+// statement over the already-open ping connection.
+func ensureAdminCredential(ctx context.Context, rt runtime.ContainerRuntime, name, desiredUser, desiredPass, prevUser, prevPass string, hadPrevious bool) error {
+	return providerkit.CredentialRotation{
+		Runtime:               rt,
+		Name:                  name,
+		Port:                  apiPort,
+		NoPreviousOrUnchanged: !adminCredentialChanged(hadPrevious, prevUser, prevPass, desiredUser, desiredPass),
+		PingDesired: func(ctx context.Context, addr string) error {
+			return pingLogin(ctx, addr, desiredUser, desiredPass)
+		},
+		PingPrevious: func(ctx context.Context, addr string) error {
+			return pingLogin(ctx, addr, prevUser, prevPass)
+		},
+		Rotate: func(ctx context.Context, _ string) error {
+			execRt, ok := rt.(runtime.ExecCapableRuntime)
+			if !ok {
+				return fmt.Errorf("grafana admin credential rotation requires a runtime that supports container exec (grafana-cli admin reset-admin-password); the current runtime does not implement it")
+			}
+			_, stderr, exitCode, err := execRt.ExecInContainer(ctx, name, resetAdminPasswordCmd(desiredPass))
+			if err != nil {
+				return fmt.Errorf("exec grafana-cli admin reset-admin-password in container %q: %w", name, err)
+			}
+			if exitCode != 0 {
+				return fmt.Errorf("grafana-cli admin reset-admin-password in container %q exited %d: %s", name, exitCode, strings.TrimSpace(stderr))
+			}
+			return nil
+		},
+		Exhausted: func(err error) error {
+			return fmt.Errorf("grafana admin credentials changed but neither the desired SecretReference nor the previous managed-container credential can log in; manual recovery is required: %w", err)
+		},
+	}.Run(ctx)
+}
+
+// pingLogin reports whether user/pass authenticates against addr's admin
+// API — GET /api/org, any org-admin-scoped endpoint with no side effects.
+func pingLogin(ctx context.Context, addr, user, pass string) error {
+	if !loginOK(ctx, "http://"+addr, user, pass) {
+		return fmt.Errorf("grafana login check failed")
+	}
+	return nil
+}
+
+// loginOK is httpOK against /api/org — the same "does this credential
+// authenticate" check Probe and pingLogin both need, kept as one place so
+// the endpoint choice is made once.
+func loginOK(ctx context.Context, baseURL, user, pass string) bool {
+	return httpOK(ctx, baseURL+"/api/org", user, pass)
+}
+
 func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (status.Status, error) {
 	if req.Resource.Kind != "Provider" {
 		return status.Status{}, fmt.Errorf("grafana provider cannot reconcile kind %s", req.Resource.Kind)
@@ -84,6 +179,12 @@ func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (statu
 	if err != nil {
 		return st, err
 	}
+	// Captured before EnsureInstance below, which recreates the container
+	// (and its admin-password FileMount) whenever the resolved password
+	// changed — the same "read the live value off the running container
+	// before it's replaced" precedent as postgres's liveSuperuser/mysql's
+	// liveRootPassword (docs/planning/08 G1).
+	prevAdminUser, prevAdminPass, hadPrevAdmin := liveAdminCredential(ctx, rt, name)
 
 	files := []runtime.FileMount{
 		{Path: dashboardProviderProvisioningPath, Content: dashboardProviderYAML, Mode: 0o444},
@@ -132,6 +233,17 @@ func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (statu
 		return st, err
 	}
 	if err := waitAPIReady(ctx, rt, name, 120*time.Second); err != nil {
+		return st, err
+	}
+	// I14: the container answering /api/health only proves it booted, not
+	// that the declared admin credential is the *live* one — Grafana only
+	// consumes GF_SECURITY_ADMIN_PASSWORD__FILE at first boot (initdb-shaped,
+	// like postgres/mysql), so a SecretReference rotated after that first
+	// apply needs the vendor-provided fix (grafana-cli admin
+	// reset-admin-password) exec'd live, then a re-probe login with the new
+	// credential before Ready — the same settledness bar every other
+	// provider's Reconcile holds itself to.
+	if err := ensureAdminCredential(ctx, rt, name, adminUser, adminPass, prevAdminUser, prevAdminPass, hadPrevAdmin); err != nil {
 		return st, err
 	}
 
@@ -216,6 +328,16 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 		adminUser, adminPass, _ = adminCredential(cfg, req.Secrets, name)
 	}
 	baseURL := "http://" + addr
+
+	// I14: check login with the declared credential before anything that
+	// needs it (datasource/dashboard checks below) — a wrong-credential 401
+	// would otherwise surface as the unrelated-sounding DatasourceUnhealthy.
+	// Healed by the same ensureAdminCredential path Reconcile already runs.
+	if !loginOK(ctx, baseURL, adminUser, adminPass) {
+		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonCredentialDrift}, now)
+		st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonCredentialDrift}, now)
+		return st, nil
+	}
 
 	if !datasourceHealthy(ctx, baseURL, adminUser, adminPass) {
 		st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonDatasourceUnhealthy}, now)
