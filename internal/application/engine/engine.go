@@ -112,17 +112,6 @@ func (e *Engine) report(fn func(Reporter)) {
 	}
 }
 
-// logf renders one prose log line through the slog seam with no structured
-// attrs — for the rare message that isn't itself one reconciliation action
-// (see logAction for those). format/args render identically to the pre-I11
-// fmt.Fprintf-based Log seam.
-func (e *Engine) logf(format string, args ...any) {
-	if e.Logger == nil {
-		return
-	}
-	e.Logger.Info(fmt.Sprintf(format, args...))
-}
-
 // logAction emits one structured reconciliation-action event (docs/planning/
 // 08 I11, NFR-4: "every reconciliation action is logged as a structured
 // event: resource, action, outcome, duration"). format/args render the exact
