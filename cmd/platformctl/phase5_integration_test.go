@@ -29,7 +29,7 @@ func TestImportEndToEnd(t *testing.T) {
 	ctx := context.Background()
 
 	cleanup := func() {
-		_ = exec.Command("docker", "rm", "-f", "datascape-imp-pg").Run()
+		_ = exec.Command("docker", "rm", "-f", "-v", "datascape-imp-pg").Run()
 	}
 	cleanup()
 	t.Cleanup(cleanup)
@@ -127,7 +127,7 @@ func TestExternalSourceEndToEnd(t *testing.T) {
 		for _, c := range []string{"datascape-ext-dbz", "datascape-ext-rp"} {
 			_ = rt.Remove(ctx, c)
 		}
-		_ = exec.Command("docker", "rm", "-f", "datascape-ext-outofband-pg").Run()
+		_ = exec.Command("docker", "rm", "-f", "-v", "datascape-ext-outofband-pg").Run()
 		_ = rt.RemoveVolume(ctx, "datascape-ext-rp-data")
 		_ = exec.Command("docker", "network", "rm", "datascape-ext-net").Run()
 	}

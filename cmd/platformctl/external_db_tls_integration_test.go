@@ -70,7 +70,7 @@ func TestExternalDatabaseTLSEndToEnd(t *testing.T) {
 	buildImage(t, "datascape-tlsdb-pg:test", buildDir)
 
 	cleanupPG := func() {
-		_ = exec.Command("docker", "rm", "-f", "datascape-tlsdb-outofband-pg").Run()
+		_ = exec.Command("docker", "rm", "-f", "-v", "datascape-tlsdb-outofband-pg").Run()
 		_ = exec.Command("docker", "network", "rm", "datascape-tlsdb-net").Run()
 	}
 	cleanupPG()

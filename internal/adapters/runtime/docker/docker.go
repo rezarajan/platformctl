@@ -313,7 +313,7 @@ func (r *Runtime) ensureOneContainer(ctx context.Context, spec runtime.Container
 		if existing.Config == nil || existing.Config.Labels[runtime.LabelManagedBy] != runtime.ManagedByValue {
 			return runtime.ContainerState{}, fmt.Errorf("container %q exists but is not managed by platformctl; refusing to replace it", spec.Name)
 		}
-		if err := r.cli.ContainerRemove(ctx, existing.ID, container.RemoveOptions{Force: true}); err != nil {
+		if err := r.cli.ContainerRemove(ctx, existing.ID, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
 			return runtime.ContainerState{}, fmt.Errorf("remove outdated container %q: %w", spec.Name, err)
 		}
 	} else if !errdefs.IsNotFound(err) {
@@ -859,7 +859,7 @@ func (r *Runtime) transientProbe(ctx context.Context, netName, host, port string
 		return fmt.Errorf("ProbeReachable: create probe container: %w", err)
 	}
 	defer func() {
-		_ = r.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+		_ = r.cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true, RemoveVolumes: true})
 	}()
 	if err := r.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("ProbeReachable: start probe container: %w", err)
@@ -891,7 +891,7 @@ func (r *Runtime) Remove(ctx context.Context, name string) error {
 		if info.Config == nil || info.Config.Labels[runtime.LabelManagedBy] != runtime.ManagedByValue {
 			return fmt.Errorf("container %q is not managed by platformctl; refusing to remove it", name)
 		}
-		if err := r.cli.ContainerRemove(ctx, info.ID, container.RemoveOptions{Force: true}); err != nil {
+		if err := r.cli.ContainerRemove(ctx, info.ID, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
 			return fmt.Errorf("remove container %q: %w", name, err)
 		}
 		return nil

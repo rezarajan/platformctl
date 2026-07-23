@@ -46,7 +46,7 @@ func TestLakehouse(t *testing.T) {
 		for _, c := range containers {
 			_ = rt.Remove(ctx, c)
 		}
-		_ = exec.Command("docker", "rm", "-f", "external-orders-db").Run()
+		_ = exec.Command("docker", "rm", "-f", "-v", "external-orders-db").Run()
 		for _, v := range []string{"lake-minio-data", "lake-postgres-data", "lake-mysql-data", "lake-lineage-db-data", "lake-redpanda-data"} {
 			_ = rt.RemoveVolume(ctx, v)
 		}
@@ -175,7 +175,7 @@ func TestLakehouse(t *testing.T) {
 
 	// Drift healing covers the new kinds: kill the Connection's forwarder,
 	// drift observes it, apply heals it, traffic flows again.
-	if out, err := exec.Command("docker", "rm", "-f", "orders-db").CombinedOutput(); err != nil {
+	if out, err := exec.Command("docker", "rm", "-f", "-v", "orders-db").CombinedOutput(); err != nil {
 		t.Fatalf("chaos remove forwarder: %v\n%s", err, out)
 	}
 	report, code := runDrift(t, manifests, stateFile)

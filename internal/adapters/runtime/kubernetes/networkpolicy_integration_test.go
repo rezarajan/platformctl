@@ -122,8 +122,20 @@ func TestNetworkPolicyEnforcementIsLive(t *testing.T) {
 	const nsIn = "datascape-netpol-enforce-in"
 	const nsOut = "datascape-netpol-enforce-out"
 	t.Cleanup(func() {
-		_ = rt.RemoveNetwork(ctx, nsIn)
-		_ = rt.RemoveNetwork(ctx, nsOut)
+		// The listener must go before its namespace: RemoveNetwork refuses
+		// while a namespace still holds workloads (the ca9d719 safety), so
+		// skipping this removal strands the whole namespace — exactly what
+		// happened while this cleanup silently swallowed the refusal (found
+		// as a live stray, listener still running, after the 2026-07-23
+		// sweep). Cleanup failures are loud now for the same reason.
+		if err := rt.Remove(ctx, "npl-listener"); err != nil {
+			t.Errorf("cleanup: remove npl-listener: %v", err)
+		}
+		for _, ns := range []string{nsIn, nsOut} {
+			if err := rt.RemoveNetwork(ctx, ns); err != nil {
+				t.Errorf("cleanup: remove namespace %s: %v", ns, err)
+			}
+		}
 	})
 	for _, ns := range []string{nsIn, nsOut} {
 		if err := rt.EnsureNetwork(ctx, runtimeport.NetworkSpec{Name: ns, Labels: labels}); err != nil {

@@ -66,7 +66,7 @@ func startExternalMinio(t *testing.T) {
 		t.Fatalf("start external minio: %v\n%s", err, out)
 	}
 	t.Cleanup(func() {
-		_ = exec.Command("docker", "rm", "-f", s3extMinioContainer).Run()
+		_ = exec.Command("docker", "rm", "-f", "-v", s3extMinioContainer).Run()
 		_ = exec.Command("docker", "network", "rm", s3extMinioNet).Run()
 	})
 

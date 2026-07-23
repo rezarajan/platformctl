@@ -52,9 +52,30 @@ func TestIngressTLSKubernetesEndToEnd(t *testing.T) {
 	}
 	ctx := context.Background()
 	const ns = "datascape-ingk8stls-test-ns"
-	cleanup := func() { _ = rt.RemoveNetwork(ctx, ns) }
+	// Workloads must go before the namespace: RemoveNetwork refuses while
+	// a namespace still holds Deployments (the ca9d719 safety), so a
+	// RemoveNetwork-only cleanup strands the whole namespace whenever the
+	// test dies before its inline destroy step (the same silent-strand
+	// class the netpol enforcement test hit live after the 2026-07-23
+	// sweep). Removals of absent objects are no-ops, so this is safe on
+	// every path; the final namespace removal is loud in t.Cleanup.
+	cleanup := func() {
+		for _, w := range []string{"ingk8stls-nessie", "ingk8stls-edge"} {
+			_ = rt.Remove(ctx, w)
+		}
+		_ = rt.RemoveNetwork(ctx, ns)
+	}
 	cleanup()
-	t.Cleanup(cleanup)
+	t.Cleanup(func() {
+		for _, w := range []string{"ingk8stls-nessie", "ingk8stls-edge"} {
+			if err := rt.Remove(ctx, w); err != nil {
+				t.Errorf("cleanup: remove %s: %v", w, err)
+			}
+		}
+		if err := rt.RemoveNetwork(ctx, ns); err != nil {
+			t.Errorf("cleanup: remove namespace %s: %v", ns, err)
+		}
+	})
 
 	// Provided cert+key (option 1) — same self-contained generator the
 	// Docker-leg test uses, defined in ingress_tls_integration_test.go

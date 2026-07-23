@@ -33,7 +33,7 @@ func startSharedStateMinio(t *testing.T) string {
 		"server", "/data").CombinedOutput(); err != nil {
 		t.Fatalf("start minio: %v\n%s", err, out)
 	}
-	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", sharedStateMinioContainer).Run() })
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "-v", sharedStateMinioContainer).Run() })
 
 	cl, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(sharedStateMinioUser, sharedStateMinioPass, "")})
 	if err != nil {

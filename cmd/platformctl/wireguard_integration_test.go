@@ -63,7 +63,7 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 		for _, c := range []string{"wg-orders-to-events", "datascape-wg-dbz", "datascape-wg-rp", "wg-orders-db-conn", "wg-orders-db-conn-via-tunnel"} {
 			_ = rt.Remove(ctx, c)
 		}
-		_ = exec.Command("docker", "rm", "-f", wgDBContainer, wgResponderContainer).Run()
+		_ = exec.Command("docker", "rm", "-f", "-v", wgDBContainer, wgResponderContainer).Run()
 		_ = rt.RemoveVolume(ctx, "datascape-wg-rp-data")
 		for _, n := range []string{wgPlatformNetwork, wgTransitNetwork, wgVPCNetwork} {
 			_ = exec.Command("docker", "network", "rm", n).Run()

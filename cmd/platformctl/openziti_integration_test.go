@@ -59,11 +59,18 @@ func TestOpenZitiMediatedConnectionEndToEnd(t *testing.T) {
 	cleanup := func() {
 		for _, c := range []string{
 			"ziti-orders-to-events", "datascape-ziti-dbz", "datascape-ziti-rp",
-			"orders-db-mediated", "mesh-ctrl", "mesh-router", "ziti-canary",
+			"orders-db-mediated", "mesh-ctrl", "mesh-router",
 		} {
 			_ = rt.Remove(ctx, c)
 		}
-		_ = exec.Command("docker", "rm", "-f", zitiDBContainer).Run()
+		// Raw fixtures (docker run, no managed labels) MUST be removed with
+		// raw docker rm: rt.Remove refuses unmanaged containers by design,
+		// and the swallowed refusal left ziti-canary running — which in
+		// turn blocked `docker network rm` of the platform network (both
+		// found as live strays after the 2026-07-23 sweep).
+		for _, c := range []string{zitiDBContainer, "ziti-canary"} {
+			_ = exec.Command("docker", "rm", "-f", "-v", c).Run()
+		}
 		for _, v := range []string{"mesh-ctrl-data", "mesh-router-data", "orders-db-mediated-identity"} {
 			_ = rt.RemoveVolume(ctx, v)
 		}
