@@ -62,7 +62,7 @@ func TestGraphScopedAccessOnKubernetesEndToEnd(t *testing.T) {
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/graphscoped-k8s-scenario"
-	const gateVal = "KubernetesRuntime=true,ContainerProvider=true,GraphScopedAccess=true"
+	const gateVal = "KubernetesRuntime=true,GraphScopedAccess=true"
 
 	out, err, code := run(t, "apply", manifests, "--state-file", stateFile, "--auto-approve", "--feature-gates", gateVal)
 	if err != nil || code != 0 {

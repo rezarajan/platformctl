@@ -13,7 +13,7 @@ import (
 
 // graphScopedGates enables the container provider (minimal-footprint,
 // docs/planning/08 H5 precedent) and GraphScopedAccess (docs/adr/026 H7).
-const graphScopedGates = "DockerRuntime=true,ContainerProvider=true,GraphScopedAccess=true"
+const graphScopedGates = "DockerRuntime=true,GraphScopedAccess=true"
 
 func gsaKey(namespace, name string) resource.Key {
 	return resource.Key{Namespace: namespace, Kind: "Provider", Name: name}
@@ -119,7 +119,7 @@ func TestGraphScopedAccessGateOffEndToEnd(t *testing.T) {
 		"datascape",
 	)
 
-	const gateOff = "DockerRuntime=true,ContainerProvider=true"
+	const gateOff = "DockerRuntime=true"
 	out, err, code := run(t, "apply", manifests, "--state-file", stateFile, "--auto-approve", "--feature-gates", gateOff)
 	if err != nil || code != 0 {
 		t.Fatalf("apply failed (code %d): %v\n%s", code, err, out)
