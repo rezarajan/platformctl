@@ -1575,6 +1575,20 @@ Remedies:
 - Set metadata.protect: true on the data-bearing resource if it must never be deleted by an authoritative apply/destroy.
 - If the resource is genuinely safe to delete, no action is needed beyond confirming the authoritative delete is intentional.
 
+### `DL022` (lintCode)
+
+A spec.access wide-grant entry has no selector — the bare namespace-wide form (docs/adr/026 §2, docs/planning/08 H7) reaches every resource in the named namespace under the GraphScopedAccess gate, broader than docs/adr/033 decision 3's bar ("namespace AND selector"). Deprecated but still fully functional: under LabelScopedAccess (off by default) a selector would additionally narrow the audience; without one, the grant stays namespace-wide.
+
+Likely causes:
+
+- The grant was written before docs/adr/033's selector form existed, or copied from an older example.
+- A genuinely namespace-wide audience is intended (e.g. a shared broker every consumer in that namespace may reach).
+
+Remedies:
+
+- Add a selector ({matchLabels: ...} and/or {matchExpressions: ...}) to narrow the grant's audience to exactly the intended resources, and enable the LabelScopedAccess gate.
+- If a namespace-wide audience is genuinely intended, waive DL022 with a reason.
+
 ### `DL-debezium-001` (lintCode)
 
 N cdc Bindings, each realized by a debezium-typed Provider, capture from Source resources backed by the same physical Postgres/MySQL Provider — each Binding is a separate Debezium connector, and each connector opens its own replication slot against that one server, independent of DL001's table-overlap condition (different Source resources, so DL001 never fires here).

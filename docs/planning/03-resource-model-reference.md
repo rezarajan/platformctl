@@ -130,6 +130,25 @@ already resolves through, so no provider changes (ADR 034's "why the engine can 
 zero provider changes"). L1 is a design spike proving this seam against a fake
 `AddressResolver`; wiring the real fabric plus every remaining Facts.Endpoint call site is L2-L4.
 
+`spec.access[].selector` (docs/adr/033 decision 3, docs/planning/08 K3) is an optional addition to
+each `accessGrant` entry (schema `$ref: meta.json#/$defs/selector`, the SAME Kubernetes-style
+`matchLabels`/`matchExpressions` shape §13's `matchEdge.selector`/`match.selector` already use,
+decoded through the SAME `internal/domain/policy.Selector` Go type — no duplicate selector
+implementation): when set, the grant's audience becomes **namespace AND selector** — only resources
+in the named namespace whose `metadata.labels` satisfy the selector are admitted, narrowing the
+bare "every resource in the namespace" form above. Selector evaluation rides the SAME
+`LabelScopedAccess` feature gate K2 registered (docs/planning/04 §12), independently of
+`GraphScopedAccess`: with `LabelScopedAccess` disabled, a selector-bearing grant is **INERT** (admits
+nobody) rather than silently falling back to the wider bare-namespace form — ADR 033's zero-trust
+answer, "never wider than declared intent when the gate is off." The bare namespace-wide form (no
+`selector`) is unaffected by `LabelScopedAccess` and keeps working exactly as H7 shipped it, but is
+now deprecated: `platformctl lint` flags it with `DL022` ("namespace-wide grant — scope it with a
+selector", warning severity), waivable like any other design lint. Compilation reuses the SAME H7
+per-edge realization with zero new runtime mechanism (`internal/application/graphaccess`'s
+`EgressPeers`/`IngressPeers`/`MembershipEdges` simply filter grant-admitted candidates through the
+selector, when one is present, before compiling peers into per-edge Docker networks or Kubernetes
+`NetworkPolicy` peers exactly as an unscoped grant already did).
+
 `metadata.annotations["lint.datascape.io/waive"]` (docs/adr/020-design-lints.md, 08 H1) waives one
 or more `platformctl lint` findings against this resource: `"DL010: <reason>"`, one entry per line
 for more than one code on the same resource (newline-separated, not comma — a reason is prose and

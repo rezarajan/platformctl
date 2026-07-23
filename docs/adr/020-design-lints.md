@@ -89,6 +89,7 @@ rather than silent.
 | DL014 | info | Single-replica data path where the HA field exists and the gate is enabled (brokers/workers/nodes = 1 with `HighAvailability` on) |
 | DL020 | warning | `deletionPolicy` unset on a data-bearing kind (Dataset/Source) — the default is retain, but explicitness is the best practice |
 | DL021 | warning | `protect` unset on a data-bearing kind in a set that also uses authoritative deletes (state has prior entries) — plan-aware |
+| DL022 | warning | Namespace-wide grant: a `spec.access` entry has no `selector` — the bare namespace-wide form (docs/adr/026 §2) is broader than docs/adr/033 decision 3's bar; scope it with a selector (docs/planning/08 K3) |
 
 ### 5. Provider-contributed lints (the ADR 009 pattern)
 

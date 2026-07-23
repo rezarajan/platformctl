@@ -1,9 +1,9 @@
 package lint
 
 // Built-in lint codes — docs/adr/020-design-lints.md §4's table. Only these
-// 11 codes exist; "DL001-DL021" names the addressing range the table
+// 12 codes exist; "DL001-DL022" names the addressing range the table
 // reserves (DL005-DL009 and DL015-DL019 are gaps left for future codes),
-// not 21 distinct lints.
+// not 22 distinct lints.
 const (
 	CodeDuplicateCapture    = "DL001" // warning: overlapping cdc capture on one sourceRef
 	CodeSinkCollision       = "DL002" // warning: sink Bindings target the same bucket+prefix/table
@@ -18,6 +18,7 @@ const (
 
 	CodeDeletionPolicyUnset = "DL020" // warning: deletionPolicy unset on Dataset/Source
 	CodeProtectUnset        = "DL021" // warning: protect unset where authoritative deletes are in play
+	CodeNamespaceWideGrant  = "DL022" // warning: spec.access grant entry has no selector (docs/adr/033 decision 3)
 )
 
 // CodeMalformedWaiver is not in ADR 020 §4's table (it's about the waiver
@@ -43,4 +44,5 @@ var BuiltinCodes = []string{
 	CodeSingleReplicaWithHAGate,
 	CodeDeletionPolicyUnset,
 	CodeProtectUnset,
+	CodeNamespaceWideGrant,
 }

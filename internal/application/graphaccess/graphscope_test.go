@@ -79,7 +79,7 @@ func keySet(keys []resource.Key) map[resource.Key]bool {
 func TestMembershipEdgesOwnerWorkedExample(t *testing.T) {
 	edges, resources, r1, r2, x, y, otherB := buildOwnerWorkedExample(t)
 
-	r1Peers := keySet(MembershipEdges(edges, r1, resources))
+	r1Peers := keySet(MembershipEdges(edges, r1, resources, false))
 	if !r1Peers[x] || !r1Peers[y] {
 		t.Errorf("R1 must reach {B/X, C/Y}, got %v", r1Peers)
 	}
@@ -90,7 +90,7 @@ func TestMembershipEdgesOwnerWorkedExample(t *testing.T) {
 		t.Errorf("R1's membership set must be exactly {B/X, C/Y}, got %d peers: %v", len(r1Peers), r1Peers)
 	}
 
-	r2Peers := keySet(MembershipEdges(edges, r2, resources))
+	r2Peers := keySet(MembershipEdges(edges, r2, resources, false))
 	if !r2Peers[x] {
 		t.Errorf("R2 must reach B/X, got %v", r2Peers)
 	}
@@ -111,7 +111,7 @@ func TestMembershipEdgesOwnerWorkedExample(t *testing.T) {
 // for — it's already the same container).
 func TestMembershipEdgesSelfNeverIncluded(t *testing.T) {
 	edges, resources, r1, _, _, _, _ := buildOwnerWorkedExample(t)
-	peers := MembershipEdges(edges, r1, resources)
+	peers := MembershipEdges(edges, r1, resources, false)
 	for _, p := range peers {
 		if p == r1 {
 			t.Fatal("self must never appear in its own membership set")
@@ -142,9 +142,98 @@ func TestMembershipEdgesWideGrant(t *testing.T) {
 	}
 	edges := DeriveEdges(g)
 
-	peers := keySet(MembershipEdges(edges, r1Env.Key(), resources))
+	peers := keySet(MembershipEdges(edges, r1Env.Key(), resources, false))
 	if !peers[xEnv.Key()] || !peers[otherBEnv.Key()] {
 		t.Errorf("a namespace-wide grant must reach EVERY container in that namespace, got %v", peers)
+	}
+}
+
+// --- docs/planning/08 K3: selector-scoped wide grants -----------------------
+
+// envWithLabels is env's sibling for K3's selector-grant fixtures, which
+// need metadata.labels (env itself has no labels parameter — adding one
+// there would ripple through every existing call site in this file for no
+// benefit to tests that don't care about labels).
+func envWithLabels(namespace, kind, name string, labels map[string]string, spec map[string]any) resource.Envelope {
+	e := env(namespace, kind, name, spec)
+	e.Metadata.Labels = labels
+	return e
+}
+
+// buildSelectorGrantScenario is TestMembershipEdgesWideGrant's fixture,
+// narrowed by a matchLabels selector: r1 declares a selector-scoped grant
+// to namespace b's "tier: gold" resources only. x carries tier: gold;
+// otherB does not — otherB is the K3 negative proof a bare namespace-wide
+// grant (TestMembershipEdgesWideGrant, above) could never express.
+func buildSelectorGrantScenario(t *testing.T) (edges []Edge, resources map[resource.Key]resource.Envelope, r1, x, otherB resource.Key) {
+	t.Helper()
+	r1Env := env("a", "Provider", "r1", map[string]any{
+		"access": []any{map[string]any{
+			"namespace": "b",
+			"selector":  map[string]any{"matchLabels": map[string]any{"tier": "gold"}},
+		}},
+	})
+	xEnv := envWithLabels("b", "Provider", "x", map[string]string{"tier": "gold"}, map[string]any{})
+	otherBEnv := env("b", "Provider", "other-b", map[string]any{}) // no tier label at all
+
+	all := []resource.Envelope{r1Env, xEnv, otherBEnv}
+	g, err := graph.Build(all)
+	if err != nil {
+		t.Fatalf("graph.Build: %v", err)
+	}
+	resources = make(map[resource.Key]resource.Envelope, len(all))
+	for _, e := range all {
+		resources[e.Key()] = e
+	}
+	return DeriveEdges(g), resources, r1Env.Key(), xEnv.Key(), otherBEnv.Key()
+}
+
+// TestMembershipEdgesSelectorGrantNarrowsAudience is docs/planning/08 K3's
+// positive+negative proof, gate ON: a selector-scoped grant admits ONLY the
+// namespace members whose labels satisfy the selector (x, tier: gold) and
+// excludes the rest of the namespace a bare grant would have widened to
+// (otherB, no tier label) — the audience is namespace AND selector, not
+// namespace alone.
+func TestMembershipEdgesSelectorGrantNarrowsAudience(t *testing.T) {
+	edges, resources, r1, x, otherB := buildSelectorGrantScenario(t)
+	peers := keySet(MembershipEdges(edges, r1, resources, true))
+	if !peers[x] {
+		t.Errorf("a selector grant must still reach the labeled member of the namespace, got %v", peers)
+	}
+	if peers[otherB] {
+		t.Error("a selector grant must NOT reach a namespace member whose labels don't satisfy the selector (negative proof)")
+	}
+}
+
+// TestMembershipEdgesSelectorGrantInertWhenGateOff is docs/planning/08 K3's
+// gate-off behavior: ADR 033's "never wider than declared intent when the
+// gate is off" answer means a selector-bearing grant is INERT (admits
+// nobody at all), never falls back to the wider bare namespace-wide form —
+// x must NOT be reached even though it satisfies the selector, because the
+// selector itself is never evaluated with the gate off.
+func TestMembershipEdgesSelectorGrantInertWhenGateOff(t *testing.T) {
+	edges, resources, r1, x, otherB := buildSelectorGrantScenario(t)
+	peers := keySet(MembershipEdges(edges, r1, resources, false))
+	if peers[x] || peers[otherB] {
+		t.Errorf("a selector grant must be INERT (reach nobody) when LabelScopedAccess is off, got %v", peers)
+	}
+}
+
+// TestIngressPeersSelectorGrantChecksSelfLabels is the IngressPeers-side
+// mirror of TestMembershipEdgesSelectorGrantNarrowsAudience: from the
+// TARGET's own vantage, a selector grant declared elsewhere only admits
+// this container as a peer when THIS container's own labels satisfy the
+// grant's selector.
+func TestIngressPeersSelectorGrantChecksSelfLabels(t *testing.T) {
+	edges, resources, r1, x, otherB := buildSelectorGrantScenario(t)
+
+	xIngress := keySet(IngressPeers(edges, x, resources, true))
+	if !xIngress[r1] {
+		t.Errorf("B/X (tier: gold) must see A/R1 as an ingress peer under the selector grant, got %v", xIngress)
+	}
+	otherBIngress := keySet(IngressPeers(edges, otherB, resources, true))
+	if otherBIngress[r1] {
+		t.Error("B/other-b (no tier label) must NOT see A/R1 as an ingress peer under the selector grant (negative proof)")
 	}
 }
 
@@ -160,6 +249,44 @@ func TestAccessGrantsReadsNamespaceEntries(t *testing.T) {
 	got := AccessGrants(e)
 	if len(got) != 2 || got[0].Namespace != "b" || got[1].Namespace != "c" {
 		t.Fatalf("AccessGrants = %+v, want [{b} {c}]", got)
+	}
+	if got[0].Selector != nil || got[1].Selector != nil {
+		t.Fatalf("AccessGrants = %+v, want nil Selector on the bare namespace-wide form", got)
+	}
+}
+
+// TestAccessGrantsDecodesSelector is docs/planning/08 K3: a grant entry
+// carrying a selector block decodes into the SAME internal/domain/
+// policy.Selector type K2 already gave the policy engine (reuse, not a
+// duplicate selector implementation) — matchLabels and matchExpressions
+// both round-trip.
+func TestAccessGrantsDecodesSelector(t *testing.T) {
+	e := env("a", "Provider", "r1", map[string]any{
+		"access": []any{
+			map[string]any{
+				"namespace": "b",
+				"selector": map[string]any{
+					"matchLabels": map[string]any{"tier": "gold"},
+					"matchExpressions": []any{
+						map[string]any{"key": "clearance", "operator": "Exists"},
+					},
+				},
+			},
+		},
+	})
+	got := AccessGrants(e)
+	if len(got) != 1 {
+		t.Fatalf("AccessGrants = %+v, want exactly one entry", got)
+	}
+	sel := got[0].Selector
+	if sel == nil {
+		t.Fatal("Selector = nil, want a decoded selector")
+	}
+	if sel.MatchLabels["tier"] != "gold" {
+		t.Errorf("Selector.MatchLabels[tier] = %q, want %q", sel.MatchLabels["tier"], "gold")
+	}
+	if len(sel.MatchExpressions) != 1 || sel.MatchExpressions[0].Key != "clearance" {
+		t.Errorf("Selector.MatchExpressions = %+v, want one entry keyed \"clearance\"", sel.MatchExpressions)
 	}
 }
 
@@ -200,21 +327,21 @@ func TestContainerOfConnectionResolvesToItself(t *testing.T) {
 func TestIngressPeersIsDirectional(t *testing.T) {
 	edges, resources, r1, _, x, _, _ := buildOwnerWorkedExample(t)
 
-	xIngress := keySet(IngressPeers(edges, x, resources))
+	xIngress := keySet(IngressPeers(edges, x, resources, false))
 	if !xIngress[r1] {
 		t.Errorf("B/X must see A/R1 as an ingress peer (R1 dials X), got %v", xIngress)
 	}
 
-	r1Ingress := keySet(IngressPeers(edges, r1, resources))
+	r1Ingress := keySet(IngressPeers(edges, r1, resources, false))
 	if r1Ingress[x] {
 		t.Error("A/R1 must NOT see B/X as an ingress peer — R1 dials OUT to X, nothing dials IN to R1 here")
 	}
 
-	r1Egress := keySet(EgressPeers(edges, r1, resources))
+	r1Egress := keySet(EgressPeers(edges, r1, resources, false))
 	if !r1Egress[x] {
 		t.Errorf("A/R1 must see B/X as an egress peer (R1 dials X), got %v", r1Egress)
 	}
-	xEgress := keySet(EgressPeers(edges, x, resources))
+	xEgress := keySet(EgressPeers(edges, x, resources, false))
 	if xEgress[r1] {
 		t.Error("B/X must NOT see A/R1 as an egress peer — X never dials R1 in this scenario")
 	}
@@ -247,8 +374,8 @@ func TestContainerDomainConnectionUsesRealizingProviderDomain(t *testing.T) {
 
 func TestMembershipEdgesDeterministic(t *testing.T) {
 	edges, resources, r1, _, _, _, _ := buildOwnerWorkedExample(t)
-	a := MembershipEdges(edges, r1, resources)
-	b := MembershipEdges(edges, r1, resources)
+	a := MembershipEdges(edges, r1, resources, false)
+	b := MembershipEdges(edges, r1, resources, false)
 	if len(a) != len(b) {
 		t.Fatalf("not deterministic in length: %d vs %d", len(a), len(b))
 	}

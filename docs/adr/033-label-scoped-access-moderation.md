@@ -94,6 +94,26 @@ Auto-severing on policy change (rejected — ADR 021 amendment records
 why); external attestation of labels (multi-operator identity
 federation is Phase 8+ territory); renaming domains.
 
+## Addendum (2026-07-23, K3): selector-scoped wide grants are INERT, not
+downgrading, when LabelScopedAccess is off
+
+Decision 3's selector form (`spec.access[].selector`) rides the SAME
+`LabelScopedAccess` gate this ADR registers, independently of
+`GraphScopedAccess` (which governs whether ANY grant compiles at all). The
+gate-off question this addendum settles: does a selector-bearing grant fall
+back to the wider bare-namespace form, or contribute nothing? **INERT**
+(admits nobody) is the answer — never wider than the declared intent when
+the gate that interprets that intent is off. Falling back to namespace-wide
+would silently grant MORE than the manifest author asked for the moment an
+operator flips a feature flag off, which is the exact self-widening this
+ADR exists to prevent; the bare namespace-wide form remains available and
+unaffected (it never depended on the gate to begin with — H7 shipped it
+before this ADR existed) for an author who actually wants that breadth.
+`internal/application/graphaccess.grantAdmits` implements this; the
+`DL022` design lint (docs/adr/020 §4) flags every remaining bare grant so
+the deprecated, ungated form is visible and gradually replaced. See
+docs/planning/08 §7.10 K3's Done-note for the implementation.
+
 ## References
 
 ADR 021 (+ 2026-07-23 amendment), ADR 022, ADR 026, ADR 027 (claims
