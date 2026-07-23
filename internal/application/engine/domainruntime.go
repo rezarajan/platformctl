@@ -10,6 +10,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/rezarajan/platformctl/internal/domain/naming"
@@ -216,4 +217,84 @@ func consumerDomainHoles(conn resource.Envelope, byKey map[resource.Key]resource
 	}
 	sort.Strings(holes)
 	return holes
+}
+
+// Optional-capability delegation (the ADR 018 promotion trap, third
+// occurrence — this decorator shipped promoting NONE of them, so every
+// capability assertion through Request.Runtime failed at the 2026-07-23
+// single gate: IngressCapableRuntime on K8s, MemberSetRuntime for
+// workers>1, all of it). Each method forwards to the wrapped runtime
+// when IT implements the capability; the assertion helpers below make
+// the decorator transparent. internal/archtest's wrapper-completeness
+// guard now FAILS THE BUILD if an adapter grows an optional capability
+// any wrapper does not forward — this class of bug is closed, not
+// patched.
+
+func (d *domainRuntime) AddressesMembersCollectively() bool {
+	if m, ok := d.ContainerRuntime.(runtime.MemberSetRuntime); ok {
+		return m.AddressesMembersCollectively()
+	}
+	return false
+}
+
+func (d *domainRuntime) EnsureIngress(ctx context.Context, spec runtime.IngressSpec) (runtime.IngressState, error) {
+	ic, ok := d.ContainerRuntime.(runtime.IngressCapableRuntime)
+	if !ok {
+		return runtime.IngressState{}, fmt.Errorf("runtime does not implement IngressCapableRuntime")
+	}
+	return ic.EnsureIngress(ctx, spec)
+}
+
+func (d *domainRuntime) GetIngress(ctx context.Context, namespace, name string) (runtime.IngressState, bool, error) {
+	ic, ok := d.ContainerRuntime.(runtime.IngressCapableRuntime)
+	if !ok {
+		return runtime.IngressState{}, false, fmt.Errorf("runtime does not implement IngressCapableRuntime")
+	}
+	return ic.GetIngress(ctx, namespace, name)
+}
+
+func (d *domainRuntime) RemoveIngress(ctx context.Context, namespace, name string) error {
+	ic, ok := d.ContainerRuntime.(runtime.IngressCapableRuntime)
+	if !ok {
+		return fmt.Errorf("runtime does not implement IngressCapableRuntime")
+	}
+	return ic.RemoveIngress(ctx, namespace, name)
+}
+
+func (d *domainRuntime) EnsureTLSSecret(ctx context.Context, namespace, name string, certPEM, keyPEM []byte, labels map[string]string) error {
+	tc, ok := d.ContainerRuntime.(runtime.IngressCapableRuntime)
+	if !ok {
+		return fmt.Errorf("runtime does not implement IngressCapableRuntime")
+	}
+	return tc.EnsureTLSSecret(ctx, namespace, name, certPEM, keyPEM, labels)
+}
+
+func (d *domainRuntime) GetTLSSecret(ctx context.Context, namespace, name string) ([]byte, []byte, bool, error) {
+	tc, ok := d.ContainerRuntime.(runtime.IngressCapableRuntime)
+	if !ok {
+		return nil, nil, false, fmt.Errorf("runtime does not implement IngressCapableRuntime")
+	}
+	return tc.GetTLSSecret(ctx, namespace, name)
+}
+
+func (d *domainRuntime) RemoveTLSSecret(ctx context.Context, namespace, name string) error {
+	tc, ok := d.ContainerRuntime.(runtime.IngressCapableRuntime)
+	if !ok {
+		return fmt.Errorf("runtime does not implement IngressCapableRuntime")
+	}
+	return tc.RemoveTLSSecret(ctx, namespace, name)
+}
+
+func (d *domainRuntime) ObserveIsolationEnforcement(ctx context.Context) (runtime.IsolationStatus, error) {
+	io, ok := d.ContainerRuntime.(runtime.IsolationObserver)
+	if !ok {
+		return runtime.IsolationStatus{State: runtime.IsolationUnknown, Reason: "runtime does not implement IsolationObserver"}, nil // archtest:allow-reason-literal: IsolationStatus.Reason is free-text diagnostics, not a condition Reason token
+	}
+	return io.ObserveIsolationEnforcement(ctx)
+}
+
+// WrapDomainRuntimeForTest wraps rt exactly as resolveRequest does —
+// exported ONLY for the archtest wrapper-completeness guard.
+func WrapDomainRuntimeForTest(rt runtime.ContainerRuntime) runtime.ContainerRuntime {
+	return &domainRuntime{ContainerRuntime: rt, token: "datascape", domain: "default"}
 }

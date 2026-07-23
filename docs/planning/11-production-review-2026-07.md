@@ -601,3 +601,20 @@ static. Dimensions, each producing findings verified before fixing:
   Jobs sharing the FIFO via emptyDir; BackupRestore GA now requires
   runtime parity). Remaining environmental step: minikube→Calico
   recreation queued behind the running wave-4 gate sweep.
+- 2026-07-23: SINGLE GATE root-caused — 8 failures, three causes, none
+  the probe retry: (1) THE ADR 018 PROMOTION TRAP, THIRD OCCURRENCE,
+  now CLOSED AS A CLASS: H5's domainRuntime decorator forwarded ZERO
+  optional capabilities, so every capability assertion through
+  Request.Runtime failed (ingress/TLS on K8s, member-set workers>1,
+  isolation observer). Full delegation added AND an archtest
+  (TestRuntimeWrappersForwardEveryOptionalCapability) now reflects over
+  every wrapper vs every adapter capability — an unforwarded capability
+  is a build failure forever. (2) My d0017d5 coherence check missed
+  H5's testdata fixtures (E7's bisect caught doc 11's own overclaim) —
+  both domains scenarios fixed (edge provider carries the domain).
+  (3) compose: bkp-* leftovers from killed backup runs — removed; they
+  also ran through the whole gate, likely pressuring the openziti
+  Docker leg (ConnectorStateFAILED post-heal — re-verified in the
+  rerun). H8's isolation note in failing output was a red herring
+  (warn-only, working as designed). Wave-5 status: J1/E6/E7/I14
+  reported (4 of 6); H7 and I13+I15 building.

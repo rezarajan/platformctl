@@ -259,3 +259,10 @@ func joinKeys[V any](m map[string]V) string {
 	}
 	return out
 }
+
+// WrapForTest wraps rt exactly as Registry.Runtime wraps every runtime it
+// hands out (the haGuard decorator) — exported ONLY for the archtest
+// wrapper-completeness guard, which must assert on the real wrapper type.
+func WrapForTest(rt runtime.ContainerRuntime) runtime.ContainerRuntime {
+	return &haGuardRuntime{ContainerRuntime: rt}
+}

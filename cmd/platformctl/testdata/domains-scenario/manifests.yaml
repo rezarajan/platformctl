@@ -67,6 +67,7 @@ apiVersion: datascape.io/v1alpha1
 kind: Provider
 metadata:
   name: domains-it-edge
+  domain: alpha
 spec:
   type: proxy
   runtime:
