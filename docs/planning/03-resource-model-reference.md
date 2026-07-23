@@ -1617,6 +1617,78 @@ is consumed as-is (§3).
    it refuses only when the Connection's realizing provider does not
    consume it (see §8.2.3's "Update" note above).
 
+### 8.2.5 Identity-attested mediated connections (the `openziti` provider, docs/planning/08 H6, docs/adr/022, docs/adr/027)
+
+A fourth realization of the `Connection` shape, and the one docs/adr/027
+promotes to Datascape's authoritative zero-trust guarantee (Layer 1): an
+`openziti`-typed `Provider` is a `ConnectionCapableProvider` (scheme `tcp`)
+whose Connection is realized as a mutually-authenticated, per-edge-
+authorized Ziti service rather than a plain forwarder. The mediation
+mechanism itself is a capability seam — `internal/ports/mediation.
+MediationProvider` — OpenZiti is the first (only, at v1) adapter; nothing
+outside `internal/adapters/providers/openziti` may import or name it
+(archtest-pinned).
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mesh
+spec:
+  type: openziti
+  secretRefs: [mesh-admin]
+  configuration:
+    adminSecretRef: mesh-admin   # SecretReference keys "username","password" — the controller's bootstrap admin
+    targetNetworks: [vpc-net]    # additional Docker networks the router joins to reach dark targets
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: orders-db-mediated
+spec:
+  providerRef:
+    name: mesh
+  scheme: tcp
+  port: 25432
+  target: vpc-postgres:5432      # reachable by the router via configuration.targetNetworks only — dark on every other network
+```
+
+- **Identity, not the schema, marks a Connection as "mediated."** Exactly
+  like `ingress`/`proxy`/`wireguard` before it, `openziti` selects itself
+  purely via `providerRef` + `scheme` — there is no `mediated: true` flag.
+  A Connection is mediated when, and only when, its realizing Provider
+  implements the `MediationCapableProvider` capability
+  (`internal/application/graphaccess.MediatedSubset` narrows the full
+  declared-graph edge set to exactly these Connections).
+- **Workload identity is minted from the naming authority**:
+  `internal/domain/naming.WorkloadIdentityURI` derives a SPIFFE-aligned URI
+  (`spiffe://datascape/<namespace>/<kind>/<name>`) for every consuming
+  resource — deterministic, unit-tested, zero I/O. Private key material
+  never leaves the mediation adapter; state/logs/status carry only a
+  public-key fingerprint (docs/adr/013).
+- **Per-edge authorization compiles from the declared graph** (docs/adr/026):
+  the engine (here, self-contained within the adapter's own Reconcile —
+  zero edits to any other provider) derives every consumer that references
+  a mediated Connection and authorizes exactly those identities to dial
+  the corresponding Ziti service — no wider grant, no group-based role.
+- **The bind side is a router-hosted, raw-TCP terminator** (Ziti's native
+  `transport` binding), not a per-target tunneler process: the router
+  reaches `spec.target` only via `configuration.targetNetworks`, so the
+  real backend (e.g. the Postgres source in the accept scenario) never
+  joins the shared/platform network its consumers are on — the "dark
+  service" posture docs/adr/022 describes.
+- **The dial side** is a small `ziti-edge-tunnel` "proxy"-mode container,
+  one per Connection (mirroring §8.2.3's one-container-per-Connection
+  precedent), enrolled under the consuming resource's own minted identity —
+  giving consumers the familiar `<connection-name>:<port>` address while
+  every hop underneath is mutually authenticated.
+- **The claims table** (docs/adr/027): with a `MediatedConnections`-gated
+  Connection in a manifest, `status`/`preflight` may say "Zero-trust:
+  identity-attested, policy-authorized edges — on ANY substrate" — the
+  same guarantee on Docker and Kubernetes, because enforcement travels
+  with the workloads rather than depending on the network fabric.
+- **Gate:** `MediatedConnections` (Alpha, disabled) — docs/planning/04 §12.
+
 ## 9. Lineage / observability schema
 
 ```yaml

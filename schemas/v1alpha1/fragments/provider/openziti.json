@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/fragments/provider/openziti.json",
+  "title": "Provider(type: openziti).spec.configuration",
+  "description": "Shape-only fragment (docs/planning/08 E5, docs/adr/022, docs/adr/027). adminSecretRef names the SecretReference carrying the controller's bootstrap admin credentials (keys: username, password) — falls back to the first entry in spec.secretRefs when unset, matching every other provider's ResolveCredential convention. targetNetworks are additional Docker networks the router container joins so it can reach a mediated Connection's target while staying off the shared/platform network consumers are on (the dark-service posture, docs/adr/022) — the explicit-declaration precedent docs/adr/023's peerNetwork sets.",
+  "type": "object",
+  "properties": {
+    "adminSecretRef": { "type": "string", "minLength": 1 },
+    "controllerPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "routerPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "targetNetworks": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false
+}

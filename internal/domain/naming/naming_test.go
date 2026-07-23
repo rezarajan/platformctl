@@ -74,3 +74,111 @@ func TestNetworkNameTruncation(t *testing.T) {
 		t.Fatalf("short names must be untouched: %q", got)
 	}
 }
+
+// TestWorkloadIdentityURIShape pins the exact SPIFFE-aligned form
+// docs/adr/022 specifies for an undeclared/default-domain resource:
+// spiffe://datascape/<namespace>/<kind>/<name>.
+func TestWorkloadIdentityURIShape(t *testing.T) {
+	env := resource.Envelope{}
+	env.GroupVersionKind.Kind = "Source"
+	env.Metadata.Name = "orders-db"
+	env.Metadata.Namespace = "payments"
+
+	want := "spiffe://datascape/payments/source/orders-db"
+	if got := WorkloadIdentityURI(env); got != want {
+		t.Errorf("WorkloadIdentityURI = %q, want %q", got, want)
+	}
+}
+
+// TestWorkloadIdentityURIIncludesNonDefaultDomain proves the H5-merge
+// upgrade: a resource declaring a non-default metadata.domain (docs/planning/08
+// H5, docs/adr/022 Ring 0) gets a domain segment in its identity URI —
+// spiffe://datascape/<namespace>/<domain>/<kind>/<name> — mirroring
+// NetworkName's own "undeclared domain is a no-op, declared domain gets its
+// own segment" rule (this file's TestNetworkName* tests, above).
+func TestWorkloadIdentityURIIncludesNonDefaultDomain(t *testing.T) {
+	env := resource.Envelope{}
+	env.GroupVersionKind.Kind = "Source"
+	env.Metadata.Name = "orders-db"
+	env.Metadata.Namespace = "payments"
+	env.Metadata.Domain = "finance"
+
+	want := "spiffe://datascape/payments/finance/source/orders-db"
+	if got := WorkloadIdentityURI(env); got != want {
+		t.Errorf("WorkloadIdentityURI = %q, want %q", got, want)
+	}
+}
+
+// TestWorkloadIdentityURIIsDeterministic proves the same graph node always
+// derives the same URI — the load-bearing property for ADR 022/027 ("the
+// graph node IS the identity subject"): repeated derivation, drift
+// detection, and re-apply must never mint a different identity for the
+// same resource.
+func TestWorkloadIdentityURIIsDeterministic(t *testing.T) {
+	env := resource.Envelope{}
+	env.GroupVersionKind.Kind = "Binding"
+	env.Metadata.Name = "cdc-orders"
+	env.Metadata.Namespace = "analytics"
+
+	first := WorkloadIdentityURI(env)
+	for i := 0; i < 5; i++ {
+		if got := WorkloadIdentityURI(env); got != first {
+			t.Fatalf("WorkloadIdentityURI is not deterministic: call %d = %q, first = %q", i, got, first)
+		}
+	}
+}
+
+// TestWorkloadIdentityURIDefaultNamespace proves an unset namespace
+// normalizes to "default" exactly like every other namespace-qualified
+// name in this codebase (resource.NormalizeNamespace), so an identity is
+// never minted with an empty path segment.
+func TestWorkloadIdentityURIDefaultNamespace(t *testing.T) {
+	env := resource.Envelope{}
+	env.GroupVersionKind.Kind = "Connection"
+	env.Metadata.Name = "edge"
+
+	want := "spiffe://datascape/default/connection/edge"
+	if got := WorkloadIdentityURI(env); got != want {
+		t.Errorf("WorkloadIdentityURI = %q, want %q", got, want)
+	}
+}
+
+// TestWorkloadIdentityURIDistinctForDistinctNodes proves two different
+// graph nodes never collide on identity — the collision-free-by-
+// construction property docs/adr/022's Consequences section names.
+func TestWorkloadIdentityURIDistinctForDistinctNodes(t *testing.T) {
+	a := resource.Envelope{}
+	a.GroupVersionKind.Kind = "Source"
+	a.Metadata.Name = "orders-db"
+	a.Metadata.Namespace = "payments"
+
+	b := resource.Envelope{}
+	b.GroupVersionKind.Kind = "Source"
+	b.Metadata.Name = "orders-db"
+	b.Metadata.Namespace = "analytics"
+
+	if WorkloadIdentityURI(a) == WorkloadIdentityURI(b) {
+		t.Fatalf("identical URIs for distinct namespaces: %q", WorkloadIdentityURI(a))
+	}
+}
+
+// TestWorkloadIdentityURIDistinctForDistinctDomains proves two resources
+// with the same namespace/kind/name but different domains never collide —
+// the same collision-free property, extended to the H5 domain segment.
+func TestWorkloadIdentityURIDistinctForDistinctDomains(t *testing.T) {
+	a := resource.Envelope{}
+	a.GroupVersionKind.Kind = "Source"
+	a.Metadata.Name = "orders-db"
+	a.Metadata.Namespace = "payments"
+	a.Metadata.Domain = "finance"
+
+	b := resource.Envelope{}
+	b.GroupVersionKind.Kind = "Source"
+	b.Metadata.Name = "orders-db"
+	b.Metadata.Namespace = "payments"
+	b.Metadata.Domain = "analytics"
+
+	if WorkloadIdentityURI(a) == WorkloadIdentityURI(b) {
+		t.Fatalf("identical URIs for distinct domains: %q", WorkloadIdentityURI(a))
+	}
+}

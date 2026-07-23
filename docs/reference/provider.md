@@ -116,6 +116,17 @@ Shape-only fragment (docs/planning/08 E5). No SpecValidator implemented for this
 | `spec.configuration.apiPort` | integer | no |  |
 | `spec.configuration.image` | string | no |  |
 
+### openziti
+
+Shape-only fragment (docs/planning/08 E5, docs/adr/022, docs/adr/027). adminSecretRef names the SecretReference carrying the controller's bootstrap admin credentials (keys: username, password) — falls back to the first entry in spec.secretRefs when unset, matching every other provider's ResolveCredential convention. targetNetworks are additional Docker networks the router container joins so it can reach a mediated Connection's target while staying off the shared/platform network consumers are on (the dark-service posture, docs/adr/022) — the explicit-declaration precedent docs/adr/023's peerNetwork sets.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `spec.configuration.adminSecretRef` | string | no |  |
+| `spec.configuration.controllerPort` | integer | no |  |
+| `spec.configuration.routerPort` | integer | no |  |
+| `spec.configuration.targetNetworks` | array of string | no |  |
+
 ### postgres
 
 Shape-only fragment (docs/planning/08 E5): the superuserSecretRef-or-nonempty-secretRefs fallback and *SecretRef spec.secretRefs-membership checks remain SpecValidator cross-field rules.

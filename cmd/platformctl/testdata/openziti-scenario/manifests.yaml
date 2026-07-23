@@ -1,0 +1,120 @@
+# H6 (docs/planning/08 §7.7, as amended by docs/adr/027) integration
+# scenario: a CDC Binding against a database that lives in an isolated
+# "VPC" Docker network, reachable ONLY through an `openziti`-realized
+# Connection — an identity-attested, per-edge-authorized mediated entrypoint
+# (docs/adr/022 Ring 2, docs/adr/027 Layer 1), never a plain forwarder. The
+# VPC network and the database itself are raw, unmanaged test fixtures
+# stood up by openziti_integration_test.go (docs/adr/023 Decision 7's
+# pattern, reused) — nothing in this file creates them. Host ports: Kafka
+# 19299, Connect 18289, controller 12890, mediated Connection 25799.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: ziti-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: ziti-db-creds
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mesh
+spec:
+  type: openziti
+  runtime:
+    type: docker
+    network: datascape-ziti-net
+  secretRefs: [ziti-admin]
+  configuration:
+    adminSecretRef: ziti-admin
+    controllerPort: 12890
+    targetNetworks: [datascape-ziti-vpc]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: orders-db-mediated
+spec:
+  providerRef:
+    name: mesh
+  scheme: tcp
+  port: 25799
+  target: ziti-vpc-db:5432
+  secretRef:
+    name: ziti-db-creds
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-ziti-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+    network: datascape-ziti-net
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19299
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: datascape-ziti-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    network: datascape-ziti-net
+  configuration:
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
+    connectPort: 18289
+    bootstrapServers: datascape-ziti-rp:29092
+  secretRefs: [ziti-db-creds]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: ziti-orders-db
+spec:
+  engine: postgres
+  external: true
+  connectionRef:
+    name: orders-db-mediated
+  postgres:
+    database: ordersdb
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: ziti-orders-events
+spec:
+  providerRef:
+    name: datascape-ziti-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: ziti-orders-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: ziti-orders-db
+  targetRef:
+    name: ziti-orders-events
+  providerRef:
+    name: datascape-ziti-dbz
+  options:
+    tables: [orders]
+    snapshotMode: initial

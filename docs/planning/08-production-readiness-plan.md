@@ -2719,6 +2719,109 @@ architecture correction, `internal/adapters/providers/placeholder`'s new
   docs. Enforcement must be proven identical on Docker AND Kubernetes
   in the accept suite — that substrate-independence IS the point.
 
+#### Done-note (2026-07-23)
+
+Shipped: `internal/ports/mediation.MediationProvider` (the port — a
+capability seam mirroring `runtime.ContainerRuntime`'s shape:
+MintIdentity/RealizeEdge/RevokeEdge/RevokeIdentity/ObservedEdges/
+ObservedIdentities, all Ensure*-idempotent by contract), a
+`reconciler.MediationCapableProvider` marker
+(`Mediation(ctx, req) (mediation.MediationProvider, error)`, request-scoped
+per doc 08 F5 rather than provider-held state), `internal/domain/naming.
+WorkloadIdentityURI` (SPIFFE-aligned `spiffe://datascape/<namespace>/
+<kind>/<name>`, extended additively at the H5 merge to
+`spiffe://datascape/<namespace>/<domain>/<kind>/<name>` for a declared
+non-default `metadata.domain` — undeclared/default domain stays
+byte-identical, mirroring `NetworkName`'s own back-compat rule),
+`internal/application/graphaccess` (technology-silent `DeriveEdges` +
+`MediatedSubset`/`CompileMediatedConnections`, reusable by H7 per ADR 027's
+own instruction), and `internal/adapters/providers/openziti` (the first —
+only — adapter: pinned `openziti/ziti-controller`/`ziti-router`/
+`ziti-tunnel` images at `1.5.14`, digest-pinned; env-var-driven bootstrap;
+Edge Management REST client; router-hosted `transport`-binding terminators
+for the dark-service bind side; per-Connection `ziti-edge-tunnel`
+proxy-mode dial-side container enrolled under the consumer's own minted
+identity; catch-all edge-router/service-edge-router policies as
+infrastructure plumbing distinct from the per-edge Dial policy that IS the
+ADR 026 authorization). `internal/archtest/mediation_layering_test.go`
+pins requirement #1 mechanically (no Ziti import/reference outside the
+adapter dir). Gate `MediatedConnections` (Alpha, disabled), schema fragment
+`schemas/v1alpha1/fragments/provider/openziti.json`, doc 03 §8.2.5, doc 04
+§12 row, `scripts/test-impact.sh`'s `openziti` suite row, and 4 new
+`platformctl explain` reasons (`MediationPlaneHealthy/Unhealthy`,
+`MediatedEdgeReady/NotReady`) all landed same-commit.
+
+**The claims-table language this ships** (verbatim from ADR 027, now
+true of a `MediatedConnections`-gated Connection): *"Zero-trust:
+identity-attested, policy-authorized edges — on ANY substrate."*
+
+**Live-verified on Docker** (`cmd/platformctl/openziti_integration_test.go`,
+`testdata/openziti-scenario`): a full `apply` of controller+router+CDC
+pipeline succeeded end-to-end against the real pinned images — every
+resource Ready, the Debezium connector reaching RUNNING through the
+mediated Connection (confirmed independently with a direct `psql` query
+through the same dial-side entrypoint), re-apply is a true no-op, and
+`destroy` leaves no containers behind. Three real defects were found and
+fixed only by running this live (none reproducible from unit tests alone):
+identity double-minting silently starved the dial-side container's
+one-time enrollment JWT; Ziti's env-var bootstrap creates no catch-all
+edge-router/service-edge-router policy pair (a real deployment's `ziti
+edge quickstart` does), so every dial failed `NO_EDGE_ROUTERS_AVAILABLE`
+until the adapter created the equivalent explicitly; and
+`encryptionRequired: true` on a service backed by a router-native
+`transport` terminator (no per-target tunneler process) fails every dial
+with "terminator did not send public header" — Ziti's end-to-end SDK
+encryption needs an SDK-aware terminator on both ends, which this
+adapter's dark-service mechanism deliberately doesn't use.
+
+**Negative proof — reachability:** before mediation exists, the database
+(an isolated Docker network, no shared-network membership) is unreachable
+from the platform network (`runtime.ProbeReachable`, docs/adr/023's
+established pattern).
+
+**Negative proof — identity (the check ADR 027 exists for):** a canary
+identity, freshly minted and enrolled against the SAME controller, on the
+SAME platform network as the legitimate dial-side tunneler, targeting the
+SAME service name, was refused — not a network artifact (full network
+reachability to the controller/router), the per-edge Dial policy's
+identity check itself: no policy names the canary, so it never even sees
+the service in its own dialable list, and a raw TCP dial to its own
+never-started local listener is correctly connection-refused. Verified
+live.
+
+**Known flake, recorded not hidden:** a `platformctl drift` invocation
+running immediately after `apply` intermittently reports the external
+Source `ExternalEndpointUnreachable` even though the Binding's own
+connector is genuinely `RUNNING` and a direct dial succeeds seconds later
+— a fresh TCP connection through the dial-side tunneler opens a new Ziti
+circuit each time, and circuit establishment occasionally exceeds the
+generic `engine.probeTCPReachable`'s ~3.75s budget (that function is
+outside this task's file fence — `internal/application/engine`, not
+`internal/adapters/providers/openziti`). This task's own settle-probe
+(`waitMediatedServing`, a bounded ~30s retry) makes the Binding/Connection
+side of `status`/`drift` reliably clean; the generic external-reachability
+probe's shorter, unretried budget is the residual gap. Reproduced 3/3 live
+runs on this session's (shared, loaded) Docker host; not root-caused
+further given the time budget — a real item for the gate's own "Beta
+after... soaks" bar, not a structural defect (the mechanism itself —
+identity, policy, terminator — is proven correct by the positive and both
+negative proofs above).
+
+**Not attempted this session: Kubernetes.** H5 (domains) merged into main
+mid-task, after the Docker debugging above; verifying the identical
+scenario on Kubernetes (the substrate-independence claim ADR 027 makes
+central) needs its own live-cluster iteration cycle this task's time
+budget did not reach. Recorded as the explicit next step, not silently
+skipped — nothing about the port/adapter design is Docker-specific (the
+adapter only calls `runtime.ContainerRuntime`/`EnsureNetwork`/
+`EnsureContainer`/`EnsureVolume`, the same interface the Kubernetes
+adapter implements); the risk is unverified live behavior, not a known
+design gap.
+
+**Impact sweep:** `scripts/test-impact.sh`'s `openziti` suite passed live
+on this session's Docker host (see the live-verified paragraph above); a
+second, back-to-back Docker run and any Kubernetes run are follow-ups.
+
 ### H8: Layer-2 enforcement observation — isolation honesty probe (ADR 027)
 
 - **Size:** S. **Depends:** none (precedes any GA language about

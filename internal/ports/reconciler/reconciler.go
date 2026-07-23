@@ -15,6 +15,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/domain/versionprofile"
+	"github.com/rezarajan/platformctl/internal/ports/mediation"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -460,6 +461,37 @@ type CatalogCapableProvider interface {
 type ConnectionCapableProvider interface {
 	Provider
 	SupportedConnectionSchemes() []string
+}
+
+// MediationCapableProvider is declared by a provider that realizes the
+// docs/adr/027 Layer 1 zero-trust plane: the authoritative capability
+// marker letting the engine and internal/application/graphaccess
+// type-assert a constructed reconciler.Provider into a
+// mediation.MediationProvider the same way every other capability is
+// discovered (docs/planning/02 §4.2's "capability interface" pattern —
+// ConnectionCapableProvider, above, is the shape this mirrors). A
+// mediation-capable provider is, in practice, ALSO a
+// ConnectionCapableProvider (docs/adr/022: a MediatedConnection is the
+// existing Connection abstraction realized by a mediator instead of a
+// plain forwarder) — the two interfaces are declared separately because
+// they answer different questions (“can this provider realize a Connection
+// resource at all” vs. “does this provider mint identity and compile
+// per-edge authorization”), matching this file's existing precedent of
+// narrow, single-purpose capability interfaces over one wide one.
+type MediationCapableProvider interface {
+	Provider
+	// Mediation returns this provider's mediation.MediationProvider facet,
+	// bound to the mediation plane instance req names (docs/planning/08
+	// F5: connecting to a control plane is exactly the kind of "more than
+	// static config" input Request exists for — mirroring how every other
+	// capability method that needs live, resolved state takes Request
+	// rather than the provider holding cross-call connection state).
+	// req.Provider is the mediation Provider resource itself (its own
+	// Kind: "Provider" envelope) whether the caller is reconciling that
+	// Provider, a Connection it realizes, or a third resource entirely —
+	// the same "req.Provider is the realizing Provider" contract every
+	// other capability method already holds.
+	Mediation(ctx context.Context, req Request) (mediation.MediationProvider, error)
 }
 
 // TunnelCapableProvider is declared by a provider that can serve as the

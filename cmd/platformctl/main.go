@@ -18,6 +18,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/adapters/providers/nessie"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/noop"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/openlineage"
+	"github.com/rezarajan/platformctl/internal/adapters/providers/openziti"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/placeholder"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/postgres"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/prometheus"
@@ -177,6 +178,17 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// from the Phase 6.5 enabled-Alpha precedent.
 	gates.Register("TunnelProvider", featuregate.Alpha, false)
 
+	// docs/planning/08 H6, as amended by docs/adr/027: the OpenZiti
+	// mediation provider — docs/adr/027's Layer 1, the authoritative
+	// zero-trust plane (identity-attested, per-edge-authorized
+	// connections). Alpha/disabled, matching TunnelProvider's posture
+	// immediately above: a new provider running its own control plane
+	// (a pinned controller + router) and minting cryptographic identity
+	// is a meaningfully different risk profile from the Phase 6.5
+	// enabled-Alpha precedent, and the owner-scenario dual-runtime accept
+	// suite (docs/planning/08 §7.7 H6) has not yet soaked.
+	gates.Register("MediatedConnections", featuregate.Alpha, false)
+
 	// docs/planning/08 H1 (ADR 020): read-only reporting only — the gate
 	// exists to switch `validate`'s one-line design-findings summary off,
 	// not to hide the `lint` command itself, so it defaults enabled.
@@ -219,6 +231,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	reg.RegisterProvider("ingress", func() reconciler.Provider { return ingress.New() }, "IngressProvider")
 	reg.RegisterProvider("trino", func() reconciler.Provider { return trino.New() }, "TrinoProvider")
 	reg.RegisterProvider("wireguard", func() reconciler.Provider { return wireguard.New() }, "TunnelProvider")
+	reg.RegisterProvider("openziti", func() reconciler.Provider { return openziti.New() }, "MediatedConnections")
 	reg.RegisterRuntime("fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
 		return fakeruntime.New(), nil
 	})

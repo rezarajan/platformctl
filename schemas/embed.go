@@ -84,6 +84,7 @@ var ProviderConfigFragments = map[string]string{
 	"ingress":     "v1alpha1/fragments/provider/ingress.json",
 	"trino":       "v1alpha1/fragments/provider/trino.json",
 	"wireguard":   "v1alpha1/fragments/provider/wireguard.json",
+	"openziti":    "v1alpha1/fragments/provider/openziti.json",
 }
 
 // SourceEngineFragments maps a Source's spec.engine to its spec.<engine>
