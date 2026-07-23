@@ -78,12 +78,58 @@ infra) landed on main (234cabe). Merged main into this branch cleanly
   consulted).
 - `go.mod`/`go.sum`: added `go.mozilla.org/pkcs7 v0.9.0`.
 
-## Verification remaining
+## Bug found and fixed by the live Docker leg (not reproducible any other way)
 
-- [ ] gofmt / go build / go vet -tags integration / golangci-lint
-- [ ] go test ./... unfiltered, log + true-exit
-- [ ] acceptance greps
-- [ ] live Docker leg: TestOpenZitiMediatedConnectionEndToEnd
-- [ ] live K8s leg: check kubeconfig validity first
-- [ ] doc 08 H10 Done-note (additive)
-- [ ] commit
+First live Docker run FAILED: `container "orders-db-mediated" publishes no
+host binding for port 25799` at the Binding step, right after the
+Connection itself reported Ready. Root-caused with a docker-ps watch loop:
+the dial-side tunneler container came up, published its port, then EXITED
+(1) within ~2-3s and stayed exited.
+
+A/B-tested against the pre-H10 code (`git checkout 234cabe -- internal/adapters/providers/openziti go.mod go.sum`,
+rerun, PASSED, then restored my changes) — confirmed the regression was
+mine, not pre-existing flake.
+
+Cause: the settle-pass recreate (strip the enrollment FileMount, exactly
+as Env was stripped before) fires immediately after the first
+EnsureContainer call, same as it always did. The OLD Env-based design was
+accidentally safe against this: ziti-tunnel's entrypoint.sh writes
+ZITI_ENROLL_TOKEN's content into a file INSIDE the persisted "/netfoundry"
+identity volume as its very first action, so even a same-second recreate
+never lost the JWT. My FileMount is deliberately OUTSIDE that volume
+(ephemeral, container-layer-only, so the settle recreate leaves no
+residue) — but that means a premature recreate destroys the only copy of
+the JWT before the container's own async `ziti edge enroll` call (RSA
+keygen + REST round trip, ~1-3s) ever ran, and the replacement container
+starts with nothing to enroll with.
+
+Fix: `waitTunnelEnrolled` (connection.go) — bounded-polls
+`rt.ReadFile(ctx, name, "/netfoundry/ziti_id.json")` (works unchanged on
+both runtimes: Docker's ReadFile does CopyFromContainer against any live
+path, Kubernetes falls back to a live exec `cat` for a path it didn't
+itself place) until the enrolled identity file durably lands in the
+volume, BEFORE the settle recreate — the same "wait for the real async
+fact before settling" pattern instance.go's `waitEdgeRouterVerified`
+already established for the router, now applied to the tunneler for the
+first time (its old Env-based safety was incidental, never an intentional
+wait).
+
+Verified: 2x consecutive green Docker runs after the fix, 1x green K8s
+rerun (connection.go changed, router path untouched by this fix).
+
+## Verification — all green
+
+- [x] gofmt / go build / go vet (both tag sets) — clean
+- [x] go test ./... unfiltered — true-exit=0
+- [x] golangci-lint v2.12.2, whole repo — 0 issues
+- [x] acceptance greps: only the one documented TOFU InsecureSkipVerify
+      remains; only the router's path-valued ZITI_ENROLL_TOKEN remains
+      (deviation from a stricter literal reading, justified and recorded
+      — see final report)
+- [x] live Docker leg: TestOpenZitiMediatedConnectionEndToEnd — green x2
+      after the fix (34.1s, 31.5s)
+- [x] live K8s leg: TestOpenZitiMediatedConnectionOnKubernetesEndToEnd —
+      green x2 (82.7s before the connection.go fix — router path only;
+      102.4s after, full rerun)
+- [x] doc 08 H10 Done-note (additive)
+- [x] final commit

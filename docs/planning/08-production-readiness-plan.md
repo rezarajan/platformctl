@@ -3712,6 +3712,114 @@ behavior changed. `go test ./...` unfiltered: true-exit=0. gofmt/`go vet`
   openziti; no secret-bearing Env key in either ziti ContainerSpec
   (grep-provable); openziti suite green on both runtimes.
 
+#### Done-note (2026-07-23)
+
+Shipped both hardening items, each verified live against the pinned
+`1.5.14` controller/router/tunnel images before any code was written.
+
+**(1) CA pinning.** `client.go`'s new `pinnedCAPool` fetches
+`GET /.well-known/est/cacerts` — live-verified to answer
+`Content-Type: application/pkcs7-mime`, a base64-wrapped (64 cols) DER
+degenerate ("certs-only", no signerInfo) PKCS#7 SignedData carrying the
+root + intermediate CA `ZITI_BOOTSTRAP_PKI` generated. Parsed with
+`go.mozilla.org/pkcs7` (MIT, zero transitive deps — added to go.mod);
+built into an `x509.CertPool` pinned as `RootCAs` on every `edgeClient`'s
+`http.Client`. `newEdgeClient` no longer accepts or sets
+`InsecureSkipVerify` anywhere. The bootstrap fetch itself is refetched
+fresh on every `dialController`/`waitControllerServing` call rather than
+cached on `*Provider` (F5 stateless-provider discipline; cheap — one
+extra round trip — and self-healing across a PKI rotation). Verified live
+end-to-end with a throwaway Go program before touching the adapter: a
+`RootCAs`-pinned client hit `/edge/client/v1/version` and got 200 OK with
+full chain+hostname verification, no `InsecureSkipVerify` anywhere in the
+request path; confirmed the server cert's SAN set (`localhost`, the
+container's own advertised name, `127.0.0.1`, `::1`) covers every address
+`EnsureReachable` ever hands back on both runtimes (a Docker published
+port or a Kubernetes port-forward, always loopback-addressed).
+**Residual, exactly as the Do-text asked to be recorded:** the CA fetch
+itself is necessarily trust-on-first-use — there is no CA to verify it
+against yet — narrowly scoped to one `pinnedCAPool` helper never used for
+authenticated Edge Management REST traffic; this is the ONE
+`InsecureSkipVerify` occurrence left in the package (documented at length
+in client.go's own package doc comment), and Go's `crypto/tls` offers no
+way to capture a first-contact certificate without it.
+
+**(2) Enrollment JWT off Env.** Extracted both pinned images' real
+entrypoint scripts rather than assuming a convention:
+- `ziti-router`'s `bootstrap.bash` already treats `ZITI_ENROLL_TOKEN` as
+  a FILE PATH whenever the value names an existing non-empty file
+  (literal-JWT only as the fallback) — the "documented equivalent" this
+  task's Do-text anticipated; no `_FILE`-suffixed var actually exists on
+  this image. So `instance.go` now FileMounts the JWT (mode **0o644**,
+  not the wireguard-precedent 0o600 — live-verified that 0600 fails: this
+  image's bootstrap runs as an unprivileged `ziggy` user while
+  `copyFilesIn`/the Kubernetes Secret-volume place the file root-owned,
+  so 0600 is unreadable cross-UID; the router panicked
+  `could not load JWT file` until relaxed to 0644) at an ephemeral,
+  non-volume path, and sets `Env["ZITI_ENROLL_TOKEN"]` to that PATH — a
+  non-secret string, never the token. This is a deliberate, live-verified
+  deviation from a stricter "the key must not appear in Env at all"
+  reading: the image's enroll() function has no other supported input for
+  the JWT in its containerized entrypoint path (its env-file mechanism is
+  bare-metal/systemd-only, unreachable from `entrypoint.bash`), and the
+  security property the Do-text actually asks for — no secret BYTES
+  transiting `docker inspect`/`kubectl get pod -o yaml` — is fully met.
+- `ziti-tunnel`'s `entrypoint.sh` searches fixed candidate directories
+  (`/enrollment-token` among them) for `<ZITI_IDENTITY_BASENAME>.jwt`
+  BEFORE ever consulting `ZITI_ENROLL_TOKEN` — so `connection.go`'s
+  dial-side tunneler needs **no Env var at all**: FileMount only, mode
+  0o600 (this image runs as root, live-verified via `id`, so 0600 works
+  as literally specified). This is the strictest possible reading,
+  achieved for free once the image's own mechanism was checked live
+  instead of assumed.
+
+Both JWT paths are deliberately OUTSIDE each container's own persisted
+named volume (`/ziti-router`, `/netfoundry`): `copyFilesIn` places
+FileMount content in the container's own writable layer, discarded by the
+settle-pass recreate below along with the old container (a named volume
+is NOT removed by that recreate) — inside the volume, the JWT would
+instead become permanent on-disk residue no later pass could ever clean
+up. The settle pass (both files) now strips `Files = nil` in the exact
+same call that already strips `Env`, so the steady-state spec carries
+neither.
+
+**A real bug, found only by the live Docker suite, not reproducible any
+other way:** the first Docker run of `TestOpenZitiMediatedConnectionEndToEnd`
+failed — `container "orders-db-mediated" publishes no host binding for
+port 25799` — traced (docker-ps watch loop) to the dial-side tunneler
+exiting (1) within ~2-3s of the settle-pass recreate. A/B-tested against
+the pre-H10 code (temporarily checked out, rerun, passed, restored) to
+confirm the regression was new, not pre-existing flake. Root cause: the
+OLD Env-based design was accidentally race-safe — `ziti-tunnel`'s
+entrypoint.sh copies `ZITI_ENROLL_TOKEN`'s content into a file INSIDE the
+persisted `/netfoundry` volume as its first action, so even an
+immediate recreate never lost the JWT. The new, deliberately-ephemeral
+FileMount has no such side effect: recreating the container before its
+own async `ziti edge enroll` call (RSA keygen + a REST round trip,
+~1-3s) finishes destroys the only copy of the JWT, and the replacement
+starts with nothing to enroll with. Fixed with `waitTunnelEnrolled`
+(connection.go): bounded-polls `rt.ReadFile(ctx, name,
+"/netfoundry/ziti_id.json")` — implemented identically on both runtimes
+(Docker: `CopyFromContainer` against any live path; Kubernetes: a live
+`cat` exec fallback for a path it didn't itself place) — until the
+identity durably lands in the volume, BEFORE the settle recreate,
+mirroring `waitEdgeRouterVerified`'s existing "wait for the real async
+fact before settling" pattern for the router (whose safety here was
+already a genuine bounded wait, not an accident). Verified: 2 consecutive
+green Docker runs after the fix (34.1s, 31.5s), a green Kubernetes rerun
+(102.4s) confirming the connection.go change didn't disturb the
+already-passing router path.
+
+**Live evidence:** `TestOpenZitiMediatedConnectionEndToEnd` green x2
+post-fix; `TestOpenZitiMediatedConnectionOnKubernetesEndToEnd` green x2
+(one pre-fix run exercising only the untouched router path, one full
+rerun post-fix). `go test ./...` unfiltered: true-exit=0. gofmt/`go vet`
+(both tag sets)/golangci-lint v2.12.2 (whole repo): 0 issues. Acceptance
+greps: the package's only remaining `InsecureSkipVerify` is the
+documented TOFU bootstrap fetch; the package's only remaining
+`Env["ZITI_ENROLL_TOKEN"]` assignment is the router's path-valued (not
+secret-valued) one, per the deviation recorded above.
+
 ## 7.8 Stage I — Production-review remediations (doc 11, 2026-07 owner review)
 
 Findings from docs/planning/11-production-review-2026-07.md promoted to

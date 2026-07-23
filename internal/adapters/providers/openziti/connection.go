@@ -64,6 +64,38 @@ func tunnelContainerName(res resource.Envelope) string { return naming.RuntimeOb
 // volume, see reconcileConnection's spec doc comment for why).
 const dialEnrollTokenPath = "/enrollment-token/ziti_id.jwt"
 
+// dialIdentityFilePath is where ziti-tunnel's entrypoint.sh writes the
+// enrolled identity once ZITI_IDENTITY_BASENAME's enrollment (ziti edge
+// enroll) succeeds — inside "/netfoundry", the persisted identity volume,
+// so its existence is a durable, cross-recreate signal waitTunnelEnrolled
+// polls for.
+const dialIdentityFilePath = "/netfoundry/ziti_id.json"
+
+// waitTunnelEnrolled bounded-polls until the dial-side tunneler container
+// name has durably written its enrolled identity (reconcileConnection's
+// settle-pass doc comment explains why this wait must happen BEFORE that
+// pass recreates the container). Uses runtime.ContainerRuntime.ReadFile —
+// implemented identically on Docker (CopyFromContainer, any live path) and
+// Kubernetes (a live `cat` exec fallback for a path ReadFile didn't itself
+// place, kubernetes/exec.go's own doc comment) — so this works unchanged on
+// both runtimes, no capability assertion needed.
+func waitTunnelEnrolled(ctx context.Context, rt runtime.ContainerRuntime, name string) error {
+	deadline := time.Now().Add(runtime.ScaledWait(30 * time.Second))
+	for {
+		if b, err := rt.ReadFile(ctx, name, dialIdentityFilePath); err == nil && len(b) > 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("identity file %q did not appear within the settle window", dialIdentityFilePath)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Request) (status.Status, error) {
 	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
@@ -220,24 +252,38 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 
 	// Settle to the STABLE, post-enrollment spec within this SAME
 	// reconcile — the same discipline instance.go's reconcileInstance
-	// applies to the router container, for the identical reason:
-	// upsertIdentity's idempotency contract (client.go, mintIdentityWithToken's
-	// own doc comment) means every LATER reconcile, by definition, finds
-	// this consumer's identity already existing and gets back an empty
-	// enrollment JWT — unlike the router's isVerified flag this needs no
-	// bounded wait (identity existence, not a live async handshake, is
-	// what upsertIdentity's "already exists" branch keys on: a second
-	// mint call for the SAME identity returns empty immediately, whether
-	// issued a microsecond or a day later). Leaving the container's
-	// desired spec keyed to the one-time token would violate the
-	// CLAUDE.md EnsureContainer idempotency bar the instant any later
-	// probe/drift/status call recomputes it — found live coupled with the
-	// router's own analogous churn (instance.go's settle comment has the
-	// full account): TestOpenZitiMediatedConnectionOnKubernetesEndToEnd's
-	// post-apply drift restarted this dial-side tunneler mid-test. The
-	// FileMount carrying the JWT (docs/planning/08 H10) is stripped here
-	// too — the steady-state spec must not carry it either.
+	// applies to the router container. upsertIdentity's idempotency
+	// contract (client.go, mintIdentityWithToken's own doc comment) means
+	// every LATER reconcile, by definition, finds this consumer's
+	// CONTROLLER-side identity entity already existing and gets back an
+	// empty enrollment JWT — that part needs no bounded wait, it's a
+	// synchronous REST idempotency check. But (docs/planning/08 H10,
+	// found live) the CONTAINER's own local enrollment — writing
+	// dialIdentityFilePath into the persisted "…-identity" volume — is a
+	// SEPARATE, genuinely async fact this settle-recreate must also wait
+	// for: with the JWT delivered via an ephemeral FileMount (never
+	// written into that volume itself, unlike the old Env-var path whose
+	// entrypoint.sh side effect happened to copy the token INTO the
+	// volume before any race could matter), recreating the container
+	// before enrollment finishes destroys the only copy of the JWT along
+	// with the container's writable layer, and the fresh replacement
+	// starts with neither a JWT nor an identity file anywhere — reliably
+	// reproduced live as an immediate "Exited (1)" (ziti-tunnel's own
+	// entrypoint.sh: "zero identities found"). waitTunnelEnrolled closes
+	// that window the same way waitEdgeRouterVerified does for the
+	// router. Leaving the container's desired spec keyed to the one-time
+	// token would ALSO violate the CLAUDE.md EnsureContainer idempotency
+	// bar the instant any later probe/drift/status call recomputes it —
+	// found live coupled with the router's own analogous churn
+	// (instance.go's settle comment has the full account):
+	// TestOpenZitiMediatedConnectionOnKubernetesEndToEnd's post-apply
+	// drift restarted this dial-side tunneler mid-test. The FileMount
+	// carrying the JWT is stripped in this same settle pass, exactly as
+	// Env is — the steady-state spec must not carry either.
 	if dialJWT != "" {
+		if err := waitTunnelEnrolled(ctx, rt, name); err != nil {
+			return st, fmt.Errorf("Connection %q: dial-side tunneler %q did not enroll: %w", res.Metadata.Name, name, err)
+		}
 		stableSpec := spec
 		stableSpec.Files = nil
 		if ctrState, err = rt.EnsureContainer(ctx, stableSpec); err != nil {
