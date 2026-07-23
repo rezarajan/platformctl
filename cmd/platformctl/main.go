@@ -198,6 +198,19 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// soaks — the same bar ADR 026's own Gate section states.
 	gates.Register("GraphScopedAccess", featuregate.Alpha, false)
 
+	// docs/planning/08 L1 (docs/adr/034): mediation as the DEFAULT
+	// transport for every declared edge, inverting H6's opt-in boundary —
+	// a Binding/Connection opts an edge OUT via spec.transport: direct,
+	// rather than opting one in. Alpha/disabled, byte-identical off (ADR
+	// 034's migration cost #5): this is the L1 design-spike seam only (the
+	// engine substitutes a mediated address into SchemaRegistryURL/
+	// KafkaBootstrapServers when on, proven fast-tier against a fake
+	// mediation.AddressResolver) — no fabric is stood up yet (that's L2),
+	// so flipping this on today has no real mediation behind it; the gate
+	// exists now so L2-L4 land as additive follow-ons to an already-wired
+	// seam, not a second flag later.
+	gates.Register("MediatedTransport", featuregate.Alpha, false)
+
 	// docs/planning/08 H1 (ADR 020): read-only reporting only — the gate
 	// exists to switch `validate`'s one-line design-findings summary off,
 	// not to hide the `lint` command itself, so it defaults enabled.

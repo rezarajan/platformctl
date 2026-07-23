@@ -35,6 +35,11 @@
           "type": "array",
           "items": { "$ref": "meta.json#/$defs/accessGrant" },
           "description": "Explicit wide-grant declarations (docs/adr/026 §2, docs/planning/08 H7) widening this Connection's reachability beyond its own declared graph edges to every resource in a named namespace. Only takes effect under the GraphScopedAccess feature gate (Alpha, disabled by default); schema-valid but inert otherwise."
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["direct"],
+          "description": "Opts edges reaching this Connection out of identity-mediated transport (docs/adr/034, docs/planning/08 L1). Unset is the default and means mediated once the MediatedTransport feature gate (Alpha, disabled by default) is on — ADR 034 inverts docs/adr/027's opt-in boundary: every declared edge is mediated unless explicitly declared direct here. Schema-valid and lint/policy-checkable regardless of the gate; inert (no runtime effect) while the gate is off."
         }
       },
       "required": ["port"],

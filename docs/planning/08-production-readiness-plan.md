@@ -4726,6 +4726,52 @@ MediatedTransport (Alpha, disabled, byte-identical off).
 - **Accept:** fast-tier proof of the substitution seam; zero adapter
   edits; gate-off pin green.
 
+#### Done-note (2026-07-23)
+
+Shipped: gate `MediatedTransport` (Alpha, disabled — cmd/platformctl/
+main.go). Schema surface: `spec.transport` (unset | `"direct"`) added to
+`Binding` and `Connection` (schemas/v1alpha1/{binding,connection}.json +
+doc 03 same commit) — the two Kinds L1 picked because they are where a
+declared edge is expressed (a Binding's own sourceRef/targetRef; a managed
+Connection's dial/bind edges, the existing ADR 027 H6 `MediatedConnection`
+subject); unset means mediated once the gate is on, schema-valid and
+lint/policy-checkable regardless, inert while the gate is off. Port
+extension: `internal/ports/mediation.AddressEdge` + `AddressResolver`
+(new file address.go) — a SEPARATE optional capability interface, not a
+new method on `MediationProvider` itself, so the openziti adapter needed
+zero changes (`git diff --stat` for internal/adapters/providers is empty
+for this task). Engine seam: a new `Engine.Mediation
+mediation.AddressResolver` field (nil disables); `resolveRequest`
+resolves `SchemaRegistryURL` (the Facts-based surface — the edge is the
+declaring Binding -> the EventStream's realizing Provider) and
+`KafkaBootstrapServers` (the graph-resolved surface — the edge is the
+Connect-worker Provider -> the broker Provider,
+`compatibility.ResolveKafkaBootstrapTarget` new alongside the existing
+`ResolveKafkaBootstrapAddress`) through one shared `mediatedAddress`
+decision point (internal/application/engine/mediation_transport.go):
+gate off, nil Mediation, or `transport: direct` all fall through to the
+unmediated address unchanged; otherwise the mediator's `DialAddress` is
+substituted, and a `DialAddress` error fails `resolveRequest` rather than
+silently degrading to plaintext (ADR 034 promotes mediation to the
+authoritative zero-trust plane once the gate is on). `reconciler.Request`
+gained no new field (the frozen-field archtest, docs/planning/08 I9,
+required no update). Proof (internal/application/engine/
+mediation_transport_test.go): a local, honest fake `AddressResolver`
+(ADR 028) returning deterministic `mediated://<from>-<to>:1` addresses,
+proving (a) both named surfaces resolve to the mediated address for a
+non-direct edge, (b) `transport: direct` resolves both surfaces
+unmediated and never calls the mediator, (c) gate-off is byte-identical
+and the mediator is never called (mirrors the H7 graphscoped gate-off
+pin), (d) two full resolutions of the same edges return byte-identical
+addresses with exactly one control-plane "write" recorded per distinct
+edge, and (e) a mediator error fails the resolve. Open items for L2-L4:
+no fabric exists yet (flipping the gate on today has no real mediation
+behind it — L2); every remaining `Facts.Endpoint` call site beyond the
+two named here is unmigrated; the KafkaBootstrapServers transport-direct
+rule requires EVERY contributing Binding to declare `direct` (documented
+scope limit, `mediatedKafkaTransportDirect`'s own comment) rather than
+splitting per-Binding transport for one shared worker->broker edge.
+
 ### L2: Platform-owned fabric — ensure the mesh like we ensure networks
 
 - **Size:** L. **Depends:** L1. **Why:** batteries-included means no
@@ -4807,6 +4853,7 @@ Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
 | `PolicyEngine` | H3 | disabled | Beta after the zero-trust pack soaks in this repo's own CI |
 | `MediatedConnections` | H6 | disabled | Beta after the owner-scenario e2e soaks on both runtimes |
 | `LabelScopedAccess` | K2 | disabled | Beta once the composed H9-style scenario passes on both runtimes (ADR 033 decision 6) |
+| `MediatedTransport` | L1 | disabled | Beta once L2-L4 (fabric, per-edge default flip, redirect-shaped protocols) land and stage L's exit criteria are met |
 | Phase 6.5 gates (`MySQLProvider`, `NessieProvider`, `OpenLineageProvider`, `ProxyProvider`) | — | enabled (Alpha) | promote to Beta at Stage A close (their hardening period ends with the ops-hardening stage) |
 
 ## 9. Mapping to doc 07's open items

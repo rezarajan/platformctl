@@ -44,6 +44,16 @@ type Connection struct {
 	// plaintext, the pre-C8 behavior unchanged. Only meaningful together
 	// with scheme: https.
 	TLS *TLS
+	// Transport is docs/planning/08 L1 / docs/adr/034's per-edge escape
+	// hatch, the same shape and default as Binding.Transport: "" (unset)
+	// means edges reaching this Connection are mediated when the
+	// MediatedTransport gate is on; "direct" opts them out. Connection is
+	// the second of the two Kinds L1 picked for this field (alongside
+	// Binding) because it is already the existing H6/ADR-027
+	// MediatedConnection abstraction's own subject — ADR 034 inverts that
+	// boundary's default without moving which Kind carries the
+	// declaration.
+	Transport string
 }
 
 // TLS is Connection.spec.tls's decoded shape. On a managed connection,
@@ -141,12 +151,16 @@ func FromEnvelope(e resource.Envelope) (Connection, error) {
 		}
 		c.TLS = t
 	}
+	c.Transport, _ = e.Spec["transport"].(string)
 	return c, c.validate(e.Metadata.Name)
 }
 
 func (c Connection) validate(name string) error {
 	if c.Port <= 0 {
 		return fmt.Errorf("Connection %q: spec.port is required", name)
+	}
+	if c.Transport != "" && c.Transport != "direct" {
+		return fmt.Errorf("Connection %q: spec.transport must be \"direct\" when set (docs/adr/034: mediated is the unset default)", name)
 	}
 	if c.External {
 		if c.Host == "" {

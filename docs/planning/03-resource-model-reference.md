@@ -110,6 +110,26 @@ own runtime object name). A manifest set with the gate off — the default — i
 before this field existed; the graph-scoped compilation only runs when `GraphScopedAccess` is
 enabled.
 
+`spec.transport` (docs/adr/034-mediation-default-transport.md, docs/planning/08 L1) is an
+additive, optional string, valid only as `"direct"` when set, available on `Binding` and
+`Connection` — the two Kinds L1 picked because they are where a declared edge (`sourceRef`/
+`targetRef` on a Binding; a managed Connection's own dial/bind edges, the existing docs/adr/027
+H6 `MediatedConnection` subject) is expressed. ADR 034 inverts H6's opt-in boundary: once the
+`MediatedTransport` feature gate (Alpha, disabled by default — docs/planning/04 §12) is on,
+every declared edge is identity-mediated UNLESS its declaring Binding/Connection sets
+`spec.transport: direct`. Unset (the default) means mediated under the gate; the field is
+schema-valid and lint/policy-checkable (ADR 034: "lint-flagged, policy-deniable") regardless of
+the gate, but has no runtime effect while it is off — the same "schema-valid but inert" posture
+`spec.access` above already established for `GraphScopedAccess`. Engine-only realization (docs/
+planning/08 L1): the resolved `SchemaRegistryURL` a Binding reads, and the graph-resolved
+`KafkaBootstrapServers` a Connect-worker Provider reads, are substituted with a mediated address
+requested through the `mediation.AddressResolver` port extension when the declaring
+Binding/edge is not `transport: direct`; the substitution happens at the SAME chokepoint
+(`internal/application/engine`'s `resolveRequest`) every other published/graph-resolved address
+already resolves through, so no provider changes (ADR 034's "why the engine can do this with
+zero provider changes"). L1 is a design spike proving this seam against a fake
+`AddressResolver`; wiring the real fabric plus every remaining Facts.Endpoint call site is L2-L4.
+
 `metadata.annotations["lint.datascape.io/waive"]` (docs/adr/020-design-lints.md, 08 H1) waives one
 or more `platformctl lint` findings against this resource: `"DL010: <reason>"`, one entry per line
 for more than one code on the same resource (newline-separated, not comma — a reason is prose and
