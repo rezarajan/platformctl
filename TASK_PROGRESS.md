@@ -112,3 +112,92 @@ criterion 3 composed end-to-end (cross-domain deny/exempt/mediate/withdraw).
   (providerkit.EnsureInstance's "<name>-data" convention) — if the live
   run reports Janitor residue on these, the actual name differs and needs
   correcting from what EnsureInstance/postgres.go/redpanda.go actually do.
+
+---
+
+# E6 conformance retrofit — progress (2026-07-23)
+
+This worktree was reused for a new, unrelated task after H9 (above) closed:
+docs/planning/08-production-readiness-plan.md §7 E6 done-note's recorded
+follow-up — retrofit `conformance_test.go` (internal/ports/reconciler/
+conformance.Run harness) onto the remaining shipped providers, per ADR
+028's fast-tier bar (<=60s/test, fakes only), following the
+noop/redpanda/proxy exemplar pattern (docs/contributing/
+provider-authoring.md).
+
+## Setup
+- Worktree fast-forward merged to main (0456b72) before starting — clean,
+  no conflicts, `go build ./...` verified after.
+
+## Scope
+13 providers, in the brief's order: s3, s3sink, debezium, grafana,
+prometheus, nessie, openlineage, trino, wireguard, jdbcsink, s3source,
+ingress, placeholder. NOT touched: postgres, mysql, openziti, dbjob (other
+agents own those areas).
+
+## Scoping method
+For each provider, read every Reconcile/Probe path per Kind and classified
+it: **fast-tier-provable** (Ready determination rests solely on
+runtime.ContainerRuntime primitives — EnsureContainer/EnsureNetwork/
+EnsureVolume/WaitHealthy/Inspect/Remove — settling on the container's own
+declared HealthCheck, which the fake always reports healthy for; NO real
+protocol dial anywhere in the path) vs. **out of scope** (Reconcile OR the
+mandatory post-Reconcile Probe conformance.Run's Settledness subtest
+invokes needs a real application-layer protocol dial — HTTP GET/POST,
+Kafka Connect REST, S3 API, a runtime-generated status file — with no seam
+the fake can serve honestly without impersonating that technology's real
+API surface; ADR 028 §2's fake-honesty rule would require pinning any such
+fake against a real system's observed behavior, out of this retrofit's
+scope). This is the SAME line redpanda's own exemplar drew (broker/
+container-lifecycle in; EventStream/real-Kafka-admin out) — applied
+uniformly, including to plain HTTP (per docs/contributing/
+provider-authoring.md §6's own framing: "a real application-layer wire
+protocol" is out of scope regardless of how simple the protocol is; HTTP
+GET-returns-200 checks were deliberately NOT special-cased as "trivial
+enough for a raw-listener fake" — that would have required a
+never-before-built HTTP-response fake-technology harness needing ADR 028 §2
+pinning to trust, which this retrofit did not build).
+
+## Result: full harness (conformance.Run, all 7 subtests green + CapabilityChecks)
+- placeholder — Provider (only Kind), zero capability interfaces.
+- s3 — Provider/instance (single-container path only; Dataset + node-set
+  path scoped out, real S3 API). CapabilityChecks: ValidateSpec x2.
+- s3sink — Provider/worker (Binding/connector scoped out, real Connect
+  REST). CapabilityChecks: ValidateSpec, ValidateBindingOptions.
+- debezium — Provider/worker (Binding scoped out). CapabilityChecks:
+  ValidateSpec, ValidateBindingOptions.
+- jdbcsink — Provider/worker (Binding scoped out). CapabilityChecks:
+  ValidateSpec, ValidateBindingOptions.
+- s3source — Provider/worker (Binding scoped out). CapabilityChecks:
+  ValidateSpec, ValidateBindingOptions.
+- wireguard — Provider (network-only, zero containers; Connection scoped
+  out — real dial-through AND a runtime-written handshake-status file the
+  fake cannot fabricate). CapabilityChecks: ValidateSpec x2.
+
+## Result: scoped out, doc comment + bonus direct ValidateSpec test (no conformance.Run)
+- grafana — real HTTP login/health dial unconditional even on first
+  Reconcile (CredentialRotation.NoPreviousOrUnchanged still pings).
+- prometheus — real HTTP + JSON /api/v1/targets count check.
+- trino — real HTTP /v1/info dial, two-container coordination.
+- ingress — Reconcile itself is dial-free, but conformance.Run's mandatory
+  Probe (Settledness subtest) requires caddyReady's real admin-API dial.
+
+## Result: scoped out, doc comment only (no capability interface to test either)
+- nessie — real HTTP + stateful branch-create/exists REST semantics.
+- openlineage — real HTTP dial, zero capability interfaces declared.
+
+## Status
+- [x] Read CLAUDE.md, doc 08 E6 done-note, ADR 028, provider-authoring.md,
+      the three exemplars (noop/redpanda/proxy conformance_test.go).
+- [x] Read every one of the 13 providers' Reconcile/Probe/Destroy bodies
+      plus capability method set; classified per above.
+- [x] Wrote all 13 conformance_test.go files.
+- [x] gofmt clean; `go build ./...` clean; `go vet ./...` and
+      `go vet -tags integration ./...` both clean.
+- [x] All 13 new test files green under `go test -v` AND `go test -race`
+      (sub-1.1s per package including race-instrumentation startup —
+      comfortably under the 60s fast-tier budget).
+- [ ] Full unfiltered `go test ./...` sweep (in progress).
+- [ ] golangci-lint v2.12.2.
+- [ ] doc 08 E6 additive done-note recording the retrofit completion.
+- [ ] Final commit.
