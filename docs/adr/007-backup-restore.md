@@ -179,7 +179,9 @@ identity only, never credentials.
   `loc.Prefix` verbatim whenever a specific `key` is given — `key == ""`
   (s3's own whole-prefix-sync backup) still reports `Prefix` as the synced
   tree, unchanged.
-- **(c) Docker-only mechanism.** `backup`/`restore` refuse outright — before
+- **(c) Docker-only mechanism.** *Closed by addendum 3 + its merge-gate
+  amendment (I15): Kubernetes Jobs realization; the engine guard described
+  below no longer exists.* `backup`/`restore` refuse outright — before
   resolving a provider, before any infrastructure call — when the target
   resource's realizing Provider resolves to any runtime other than Docker
   (`Engine.backupCapable` checks `spec.runtime.type`). The job-container-
@@ -681,3 +683,31 @@ gains the Kubernetes adapter directory to its scope.
   as perpetually running until `platformctl` removes it — expected, and
   the same "the CLI, not the cluster, owns this object's lifetime" shape
   every other one-shot mechanism in this codebase already has.
+
+### Amendment (merge gate, 2026-07-23): the engine guard and the dispatch rule
+
+Two corrections landed at I15's merge, found by running the live
+Kubernetes round-trip on the merged tree:
+
+1. **The engine guard is lifted.** I15's branch built the Job path but
+   left `Engine.backupCapable`'s v1 refusal (`runtime.type != "docker"`)
+   in place, so no Kubernetes backup could ever reach dbjob. The guard is
+   now removed entirely rather than extended: mechanism choice belongs to
+   each provider (dbjob dispatches per Provider `RuntimeType`; s3 syncs
+   in-process over the S3 API on any runtime), and an engine-level
+   runtime-name check couples the engine to adapter capabilities it
+   cannot see. `TestBackupReachesProviderOnKubernetesRuntime` pins the
+   lifted behavior (replacing `TestBackupRefusesForNonDockerRuntime`).
+2. **Dispatch reads `RuntimeType`, never a type assertion.** dbjob
+   originally chose the Job path by asserting
+   `rt.(runtime.JobCapableRuntime)` — true only while runtimes arrived
+   unwrapped. The wrapper-completeness archtest now requires every
+   runtime wrapper (registry haGuard, engine domainRuntime) to statically
+   implement each optional capability (erroring at call time), so the
+   assertion is always true through a wrapped runtime and a Docker
+   pipeline would have taken the Job path and failed. dbjob now follows
+   the same rule ingress established (ADR 018, H7): the caller passes the
+   Provider's `RuntimeType` (`PipelineSpec.RuntimeType` and a parameter
+   on `RunOneShot`/`CheckDiskHeadroom`/`PersistManifest`/`ReadManifest`),
+   the path is chosen on that domain fact, and the assertion merely
+   obtains the capability once Kubernetes is chosen.

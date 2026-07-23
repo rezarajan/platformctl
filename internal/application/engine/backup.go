@@ -59,14 +59,14 @@ func (e *Engine) Restore(ctx context.Context, envelopes []resource.Envelope, key
 }
 
 // backupCapable resolves key's realizing Provider and Request the same way
-// every other capability call does, then checks two additional things
+// every other capability call does, then checks the one additional thing
 // Backup/Restore specifically need: the provider implements
-// BackupCapableProvider, and the resolved runtime is Docker — the
-// job-container-plus-FIFO-volume mechanism (internal/adapters/providers/
-// dbjob) and s3's own read-after-exit sentinel-file protocol have no
-// Kubernetes equivalent (no Deployment maps onto a short-lived,
-// exit-code-observable Job the way a Docker container does); see
-// docs/adr/007-backup-restore.md's Known limitations.
+// BackupCapableProvider. No runtime-type gate lives here — each provider
+// owns its own mechanism (dbjob's pipeline dispatches Docker containers vs
+// a Kubernetes Job on the Provider's RuntimeType; s3 syncs in-process over
+// the S3 API on any runtime), so the engine refusing a runtime by name
+// would couple it to adapter capabilities it cannot see (docs/adr/
+// 007-backup-restore.md addendum 3 closed the v1 docker-only limitation).
 func (e *Engine) backupCapable(ctx context.Context, envelopes []resource.Envelope, key resource.Key) (reconciler.BackupCapableProvider, reconciler.Request, error) {
 	byKey := make(map[resource.Key]resource.Envelope, len(envelopes))
 	for _, env := range envelopes {
@@ -79,13 +79,6 @@ func (e *Engine) backupCapable(ctx context.Context, envelopes []resource.Envelop
 	prov, req, err := e.resolveRequest(ctx, env, byKey, nil) // nil state: SchemaRegistryURL is Binding-only, backup targets are Source/Dataset
 	if err != nil {
 		return nil, reconciler.Request{}, err
-	}
-	cfg, err := provider.FromEnvelope(req.Provider)
-	if err != nil {
-		return nil, reconciler.Request{}, err
-	}
-	if cfg.RuntimeType != "docker" {
-		return nil, reconciler.Request{}, fmt.Errorf("%s: backup/restore only supports the docker runtime in v1 (resolved runtime type %q) — see docs/adr/007-backup-restore.md's Known limitations", key, cfg.RuntimeType)
 	}
 	bp, ok := prov.(reconciler.BackupCapableProvider)
 	if !ok {

@@ -122,11 +122,13 @@ func TestBackupRefusesForNonCapableProvider(t *testing.T) {
 	}
 }
 
-// TestBackupRefusesForNonDockerRuntime covers docs/adr/007-backup-restore.md's
-// Docker-only limitation (C6 review finding 5c): the job-container-plus-FIFO
-// mechanism dbjob relies on has no Kubernetes equivalent, so the engine must
-// refuse before ever calling into the provider.
-func TestBackupRefusesForNonDockerRuntime(t *testing.T) {
+// TestBackupReachesProviderOnKubernetesRuntime pins the LIFTING of
+// docs/adr/007-backup-restore.md's v1 Docker-only limitation (addendum 3,
+// docs/planning/08 I15): the engine has no runtime-type gate — mechanism
+// choice belongs to each provider (dbjob dispatches on the Provider's
+// RuntimeType; s3 is runtime-agnostic), so a kubernetes-runtime Provider's
+// backup must reach the provider, not be refused by name at the engine.
+func TestBackupReachesProviderOnKubernetesRuntime(t *testing.T) {
 	t.Parallel()
 	prov := &fakeBackupProvider{}
 	gates := featuregate.NewRegistry()
@@ -151,15 +153,11 @@ func TestBackupRefusesForNonDockerRuntime(t *testing.T) {
 		}),
 	}
 	key := resource.Key{Namespace: "default", Kind: "Source", Name: "orders"}
-	_, err := eng.Backup(context.Background(), envelopes, key, backup.Location{})
-	if err == nil {
-		t.Fatal("Backup: expected an error for a non-docker runtime, got nil")
+	if _, err := eng.Backup(context.Background(), envelopes, key, backup.Location{}); err != nil {
+		t.Fatalf("Backup on a kubernetes-runtime Provider: %v (the engine must not gate on runtime type — the v1 docker-only limitation is lifted)", err)
 	}
-	if !strings.Contains(err.Error(), "docker") {
-		t.Fatalf("error should name the docker-only limitation, got: %v", err)
-	}
-	if prov.backupCalls != 0 {
-		t.Fatalf("provider.Backup was called %d time(s); the engine must refuse before any provider call", prov.backupCalls)
+	if prov.backupCalls != 1 {
+		t.Fatalf("provider.Backup was called %d time(s), want exactly 1 — the engine's job is resolution, the provider's is mechanism", prov.backupCalls)
 	}
 }
 

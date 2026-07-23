@@ -201,9 +201,18 @@ type PipelineSpec struct {
 	// Ignored on Docker/fake, which derive per-side placement from each
 	// Side's own Networks instead.
 	Namespace string
-	Labels    map[string]string
-	Producer  Side
-	Consumer  Side
+	// RuntimeType is the realizing Provider's provider.Provider.RuntimeType,
+	// passed through by callers. Path dispatch (Kubernetes Job vs Docker
+	// container pipeline) reads THIS domain-layer fact, never a type
+	// assertion on rt — every runtime wrapper statically implements
+	// runtime.JobCapableRuntime (the wrapper-completeness archtest requires
+	// it) and only errors at call time, so an assertion is always true
+	// through a wrapped runtime and says nothing about the adapter
+	// underneath (the same rule ingress's isKubernetes documents).
+	RuntimeType string
+	Labels      map[string]string
+	Producer    Side
+	Consumer    Side
 	// Timeout bounds each side by default; 0 = DefaultTimeout.
 	Timeout time.Duration
 	// ProducerTimeout/ConsumerTimeout override Timeout for one side only
@@ -244,16 +253,18 @@ type Result struct {
 // spec.Cleanup (if set) runs, and the returned error names which side
 // failed and why.
 //
-// When rt implements runtime.JobCapableRuntime (the Kubernetes adapter —
-// docs/adr/007-backup-restore.md addendum 3, docs/planning/08 I15), the
-// whole pipeline instead runs as one Kubernetes Job whose pod runs Producer
-// and Consumer as sibling containers sharing an emptyDir — the FIFO
-// protocol below (sideScript) is identical either way; only how the two
-// sides are scheduled and inspected differs. Docker/fake are completely
-// unaffected: this type assertion always fails for them, so every existing
-// caller's behavior is byte-for-byte unchanged.
+// When spec.RuntimeType is "kubernetes" (docs/adr/007-backup-restore.md
+// addendum 3, docs/planning/08 I15), the whole pipeline instead runs as one
+// Kubernetes Job whose pod runs Producer and Consumer as sibling containers
+// sharing an emptyDir — the FIFO protocol below (sideScript) is identical
+// either way; only how the two sides are scheduled and inspected differs.
+// Docker/fake callers pass their own RuntimeType and are unaffected.
 func RunPipeline(ctx context.Context, rt runtime.ContainerRuntime, spec PipelineSpec) (Result, error) {
-	if jrt, ok := rt.(runtime.JobCapableRuntime); ok {
+	if spec.RuntimeType == runtimeTypeKubernetes {
+		jrt, err := jobRuntime(rt)
+		if err != nil {
+			return Result{}, err
+		}
 		return runJobPipeline(ctx, jrt, spec)
 	}
 	producerTimeout := spec.ProducerTimeout
@@ -300,7 +311,7 @@ func RunPipeline(ctx context.Context, rt runtime.ContainerRuntime, spec Pipeline
 	_ = rt.Remove(context.WithoutCancel(ctx), producerName)
 	_ = rt.Remove(context.WithoutCancel(ctx), consumerName)
 	if spec.Cleanup != nil {
-		if _, cerr := RunOneShot(ctx, rt, spec.JobName+"-cleanup", spec.Labels, *spec.Cleanup, cleanupTimeout, ""); cerr != nil {
+		if _, cerr := RunOneShot(ctx, rt, spec.RuntimeType, spec.JobName+"-cleanup", spec.Labels, *spec.Cleanup, cleanupTimeout, ""); cerr != nil {
 			err = fmt.Errorf("%w (partial-object cleanup after failure also failed: %s)", err, cerr)
 		}
 	}
@@ -506,12 +517,17 @@ func diagnostics(ctx context.Context, rt runtime.ContainerRuntime, producerName,
 // after a failure). If resultPath is non-empty, its content is read back
 // (before the container is removed) and returned on success.
 //
-// When rt implements runtime.JobCapableRuntime, this runs as a
-// single-container Kubernetes Job instead (side.Namespace selects where;
-// side.NodeName optionally pins it — docs/adr/007-backup-restore.md
-// addendum 3). Docker/fake are unaffected.
-func RunOneShot(ctx context.Context, rt runtime.ContainerRuntime, name string, labels map[string]string, side Side, timeout time.Duration, resultPath string) ([]byte, error) {
-	if jrt, ok := rt.(runtime.JobCapableRuntime); ok {
+// When runtimeType is "kubernetes", this runs as a single-container
+// Kubernetes Job instead (side.Namespace selects where; side.NodeName
+// optionally pins it — docs/adr/007-backup-restore.md addendum 3).
+// Dispatch reads runtimeType, never a type assertion on rt (see
+// PipelineSpec.RuntimeType). Docker/fake are unaffected.
+func RunOneShot(ctx context.Context, rt runtime.ContainerRuntime, runtimeType, name string, labels map[string]string, side Side, timeout time.Duration, resultPath string) ([]byte, error) {
+	if runtimeType == runtimeTypeKubernetes {
+		jrt, err := jobRuntime(rt)
+		if err != nil {
+			return nil, err
+		}
 		return runOneShotJob(ctx, jrt, name, labels, side, timeout, resultPath)
 	}
 	if timeout <= 0 {
@@ -595,21 +611,25 @@ const (
 // running instance pod to mount volumeName alongside it (docs/adr/
 // 007-backup-restore.md addendum 3). namespace is the Kubernetes namespace
 // to schedule into; ignored, like instanceName, on Docker/fake.
-func CheckDiskHeadroom(ctx context.Context, rt runtime.ContainerRuntime, labels map[string]string, jobName, namespace, instanceName, image, volumeName, mountPath string, wantBytes int64) error {
+func CheckDiskHeadroom(ctx context.Context, rt runtime.ContainerRuntime, runtimeType string, labels map[string]string, jobName, namespace, instanceName, image, volumeName, mountPath string, wantBytes int64) error {
 	side := Side{
 		Image:     image,
 		Namespace: namespace,
 		Volumes:   []runtime.VolumeMount{{VolumeName: volumeName, MountPath: mountPath}},
 		ShellCmd:  fmt.Sprintf("df -Pk %s | tail -1 | awk '{print $4}' > %s", mountPath, diskHeadroomResultPath),
 	}
-	if jrt, ok := rt.(runtime.JobCapableRuntime); ok {
+	if runtimeType == runtimeTypeKubernetes {
+		jrt, err := jobRuntime(rt)
+		if err != nil {
+			return fmt.Errorf("disk headroom precheck: %w", err)
+		}
 		node, err := jrt.NodeNameOf(ctx, instanceName)
 		if err != nil {
 			return fmt.Errorf("disk headroom precheck: resolve instance node: %w", err)
 		}
 		side.NodeName = node
 	}
-	out, err := RunOneShot(ctx, rt, jobName+"-headroom", labels, side, diskHeadroomTimeout, diskHeadroomResultPath)
+	out, err := RunOneShot(ctx, rt, runtimeType, jobName+"-headroom", labels, side, diskHeadroomTimeout, diskHeadroomResultPath)
 	if err != nil {
 		return fmt.Errorf("disk headroom precheck: %w", err)
 	}
@@ -636,7 +656,7 @@ func CheckDiskHeadroom(ctx context.Context, rt runtime.ContainerRuntime, labels 
 // implements runtime.JobCapableRuntime (docs/adr/007-backup-restore.md
 // addendum 3) — ignored on Docker/fake; callers pass the same "provider's
 // domain namespace" value they pass to PipelineSpec.Namespace.
-func PersistManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName, namespace string, labels map[string]string, loc backup.Location, key string, manifest backup.Manifest) error {
+func PersistManifest(ctx context.Context, rt runtime.ContainerRuntime, runtimeType, jobName, namespace string, labels map[string]string, loc backup.Location, key string, manifest backup.Manifest) error {
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("job %q: encode manifest sidecar: %w", jobName, err)
@@ -656,7 +676,7 @@ func PersistManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName, 
 		},
 		ShellCmd: fmt.Sprintf("mc pipe %s/%s/%s < %s", MCAlias, loc.Bucket, key+manifestSuffix, manifestMountPath),
 	}
-	if _, err := RunOneShot(ctx, rt, jobName+"-manifest-write", labels, side, manifestTimeout, ""); err != nil {
+	if _, err := RunOneShot(ctx, rt, runtimeType, jobName+"-manifest-write", labels, side, manifestTimeout, ""); err != nil {
 		return fmt.Errorf("persist backup integrity manifest for %q: %w", key, err)
 	}
 	return nil
@@ -670,7 +690,7 @@ func PersistManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName, 
 // outright (docs/adr/007-backup-restore.md's I12 addendum, Known
 // limitation (d)). namespace is PersistManifest's own parameter, same
 // meaning.
-func ReadManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName, namespace string, labels map[string]string, loc backup.Location, key string) (backup.Manifest, error) {
+func ReadManifest(ctx context.Context, rt runtime.ContainerRuntime, runtimeType, jobName, namespace string, labels map[string]string, loc backup.Location, key string) (backup.Manifest, error) {
 	mcConfig, err := MCConfig(loc)
 	if err != nil {
 		return backup.Manifest{}, err
@@ -683,7 +703,7 @@ func ReadManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName, nam
 		Files:     []runtime.FileMount{{Path: MCConfigPath, Content: mcConfig, Mode: 0o600}},
 		ShellCmd:  fmt.Sprintf("mc cat %s/%s/%s > %s", MCAlias, loc.Bucket, key+manifestSuffix, manifestReadPath),
 	}
-	out, err := RunOneShot(ctx, rt, jobName+"-manifest-read", labels, side, manifestTimeout, manifestReadPath)
+	out, err := RunOneShot(ctx, rt, runtimeType, jobName+"-manifest-read", labels, side, manifestTimeout, manifestReadPath)
 	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("read backup integrity manifest for %q: %w (this object may predate I12's integrity hardening, or the backup did not complete successfully)", key, err)
 	}
@@ -945,4 +965,26 @@ func runOneShotJob(ctx context.Context, jrt runtime.JobCapableRuntime, name stri
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+// runtimeTypeKubernetes is the provider.Provider.RuntimeType value that
+// selects the Kubernetes Job path. Dispatch reads this domain-layer fact,
+// passed through by callers from their own Provider config — never a type
+// assertion on the runtime, because every runtime wrapper statically
+// implements runtime.JobCapableRuntime (the wrapper-completeness archtest
+// requires forwarding) and errors only at call time, so the assertion is
+// always true through a wrapped runtime regardless of the adapter
+// underneath. Same rule as ingress's isKubernetes (docs/adr/018).
+const runtimeTypeKubernetes = "kubernetes"
+
+// jobRuntime obtains the JobCapableRuntime capability once the Kubernetes
+// path has been chosen by RuntimeType — the assertion OBTAINS the
+// capability, it never DECIDES the path (mirroring ingress's
+// ingressRuntime).
+func jobRuntime(rt runtime.ContainerRuntime) (runtime.JobCapableRuntime, error) {
+	jrt, ok := rt.(runtime.JobCapableRuntime)
+	if !ok {
+		return nil, fmt.Errorf("dbjob: runtime does not implement JobCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return jrt, nil
 }

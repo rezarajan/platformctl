@@ -116,10 +116,11 @@ func (p *Provider) Backup(ctx context.Context, req reconciler.Request, dest back
 	}
 
 	spec := dbjob.PipelineSpec{
-		JobName:   jobName,
-		Namespace: providerkit.Network(cfg),
-		Labels:    labels,
-		Producer:  dbSide(dumpTool(cfg), cfg, prof.Image, dbHost, rootPass, dbName),
+		RuntimeType: cfg.RuntimeType,
+		JobName:     jobName,
+		Namespace:   providerkit.Network(cfg),
+		Labels:      labels,
+		Producer:    dbSide(dumpTool(cfg), cfg, prof.Image, dbHost, rootPass, dbName),
 		Consumer: func() dbjob.Side {
 			s := mcSide
 			s.ShellCmd = fmt.Sprintf("mc pipe %s/%s/%s", dbjob.MCAlias, dest.Bucket, objectKey)
@@ -153,7 +154,7 @@ func (p *Provider) Backup(ctx context.Context, req reconciler.Request, dest back
 		Checksum:     "sha256:" + result.SHA256,
 		Bytes:        result.Bytes,
 	}
-	if err := dbjob.PersistManifest(ctx, req.Runtime, jobName, providerkit.Network(cfg), labels, dest, objectKey, manifest); err != nil {
+	if err := dbjob.PersistManifest(ctx, req.Runtime, cfg.RuntimeType, jobName, providerkit.Network(cfg), labels, dest, objectKey, manifest); err != nil {
 		return backup.Manifest{}, fmt.Errorf("Source %q: %s backup: dump uploaded but its integrity manifest was not: %w", req.Resource.Metadata.Name, cfg.Type, err)
 	}
 	return manifest, nil
@@ -215,14 +216,14 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 	// Fetch the backup's integrity manifest before streaming anything back —
 	// a missing sidecar refuses outright rather than silently skipping
 	// verification (docs/adr/007-backup-restore.md's I12 addendum).
-	wantManifest, err := dbjob.ReadManifest(ctx, req.Runtime, jobName, providerkit.Network(cfg), labels, src, objectKey)
+	wantManifest, err := dbjob.ReadManifest(ctx, req.Runtime, cfg.RuntimeType, jobName, providerkit.Network(cfg), labels, src, objectKey)
 	if err != nil {
 		return fmt.Errorf("Source %q: %s restore: %w", req.Resource.Metadata.Name, cfg.Type, err)
 	}
 
 	// I13 disk-headroom precheck: 2x the recorded backup size must be free
 	// on the instance's own data volume before anything else starts.
-	if err := dbjob.CheckDiskHeadroom(ctx, req.Runtime, labels, jobName, providerkit.Network(cfg), dbHost, prof.Image, dbHost+"-data", prof.DataMount, wantManifest.Bytes); err != nil {
+	if err := dbjob.CheckDiskHeadroom(ctx, req.Runtime, cfg.RuntimeType, labels, jobName, providerkit.Network(cfg), dbHost, prof.Image, dbHost+"-data", prof.DataMount, wantManifest.Bytes); err != nil {
 		return fmt.Errorf("Source %q: %s restore: %w", req.Resource.Metadata.Name, cfg.Type, err)
 	}
 
@@ -239,9 +240,10 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 	}
 
 	spec := dbjob.PipelineSpec{
-		JobName:   jobName,
-		Namespace: providerkit.Network(cfg),
-		Labels:    labels,
+		RuntimeType: cfg.RuntimeType,
+		JobName:     jobName,
+		Namespace:   providerkit.Network(cfg),
+		Labels:      labels,
 		Producer: dbjob.Side{
 			Image:    dbjob.MCImage,
 			Networks: producerNetworks,
