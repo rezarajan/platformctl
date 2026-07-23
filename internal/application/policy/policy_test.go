@@ -304,6 +304,67 @@ func TestRunCrossDomainConnectionConsumption(t *testing.T) {
 	}
 }
 
+func grantPolicy(id, namespace string, effect policy.Effect) policy.Policy {
+	var p policy.Policy
+	p.APIVersion = policy.APIVersion
+	p.Kind = policy.KindName
+	p.Metadata.Name = "grant-pack"
+	p.Spec.Rules = []policy.Rule{{
+		ID:         id,
+		MatchGrant: &policy.GrantMatch{Namespace: namespace},
+		Effect:     effect,
+	}}
+	return p
+}
+
+// TestRunMatchGrantDeniesWideGrant pins docs/adr/026 decision 2 (docs/planning/08
+// H7): "a matchGrant selector lets organizations deny or constrain wide
+// grants" — a Provider declaring spec.access: [{namespace: b}] is denied by
+// a matching matchGrant rule, named exactly like evaluateCrossDomain names
+// its own edge.
+func TestRunMatchGrantDeniesWideGrant(t *testing.T) {
+	r1 := domainEnv("Provider", "r1", "", map[string]any{
+		"type": "noop", "runtime": map[string]any{"type": "fake"},
+		"access": []any{map[string]any{"namespace": "b"}},
+	})
+	envelopes := []resource.Envelope{r1}
+	p := grantPolicy("no-wide-grants-to-b", "b", policy.Deny)
+
+	decisions, err := Run([]policy.Policy{p}, envelopes, nil, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(decisions) != 1 || decisions[0].Resource.Name != "r1" {
+		t.Fatalf("got %+v, want exactly one decision on r1", decisions)
+	}
+	if decisions[0].Effect != policy.Deny {
+		t.Errorf("effect = %v, want Deny", decisions[0].Effect)
+	}
+	if !strings.Contains(decisions[0].Message, "b") {
+		t.Errorf("message %q does not name the granted namespace", decisions[0].Message)
+	}
+}
+
+// TestRunMatchGrantOtherNamespaceNoDecision proves the selector matches the
+// exact namespace only — a grant to a namespace the rule doesn't name never
+// fires.
+func TestRunMatchGrantOtherNamespaceNoDecision(t *testing.T) {
+	r1 := domainEnv("Provider", "r1", "", map[string]any{
+		"type": "noop", "runtime": map[string]any{"type": "fake"},
+		"access": []any{map[string]any{"namespace": "c"}},
+	})
+	envelopes := []resource.Envelope{r1}
+	p := grantPolicy("no-wide-grants-to-b", "b", policy.Deny)
+
+	decisions, err := Run([]policy.Policy{p}, envelopes, nil, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(decisions) != 0 {
+		t.Fatalf("got %d decisions, want 0 (grant to a different namespace never matches): %+v", len(decisions), decisions)
+	}
+}
+
 // TestRunDeterministic is the golden determinism bar (docs/planning/08 H3
 // accept: "determinism golden") — two independent Run calls over the same
 // inputs must produce byte-identical (deep-equal, stably ordered) output.

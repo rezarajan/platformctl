@@ -55,19 +55,75 @@ func NetworkName(base, domain string) string {
 	if d == resource.DefaultDomain {
 		return base
 	}
-	name := base + "-" + d
-	// Kubernetes namespace names (which this doubles as, see above) are
-	// DNS labels: 63 chars max. A long base+domain pair is truncated to
-	// 53 chars and suffixed with an 8-hex FNV of the FULL name so two
-	// long names never silently collide post-truncation and the result
-	// stays deterministic (doc 11 GA caveat sweep, item D — recorded at
-	// H5's merge gate).
-	if len(name) > 63 {
-		h := fnv.New32a()
-		_, _ = h.Write([]byte(name))
-		name = fmt.Sprintf("%s-%08x", name[:54], h.Sum32())
+	return truncateName(base + "-" + d)
+}
+
+// truncateName bounds name to the 63-char DNS-label limit NetworkName's
+// Kubernetes-namespace doubling requires, suffixing an 8-hex FNV of the
+// FULL name so two long names never silently collide post-truncation and
+// the result stays deterministic (doc 11 GA caveat sweep, item D —
+// recorded at H5's merge gate; reused by PrivateNetworkName below for the
+// identical reason).
+func truncateName(name string) string {
+	if len(name) <= 63 {
+		return name
 	}
-	return name
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	return fmt.Sprintf("%s-%08x", name[:54], h.Sum32())
+}
+
+// PrivateNetworkName derives the docs/adr/026 H7 Docker realization of a
+// resource's home network under the GraphScopedAccess gate: instead of the
+// domain-wide network NetworkName gives every Provider in a domain (which,
+// on Docker, is a flat network any two members already fully reach each
+// other on — the very thing that makes pairwise access unrepresentable
+// there), each realizing Provider/Connection (owner) gets an EXCLUSIVE
+// network scoped to itself: its own replicas/internal topology, and
+// nothing else ("brokers reach brokers", ADR 026 decision 1) — cross-
+// container reachability is instead realized entirely by explicit
+// EdgeNetworkName joins. domain is kept as a prefix purely for operator
+// legibility (`docker network ls`); it carries no isolation meaning here,
+// since the owner suffix alone already makes the network exclusive to one
+// container regardless of domain.
+func PrivateNetworkName(base, domain string, owner resource.Key) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(owner.String()))
+	return truncateName(fmt.Sprintf("%s-own-%016x", NetworkName(base, domain), h.Sum64()))
+}
+
+// EdgeNetworkName derives the deterministic Docker network name for one
+// docs/adr/026 H7 per-edge access grant between two realizing containers
+// (a and b are their resource.Key values) — an unordered pair: swapping a
+// and b produces the identical name, so either endpoint's own reconcile
+// (whichever runs first) names the exact same network the other endpoint
+// will also join, with no shared state (the same property EdgeKey gives
+// internal/domain/subnet's subnet allocation, deliberately reusing the
+// identical canonicalization so a network's name and its subnet are always
+// derived from the same key). "access-<16-hex-FNV>" stays comfortably under
+// Docker's network-name limits regardless of how long the two resource keys
+// are, and carries no resource identity in the name itself (an edge network
+// is infrastructure, not a resource to browse by name — `docker network ls
+// --filter label=io.datascape.*` is the intended inspection path, same as
+// every other managed object).
+func EdgeNetworkName(a, b resource.Key) string {
+	key := edgeKey(a.String(), b.String())
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(key))
+	return fmt.Sprintf("access-%016x", h.Sum64())
+}
+
+// edgeKey canonicalizes an unordered pair — mirrors
+// internal/domain/subnet.EdgeKey exactly (duplicated, not imported: naming
+// is a leaf package other domain packages depend on, and importing a
+// sibling leaf back would invert that; the two packages' tests each pin
+// their own copy's order-independence, which is all EdgeKey actually
+// promises).
+func edgeKey(a, b string) string {
+	if a > b {
+		a, b = b, a
+	}
+	return a + "|" + b
 }
 
 // identityScheme is the URI scheme workload identities are minted under —

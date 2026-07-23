@@ -38,6 +38,11 @@
           "type": "string",
           "enum": ["retain", "delete"],
           "description": "What Source destroy does to the database: retain (default) keeps it — destroying the platform's record of a source must not destroy the data; delete drops the database. Instance teardown (Provider destroy) removes the backing store regardless. Ignored for external sources (never touched)."
+        },
+        "access": {
+          "type": "array",
+          "items": { "$ref": "meta.json#/$defs/accessGrant" },
+          "description": "Explicit wide-grant declarations (docs/adr/026 §2, docs/planning/08 H7) widening this Source's reachability beyond its own declared graph edges to every resource in a named namespace. Only takes effect under the GraphScopedAccess feature gate (Alpha, disabled by default); schema-valid but inert otherwise."
         }
       },
       "required": [

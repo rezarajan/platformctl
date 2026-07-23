@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/application/compatibility"
+	"github.com/rezarajan/platformctl/internal/application/graphaccess"
 	"github.com/rezarajan/platformctl/internal/application/plan"
 	"github.com/rezarajan/platformctl/internal/application/registry"
 	"github.com/rezarajan/platformctl/internal/domain/binding"
@@ -1353,7 +1354,19 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 	// dials at a network the provider's containers are not on. The
 	// dependent's declared domain governs graph/policy edges only;
 	// an explicit mismatch is refused at validate (coherence check).
-	rt = newDomainRuntime(rt, p.RuntimeConfig, provEnv, env, byKey)
+	// docs/adr/026 H7: compile the access-request graph only when the gate
+	// is enabled — GateEnabled is a pure query (never refuses), and the
+	// gate defaults off, so this is the ENTIRE cost the gate-off byte-
+	// identical pin promises: one bool check, zero graph rebuild, per call.
+	graphScoped := e.Registry.GateEnabled("GraphScopedAccess")
+	var accessEdges []graphaccess.Edge
+	if graphScoped {
+		accessEdges, err = deriveGraphAccessEdges(byKey)
+		if err != nil {
+			return nil, reconciler.Request{}, fmt.Errorf("%s: %w", env.Key(), err)
+		}
+	}
+	rt = newDomainRuntime(rt, p.RuntimeConfig, provEnv, env, byKey, graphScoped, accessEdges, p.RuntimeType)
 	// facts is the single state snapshot every published-fact lookup below
 	// reads from (docs/planning/08 I9) — taken once, under one lock
 	// acquisition, rather than each resolve* function separately locking

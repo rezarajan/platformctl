@@ -27,6 +27,15 @@ const (
 	// Docker ignores this field either way; a network is always isolated
 	// there.
 	IsolationNone = "none"
+	// IsolationGraphScoped (docs/adr/026 H7, engine-injected only — no
+	// provider ever sets this) keeps the default-deny half of B7's
+	// NetworkPolicy pair but DROPS the allow-same-namespace rule: under
+	// GraphScopedAccess, membership in a namespace no longer implies
+	// reachability — only the per-container graph-scoped policy
+	// (ContainerSpec.AllowFromPeers) does. Docker ignores this field; the
+	// per-edge-network mechanism there achieves the equivalent narrowing
+	// by construction (see domainRuntime's Docker realization).
+	IsolationGraphScoped = "graph-scoped"
 )
 
 type NetworkSpec struct {
@@ -49,6 +58,25 @@ type NetworkSpec struct {
 	// this same runtime already ensures (Docker network / Kubernetes
 	// Namespace — the same string either way).
 	AllowFromNetworks []string
+	// Subnet, when non-empty, requests this network be created with an
+	// explicit IPv4 CIDR (docs/adr/026, the 2026-07-23 addendum to
+	// docs/planning/08 H7): the engine's per-edge-network compiler sets
+	// this to a deterministic /28 (internal/domain/subnet.For) so Docker's
+	// own default address-pool exhaustion — the addendum's retired "order
+	// tens per daemon" bound — never applies. Kubernetes ignores this: a
+	// Namespace has no subnet of its own to set.
+	Subnet string
+}
+
+// NetworkPeer names one specific individual workload (not a whole network)
+// permitted to reach a container under docs/adr/026 H7's graph-scoped
+// access — narrower than NetworkSpec.AllowFromNetworks' whole-network hole.
+// Network is the peer's own home network/namespace (a NetworkSpec.Name this
+// runtime already ensures, the same identity convention AllowFromNetworks
+// uses); Name is the peer's runtime object name (naming.RuntimeObjectName).
+type NetworkPeer struct {
+	Network string
+	Name    string
 }
 
 type VolumeSpec struct {
@@ -304,6 +332,19 @@ type ContainerSpec struct {
 	// with StableIdentity false remains today's single-container behavior,
 	// byte-for-byte.
 	StableIdentity bool
+	// AllowFromPeers names specific individual workloads (docs/adr/026 H7,
+	// NetworkPeer) permitted to reach this container's ports under
+	// graph-scoped access — engine-injected only (no provider ever sets
+	// this). Docker ignores it: per-edge reachability there is realized as
+	// its own dedicated per-edge network (spec.Networks joins), the
+	// mechanism NetworkPeer exists to give Kubernetes instead, where a Pod
+	// lives in exactly one Namespace and a per-workload allow-rule must be
+	// expressed as a NetworkPolicy ingress peer (NamespaceSelector +
+	// PodSelector on the peer's own runtime-object-name label) rather than
+	// an actual network join. Empty means no per-edge ingress hole is
+	// opened for this container — the pre-existing behavior for every
+	// provider that never sets this field.
+	AllowFromPeers []NetworkPeer
 }
 
 // ReplicaCount normalizes Replicas: 0 (or any value <= 1) means exactly 1,

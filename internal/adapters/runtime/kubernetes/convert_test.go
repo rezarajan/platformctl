@@ -179,3 +179,106 @@ func TestBuildCrossDomainIngressPolicy(t *testing.T) {
 		}
 	})
 }
+
+// TestBuildNetworkPoliciesGraphScoped pins docs/adr/026 H7's core
+// Kubernetes claim: "per-edge NetworkPolicies replace allow-same-namespace
+// under the gate" — graphScoped=true must drop the allow-same-namespace
+// rule entirely (default-deny only), while graphScoped=false keeps
+// producing the exact pre-H7 pair, unchanged (the gate-off pin).
+func TestBuildNetworkPoliciesGraphScoped(t *testing.T) {
+	t.Run("gate off: default-deny + allow-same-namespace, unchanged", func(t *testing.T) {
+		policies := buildNetworkPolicies("ns", nil, false)
+		if len(policies) != 2 {
+			t.Fatalf("got %d policies, want 2 (default-deny + allow-same-namespace)", len(policies))
+		}
+		names := map[string]bool{}
+		for _, p := range policies {
+			names[p.Name] = true
+		}
+		if !names[denyAllIngressPolicyName] || !names[allowSameNamespacePolicyName] {
+			t.Errorf("expected both %q and %q, got %v", denyAllIngressPolicyName, allowSameNamespacePolicyName, names)
+		}
+	})
+
+	t.Run("gate on: default-deny only", func(t *testing.T) {
+		policies := buildNetworkPolicies("ns", nil, true)
+		if len(policies) != 1 {
+			t.Fatalf("got %d policies, want 1 (default-deny only)", len(policies))
+		}
+		if policies[0].Name != denyAllIngressPolicyName {
+			t.Errorf("policy = %q, want %q", policies[0].Name, denyAllIngressPolicyName)
+		}
+	})
+}
+
+// TestBuildGraphScopedIngressPolicy pins the per-container half of
+// docs/adr/026 H7's Kubernetes realization: exactly the declared peers,
+// each expressed as a namespace-selector + pod-selector pair (a Pod lives
+// in exactly one Namespace, so this is the K8s-native way to express "this
+// SPECIFIC pod in that namespace, not the whole namespace" —
+// buildCrossDomainIngressPolicy's namespace-wide peer generalized down to
+// resource granularity).
+func TestBuildGraphScopedIngressPolicy(t *testing.T) {
+	t.Run("nil when no peer is declared", func(t *testing.T) {
+		spec := runtimeport.ContainerSpec{Name: "x"}
+		if p := buildGraphScopedIngressPolicy("b", spec); p != nil {
+			t.Errorf("expected nil policy for no declared peers, got %+v", p)
+		}
+	})
+
+	t.Run("admits exactly the declared peers", func(t *testing.T) {
+		spec := runtimeport.ContainerSpec{
+			Name:   "x",
+			Labels: map[string]string{"io.datascape.kind": "provider"},
+			AllowFromPeers: []runtimeport.NetworkPeer{
+				{Network: "a", Name: "r1"},
+				{Network: "a", Name: "r2"},
+			},
+		}
+		p := buildGraphScopedIngressPolicy("b", spec)
+		if p == nil {
+			t.Fatal("expected a policy, got nil")
+		}
+		if got, want := p.Name, graphScopedIngressPolicyName("x"); got != want {
+			t.Errorf("name = %q, want %q", got, want)
+		}
+		if got := p.Namespace; got != "b" {
+			t.Errorf("namespace = %q, want %q", got, "b")
+		}
+		if got := p.Spec.PodSelector.MatchLabels["app"]; got != "x" {
+			t.Errorf("podSelector app = %q, want %q", got, "x")
+		}
+		if got := p.Spec.PolicyTypes; len(got) != 1 || got[0] != networkingv1.PolicyTypeIngress {
+			t.Errorf("policyTypes = %v, want [Ingress]", got)
+		}
+		peers := p.Spec.Ingress[0].From
+		if len(peers) != 2 {
+			t.Fatalf("peers = %d, want 2", len(peers))
+		}
+		for i, want := range []runtimeport.NetworkPeer{{Network: "a", Name: "r1"}, {Network: "a", Name: "r2"}} {
+			if peers[i].NamespaceSelector == nil || peers[i].NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != want.Network {
+				t.Errorf("peer[%d] namespaceSelector = %+v, want namespace %q", i, peers[i].NamespaceSelector, want.Network)
+			}
+			if peers[i].PodSelector == nil || peers[i].PodSelector.MatchLabels["app"] != want.Name {
+				t.Errorf("peer[%d] podSelector = %+v, want app %q", i, peers[i].PodSelector, want.Name)
+			}
+		}
+		if got := p.Labels[runtimeport.LabelManagedBy]; got != runtimeport.ManagedByValue {
+			t.Errorf("missing ownership label: %q = %q", runtimeport.LabelManagedBy, got)
+		}
+	})
+
+	t.Run("does not mutate the caller's spec labels", func(t *testing.T) {
+		spec := runtimeport.ContainerSpec{
+			Name:           "x",
+			AllowFromPeers: []runtimeport.NetworkPeer{{Network: "a", Name: "r1"}},
+		}
+		if _, exists := spec.Labels["app"]; exists {
+			t.Fatalf("precondition: spec.Labels already has an app key")
+		}
+		buildGraphScopedIngressPolicy("b", spec)
+		if _, leaked := spec.Labels["app"]; leaked {
+			t.Errorf("buildGraphScopedIngressPolicy mutated the caller's spec.Labels")
+		}
+	})
+}

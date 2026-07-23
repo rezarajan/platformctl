@@ -54,6 +54,20 @@
       },
       "required": ["name"],
       "additionalProperties": false
+    },
+    "accessGrant": {
+      "type": "object",
+      "description": "docs/adr/026 §2 wide grant: under the GraphScopedAccess gate (docs/planning/08 H7), a resource reaches exactly the endpoints its declared references imply UNLESS it also declares spec.access entries — an explicit, reviewable, policy-visible opt-in to reach every OTHER resource in the named namespace, not just the ones it references. Absent (the default) is the minimal edge set; a wide grant is never implicit. A policy.datascape.io matchGrant rule can deny or otherwise govern a declared grant at validate time.",
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63,
+          "description": "Every resource in this namespace becomes reachable, in addition to the ordinary graph-derived edge set."
+        }
+      },
+      "required": ["namespace"],
+      "additionalProperties": false
     }
   }
 }

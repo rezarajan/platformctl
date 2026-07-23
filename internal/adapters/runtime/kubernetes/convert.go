@@ -283,10 +283,16 @@ const (
 // allow rule's peer names no namespaceSelector, which Kubernetes' own
 // NetworkPolicy semantics scope to the policy's own namespace — exactly
 // "allow from anything in this namespace, deny everything else."
-func buildNetworkPolicies(namespace string, labels map[string]string) []*networkingv1.NetworkPolicy {
+//
+// graphScoped (docs/adr/026 H7) DROPS the allow-same-namespace rule,
+// leaving only default-deny: "K8s per-edge NetworkPolicies replace
+// allow-same-namespace under the gate" — membership in a namespace alone no
+// longer implies reachability; only the per-container
+// buildGraphScopedIngressPolicy does, one pair at a time.
+func buildNetworkPolicies(namespace string, labels map[string]string, graphScoped bool) []*networkingv1.NetworkPolicy {
 	owned := withOwnership(labels)
 	ingress := []networkingv1.PolicyType{networkingv1.PolicyTypeIngress}
-	return []*networkingv1.NetworkPolicy{
+	policies := []*networkingv1.NetworkPolicy{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: denyAllIngressPolicyName, Namespace: namespace, Labels: owned},
 			Spec: networkingv1.NetworkPolicySpec{
@@ -296,17 +302,20 @@ func buildNetworkPolicies(namespace string, labels map[string]string) []*network
 				// allowed — the default-deny half of the pair.
 			},
 		},
-		{
-			ObjectMeta: metav1.ObjectMeta{Name: allowSameNamespacePolicyName, Namespace: namespace, Labels: owned},
-			Spec: networkingv1.NetworkPolicySpec{
-				PodSelector: metav1.LabelSelector{},
-				PolicyTypes: ingress,
-				Ingress: []networkingv1.NetworkPolicyIngressRule{
-					{From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}}},
-				},
+	}
+	if graphScoped {
+		return policies
+	}
+	return append(policies, &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: allowSameNamespacePolicyName, Namespace: namespace, Labels: owned},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{},
+			PolicyTypes: ingress,
+			Ingress: []networkingv1.NetworkPolicyIngressRule{
+				{From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}}},
 			},
 		},
-	}
+	})
 }
 
 // externalIngressPolicyName is the per-container NetworkPolicy that opens the
@@ -398,6 +407,50 @@ func buildCrossDomainIngressPolicy(namespace string, labels map[string]string, a
 		ObjectMeta: metav1.ObjectMeta{Name: crossDomainIngressPolicyName, Namespace: namespace, Labels: withOwnership(labels)},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress:     []networkingv1.NetworkPolicyIngressRule{{From: peers}},
+		},
+	}
+}
+
+// graphScopedIngressPolicyName is the per-container NetworkPolicy realizing
+// docs/adr/026 H7's pairwise access under the GraphScopedAccess gate: the
+// K8s "per-edge NetworkPolicies replace allow-same-namespace" half of the
+// task. buildNetworkPolicies drops the cluster-wide allow-same-namespace
+// rule entirely when the gate is on (see EnsureNetwork); this per-container
+// policy is what takes its place, opening ingress to exactly the peers the
+// declared graph names for THIS container, one container at a time —
+// mirroring buildExternalIngressPolicy's per-container "punch a precise
+// hole" shape rather than crossDomainIngressPolicy's namespace-wide one
+// (H7 is resource-granular, not domain-granular).
+func graphScopedIngressPolicyName(containerName string) string {
+	return "datascape-allow-access-" + containerName
+}
+
+// buildGraphScopedIngressPolicy returns a NetworkPolicy admitting ingress to
+// spec's own pods from exactly spec.AllowFromPeers, or nil when empty (no
+// container-specific hole needed).
+func buildGraphScopedIngressPolicy(namespace string, spec runtimeport.ContainerSpec) *networkingv1.NetworkPolicy {
+	if len(spec.AllowFromPeers) == 0 {
+		return nil
+	}
+	peers := make([]networkingv1.NetworkPolicyPeer, 0, len(spec.AllowFromPeers))
+	for _, p := range spec.AllowFromPeers {
+		peers = append(peers, networkingv1.NetworkPolicyPeer{
+			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": p.Network}},
+			PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app": p.Name}},
+		})
+	}
+	labels := withOwnership(spec.Labels)
+	labels["app"] = spec.Name
+	return &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      graphScopedIngressPolicyName(spec.Name),
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": spec.Name}},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 			Ingress:     []networkingv1.NetworkPolicyIngressRule{{From: peers}},
 		},

@@ -130,6 +130,7 @@ func TestValidateRequiresExactlyOneSelectorShape(t *testing.T) {
 		{ID: "r1", Effect: Deny}, // none of match+assert/matchFinding/matchPlan
 		{ID: "r2", Effect: Deny, Match: &Match{Kind: StringList{"Connection"}}},                                                                                                        // match without assert
 		{ID: "r3", Effect: Deny, Match: &Match{Kind: StringList{"Connection"}}, Assert: &Assert{Field: "spec.scheme", In: []any{"https"}}, MatchFinding: &FindingMatch{Code: "DL001"}}, // both
+		{ID: "r4", Effect: Deny, Match: &Match{Kind: StringList{"Provider"}}, MatchGrant: &GrantMatch{Namespace: "b"}},                                                                 // match + matchGrant
 	}
 	for _, r := range cases {
 		t.Run(r.ID, func(t *testing.T) {
@@ -161,6 +162,26 @@ func TestValidateMatchEdgeRequiresFromAndTo(t *testing.T) {
 				t.Fatalf("rule %s: expected a from/to-required validation error", r.ID)
 			}
 		})
+	}
+}
+
+// TestRuleKindMatchGrant pins docs/adr/026 §2's matchGrant selector
+// (docs/planning/08 H7) — the same closed-shape-exclusivity dispatch
+// TestRuleKindMatchEdge already pins for matchEdge.
+func TestRuleKindMatchGrant(t *testing.T) {
+	rule := Rule{ID: "no-wide-grants-to-b", Effect: Deny, MatchGrant: &GrantMatch{Namespace: "b"}}
+	if got := rule.Kind(); got != RuleKindGrant {
+		t.Fatalf("Kind() = %v, want RuleKindGrant", got)
+	}
+	if err := Validate([]Policy{validPolicy("p", rule)}); err != nil {
+		t.Fatalf("expected a well-formed matchGrant rule to validate, got %v", err)
+	}
+}
+
+func TestValidateMatchGrantRequiresNamespace(t *testing.T) {
+	rule := Rule{ID: "no-namespace", Effect: Deny, MatchGrant: &GrantMatch{}}
+	if err := Validate([]Policy{validPolicy("no-namespace", rule)}); err == nil {
+		t.Fatal("expected a namespace-required validation error")
 	}
 }
 

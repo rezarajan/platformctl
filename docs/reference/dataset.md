@@ -8,6 +8,7 @@ A durable landing zone (bucket/prefix + format) realized by an object-store Prov
 |---|---|---|---|
 | `metadata.name` | string | yes | Unique per Kind within a manifest set. |
 | `metadata.observers[].name` | string | no | Provider names resolved to LineageEndpoints and forwarded when this resource's provider is LineageAware. |
+| `spec.access` | array of object | no | Explicit wide-grant declarations (docs/adr/026 §2, docs/planning/08 H7) widening this Dataset's reachability beyond its own declared graph edges to every resource in a named namespace. Only takes effect under the GraphScopedAccess feature gate (Alpha, disabled by default); schema-valid but inert otherwise. |
 | `spec.bucket` | string | yes |  |
 | `spec.connectionRef` | object `{name}` | no | A Connection (preferred) or SecretReference describing how to reach an external object store. Required when external. |
 | `spec.deletionPolicy` | `retain` \| `delete` | no | What Dataset destroy does to the stored objects: retain (default) keeps bucket contents — destroying the platform's record of a dataset must not destroy the data; delete removes every object under bucket/prefix. Instance teardown (Provider destroy) removes the backing store regardless. |

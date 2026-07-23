@@ -97,6 +97,9 @@ func (r *Runtime) ensureDeployment(ctx context.Context, spec runtimeport.Contain
 	if err := r.ensureExternalIngressPolicy(ctx, ns, spec); err != nil {
 		return runtimeport.ContainerState{}, err
 	}
+	if err := r.ensureGraphScopedIngressPolicy(ctx, ns, spec); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
 	if err := r.ensureFilesSecret(ctx, ns, spec); err != nil {
 		return runtimeport.ContainerState{}, err
 	}
@@ -197,6 +200,9 @@ func (r *Runtime) ensureStatefulSet(ctx context.Context, spec runtimeport.Contai
 		return runtimeport.ContainerState{}, err
 	}
 	if err := r.ensureExternalIngressPolicy(ctx, ns, spec); err != nil {
+		return runtimeport.ContainerState{}, err
+	}
+	if err := r.ensureGraphScopedIngressPolicy(ctx, ns, spec); err != nil {
 		return runtimeport.ContainerState{}, err
 	}
 	if err := r.ensureFilesSecret(ctx, ns, spec); err != nil {

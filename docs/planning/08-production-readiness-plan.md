@@ -2950,6 +2950,90 @@ second, back-to-back Docker run and any Kubernetes run are follow-ups.
   the "order tens" bound was Docker default-pool exhaustion, not a real
   limit; with explicit subnets the envelope is thousands of edges.
   Determinism test required (same edge → same subnet).
+- **Done (2026-07-23):** membership derivation
+  (`internal/application/graphaccess/graphscope.go`): `ContainerOf`
+  collapses any logical Kind (Source/Binding/EventStream/Dataset) onto
+  the Provider/Connection that actually realizes its container (only
+  those two Kinds ever call `EnsureContainer`); `EgressPeers`/
+  `IngressPeers`/`MembershipEdges` compile DeriveEdges' full graph edge
+  set plus `spec.access` wide grants into directional per-container peer
+  sets. Realization rides the H5 decorator
+  (`internal/application/engine/domainruntime.go` + new
+  `graphscoped.go`), zero provider edits, archtest-pinned (extended
+  `internal/archtest/domain_decoupling_test.go`'s existing
+  zero-provider-diff fence to the new naming/graphaccess surface —
+  deliberately narrower than "any graphaccess symbol" since H6's
+  openziti already has a legitimate provider-side use of the package).
+  Docker: each owner's home network becomes exclusive to itself
+  (`naming.PrivateNetworkName`) — the only way pairwise access is
+  representable when a shared/flat network is a blanket ACL — plus a
+  deterministic `/28`-subnetted per-edge network per declared peer
+  (`naming.EdgeNetworkName` + `internal/domain/subnet`, the addendum's
+  scheme, default supernet `10.94.0.0/16`, documented in doc 03 §2).
+  Kubernetes: domain/namespace placement is untouched; only the
+  NetworkPolicy compilation changes —
+  `internal/adapters/runtime/kubernetes`'s `buildNetworkPolicies` drops
+  the allow-same-namespace rule under the gate (and drift-heals a
+  namespace that already had it), and a new per-container policy
+  (`ContainerSpec.AllowFromPeers`, `buildGraphScopedIngressPolicy`)
+  admits ingress from exactly the peers the graph names, one container
+  at a time — verified directly against a real cluster
+  (`kubectl get networkpolicy -o yaml`: the target's policy names
+  exactly its declared consumers' namespace+pod, an unreferenced
+  sibling in the SAME namespace gets no policy at all,
+  `datascape-allow-same-namespace` absent everywhere under the gate).
+  `spec.access` (ADR 026 §2) added to
+  provider/connection/source/binding/eventstream/dataset schemas via a
+  shared `meta.json#/$defs/accessGrant` fragment; `policy.datascape.io`
+  gained `matchGrant: {namespace}` (mirrors `matchEdge.crossDomain`
+  exactly, validate-time-only, same "the engine-side compiler trusts an
+  already-policy-filtered byKey" precedent domainruntime.go's own holes
+  comment documents). Drift ("any attachment beyond the membership set")
+  needed no bespoke code: every `EnsureContainer`/`EnsureNetwork` call
+  already recomputes the exact declared set on every reconcile and the
+  existing idempotency check (Docker's `networksAttached`; Kubernetes'
+  per-container policy Ensure/Update) replaces/converges on any
+  deviation — the same generic mechanism H5's domain holes and I1's
+  blast-radius claim already rely on, not a new one. Accept: the owner's
+  worked example (docs/planning/11, 2026-07-22) live on BOTH runtimes —
+  `internal/application/engine/graphscoped_test.go` (fake runtime,
+  positive+negative both directions, wide grant, gate-off byte-identical
+  pin) and `cmd/platformctl/graphscoped_integration_test.go` +
+  `graphscoped_kubernetes_integration_test.go` (real Docker daemon, run
+  green twice; real Kubernetes cluster via the minted RBAC kubeconfig,
+  run twice — positive proofs pass and the compiled `NetworkPolicy`
+  objects are verified correct both times, the negative proof honestly
+  skips because this shared minikube's CNI does not enforce
+  NetworkPolicy, the same documented limitation
+  `TestDomainSegmentationOnKubernetesEndToEnd` (H5) and
+  `TestNetworkPolicyEnforcementIsLive` (H8) already carry — structured
+  identically: `PLATFORMCTL_REQUIRE_NETPOL_ENFORCEMENT` turns the skip
+  into a hard failure on a Calico-backed CI cluster). Three real bugs
+  found only by running live, fixed: (1) `runtime.IngressCapableRuntime`
+  cannot signal "is this Kubernetes" once wrapped by
+  `registry.haGuardRuntime`, which unconditionally implements that
+  interface for an unrelated reason (docs/adr/018's promotion gotcha) —
+  Docker was silently taking the Kubernetes code path; fixed by passing
+  `p.RuntimeType` explicitly into `newDomainRuntime` instead of a
+  capability assertion. (2) the pre-existing `domains-scenario`/
+  `domains-k8s-scenario` H5 fixtures were stale against a domain-
+  coherence check merged earlier (commit `d0017d5`, unrelated to this
+  task) and were failing on `main` before any of this task's changes —
+  fixed (one line each). (3) the live Docker negative-proof assertion
+  originally anchored on R1 false-passed: `ProbeReachable`'s real Docker
+  implementation execs a dial from an existing managed container found
+  on the named network, and a multi-homed container (R1, legitimately
+  attached to both its private home network and its own edge networks)
+  can dial out through ANY of its interfaces regardless of which network
+  name was passed as the vantage — re-anchored on a genuinely
+  single-homed resource (one with no declared edges at all) for a
+  confound-free proof; the underlying segmentation itself was already
+  correct (confirmed via `docker inspect`), only the test methodology
+  needed the fix. Full account: this task's own commit message and
+  `TASK_PROGRESS.md` (worktree history, squashed into the final commit).
+  gofmt/vet (both tag sets)/golangci-lint 0/`go test ./...` unfiltered
+  true-exit=0; `scripts/test-impact.sh --only graphscoped,domains` green
+  (Docker legs twice, Kubernetes leg twice against the live cluster).
 
 ### I13: Verify-then-promote restore — corruption never touches the target (ADR 007 addendum 2)
 

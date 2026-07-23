@@ -26,6 +26,11 @@
             "versioning": { "type": "string", "enum": ["enabled", "suspended"], "description": "Manage the bucket's versioning state. Omit to leave versioning unmanaged." }
           },
           "additionalProperties": false
+        },
+        "access": {
+          "type": "array",
+          "items": { "$ref": "meta.json#/$defs/accessGrant" },
+          "description": "Explicit wide-grant declarations (docs/adr/026 §2, docs/planning/08 H7) widening this Dataset's reachability beyond its own declared graph edges to every resource in a named namespace. Only takes effect under the GraphScopedAccess feature gate (Alpha, disabled by default); schema-valid but inert otherwise."
         }
       },
       "required": ["bucket", "format"],

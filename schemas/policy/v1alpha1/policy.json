@@ -22,7 +22,7 @@
           "minItems": 1,
           "items": {
             "type": "object",
-            "description": "Exactly one of (match+assert), matchFinding, matchPlan, or matchEdge must be set — a Go-level invariant (internal/domain/policy.Validate), not expressible as a plain JSON Schema oneOf without duplicating every property branch.",
+            "description": "Exactly one of (match+assert), matchFinding, matchPlan, matchEdge, or matchGrant must be set — a Go-level invariant (internal/domain/policy.Validate), not expressible as a plain JSON Schema oneOf without duplicating every property branch.",
             "properties": {
               "id": { "type": "string", "minLength": 1, "description": "Globally unique across every loaded policy — the explain-catalog key and the exemption-annotation key." },
               "match": {
@@ -90,6 +90,15 @@
                   }
                 },
                 "required": ["crossDomain"],
+                "additionalProperties": false
+              },
+              "matchGrant": {
+                "type": "object",
+                "description": "Selects docs/adr/026 §2 spec.access wide-grant declarations (docs/planning/08 H7) rather than resources or graph edges — \"deny/warn any resource that declares a wide grant to this namespace\" (ADR 026 decision 2).",
+                "properties": {
+                  "namespace": { "type": "string", "minLength": 1, "description": "Matches a grant naming this namespace exactly." }
+                },
+                "required": ["namespace"],
                 "additionalProperties": false
               },
               "effect": { "type": "string", "enum": ["deny", "warn"] },

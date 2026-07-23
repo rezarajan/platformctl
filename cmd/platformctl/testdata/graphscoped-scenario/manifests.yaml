@@ -1,0 +1,84 @@
+# docs/adr/026 H7 (as amended by the 2026-07-23 addendum) accept scenario —
+# the owner's exact worked example (docs/planning/11, 2026-07-22): A/R1
+# reaches {B/X, C/Y}; A/R2 reaches {B/X} only; B/other-b is never referenced
+# by anyone (the negative-proof target). R1/R2 declare their references via
+# metadata.observers (the generic, Kind-agnostic edge-creating field —
+# docs/domain/graph.go: "observers create edges too") so this scenario needs
+# no Binding/Source/Connection machinery at all — every node here is a plain
+# Provider(type: container), each in its own namespace (a, b, c) exactly as
+# the owner's A/B/C example names them.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: gsa-it-r1
+  namespace: a
+  observers:
+    - name: gsa-it-x
+      namespace: b
+    - name: gsa-it-y
+      namespace: c
+spec:
+  type: container
+  runtime:
+    type: docker
+  configuration:
+    image: alpine:3.20
+    cmd: ["sleep", "600"]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: gsa-it-r2
+  namespace: a
+  observers:
+    - name: gsa-it-x
+      namespace: b
+spec:
+  type: container
+  runtime:
+    type: docker
+  configuration:
+    image: alpine:3.20
+    cmd: ["sleep", "600"]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: gsa-it-x
+  namespace: b
+spec:
+  type: container
+  runtime:
+    type: docker
+  configuration:
+    image: alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e
+    cmd: ["-u", "tcp-listen:8080,fork,reuseaddr", "open:/dev/null"]
+    ports: [8080]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: gsa-it-y
+  namespace: c
+spec:
+  type: container
+  runtime:
+    type: docker
+  configuration:
+    image: alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e
+    cmd: ["-u", "tcp-listen:8080,fork,reuseaddr", "open:/dev/null"]
+    ports: [8080]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: gsa-it-other-b
+  namespace: b
+spec:
+  type: container
+  runtime:
+    type: docker
+  configuration:
+    image: alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e
+    cmd: ["-u", "tcp-listen:8080,fork,reuseaddr", "open:/dev/null"]
+    ports: [8080]

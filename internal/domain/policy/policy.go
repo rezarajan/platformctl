@@ -283,8 +283,20 @@ type EdgeMatch struct {
 	CrossDomain *CrossDomainSelector `json:"crossDomain,omitempty"`
 }
 
+// GrantMatch selects docs/adr/026 §2 spec.access wide-grant declarations
+// rather than resources or graph edges — a distinct match shape from both
+// (a grant's identity is the declaring resource plus the namespace it
+// names, not one resource's own fields the way Match works, and not a pair
+// of graph nodes the way EdgeMatch works). Namespace is the only selector
+// this closed vocabulary defines: "deny any resource that declares a wide
+// grant to this namespace."
+type GrantMatch struct {
+	Namespace string `json:"namespace"`
+}
+
 // Rule is one typed policy rule — exactly one of (Match+Assert),
-// MatchFinding, MatchPlan, or MatchEdge is set (Validate enforces this).
+// MatchFinding, MatchPlan, MatchEdge, or MatchGrant is set (Validate
+// enforces this).
 type Rule struct {
 	ID           string        `json:"id"`
 	Match        *Match        `json:"match,omitempty"`
@@ -292,12 +304,17 @@ type Rule struct {
 	MatchFinding *FindingMatch `json:"matchFinding,omitempty"`
 	MatchPlan    *PlanMatch    `json:"matchPlan,omitempty"`
 	MatchEdge    *EdgeMatch    `json:"matchEdge,omitempty"`
-	Effect       Effect        `json:"effect"`
-	Exemptible   bool          `json:"exemptible,omitempty"`
-	Message      string        `json:"message,omitempty"`
+	// MatchGrant selects docs/adr/026 §2 wide-grant declarations
+	// (docs/planning/08 H7) — the mechanism ADR 026 decision 2 promises:
+	// "a matchGrant selector lets organizations deny or constrain wide
+	// grants."
+	MatchGrant *GrantMatch `json:"matchGrant,omitempty"`
+	Effect     Effect      `json:"effect"`
+	Exemptible bool        `json:"exemptible,omitempty"`
+	Message    string      `json:"message,omitempty"`
 }
 
-// RuleKind categorizes which of the four closed selector shapes a Rule
+// RuleKind categorizes which of the five closed selector shapes a Rule
 // uses, for the evaluator's dispatch.
 type RuleKind int
 
@@ -307,18 +324,21 @@ const (
 	RuleKindFinding
 	RuleKindPlan
 	RuleKindEdge
+	RuleKindGrant
 )
 
 func (r Rule) Kind() RuleKind {
 	switch {
-	case r.Match != nil && r.Assert != nil && r.MatchFinding == nil && r.MatchPlan == nil && r.MatchEdge == nil:
+	case r.Match != nil && r.Assert != nil && r.MatchFinding == nil && r.MatchPlan == nil && r.MatchEdge == nil && r.MatchGrant == nil:
 		return RuleKindFieldAssert
-	case r.MatchFinding != nil && r.Match == nil && r.Assert == nil && r.MatchPlan == nil && r.MatchEdge == nil:
+	case r.MatchFinding != nil && r.Match == nil && r.Assert == nil && r.MatchPlan == nil && r.MatchEdge == nil && r.MatchGrant == nil:
 		return RuleKindFinding
-	case r.MatchPlan != nil && r.Match == nil && r.Assert == nil && r.MatchFinding == nil && r.MatchEdge == nil:
+	case r.MatchPlan != nil && r.Match == nil && r.Assert == nil && r.MatchFinding == nil && r.MatchEdge == nil && r.MatchGrant == nil:
 		return RuleKindPlan
-	case r.MatchEdge != nil && r.MatchEdge.CrossDomain != nil && r.Match == nil && r.Assert == nil && r.MatchFinding == nil && r.MatchPlan == nil:
+	case r.MatchEdge != nil && r.MatchEdge.CrossDomain != nil && r.Match == nil && r.Assert == nil && r.MatchFinding == nil && r.MatchPlan == nil && r.MatchGrant == nil:
 		return RuleKindEdge
+	case r.MatchGrant != nil && r.Match == nil && r.Assert == nil && r.MatchFinding == nil && r.MatchPlan == nil && r.MatchEdge == nil:
+		return RuleKindGrant
 	default:
 		return RuleKindInvalid
 	}
@@ -418,8 +438,12 @@ func Validate(policies []Policy) error {
 				if r.MatchEdge.CrossDomain.From == "" || r.MatchEdge.CrossDomain.To == "" {
 					return fmt.Errorf("rule %q: matchEdge.crossDomain.from and matchEdge.crossDomain.to are required", r.ID)
 				}
+			case RuleKindGrant:
+				if r.MatchGrant.Namespace == "" {
+					return fmt.Errorf("rule %q: matchGrant.namespace is required", r.ID)
+				}
 			default:
-				return fmt.Errorf("rule %q: must set exactly one of (match+assert), matchFinding, matchPlan, or matchEdge", r.ID)
+				return fmt.Errorf("rule %q: must set exactly one of (match+assert), matchFinding, matchPlan, matchEdge, or matchGrant", r.ID)
 			}
 		}
 	}

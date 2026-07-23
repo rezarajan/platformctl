@@ -266,8 +266,8 @@ func (r *Runtime) removeStatefulSet(ctx context.Context, ns, name string, sts *a
 }
 
 // removeCommonContainerObjects deletes the Service(s), files Secret, and
-// external-ingress NetworkPolicy hole shared by both the Deployment and
-// StatefulSet teardown paths.
+// external-ingress/graph-scoped NetworkPolicy holes shared by both the
+// Deployment and StatefulSet teardown paths.
 func (r *Runtime) removeCommonContainerObjects(ctx context.Context, ns, name string) error {
 	// Delete every Service addressing this container — its own name plus
 	// alias Services, all labeled app=<name> by ensureService/
@@ -291,6 +291,9 @@ func (r *Runtime) removeCommonContainerObjects(ctx context.Context, ns, name str
 	// on networkpolicies, so this must not enumerate.
 	if err := r.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, externalIngressPolicyName(name), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete external-ingress policy for %q: %w", name, err)
+	}
+	if err := r.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, graphScopedIngressPolicyName(name), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete graph-scoped ingress policy for %q: %w", name, err)
 	}
 	return nil
 }

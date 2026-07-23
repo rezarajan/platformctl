@@ -69,6 +69,17 @@ func (r *Registry) RequireGate(name string) error {
 	return r.gates.Require(name)
 }
 
+// GateEnabled reports whether the named feature gate is currently on —
+// the pure query counterpart to RequireGate, for a caller that wants to
+// take an OPTIONAL path when a gate is enabled rather than refuse outright
+// when it's not (docs/adr/026 H7's GraphScopedAccess: the engine decorator
+// checks this once per resolveRequest to decide whether to compile
+// graph-scoped access at all; an unknown gate name reports false, the same
+// "disabled" default featuregate.Registry.Enabled already gives).
+func (r *Registry) GateEnabled(name string) bool {
+	return r.gates.Enabled(name)
+}
+
 func (r *Registry) Provider(typeName string) (reconciler.Provider, error) {
 	ctor, ok := r.providers[typeName]
 	if !ok {

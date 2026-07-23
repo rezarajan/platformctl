@@ -27,7 +27,7 @@ func envWithDomain(kind, name, namespace, domain string, spec map[string]any) re
 func TestDomainRuntimeUndeclaredDomainIsByteIdenticalNoOp(t *testing.T) {
 	rt := fakeruntime.New()
 	env := envWithDomain("Provider", "pg", "default", "", nil)
-	d := newDomainRuntime(rt, map[string]any{}, env, env, nil)
+	d := newDomainRuntime(rt, map[string]any{}, env, env, nil, false, nil, "fake")
 
 	if err := d.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "datascape", Labels: runtime.ManagedLabels("default", "Provider", "pg", "pg")}); err != nil {
 		t.Fatalf("EnsureNetwork: %v", err)
@@ -48,7 +48,7 @@ func TestDomainRuntimeUndeclaredDomainIsByteIdenticalNoOp(t *testing.T) {
 func TestDomainRuntimeScopesTheDefaultToken(t *testing.T) {
 	rt := fakeruntime.New()
 	env := envWithDomain("Provider", "pg", "default", "payments", nil)
-	d := newDomainRuntime(rt, map[string]any{}, env, env, nil)
+	d := newDomainRuntime(rt, map[string]any{}, env, env, nil, false, nil, "fake")
 
 	if err := d.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "datascape", Labels: runtime.ManagedLabels("default", "Provider", "pg", "pg")}); err != nil {
 		t.Fatalf("EnsureNetwork: %v", err)
@@ -69,7 +69,7 @@ func TestDomainRuntimeScopesTheDefaultToken(t *testing.T) {
 func TestDomainRuntimePinnedOverrideNeverScoped(t *testing.T) {
 	rt := fakeruntime.New()
 	env := envWithDomain("Provider", "pg", "default", "payments", nil)
-	d := newDomainRuntime(rt, map[string]any{"network": "custom-net"}, env, env, nil)
+	d := newDomainRuntime(rt, map[string]any{"network": "custom-net"}, env, env, nil, false, nil, "fake")
 
 	if err := d.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "custom-net", Labels: runtime.ManagedLabels("default", "Provider", "pg", "pg")}); err != nil {
 		t.Fatalf("EnsureNetwork: %v", err)
@@ -90,7 +90,7 @@ func TestDomainRuntimePinnedOverrideNeverScoped(t *testing.T) {
 func TestDomainRuntimeNonTokenNamePassesThroughVerbatim(t *testing.T) {
 	rt := fakeruntime.New()
 	env := envWithDomain("Connection", "bridge", "default", "payments", nil)
-	d := newDomainRuntime(rt, map[string]any{}, env, env, nil)
+	d := newDomainRuntime(rt, map[string]any{}, env, env, nil, false, nil, "fake")
 
 	if err := d.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "datascape-vpc-transit", Labels: runtime.ManagedLabels("default", "Connection", "bridge", "bridge")}); err != nil {
 		t.Fatalf("EnsureNetwork: %v", err)
@@ -123,7 +123,7 @@ func TestDomainRuntimeConnectionOpensHolesForCrossDomainConsumers(t *testing.T) 
 		consumer.Key():   consumer,
 		sameDomain.Key(): sameDomain,
 	}
-	d := newDomainRuntime(rt, map[string]any{}, conn, conn, byKey)
+	d := newDomainRuntime(rt, map[string]any{}, conn, conn, byKey, false, nil, "fake")
 
 	if err := d.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "datascape", Labels: runtime.ManagedLabels("default", "Provider", "pg", "pg")}); err != nil {
 		t.Fatalf("EnsureNetwork: %v", err)
@@ -162,7 +162,7 @@ func TestDomainRuntimeUsesProviderDomainOfRecord(t *testing.T) {
 	provEnv := envWithDomain("Provider", "broker", "default", "infra", nil)
 	esEnv := envWithDomain("EventStream", "events", "default", "analytics", nil)
 
-	d := newDomainRuntime(rt, map[string]any{}, provEnv, esEnv, nil)
+	d := newDomainRuntime(rt, map[string]any{}, provEnv, esEnv, nil, false, nil, "fake")
 	if err := d.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "datascape", Labels: runtime.ManagedLabels("default", "Provider", "broker", "broker")}); err != nil {
 		t.Fatalf("EnsureNetwork: %v", err)
 	}

@@ -42,7 +42,8 @@ func (r *Runtime) EnsureNetwork(ctx context.Context, spec runtimeport.NetworkSpe
 		fmt.Fprintf(os.Stderr, "warning: namespace %q uses networkPolicy: none — no isolation boundary is provisioned; every pod in the cluster can reach it unless something else in the cluster restricts it\n", spec.Name)
 		return nil
 	}
-	if err := r.ensureNetworkPolicies(ctx, spec.Name, spec.Labels); err != nil {
+	graphScoped := spec.IsolationPolicy == runtimeport.IsolationGraphScoped
+	if err := r.ensureNetworkPolicies(ctx, spec.Name, spec.Labels, graphScoped); err != nil {
 		return err
 	}
 	return r.ensureCrossDomainIngressPolicy(ctx, spec.Name, spec.Labels, spec.AllowFromNetworks)
@@ -81,13 +82,18 @@ func (r *Runtime) ensureCrossDomainIngressPolicy(ctx context.Context, ns string,
 }
 
 // ensureNetworkPolicies creates or updates the isolation-boundary
-// NetworkPolicy pair. Update (not just create-if-absent) so a namespace
+// NetworkPolicy pair (or, under graphScoped, just its default-deny half —
+// buildNetworkPolicies). Update (not just create-if-absent) so a namespace
 // created before this existed, or one whose policies were edited
 // out-of-band, converges back to the declared boundary on the next apply —
 // the same drift-heals-on-reconcile behavior every other managed object
-// gets.
-func (r *Runtime) ensureNetworkPolicies(ctx context.Context, ns string, labels map[string]string) error {
-	for _, policy := range buildNetworkPolicies(ns, labels) {
+// gets. When graphScoped flips true on an existing namespace, the
+// now-stale allow-same-namespace policy is explicitly deleted (it would
+// otherwise silently keep granting the exact blanket access the gate
+// exists to remove — buildNetworkPolicies' returned slice omitting it is
+// not enough by itself to converge an already-applied cluster).
+func (r *Runtime) ensureNetworkPolicies(ctx context.Context, ns string, labels map[string]string, graphScoped bool) error {
+	for _, policy := range buildNetworkPolicies(ns, labels, graphScoped) {
 		existing, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, policy.Name, metav1.GetOptions{})
 		switch {
 		case apierrors.IsNotFound(err):
@@ -101,6 +107,11 @@ func (r *Runtime) ensureNetworkPolicies(ctx context.Context, ns string, labels m
 			if _, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Update(ctx, policy, metav1.UpdateOptions{}); err != nil {
 				return fmt.Errorf("update networkpolicy %q: %w", policy.Name, err)
 			}
+		}
+	}
+	if graphScoped {
+		if err := r.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, allowSameNamespacePolicyName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete allow-same-namespace policy in %q: %w", ns, err)
 		}
 	}
 	return nil
@@ -146,6 +157,39 @@ func (r *Runtime) ensureExternalIngressPolicy(ctx context.Context, ns string, sp
 		desired.ResourceVersion = existing.ResourceVersion
 		if _, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Update(ctx, desired, metav1.UpdateOptions{}); err != nil {
 			return fmt.Errorf("update external-ingress policy %q: %w", name, err)
+		}
+		return nil
+	}
+}
+
+// ensureGraphScopedIngressPolicy reconciles the per-container NetworkPolicy
+// realizing docs/adr/026 H7's pairwise access (spec.AllowFromPeers) —
+// idempotent at the EnsureContainer level like ensureExternalIngressPolicy,
+// created/updated when peers are declared, deleted when they aren't (a
+// container that stops declaring any peer converges back to "reachable by
+// nothing but the base wall", never leaves a stale hole).
+func (r *Runtime) ensureGraphScopedIngressPolicy(ctx context.Context, ns string, spec runtimeport.ContainerSpec) error {
+	name := graphScopedIngressPolicyName(spec.Name)
+	desired := buildGraphScopedIngressPolicy(ns, spec)
+	if desired == nil {
+		if err := r.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete graph-scoped ingress policy %q: %w", name, err)
+		}
+		return nil
+	}
+	existing, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		if _, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create graph-scoped ingress policy %q: %w", name, err)
+		}
+		return nil
+	case err != nil:
+		return fmt.Errorf("get graph-scoped ingress policy %q: %w", name, err)
+	default:
+		desired.ResourceVersion = existing.ResourceVersion
+		if _, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Update(ctx, desired, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update graph-scoped ingress policy %q: %w", name, err)
 		}
 		return nil
 	}
