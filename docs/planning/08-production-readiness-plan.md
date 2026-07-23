@@ -2578,6 +2578,34 @@ addendum) and protect-data recorded as the known dev-example baseline.
   out-of-band Ziti policy edits detected and healed (the debezium
   config-drift bar applied to mediator state).
 - **Gate:** `MediatedConnections` (Alpha, disabled).
+- **Amended by docs/adr/027 (2026-07-22):** H6's deliverable is the
+  AUTHORITATIVE zero-trust plane, not an optional mesh feature. Added
+  to scope: a `MediationProvider` port (capability seam + conformance
+  expectations — OpenZiti implements it; nothing may consume it by
+  name), SPIFFE-aligned workload identity minted from the naming
+  authority + the declared graph, per-edge authorization compiled from
+  the ADR 026 edge set, and the claims-table language (ADR 027) in its
+  docs. Enforcement must be proven identical on Docker AND Kubernetes
+  in the accept suite — that substrate-independence IS the point.
+
+### H8: Layer-2 enforcement observation — isolation honesty probe (ADR 027)
+
+- **Size:** S. **Depends:** none (precedes any GA language about
+  isolation). **Why:** ADR 027: network enforcement is observed, never
+  assumed — a cluster whose CNI ignores NetworkPolicy must SAY SO.
+- **Do:** productize TestNetworkPolicyEnforcementIsLive's mechanism: a
+  runtime capability probe (ephemeral canary pair, dial through the
+  deny wall, bounded + cached per apply/status run) surfacing
+  `network isolation: enforced | not-enforced | unknown` in
+  `status`/preflight/`inventory`; validate emits a warning on
+  not-enforced (never a hard fail — Layer 1 is the guarantee); explain-
+  catalog entry; Docker reports enforced-by-construction (network
+  membership IS the mechanism); doc the claims table in onboarding.
+- **Accept:** on a non-enforcing CNI the probe reports not-enforced and
+  status shows it (live, the CI cluster pre-Calico shape can be
+  reproduced with kindnet); on the Calico CI cluster it reports
+  enforced; Docker path unit-covered.
+- **Gate:** none (honesty reporting).
 
 ### H7: Graph-scoped access — least privilege from the reference graph (ADR 026)
 
@@ -3150,6 +3178,18 @@ Connect-worker HA (workers>1) remains I7's gap.
   is the point). Keep it pure-Go (yaml walk), no Docker.
 - **Accept:** test green on main; deleting httpsPort from the ingress
   fragment makes it fail naming the field and the file.
+- **Done (2026-07-22):** `manifest.FragmentCheck` (exported wrapper over
+  fragment.go's existing compiled schemas — no reimplementation, no drift
+  risk) + `internal/archtest/fragment_completeness_test.go`
+  (`TestFragmentCompletenessSweep`), walking
+  cmd/platformctl/testdata/** (excl. negative-corpus), examples/**, and
+  internal/application/blueprint/templates/**, grouping Binding
+  providerRef resolution per directory (the same manifest-set boundary
+  `manifest.Load` uses). Proven both directions: green at the current
+  state; deleting `httpsPort` from
+  schemas/v1alpha1/fragments/provider/ingress.json fails naming
+  `cmd/platformctl/testdata/ingress-tls-scenario/manifests.yaml` and the
+  `httpsPort` field, then reverts clean.
 
 ### I11: log/slog behind the engine's logging seam (NFR-4 made literal)
 
@@ -3166,6 +3206,23 @@ Connect-worker HA (workers>1) remains I7's gap.
 - **Accept:** `--log-format json` emits one parseable event per action
   covering NFR-4's fields (asserted in a cmd-level test); default output
   byte-compatible with today's (output-contract harness green).
+- **Done (2026-07-22):** `Engine.Log func(format,args)` replaced with
+  `Engine.Logger *slog.Logger`; `logf` re-implemented on it, plus a new
+  `logAction` helper carrying `resource`/`action`/`outcome`/`duration`
+  slog attrs at all 15 reconciliation-action call sites (Apply's
+  processEntry: skip/fail/drift/ok; Destroy: fail/skip/ok, now also
+  timed per entry). cmd: `--log-format text|json` persistent flag
+  (`cmd/platformctl/logging.go`'s `textLineHandler` renders exactly the
+  pre-slog prose byte-for-byte for the text default; `json` uses slog's
+  standard `JSONHandler`); `(*app).newEngine` now takes an `io.Writer`
+  (`cmd.ErrOrStderr()`) instead of hardcoding `os.Stderr`, so both the
+  live CLI and tests observe the same stream. Proven by
+  `cmd/platformctl/logging_test.go`
+  (`TestLogFormatJSONEmitsStructuredEventsPerAction`,
+  `TestLogFormatTextIsByteCompatible`) against `destroy` (the one
+  command whose `Engine.Logger` stays wired — `apply` nils it once its
+  Reporter owns stderr). Doc 01 NFR-12 and the README's global-flags
+  list record the literal claim. Reporter interface untouched.
 
 ### I12: dbjob pipeline hardening (precondition for BackupRestore GA)
 

@@ -176,6 +176,27 @@ func validateEngineFragment(e resource.Envelope, engine string, block map[string
 	return nil
 }
 
+// FragmentCheck validates block — a Provider's spec.configuration, a
+// Source/Catalog's spec.<engine> block, or a Binding's spec.options —
+// against the fragment registered for kind ("provider", "source",
+// "catalog", or "binding") and discriminator (a provider type, an engine
+// name, or "<mode>-<providerType>"), using exactly the same compiled
+// fragment schemas Validate composes internally. Returns nil when no
+// fragment is registered for kind/discriminator — there is then no
+// fragment-level guard to fail against, the pre-E5 behavior.
+//
+// Exported for internal/archtest's fragment-completeness sweep
+// (docs/planning/08 I10), which must check shipped manifests against the
+// EXACT schemas production validation uses, not a reimplementation that
+// could silently drift from fragment.go's own discriminators.
+func FragmentCheck(kind, discriminator string, block map[string]any) error {
+	sch := fragmentMustLoad()[kind+"/"+discriminator]
+	if sch == nil {
+		return nil
+	}
+	return validateBlockAgainstSchema(sch, block)
+}
+
 // validateBindingOptionsFragment checks a Binding's spec.options against the
 // fragment registered for "<mode>-<providerType>", if any. providerType is
 // resolved from providerTypeByKey — the Provider envelope named by this

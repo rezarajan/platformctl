@@ -541,3 +541,16 @@ static. Dimensions, each producing findings verified before fixing:
   streaming, detection proven by I12 fault tests), backup Docker-only
   (ADR 007 scope), Docker per-edge network scale bounds (ADR 026,
   stated design envelope).
+- 2026-07-22: OWNER DESIGN CHALLENGE answered as ADR 027 (enforcement
+  layering): network-layer enforcement authenticates location, not
+  workload, and varies by fabric — so it is DEMOTED to best-effort
+  defense-in-depth, observed-never-assumed (H8 honesty probe sequenced);
+  the AUTHORITATIVE zero-trust plane is identity-attested edges (ADR
+  022 Ring 2 / H6, now amended: MediationProvider PORT so no mesh
+  coupling — OpenZiti is the first adapter, SPIFFE-aligned identity
+  from the naming authority, per-edge authz from the ADR 026 graph),
+  which is substrate-independent by construction — the same guarantee
+  on Docker, K8s, and future Terraform-provisioned infrastructure.
+  Calico remains CI test infrastructure only (standard NetworkPolicy
+  objects; any conforming CNI). The ADR's claims table now governs all
+  zero-trust language.

@@ -331,7 +331,11 @@ Common production shapes, each a documented walkthrough:
 Global flags: `--state-file` (default `.datascape/state.json`, local backend),
 `--feature-gates`, `-o table|json|yaml`, `--policies` (directory of Policy
 documents, ADR 021; default `.datascape/policies/` if it exists — evaluated
-at validate/plan/apply/destroy when the `PolicyEngine` gate is enabled).
+at validate/plan/apply/destroy when the `PolicyEngine` gate is enabled),
+`--log-format text|json` (default `text`, byte-compatible with the
+historical prose stderr log; `json` emits one structured `log/slog` event
+per reconciliation action with `resource`/`action`/`outcome`/`duration`
+attributes, per NFR-4 — see doc 01).
 Shared state
 (`docs/adr/003-shared-state.md`, gated `SharedStateBackend`):
 `--state-backend s3 --state-bucket ... --state-endpoint ... --state-secret-ref
