@@ -58,11 +58,20 @@ criterion 3 composed end-to-end (cross-domain deny/exempt/mediate/withdraw).
 - [x] scripts/test-impact.sh suite row (`crossdomain-mediated`) +
       TestIntegrationSuiteMapCoversEveryTest green
 - [x] gofmt/vet(both tag sets)/build all clean; full `go test ./...` green
-- [ ] Live Docker run (flock-wrapped) — next step
-- [ ] Live K8s run (flock-wrapped) — or record token-expired if blocked
-- [ ] golangci-lint
-- [ ] doc 08 H9 Done-note (additive)
-- [ ] Final commit
+- [x] Live Docker run (flock-wrapped): PASS 26.73s, all 5 legs, zero
+      residue (scratchpad/docker_leg4.log). Two earlier live-found fixes:
+      Binding domain coherence; leg-5 NFR-3 double flags for the External
+      Source's removal.
+- [x] Live K8s run attempted: BLOCKED — minted kubeconfig token expired
+      mid-session (kubectl auth can-i: yes minutes earlier, Unauthorized
+      at run time). Per brief: recorded, token NOT re-minted, K8s leg
+      code-complete/unverified. Compensating unit coverage added:
+      TestDomainRuntimeQualifyTargetAddress (also fixed a pinned-network
+      inconsistency it exposed: pinned => qualification no-op).
+- [x] golangci-lint v2.12.2: 0 issues (merged tree, final).
+- [x] doc 08 H9 Done-note appended (additive; criterion-3 box left
+      UNCHECKED — Accept demands both runtimes green).
+- [x] Final commit
 
 ## Coordinator correction (2026-07-23, mid-task)
 - Merged main again (now at e993a07): H10 (CA pinning via EST/PKCS7,

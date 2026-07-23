@@ -429,6 +429,14 @@ func (d *domainRuntime) QualifyTargetAddress(ctx context.Context, target, caller
 	if !d.namespaced {
 		return hostport, nil
 	}
+	// A pinned (explicitly configured) network passes through verbatim in
+	// EVERY domain (H5's configured-value-always-wins rule, translate()
+	// above) — so on Kubernetes every domain shares the one pinned
+	// namespace and a bare name already resolves in it; qualifying would
+	// point at a "<pinned>-<domain>" namespace that never exists.
+	if d.pinned {
+		return hostport, nil
+	}
 	targetDomain := resource.NormalizeDomain(target.Metadata.Domain)
 	callerDomain := resource.NormalizeDomain(caller.Metadata.Domain)
 	if targetDomain == callerDomain {
