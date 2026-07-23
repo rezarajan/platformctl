@@ -355,13 +355,36 @@ func (c *edgeClient) upsertNamedPolicy(ctx context.Context, collection, name str
 // presenting the identity the graph authorizes") is unaffected — that is
 // enforced by the Dial service-policy's identity check
 // (upsertDialPolicy), not by this per-service transport-encryption flag.
+//
+// Idempotency includes CONVERGENCE, not just existence: if a service by
+// this name already exists but carries a divergent encryptionRequired
+// (e.g. one created before this adapter settled on false, or edited
+// out-of-band), it is PATCHed back to the desired value rather than left
+// as-is — the same "drift is healed, not merely detected" contract every
+// other Ensure* in this adapter holds (docs/planning/08 H6 accept: "drift
+// on out-of-band Ziti policy edits detected and healed").
 func (c *edgeClient) upsertService(ctx context.Context, name string) (id string, err error) {
-	if existingID, ok, ferr := c.findByName(ctx, "services", name); ferr != nil {
+	const desiredEncryption = false
+	existingID, ok, ferr := c.findByName(ctx, "services", name)
+	if ferr != nil {
 		return "", ferr
-	} else if ok {
+	}
+	if ok {
+		var out struct {
+			EncryptionRequired bool `json:"encryptionRequired"`
+		}
+		if err := c.do(ctx, http.MethodGet, "/edge/management/v1/services/"+existingID, nil, &out); err != nil {
+			return "", err
+		}
+		if out.EncryptionRequired != desiredEncryption {
+			patch := map[string]any{"encryptionRequired": desiredEncryption}
+			if err := c.do(ctx, http.MethodPatch, "/edge/management/v1/services/"+existingID, patch, nil); err != nil {
+				return "", fmt.Errorf("openziti: converge service %q encryptionRequired: %w", name, err)
+			}
+		}
 		return existingID, nil
 	}
-	body := map[string]any{"name": name, "encryptionRequired": false}
+	body := map[string]any{"name": name, "encryptionRequired": desiredEncryption}
 	var created entityRef
 	if err := c.do(ctx, http.MethodPost, "/edge/management/v1/services", body, &created); err != nil {
 		return "", err

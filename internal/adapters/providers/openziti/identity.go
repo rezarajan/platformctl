@@ -18,13 +18,32 @@ import (
 // (one Reconcile call), never held across calls (docs/planning/08 F5).
 type session struct {
 	client *edgeClient
+	// closeTunnel tears down the reachable tunnel to the controller (a
+	// no-op on Docker, a port-forward teardown on Kubernetes). Callers of
+	// newSession MUST defer Close() — the mediation.MediationProvider port
+	// itself carries no Close (nothing consumes Mediation() yet, H7), so
+	// this adapter's own reconcile/destroy paths own the lifetime.
+	closeTunnel func() error
+}
+
+// Close releases the session's controller tunnel. Idempotent-safe: a nil
+// closeTunnel (a session built in a unit test with a pre-wired client) is
+// a no-op.
+func (s *session) Close() error {
+	if s.closeTunnel == nil {
+		return nil
+	}
+	return s.closeTunnel()
 }
 
 // newSession authenticates against the mediation Provider named by
-// req.Provider, the same controller reconcileInstance bootstraps —
-// Inspecting its container for the live host address rather than assuming
-// a fixed name/port lets a session work regardless of which resource
-// (the Provider itself, or a Connection it realizes) is being reconciled.
+// req.Provider, the same controller reconcileInstance bootstraps. It
+// reaches the controller through runtime.EnsureReachable (dialController),
+// never ctrlState.HostAddr, so it works identically on Docker (published
+// port) and Kubernetes (ephemeral port-forward) — the substrate-neutral
+// seam that makes the whole mediation plane substrate-independent
+// (docs/adr/027). The caller owns the returned session's lifetime and must
+// defer (*session).Close().
 func newSession(ctx context.Context, req reconciler.Request) (*session, error) {
 	cfg, err := provider.FromEnvelope(req.Provider)
 	if err != nil {
@@ -34,11 +53,9 @@ func newSession(ctx context.Context, req reconciler.Request) (*session, error) {
 	providerName := naming.RuntimeObjectName(req.Provider)
 	ctrlName := controllerName(providerName)
 
-	ctrlState, ok, err := req.Runtime.Inspect(ctx, ctrlName)
-	if err != nil {
+	if _, ok, err := req.Runtime.Inspect(ctx, ctrlName); err != nil {
 		return nil, fmt.Errorf("openziti: inspect controller %q: %w", ctrlName, err)
-	}
-	if !ok {
+	} else if !ok {
 		return nil, fmt.Errorf("openziti: controller %q does not exist yet (Provider %q must reconcile first)", ctrlName, providerName)
 	}
 	creds, refName, err := providerkit.ResolveCredential(cfg, req.Secrets, "adminSecretRef", providerName)
@@ -50,11 +67,15 @@ func newSession(ctx context.Context, req reconciler.Request) (*session, error) {
 		return nil, fmt.Errorf("Provider %q (type: openziti): secretRef %q must carry keys \"username\" and \"password\"", providerName, refName)
 	}
 
-	client := newEdgeClient(fmt.Sprintf("https://%s", ctrlState.HostAddr(ic.ControllerPort)))
+	client, closeTunnel, err := dialController(ctx, req.Runtime, ctrlName, ic.ControllerPort)
+	if err != nil {
+		return nil, err
+	}
 	if err := client.Authenticate(ctx, username, password); err != nil {
+		_ = closeTunnel()
 		return nil, fmt.Errorf("openziti: session authentication: %w", err)
 	}
-	return &session{client: client}, nil
+	return &session{client: client, closeTunnel: closeTunnel}, nil
 }
 
 // identityRoleAttribute derives a Ziti-safe role attribute from a

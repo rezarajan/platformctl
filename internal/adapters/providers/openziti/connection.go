@@ -79,6 +79,7 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 	if err != nil {
 		return st, err
 	}
+	defer func() { _ = sess.Close() }()
 
 	mc, found, err := compileMediatedConnection(res, req.Resources)
 	if err != nil {
@@ -202,11 +203,15 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 	// settled, failed moments earlier) — settle-poll a real dial through
 	// the mediated entrypoint before declaring Ready, the same bar
 	// docs/adr/023's waitTunnelServing holds for wireguard's own forwarder.
-	hostAddr := ctrState.HostAddr(conn.Port)
-	if err := waitMediatedServing(ctx, hostAddr); err != nil {
+	// Dials through runtime.WithReachable so the settle-check works on both
+	// runtimes: a published-port dial on Docker, an ephemeral port-forward
+	// on Kubernetes (ctrState.HostAddr is "" for a K8s ClusterIP, so a
+	// HostAddr-based dial would settle-fail every K8s apply).
+	if err := waitMediatedServing(ctx, rt, name, conn.Port); err != nil {
 		return st, fmt.Errorf("Connection %q: mediated entrypoint did not settle: %w", res.Metadata.Name, err)
 	}
 
+	hostAddr := ctrState.HostAddr(conn.Port)
 	host, port := conn.Endpoint(name)
 	now := time.Now()
 	st.SetCondition(status.Condition{Type: status.Ready, Status: status.True, Reason: status.ReasonMediatedEdgeReady}, now)
@@ -255,6 +260,7 @@ func (p *Provider) destroyConnection(ctx context.Context, req reconciler.Request
 		// ContainerRuntime.Remove's "already gone is success" contract.
 		return nil
 	}
+	defer func() { _ = sess.Close() }()
 	mc, found, err := compileMediatedConnection(res, req.Resources)
 	if err != nil || !found {
 		return nil
@@ -304,29 +310,21 @@ var (
 	mediatedSettlePoll    = time.Second
 )
 
-// waitMediatedServing bounded-polls a raw TCP dial to hostAddr (the
-// mediated Connection's host-published address) until it succeeds or the
+// waitMediatedServing bounded-polls a raw TCP dial to the mediated
+// Connection's dial-side entrypoint (name:port) until it succeeds or the
 // deadline (docs/planning/02 §4.1's ScaledWait chokepoint) elapses — the
-// NFR-11 "ready means serving now" bar, applied to the mediated path's
-// own first-connection warm-up window (this file's doc comment on the
-// call site).
-func waitMediatedServing(ctx context.Context, hostAddr string) error {
-	deadline := time.Now().Add(runtime.ScaledWait(mediatedSettleTimeout))
-	var lastErr error
-	for {
-		conn, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", hostAddr)
-		if err == nil {
-			_ = conn.Close()
-			return nil
+// NFR-11 "ready means serving now" bar, applied to the mediated path's own
+// first-connection warm-up window. Dials through runtime.WithReachable so
+// it resolves a real address on BOTH runtimes (Docker published port /
+// Kubernetes ephemeral port-forward), re-resolving each attempt so a stale
+// port-forward can't wedge the wait.
+func waitMediatedServing(ctx context.Context, rt runtime.ContainerRuntime, name string, port int) error {
+	opts := runtime.ReachableOptions{Timeout: mediatedSettleTimeout, Interval: mediatedSettlePoll}
+	return runtime.WithReachable(ctx, rt, name, port, opts, func(ctx context.Context, addr string) error {
+		conn, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", addr)
+		if err != nil {
+			return err
 		}
-		lastErr = err
-		if time.Now().After(deadline) {
-			return fmt.Errorf("mediated entrypoint %s not serving within %s: %w", hostAddr, mediatedSettleTimeout, lastErr)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(mediatedSettlePoll):
-		}
-	}
+		return conn.Close()
+	})
 }

@@ -186,14 +186,26 @@ func (f *fakeZitiController) handler() http.Handler {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		id := strings.TrimPrefix(r.URL.Path, "/edge/management/v1/services/")
-		if _, ok := f.services[id]; !ok {
+		rec, ok := f.services[id]
+		if !ok {
 			http.Error(w, `{"error":{"code":"NOT_FOUND","message":"not found"}}`, http.StatusNotFound)
 			return
 		}
-		if r.Method == http.MethodDelete {
+		switch r.Method {
+		case http.MethodGet:
+			enc, _ := rec["encryptionRequired"].(bool)
+			writeEnvelope(w, http.StatusOK, map[string]any{"id": id, "name": rec["name"], "encryptionRequired": enc})
+		case http.MethodPatch:
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			for k, v := range body {
+				rec[k] = v
+			}
+			w.WriteHeader(http.StatusOK)
+		case http.MethodDelete:
 			delete(f.services, id)
+			w.WriteHeader(http.StatusOK)
 		}
-		w.WriteHeader(http.StatusOK)
 	})
 
 	mux.HandleFunc("/edge/management/v1/service-policies", func(w http.ResponseWriter, r *http.Request) {
@@ -349,6 +361,38 @@ func TestUpsertServiceIsIdempotent(t *testing.T) {
 	}
 	if len(f.services) != 1 {
 		t.Fatalf("services = %d, want 1", len(f.services))
+	}
+}
+
+// TestUpsertServiceConvergesEncryptionRequired is the drift-heal assertion
+// for the encryptionRequired field: a service that already exists carrying
+// the WRONG value (e.g. created before this adapter settled on false, or
+// edited out-of-band in the Ziti console) must be PATCHed back to the
+// desired value on the next upsert — not left as create-only drift. This is
+// the exact defect the H6 continuation flagged: create-only idempotency
+// would let a stale encryptionRequired: true survive forever, silently
+// breaking every dial through the router-native terminator.
+func TestUpsertServiceConvergesEncryptionRequired(t *testing.T) {
+	c, f := newTestClient(t)
+	ctx := context.Background()
+
+	// Simulate a service created out-of-band with encryptionRequired: true.
+	f.mu.Lock()
+	f.services["drifted"] = map[string]any{"name": "orders-service", "encryptionRequired": true}
+	f.mu.Unlock()
+
+	id, err := c.upsertService(ctx, "orders-service")
+	if err != nil {
+		t.Fatalf("upsertService: %v", err)
+	}
+	if id != "drifted" {
+		t.Fatalf("upsertService minted a new service instead of reusing the existing one: %s", id)
+	}
+	f.mu.Lock()
+	got := f.services["drifted"]["encryptionRequired"]
+	f.mu.Unlock()
+	if got != false {
+		t.Fatalf("encryptionRequired = %v after convergence, want false (drift not healed)", got)
 	}
 }
 

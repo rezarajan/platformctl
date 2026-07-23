@@ -121,10 +121,26 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 		return st, err
 	}
 
-	client := newEdgeClient(fmt.Sprintf("https://%s", ctrlState.HostAddr(ic.ControllerPort)))
-	if err := waitControllerServing(ctx, client); err != nil {
+	// Reach the controller's Edge Management API through
+	// runtime.EnsureReachable/WithReachable, never ctrlState.HostAddr:
+	// HostAddr returns a real host address only where a port is published
+	// to the host (Docker), and "" on a Kubernetes ClusterIP Service —
+	// so a HostAddr-built client worked on Docker and silently produced
+	// "https://" (empty host) on Kubernetes (found live against the shared
+	// cluster). EnsureReachable is the substrate-neutral seam every other
+	// provider dials its own admin API through (debezium's Connect
+	// preflight, redpanda's admin): Docker resolves it to the published
+	// port at ~zero cost, Kubernetes opens an ephemeral port-forward — the
+	// adapter speaks only the ContainerRuntime port, no K8s-special path
+	// (the archtest fence stays green).
+	if err := waitControllerServing(ctx, rt, ctrlName, ic.ControllerPort); err != nil {
 		return st, err
 	}
+	client, closeCtrl, err := dialController(ctx, rt, ctrlName, ic.ControllerPort)
+	if err != nil {
+		return st, err
+	}
+	defer func() { _ = closeCtrl() }()
 	if err := client.Authenticate(ctx, username, password); err != nil {
 		return st, fmt.Errorf("Provider %q (type: openziti): controller authentication: %w", res.Metadata.Name, err)
 	}
@@ -180,28 +196,41 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	// discipline, applied to the whole adapter, not only identity.go).
 	st.ProviderState = map[string]any{
 		"controllerContainerId": ctrlState.ID,
-		"controllerAddr":        ctrlState.HostAddr(ic.ControllerPort),
-		"routerId":              routerID,
+		// The in-cluster/in-network address the router dials — meaningful
+		// on BOTH runtimes (Docker network DNS / Kubernetes Service DNS),
+		// unlike a host address which is "" on a K8s ClusterIP. The
+		// host-audience reachable address is ephemeral (a fresh
+		// port-forward per call on K8s), so it is never persisted.
+		"controllerInternal": fmt.Sprintf("%s:%d", ctrlName, ic.ControllerPort),
+		"routerId":           routerID,
 	}
 	return st, nil
 }
 
-func waitControllerServing(ctx context.Context, client *edgeClient) error {
-	deadline := time.Now().Add(runtime.ScaledWait(60 * time.Second))
-	var lastErr error
-	for {
-		if lastErr = client.Version(ctx); lastErr == nil {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("openziti controller did not answer within timeout: %w", lastErr)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
-		}
+// dialController opens a substrate-neutral reachable tunnel to the
+// controller's Edge Management API and returns a REST client bound to it
+// plus the tunnel's close func (a no-op on Docker, a port-forward teardown
+// on Kubernetes) — callers defer the close for the operation's duration.
+func dialController(ctx context.Context, rt runtime.ContainerRuntime, ctrlName string, port int) (*edgeClient, func() error, error) {
+	addr, closeAddr, err := rt.EnsureReachable(ctx, ctrlName, port)
+	if err != nil {
+		return nil, nil, fmt.Errorf("openziti: reach controller %q: %w", ctrlName, err)
 	}
+	return newEdgeClient("https://" + addr), closeAddr, nil
+}
+
+// waitControllerServing bounded-polls the controller's REST API until it
+// answers, re-resolving reachability on every attempt via
+// runtime.WithReachable — the "fresh tunnel per attempt" discipline
+// (docs/planning/09 Class 2, runtime.WithReachable's own doc): a K8s
+// port-forward opened while the controller pod is still starting can go
+// permanently dead, so a held tunnel across the whole wait would hang; a
+// re-resolved one recovers the moment the pod is ready.
+func waitControllerServing(ctx context.Context, rt runtime.ContainerRuntime, ctrlName string, port int) error {
+	opts := runtime.ReachableOptions{Timeout: 90 * time.Second, Interval: 2 * time.Second}
+	return runtime.WithReachable(ctx, rt, ctrlName, port, opts, func(ctx context.Context, addr string) error {
+		return newEdgeClient("https://" + addr).Version(ctx)
+	})
 }
 
 func (p *Provider) probeInstance(ctx context.Context, req reconciler.Request) (status.Status, error) {
