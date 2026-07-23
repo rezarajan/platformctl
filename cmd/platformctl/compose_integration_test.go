@@ -137,11 +137,7 @@ func TestComposeOwnerScenario(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("status failed (code %d): %v\n%s", code, err, out)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
-		if !strings.Contains(line, "True") {
-			t.Errorf("resource not Ready: %s", line)
-		}
-	}
+	assertAllStatusReady(t, out, "after apply")
 	out, err, code = run(t, "plan", manifests, "--state-file", stateFile, "--detect-drift-only")
 	if err != nil || code != 0 {
 		t.Fatalf("plan (post-apply) reported drift or failed (code %d): %v\n%s", code, err, out)

@@ -99,11 +99,7 @@ func TestSharedStateBackendEndToEnd(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("status against the s3 backend failed (code %d): %v\n%s", code, err, out)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
-		if !strings.Contains(line, "True") {
-			t.Errorf("resource not Ready after s3-backed apply: %s", line)
-		}
-	}
+	assertAllStatusReady(t, out, "s3-backed apply")
 
 	args = append([]string{"destroy", manifests, "--auto-approve"}, gatedArgs...)
 	out, err, code = run(t, args...)

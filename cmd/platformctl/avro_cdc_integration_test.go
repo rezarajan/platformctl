@@ -95,11 +95,7 @@ func TestAvroCDCEndToEnd(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("status failed (code %d): %v\n%s", code, err, out)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
-		if !strings.Contains(line, "True") {
-			t.Errorf("resource not Ready after apply: %s", line)
-		}
-	}
+	assertAllStatusReady(t, out, "apply")
 
 	// The connector is RUNNING and configured with the Avro converters, each
 	// wired to the registry's INTERNAL address (auto-resolved, not typed).

@@ -168,11 +168,7 @@ func TestCDCAttendanceExampleOnKubernetes(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("status failed (code %d): %v\n%s", code, err, out)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
-		if !strings.Contains(line, "True") {
-			t.Errorf("resource not Ready: %s", line)
-		}
-	}
+	assertAllStatusReady(t, out, "after apply")
 
 	// Data actually flows: insert a row into the real Postgres (reached via
 	// EnsureReachable, not a hardcoded port) and confirm it lands as an
@@ -358,11 +354,7 @@ func TestLakehouseExampleOnKubernetes(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("status failed (code %d): %v\n%s", code, err, out)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
-		if !strings.Contains(line, "True") {
-			t.Errorf("resource not Ready: %s", line)
-		}
-	}
+	assertAllStatusReady(t, out, "after apply")
 
 	nessieAddr, closeNessie, err := rt.EnsureReachable(ctx, "catalog-svc", 19120)
 	if err != nil {

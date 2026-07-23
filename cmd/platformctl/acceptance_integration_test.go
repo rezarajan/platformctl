@@ -100,11 +100,7 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("status failed (code %d): %v\n%s", code, err, out)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
-		if !strings.Contains(line, "True") {
-			t.Errorf("resource not Ready: %s", line)
-		}
-	}
+	assertAllStatusReady(t, out, "after apply")
 
 	// NFR-8: steps 1–4 within the four-minute budget (images pre-pulled).
 	if elapsed := time.Since(start); elapsed > 4*time.Minute {

@@ -80,11 +80,7 @@ func TestJDBCSinkEndToEnd(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("status failed (code %d): %v\n%s", code, err, out)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
-		if !strings.Contains(line, "True") {
-			t.Errorf("resource not Ready after apply: %s", line)
-		}
-	}
+	assertAllStatusReady(t, out, "apply")
 
 	// Pre-create the target table (auto.create is off by default —
 	// docs/planning/03's jdbcsink note: schemaless records can't drive DDL

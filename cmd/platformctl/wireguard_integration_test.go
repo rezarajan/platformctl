@@ -129,11 +129,7 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("status failed (code %d): %v\n%s", code, err, out)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
-		if !strings.Contains(line, "True") {
-			t.Errorf("resource not Ready after apply: %s", line)
-		}
-	}
+	assertAllStatusReady(t, out, "apply")
 
 	// Positive proof: the CDC connector reached RUNNING — through the
 	// via'd Connection's forwarder and tunnel, since Debezium (on
@@ -224,11 +220,7 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("status after rotation failed (code %d): %v\n%s", code, err, out)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
-		if !strings.Contains(line, "True") {
-			t.Errorf("resource not Ready after key rotation: %s", line)
-		}
-	}
+	assertAllStatusReady(t, out, "key rotation")
 
 	// --- destroy: leaves no tunnel artifacts, including no transit-network
 	// attachments (docs/planning/08 I1 Accept). -------------------------
