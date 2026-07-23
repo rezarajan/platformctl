@@ -199,7 +199,7 @@ func buildJob(spec runtimeport.JobSpec) (*batchv1.Job, error) {
 			volumes = append(volumes, corev1.Volume{
 				Name: jobFilesVolumeName(c.Name),
 				VolumeSource: corev1.VolumeSource{
-					Secret: &corev1.SecretVolumeSource{SecretName: jobFilesSecretName(spec.Name, c.Name), DefaultMode: &mode},
+					Secret: &corev1.SecretVolumeSource{SecretName: jobFilesSecretName(spec.Name, c.Name), DefaultMode: &mode, Items: fileItems(c.Files)},
 				},
 			})
 		}

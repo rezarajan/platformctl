@@ -103,6 +103,7 @@ func buildDeployment(namespace string, spec runtimeport.ContainerSpec, hash stri
 				Secret: &corev1.SecretVolumeSource{
 					SecretName:  filesSecretName(spec.Name),
 					DefaultMode: &mode,
+					Items:       fileItems(spec.Files),
 				},
 			},
 		})
@@ -460,6 +461,23 @@ func buildGraphScopedIngressPolicy(namespace string, spec runtimeport.ContainerS
 func filesSecretName(containerName string) string { return containerName + "-files" }
 
 func fileKey(i int) string { return fmt.Sprintf("f%d", i) }
+
+// fileItems builds the per-key projection for a files Secret volume,
+// honoring each FileMount's declared Mode (0 = the 0o444 default) — a
+// pgpass file mounted at 0o444 fails libpq's world-readable check and
+// pg_dump silently prompts for a password instead (found by the I15 live
+// round-trip).
+func fileItems(files []runtimeport.FileMount) []corev1.KeyToPath {
+	items := make([]corev1.KeyToPath, 0, len(files))
+	for i, f := range files {
+		mode := int32(0o444)
+		if f.Mode != 0 {
+			mode = int32(f.Mode)
+		}
+		items = append(items, corev1.KeyToPath{Key: fileKey(i), Path: fileKey(i), Mode: &mode})
+	}
+	return items
+}
 
 // filePathsAnnotation records the FileMount path each Secret key holds so
 // ReadFile can map a path back to its key.

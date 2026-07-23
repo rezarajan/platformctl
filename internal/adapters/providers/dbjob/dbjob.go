@@ -868,6 +868,9 @@ func waitJobPipeline(ctx context.Context, jrt runtime.JobCapableRuntime, jobName
 			return Result{}, fmt.Errorf("job %q: consumer failed (exit=%d)%s", jobName, consumer.ExitCode, jobDiagnostics(ctx, jrt, namespace, jobName, jobProducerContainerName, jobConsumerContainerName))
 		}
 		if producer.Terminated && consumer.Terminated {
+			if err := checkJobSideExits(ctx, jrt, namespace, jobName); err != nil {
+				return Result{}, err
+			}
 			return readJobResult(ctx, jrt, namespace, jobName)
 		}
 		now := time.Now()
@@ -883,6 +886,36 @@ func waitJobPipeline(ctx context.Context, jrt runtime.JobCapableRuntime, jobName
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+// checkJobSideExits reads both sides' sentinel exit files — the SAME
+// verdict source the Docker path uses (pollSide/readExitCode). It exists
+// because sideScript deliberately routes the real command's exit code into
+// WorkDir/{producer,consumer}-exit and then ends with cp/echo, so the
+// CONTAINER always terminates 0: Kubernetes' ContainerStatuses ExitCode is
+// truthful about the script, not the command, and trusting it alone let a
+// failed pg_dump masquerade as a successful 0-byte backup (found by the
+// I15 live round-trip). The ExitCode checks above still stand — they catch
+// script-level infrastructure failures (mkfifo, missing shell) that never
+// reach the sentinel files.
+func checkJobSideExits(ctx context.Context, jrt runtime.JobCapableRuntime, namespace, jobName string) error {
+	for side, file := range map[string]string{
+		"producer": WorkDir + "/producer-exit",
+		"consumer": WorkDir + "/consumer-exit",
+	} {
+		data, err := jrt.ReadJobFile(ctx, namespace, jobName, file)
+		if err != nil {
+			return fmt.Errorf("job %q: read %s exit sentinel: %w", jobName, side, err)
+		}
+		code, perr := strconv.Atoi(strings.TrimSpace(string(data)))
+		if perr != nil {
+			return fmt.Errorf("job %q: parse %s exit sentinel %q: %w", jobName, side, data, perr)
+		}
+		if code != 0 {
+			return fmt.Errorf("job %q: %s failed (exit=%d)%s", jobName, side, code, jobDiagnostics(ctx, jrt, namespace, jobName, jobProducerContainerName, jobConsumerContainerName))
+		}
+	}
+	return nil
 }
 
 // readJobResult reads back the producer-side checksum/byte-count files via
