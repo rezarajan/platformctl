@@ -18,9 +18,13 @@ func assertAllStatusReady(t *testing.T, out, context string) {
 		t.Errorf("status output has no resource rows (%s):\n%s", context, out)
 		return
 	}
-	for _, line := range lines[1:] {
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" ||
+			// The table header is skipped by PREFIX, not by position:
+			// stderr notes (below) flushed before the stdout table shift
+			// it in combined captures, so lines[0] is not reliably it.
+			strings.HasPrefix(trimmed, "RESOURCE") ||
 			strings.HasPrefix(trimmed, "network isolation") ||
 			strings.HasPrefix(trimmed, "WARNING:") ||
 			// K5 policy decision events (docs/adr/033 decision 5) ride
