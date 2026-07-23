@@ -781,3 +781,21 @@ static. Dimensions, each producing findings verified before fixing:
   instead of the target host, so the qualifier compared a domain to
   itself (root-caused from the router's own logs; fixed by
   target-host runtime-name resolution, unit-pinned). Wave sweep next.
+- 2026-07-23: WAVE 7 (standing authorization) — J4 merged (backup
+  orchestration deduped: one dbbackup harness, postgres/mysql are
+  profiles; full suite live green 190.8s incl. the K8s round-trip),
+  K5 merged (decision audit trail + policy audit command; Stage K
+  criterion 5 checked), E6 retrofit merged (all 13 remaining providers
+  carry fast-tier conformance evidence; 7 full-harness, 6 honestly
+  scoped per the redpanda precedent). The wave-6 sweep caught a REAL
+  K5 regression before it could ship: decision events on stderr were
+  read as status rows by combined-capture tests, and the fix exposed a
+  second latent helper bug (header matched by position, not prefix) —
+  both fixed in the shared assertAllStatusReady; both crossdomain legs
+  re-proven green (153.3s). Sweep triage: backup failure = external
+  SIGTERM (re-proven by J4's live run); openziti-K8s
+  ConnectorStateFAILED under triple concurrent cluster load — final
+  serialized sweep re-arbitrates. COMMIT POLICY shift: unsigned commits
+  with full messages per owner directive; owner signs at finalization.
+  Pending: K4 (K8s leg in flight), then L2 + pkcs7 swap, then THE
+  authoritative single-content-state sweep.
