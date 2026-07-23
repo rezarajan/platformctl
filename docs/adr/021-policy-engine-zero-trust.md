@@ -188,3 +188,43 @@ non-exemptible: it has no exemptible sibling, and the examples' failure
 to meet it is recorded as a known baseline (the CI evaluation catches
 new regressions), not waived — a prod-bar rule a dev example honestly
 does not meet.
+
+## Amendment (2026-07-23): what "severing" means — admission refusal plus manifest-driven teardown, never auto-destroy
+
+**Prompted by:** the Stage H completeness audit (doc 11, 2026-07-23).
+Stage H exit criterion 3 says "removing the allow and re-applying severs
+it," which a natural reading takes as: withdraw the allow, and the
+previously-authorized mediated path is torn down. The accepted design
+cannot and SHOULD not do that, and this amendment records both halves
+so the criterion is testable instead of aspirational.
+
+**What actually happens, and why it is right.** This engine is
+admission control: deny-wins evaluation refuses validate/plan/apply for
+the whole set. When an allow (an exemption, or the absence of a
+matching deny) is withdrawn, the next apply is REFUSED, naming the rule
+and the edge — fail-closed at the door. The standing infrastructure
+from the previously-authorized apply keeps operating until the manifest
+changes, because the only alternative — converging live infrastructure
+to a policy re-evaluation — means a policy edit (or typo) silently
+tears down production data paths: the exact blast-radius class ADR 013
+exists to prevent, now triggered from a file that deliberately lives
+OUTSIDE the governed manifest set. A destroy that no manifest diff
+proposed and no human approved is not zero-trust; it is a new
+unaudited actor.
+
+**Severing, defined.** (a) The withdrawal is enforced at the next
+admission: re-apply refuses, fail-closed, naming the edge — no NEW
+authorization can occur. (b) Teardown is manifest-driven: removing the
+offending Binding/Connection and applying destroys the mediation
+(service, service-policies, identities — the H6-proven destroy path),
+which IS the tear-down, proposed by a plan and approved like any other
+destructive change. (c) The gap between (a) and (b) — a running path
+whose authorization has been withdrawn — is a REPORTED state, not a
+silent one: `validate`/`plan` against the current manifests name the
+denied edge, and the H9 composed scenario asserts all three legs.
+Stage H criterion 3 is satisfiable exactly in these terms.
+
+**Consequence for the claims table (ADR 027):** "policy-based access"
+claims admission-time enforcement with auditable refusal, plus
+runtime identity enforcement by the mediator's own service-policies —
+never continuous policy-to-infrastructure convergence.

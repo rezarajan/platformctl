@@ -737,3 +737,21 @@ static. Dimensions, each producing findings verified before fixing:
   is now a build failure. J2's interrupted verification sweep is
   superseded by one final sweep at this content-state (6 suites that
   completed green before the interrupt re-run under it).
+- 2026-07-23: STAGE H AUDIT ACTIONED + STAGE K DRAFTED. ADR 021
+  amendment defines "severing" (admission refusal + manifest-driven
+  teardown + reported in-between — auto-destroy on policy change
+  REJECTED as a new unaudited destructive actor); criterion 3 carries
+  an additive clarification and stays unchecked until H9. H9 (composed
+  cross-domain deny/exempt/mediate/withdraw scenario with POSITIVE
+  mediator-state evidence) and H10 (CA pinning + enrollment JWT off
+  Env) specced. ADR 033 accepts and refines the owner's
+  labels-over-domains standpoint: runtime wiring is already
+  resource-granular (ADR 026) — the gap is the POLICY vocabulary;
+  three-plane model (compartment/wiring/moderation), the self-claim
+  pitfall handled by label-integrity rules + target-side grants +
+  mediator-attested attributes; namespace-wide grants deprecated to
+  selector grants. Stage K (K1-K5) sequenced in doc 08 with exit
+  criteria including a CI fixture where the self-claim ATTACK must
+  fail policy. NO tasks struck: the audit found nothing obsolete —
+  domains remain as compartments (blast radius), and every open task
+  feeds the new plan. Wave: agents on H9, H10, K1+K2.

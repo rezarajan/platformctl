@@ -2742,6 +2742,15 @@ ADRs and is not restated.
       same manifest reconciles the path through a MediatedConnection and
       the mediator's own logs/policy state show the identity-checked
       dial; removing the allow and re-applying severs it.
+      *Clarified 2026-07-23 (Stage H audit, docs/adr/021 amendment):
+      each component is done and live-proven, but this COMPOSED scenario
+      was never run, so the box stays unchecked until H9 passes.
+      "Severs" is defined by the ADR 021 amendment as (a) re-apply
+      REFUSED fail-closed naming the edge + (b) manifest-driven teardown
+      destroying the mediation + (c) the in-between reported by
+      validate/plan — never auto-destroy on policy change. "Allow
+      policy" means an exemption on an exemptible deny (the vocabulary
+      has no allow effect, by design).*
 - [x] Undeclared domains remain byte-identical to today's behavior
       (no segmentation, no mediation) — pinned by tests.
 
@@ -3650,6 +3659,59 @@ behavior changed. `go test ./...` unfiltered: true-exit=0. gofmt/`go vet`
   verified: backup 2072 bytes, DROP TABLE, restore via scratch-db plus
   atomic promote, rows back.
 
+### H9: Stage H criterion 3 composed — cross-domain deny/exempt/mediate/withdraw, end-to-end (ADR 021 amendment)
+
+- **Size:** M. **Depends:** H4-H8 (all merged), ADR 021 amendment
+  (2026-07-23). **Why:** the Stage H audit: every component is proven in
+  isolation, the composition never ran, and the graphscoped/E7
+  merge-order incident this same week proved components-green is not
+  composition-green.
+- **Do:** one scenario (testdata/crossdomain-mediated-scenario) with a
+  cdc Binding whose source chain and sink chain carry different
+  metadata.domain values AND an openziti MediatedConnection on the
+  cross-domain edge; a policy file with the crossDomain deny
+  (exemptible). Test legs, Docker first, K8s leg following the same
+  runtime-parity bar as H6: (1) validate WITHOUT exemption refuses,
+  naming rule id + both domains + the edge; (2) WITH the exemption
+  annotation, apply reaches Ready and the connector runs through the
+  mediated path; (3) POSITIVE mediator evidence: the Ziti management
+  API lists exactly the expected service, service-policies, and
+  identities for this edge (not only the H6 canary negative — assert
+  the policy state itself, as the criterion's own wording demands);
+  (4) remove the exemption: re-apply is REFUSED fail-closed naming the
+  edge; validate/plan report the denied edge while the path still
+  stands (the ADR 021 amendment's reported in-between); (5) remove the
+  Binding+Connection from the manifest, apply: the Ziti service/
+  policies/identities for the edge are GONE (manifest-driven
+  teardown = severing leg b). Wire the suite into scripts/test-impact.sh
+  and the CI scenarios-apps shard pattern (the partition guard enforces
+  the latter).
+- **Accept:** stage-criterion 3's box checked with this test as the
+  evidence; both runtimes green.
+
+### H10: Mediation hardening — controller CA pinning + enrollment JWT off Env
+
+- **Size:** S-M. **Depends:** H6 (merged). **Why:** the Stage H audit's
+  two recorded-but-open security follow-ups. (1) The ziti management
+  client dials the controller with InsecureSkipVerify (client.go's own
+  doc comment records CA pinning as the follow-up). (2) The one-time
+  enrollment JWT transits ContainerSpec.Env — stripped in-reconcile,
+  but briefly visible to docker inspect / pod spec; the wireguard
+  precedent (privateKeySecretRef) is file-mount-only.
+- **Do:** (1) fetch the controller's bootstrap CA once
+  (GET /.well-known/est/cacerts, or the ctrl-plane CA file the
+  controller container exposes), pin it in the http.Client's RootCAs,
+  and delete InsecureSkipVerify; the trust bootstrap (first fetch) is
+  TOFU over the isolated platform network — record that residual
+  explicitly in the client doc. (2) mount enrollment JWTs via
+  FileMount (mode 0600, honored on both runtimes since J5's sibling
+  fix) and point the tunneler at the file (ZITI_ENROLL_TOKEN_FILE or
+  documented equivalent); the steady-state spec settle logic carries
+  over unchanged.
+- **Accept:** no InsecureSkipVerify under internal/adapters/providers/
+  openziti; no secret-bearing Env key in either ziti ContainerSpec
+  (grep-provable); openziti suite green on both runtimes.
+
 ## 7.8 Stage I — Production-review remediations (doc 11, 2026-07 owner review)
 
 Findings from docs/planning/11-production-review-2026-07.md promoted to
@@ -4353,6 +4415,99 @@ Connect-worker HA (workers>1) remains I7's gap.
   green on both engines at pass 1 (94.9s, round-trips + mid-stream);
   final green-twice timings: see /tmp/claude-1000/i12-evidence.log,
   transcribed at the merge gate.
+
+## 7.10 Stage K — Label-scoped access moderation (ADR 033)
+
+Theme: give policy the same resolution the runtime already has (ADR 026
+made wiring least-privilege; ADR 033 makes GOVERNANCE selector-scoped),
+with label integrity, attested attributes, and a full audit trail.
+Owner directive (2026-07-23): domain-granularity policy is too broad —
+cross-resource access is moderated by labels/tags under strict
+zero-trust. Sequencing is strict: K1 -> K2 -> {K3, K4} -> K5; H9 is the
+evidence pattern every leg reuses.
+
+**Stage exit criteria:**
+- [ ] A policy can deny/permit a specific declared edge by label
+      selectors on BOTH endpoints; crossDomain remains as the
+      compartment special case; deny names rule, selectors, and edge.
+- [ ] Label integrity is governable: the zero-trust pack ships a
+      who-may-wear-this-label rule shape, and the self-claim attack
+      (consumer labels itself into an audience) is a fixture that FAILS
+      policy in CI.
+- [ ] A wide grant scoped by selector admits exactly the selected
+      audience; the bare namespace-wide grant form lints as deprecated.
+- [ ] The mediator enforces label-derived attributes at dial time
+      (attribute-based service-policies), and its policy state is
+      asserted as positive evidence, H9-style, on both runtimes.
+- [ ] Every edge decision is auditable: structured decision events +
+      `platformctl policy audit` naming rule/selector/grant for any
+      permitted edge; ADR 027 claims table updated.
+- [ ] Gate LabelScopedAccess (Alpha, disabled) guards all of it;
+      gate-off is byte-identical (pinned).
+
+### K1: Label grammar and validation
+
+- **Size:** S. **Depends:** —. **Why:** metadata.labels exists free-form
+  today; free-form values that only one runtime rejects are the ADR 030
+  failure class, and selectors need a defined grammar to match against.
+- **Do:** validate label keys/values to the Kubernetes label grammar at
+  validate time (domain/resource validation, error naming the offending
+  key); doc 03 additive entry; fixtures for valid/invalid.
+- **Accept:** invalid labels refused at validate with named keys; doc
+  03 updated same commit.
+
+### K2: Selector vocabulary in policy — matchEdge.selector + matchResource.selector
+
+- **Size:** M. **Depends:** K1. **Why:** ADR 033 decisions 1-2.
+- **Do:** matchLabels/matchExpressions selector shape in
+  schemas/policy/v1alpha1 + internal/domain/policy; evaluation in
+  internal/application/policy over the SAME graph-derived edges
+  crossDomain uses (from-endpoint labels x to-endpoint labels);
+  matchResource gains the selector form (label-integrity rules);
+  zero-trust pack gains the who-may-wear example rule + the self-claim
+  attack fixture (deny fires); policy test covers both polarities;
+  explain catalog entries.
+- **Accept:** stage criteria 1-2; deny output names rule id, both
+  selectors, and the edge key pair.
+
+### K3: Selector-scoped wide grants
+
+- **Size:** M. **Depends:** K2. **Why:** ADR 033 decision 3 — the
+  namespace-wide accessGrant is broader than the owner's bar.
+- **Do:** spec.access grant entries gain a selector (audience =
+  namespace AND selector); compile to the SAME per-edge realization H7
+  ships (no new runtime mechanism); bare namespace-wide form kept
+  working but flagged by a new DL lint code ("namespace-wide grant —
+  scope it with a selector"), catalog entry included; docs/planning/03
+  same commit.
+- **Accept:** stage criterion 3; H7 suites stay green; gate-off pinned
+  byte-identical.
+
+### K4: Label-derived attributes through the mediation port
+
+- **Size:** M. **Depends:** K2 (grammar), H10 (hardened client).
+  **Why:** ADR 033 decision 4 — admission and runtime must check the
+  same facts (ADR 027 Layer 1).
+- **Do:** MediationProvider port carries endpoint labels; the openziti
+  adapter maps them to identity role attributes and attribute-based
+  Dial/Bind service-policies (replacing name-only policies where labels
+  exist); idempotent under the H6 settle discipline; the H9 positive
+  mediator-state assertion extends to attributes.
+- **Accept:** stage criterion 4 on both runtimes; mediation layering
+  archtest still green (no adapter name outside the adapter).
+
+### K5: Decision audit trail
+
+- **Size:** S-M. **Depends:** K2 (decisions exist to log). **Why:** ADR
+  033 decision 5 — "strictly moderated" must be provable after the
+  fact.
+- **Do:** structured decision events (edge, rule id, effect, selector,
+  grant, exemption) on the I11 slog seam for validate/plan/apply;
+  `platformctl policy audit [path]` renders the permitted-edge
+  justification table (machine output per the A7 harness); ADR 027
+  claims-table row updated in the same commit.
+- **Accept:** stage criterion 5; an edge with no nameable justification
+  is a test failure.
 
 ## 8. New feature gates introduced by this plan
 
