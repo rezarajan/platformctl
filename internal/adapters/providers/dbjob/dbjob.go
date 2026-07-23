@@ -908,12 +908,22 @@ func readJobResult(ctx context.Context, jrt runtime.JobCapableRuntime, namespace
 }
 
 // runOneShotJob is RunOneShot's Kubernetes Job-path realization: a
-// single-container Job, no shared volume unless side.Volumes names one.
+// single-container Job. Exit codes come natively from
+// pod.Status.ContainerStatuses (no Docker-style exit-sentinel file), and a
+// non-empty resultPath is copied into the pod's shared emptyDir (WorkDir)
+// on success so ReadJobFile — which reads through the keep-alive reader
+// container, the only filesystem that outlives the one-shot container —
+// can return it: the one-shot's own /tmp is invisible to the reader.
 func runOneShotJob(ctx context.Context, jrt runtime.JobCapableRuntime, name string, labels map[string]string, side Side, timeout time.Duration, resultPath string) ([]byte, error) {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	script := fmt.Sprintf("(%s); echo $? > %s", side.ShellCmd, oneShotExitFile)
+	script := side.ShellCmd
+	sharedMount := ""
+	if resultPath != "" {
+		sharedMount = WorkDir
+		script = fmt.Sprintf("(%s) && cp %s %s/oneshot-result", side.ShellCmd, resultPath, WorkDir)
+	}
 	jobSpec := runtime.JobSpec{
 		Name:      name,
 		Namespace: side.Namespace,
@@ -927,7 +937,8 @@ func runOneShotJob(ctx context.Context, jrt runtime.JobCapableRuntime, name stri
 			Files:      side.Files,
 			Volumes:    side.Volumes,
 		}},
-		NodeName: side.NodeName,
+		SharedVolumeMountPath: sharedMount,
+		NodeName:              side.NodeName,
 	}
 	defer func() { _ = jrt.RemoveJob(context.WithoutCancel(ctx), side.Namespace, name) }()
 	if _, err := jrt.EnsureJob(ctx, jobSpec); err != nil {
@@ -950,7 +961,7 @@ func runOneShotJob(ctx context.Context, jrt runtime.JobCapableRuntime, name stri
 			if resultPath == "" {
 				return nil, nil
 			}
-			out, err := jrt.ReadJobFile(ctx, side.Namespace, name, resultPath)
+			out, err := jrt.ReadJobFile(ctx, side.Namespace, name, WorkDir+"/oneshot-result")
 			if err != nil {
 				return nil, fmt.Errorf("job %q: read result %q: %w", name, resultPath, err)
 			}
