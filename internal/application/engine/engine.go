@@ -36,6 +36,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/secret"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/clock"
+	"github.com/rezarajan/platformctl/internal/ports/mediation"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	runtimeport "github.com/rezarajan/platformctl/internal/ports/runtime"
 	"github.com/rezarajan/platformctl/internal/ports/secretstore"
@@ -91,6 +92,20 @@ type Engine struct {
 	// stateMu serializes state-map access and persistence when levels
 	// execute concurrently; reconciliation itself runs unlocked.
 	stateMu sync.Mutex
+
+	// Mediation is docs/planning/08 L1's engine-owned edge-mediation seam
+	// (docs/adr/034): when non-nil AND the MediatedTransport gate is on,
+	// resolveRequest asks it for a dial address for each resolved edge not
+	// declared spec.transport: direct (SchemaRegistryURL,
+	// KafkaBootstrapServers) and substitutes it in place of the
+	// unmediated address — the SAME resolution surface every consumer
+	// already reads (ADR 034 "why the engine can do this with zero
+	// provider changes"). nil disables (mirrors SecretStore's own "nil
+	// disables" convention above) — today's production wiring
+	// (cmd/platformctl) leaves this nil: L1 proves the seam against a
+	// fake; standing up the real fabric a non-nil value would come from
+	// is L2.
+	Mediation mediation.AddressResolver
 }
 
 type Result struct {
@@ -1380,6 +1395,20 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 	// fields below are now thin wrappers assembled from exactly the same
 	// snapshot a third-party provider's own req.Facts call would read.
 	facts := e.factsSnapshot(st)
+	// docs/planning/08 L1: both resolved up front (rather than inline in
+	// the struct literal below) so a mediation failure can be reported as
+	// a normal resolveRequest error (%w-wrapped with env.Key(), matching
+	// every other error path in this function) instead of silently
+	// degrading to an unmediated address — see mediatedAddress's own doc
+	// comment.
+	schemaRegistryURL, err := e.resolveSchemaRegistryURL(ctx, env, byKey, facts)
+	if err != nil {
+		return nil, reconciler.Request{}, fmt.Errorf("%s: %w", env.Key(), err)
+	}
+	kafkaBootstrapServers, err := e.resolveKafkaBootstrapServers(ctx, provEnv, p, byKey)
+	if err != nil {
+		return nil, reconciler.Request{}, fmt.Errorf("%s: %w", env.Key(), err)
+	}
 	return prov, reconciler.Request{
 		Resource:              env,
 		Warn:                  e.warnf,
@@ -1388,8 +1417,8 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 		Secrets:               secrets,
 		Resources:             byKey,
 		Facts:                 facts,
-		SchemaRegistryURL:     e.resolveSchemaRegistryURL(env, byKey, facts),
-		KafkaBootstrapServers: e.resolveKafkaBootstrapServers(provEnv, p, byKey),
+		SchemaRegistryURL:     schemaRegistryURL,
+		KafkaBootstrapServers: kafkaBootstrapServers,
 		MetricsTargets:        e.resolveMetricsTargets(env, facts),
 		CatalogFacts:          e.resolveCatalogFacts(env, p, byKey, facts),
 		PrometheusURL:         e.resolvePrometheusURL(env, p, byKey, facts),
@@ -1669,15 +1698,34 @@ func (e *Engine) resolveProviderS3Fact(s3Env resource.Envelope, facts reconciler
 // value the worker container was actually started with. p is provEnv's
 // already-decoded configuration; an explicit spec.configuration.
 // bootstrapServers always wins and skips the graph walk entirely.
-func (e *Engine) resolveKafkaBootstrapServers(provEnv resource.Envelope, p provider.Provider, byKey map[resource.Key]resource.Envelope) string {
+func (e *Engine) resolveKafkaBootstrapServers(ctx context.Context, provEnv resource.Envelope, p provider.Provider, byKey map[resource.Key]resource.Envelope) (string, error) {
 	if _, has := p.Configuration["bootstrapServers"]; has {
-		return ""
+		return "", nil
 	}
 	envelopes := make([]resource.Envelope, 0, len(byKey))
 	for _, v := range byKey {
 		envelopes = append(envelopes, v)
 	}
-	return compatibility.ResolveKafkaBootstrapAddress(provEnv, envelopes, e.Registry.Provider)
+	targetKey, addr, bindings, ok := compatibility.ResolveKafkaBootstrapTarget(provEnv, envelopes, e.Registry.Provider)
+	if !ok {
+		return "", nil
+	}
+	// docs/planning/08 L1 / docs/adr/034: KafkaBootstrapServers is
+	// graph-resolved, not a published fact (see the field's own doc
+	// comment on reconciler.Request), so it is substituted here rather
+	// than via the Facts snapshot resolveSchemaRegistryURL uses below.
+	// The edge is provEnv (the Connect worker dialing out) -> targetKey
+	// (the broker Provider); transport-direct is honored only when EVERY
+	// contributing Binding declares it (ADR 034's mediated-by-default
+	// bias — see mediatedKafkaTransportDirect's own doc comment).
+	mediated, substituted, err := e.mediatedAddress(ctx, mediation.AddressEdge{From: provEnv.Key(), To: targetKey}, mediatedKafkaTransportDirect(bindings, byKey))
+	if err != nil {
+		return "", err
+	}
+	if substituted {
+		return mediated, nil
+	}
+	return addr, nil
 }
 
 // resolveMetricsTargets resolves the prometheus provider's scrape-target
@@ -1721,13 +1769,13 @@ func (e *Engine) resolveMetricsTargets(env resource.Envelope, facts reconciler.S
 // e.g. Import, which loads no state — behaves the same as "not yet
 // published"). Now a thin wrapper over facts.Endpoint (docs/planning/08
 // I9) — see reconciler.Request.SchemaRegistryURL's own doc comment.
-func (e *Engine) resolveSchemaRegistryURL(env resource.Envelope, byKey map[resource.Key]resource.Envelope, facts reconciler.StaticFacts) string {
+func (e *Engine) resolveSchemaRegistryURL(ctx context.Context, env resource.Envelope, byKey map[resource.Key]resource.Envelope, facts reconciler.StaticFacts) (string, error) {
 	if facts == nil || env.Kind != "Binding" {
-		return ""
+		return "", nil
 	}
 	b, err := binding.FromEnvelope(env)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	format, _ := b.Options["format"].(string)
 	needsRegistry := format == "avro" || format == "protobuf"
@@ -1740,7 +1788,7 @@ func (e *Engine) resolveSchemaRegistryURL(env resource.Envelope, byKey map[resou
 		}
 	}
 	if !needsRegistry {
-		return ""
+		return "", nil
 	}
 
 	var esEnv resource.Envelope
@@ -1753,18 +1801,30 @@ func (e *Engine) resolveSchemaRegistryURL(env resource.Envelope, byKey map[resou
 		}
 	}
 	if !found {
-		return ""
+		return "", nil
 	}
 	provRef := resource.RefFromSpec(esEnv.Spec, "providerRef")
 	esProvEnv, ok := byKey[provRef.Key(esEnv.Metadata.Namespace, "Provider")]
 	if !ok {
-		return ""
+		return "", nil
 	}
 	ep, ok := facts.Endpoint(esProvEnv.Key(), "schema-registry")
 	if !ok {
-		return ""
+		return "", nil
 	}
-	return ep.Internal
+	// docs/planning/08 L1 / docs/adr/034: the Binding (env) is the
+	// resource declaring this edge (sourceRef/targetRef reaching the
+	// EventStream whose Provider publishes schema-registry) — substitute
+	// a mediated address unless env itself declares spec.transport:
+	// direct.
+	mediated, substituted, err := e.mediatedAddress(ctx, mediation.AddressEdge{From: env.Key(), To: esProvEnv.Key()}, transportDirect(env))
+	if err != nil {
+		return "", err
+	}
+	if substituted {
+		return mediated, nil
+	}
+	return ep.Internal, nil
 }
 
 func (e *Engine) resolveLineageEndpoint(ctx context.Context, observer resource.ObserverRef, defaultNamespace string, byKey map[resource.Key]resource.Envelope, st *state.State) (lineage.LineageEndpoint, error) {

@@ -14,6 +14,7 @@ A directed data-movement contract realized by a Provider. spec.mode names the mo
 | `spec.providerRef` | object `{name}` | yes | Must implement the capability interface matching spec.mode (CDCCapableProvider / SinkCapableProvider). |
 | `spec.sourceRef` | object `{name}` | yes |  |
 | `spec.targetRef` | object `{name}` | yes |  |
+| `spec.transport` | `direct` | no | Opts this Binding's own declared edges out of identity-mediated transport (docs/adr/034, docs/planning/08 L1). Unset is the default and means mediated once the MediatedTransport feature gate (Alpha, disabled by default) is on — ADR 034 inverts docs/adr/027's opt-in boundary: every declared edge is mediated unless explicitly declared direct here. Schema-valid and lint/policy-checkable regardless of the gate; inert (no runtime effect) while the gate is off. |
 
 ## Binding options reference (by `spec.mode` + provider type)
 

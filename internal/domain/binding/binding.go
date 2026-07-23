@@ -65,6 +65,17 @@ type Binding struct {
 	// Kafka Connect's own semantics, an advanced/rare combination that
 	// remains expressible by setting it explicitly).
 	DeadLetter *DeadLetter
+	// Transport is docs/planning/08 L1 / docs/adr/034's per-edge escape
+	// hatch: "" (unset, the default) means this Binding's own declared
+	// edges are mediated when the MediatedTransport gate is on (ADR 034
+	// inverts H6's opt-in boundary — every declared edge is mediated
+	// unless the manifest says otherwise); "direct" opts this Binding's
+	// edges out. Schema-valid and validated regardless of the gate (lint/
+	// policy can flag a declared "direct" transport even before the gate
+	// ships, per ADR 034's "lint-flagged, policy-deniable") but inert
+	// without it — the same "schema-valid but inert" posture spec.access
+	// already established for GraphScopedAccess.
+	Transport string
 }
 
 func FromEnvelope(e resource.Envelope) (Binding, error) {
@@ -74,6 +85,7 @@ func FromEnvelope(e resource.Envelope) (Binding, error) {
 	b.SourceRef = refName(e.Spec, "sourceRef")
 	b.TargetRef = refName(e.Spec, "targetRef")
 	b.ProviderRef = refName(e.Spec, "providerRef")
+	b.Transport, _ = e.Spec["transport"].(string)
 	if opts, ok := e.Spec["options"].(map[string]any); ok {
 		b.Options = opts
 		if raw, ok := opts["deadLetter"].(map[string]any); ok {
@@ -105,6 +117,9 @@ func (b Binding) validate(name string) error {
 	}
 	if b.ProviderRef == "" {
 		return fmt.Errorf("Binding %q: spec.providerRef is required", name)
+	}
+	if b.Transport != "" && b.Transport != "direct" {
+		return fmt.Errorf("Binding %q: spec.transport must be \"direct\" when set (docs/adr/034: mediated is the unset default)", name)
 	}
 	if b.DeadLetter != nil {
 		if b.Mode != ModeSink {
