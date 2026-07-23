@@ -1729,7 +1729,7 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
       a machine with only Docker installed, no manifest editing.
 - [x] Every schema-legal misconfiguration class in the negative-test corpus
       fails at `validate`, not apply.
-- [ ] A third-party provider can be built from the provider-author guide +
+- [x] A third-party provider can be built from the provider-author guide +
       conformance suite alone (proven by an example provider PR that
       touches no core code).
 - [x] Versioned release artifacts (multi-platform binaries) build from CI.
@@ -2005,6 +2005,75 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
 - **Accept:** all nine-plus providers pass the reconciler conformance
   suite in CI; the guide is validated by using it to (re)build the noop
   provider from scratch in a test branch (recorded in the PR).
+- **Done (2026-07-23, re-scoped by [ADR 028](../adr/028-test-tiering.md) as
+  the fast-tier's provider middle):** `internal/ports/reconciler/conformance`
+  (`conformance.go`) — a `Harness{NewRuntime, Provider, Resource,
+  CapabilityChecks}`-driven suite mirroring
+  `internal/ports/runtime/conformance`'s shape exactly (imports domain +
+  ports only, never an adapter — the concrete fake runtime/fake-technology
+  harness is supplied by the calling `_test.go` file). Seven subtests, all
+  `t.Parallel()`: Settledness (NFR-11: Ready implies immediately
+  probe-clean), Idempotency (zero mutating runtime calls on re-reconcile,
+  via `fake.Runtime.Mutations()`), Probe honesty (point-in-time, bounded wall
+  clock), Destroy convergence (incl. already-gone), Request statelessness
+  (two interleaved fixtures through one Provider instance), providerState/
+  endpoint publication (ADR 015: no blank-fact entries), and capability
+  error formats (doc 02 §4.2's naming discipline, opt-in per provider via
+  `CapabilityChecks`). Run against three exemplars spanning the
+  provider-complexity spectrum, each via its own `conformance_test.go` using
+  the real registered-constructor shape:
+  `internal/adapters/providers/noop` (trivial — zero runtime calls, zero
+  ProviderState), `internal/adapters/providers/redpanda` (container-lifecycle
+  — Provider/broker kind only; `CapabilityChecks` exercises
+  `SpecValidator`+`StreamReplicationValidator`), `internal/adapters/providers/proxy`
+  (settledness/dial-through — real `net.Listen` fake-technology harness
+  reused from `proxy_test.go`'s own established trick). All three green
+  under `go test -race`; `go test ./<pkg>/... -run TestConformance -v`
+  measured (package-total, including test-binary/runner startup — each
+  subtest itself reports 0.00-0.08s): noop 0.002s, redpanda 0.003s, proxy
+  0.084s plain; noop 1.012s, redpanda 1.012s, proxy 1.093s under `-race`
+  (the `-race` instrumentation plus startup overhead, not the suite logic —
+  both sets comfortably sub-second per the Gates bar).
+  `docs/contributing/provider-authoring.md` written: lifecycle semantics
+  (settledness/idempotency/statelessness), the full capability-interface
+  index (table, one row per interface in `reconciler.go`), `Request`/`Facts`
+  (teaching ONLY the generic `Facts` form per this task's own instruction —
+  the five deprecated bespoke fields are named as legacy, not taught),
+  fragments (E5), endpoint publication (ADR 015 rules), drift/condition-
+  reason conventions, feature-gate procedure (ADR 014), the conformance
+  suite as the acceptance bar with a full `Harness` walkthrough, and the
+  ADR 028 §2 fake-honesty rule. `README.md`'s "Writing your own provider"
+  section and `docs/onboarding/developers.md`'s "Your first contribution:
+  adding a provider" section both now link it (the latter's "not yet
+  landed" placeholder text is superseded by an additive replacement, not
+  edited in place — the guard hook's additive-only rule for
+  `docs/planning/*.md` does not apply to `docs/onboarding/`, which this
+  task's edit is free to modify directly). Live-found and fixed during
+  exemplar authoring: (a) `fake.Runtime.Mutations()` was defined in
+  `fake_test.go` (test-only), invisible to an external importer's own test
+  file — promoted to `fake.go` as a proper exported, mutex-guarded method,
+  which is what makes `MutationCounter` usable by any provider's own
+  conformance harness, not only `fake`'s own package; (b) `proxy.go`'s
+  `probeThroughForwarder` had a hard-coded 1500ms read-deadline with no var
+  to shrink (unlike its sibling `forwarderSettleTimeout`/
+  `forwarderSettlePoll` in the same file) — blew the fast-tier sub-second
+  budget (6.008s measured before the fix); extracted to a package-level
+  `probeReadDeadline` var (default unchanged, zero production behavior
+  change), mirroring the existing pattern exactly.
+  **Scope, stated plainly against the original Accept text above (written
+  before ADR 028's rescoping):** this task ran the suite against three
+  exemplars, not "all nine-plus providers," and validated the guide by
+  writing three real exemplar `conformance_test.go` files against already-
+  shipped providers (spanning trivial/container-lifecycle/settledness-
+  dial-through shapes) rather than literally rebuilding `noop` from scratch
+  in a separate branch — this task's own instructions (re-scoping E6 as the
+  fast-tier cornerstone) explicitly set this narrower bar: "AT LEAST noop,
+  redpanda, proxy — exemplars proving the suite's generality," and "the
+  exemplars ARE the evidence" for the Stage E exit criterion ticked above.
+  Retrofitting the remaining shipped providers with their own
+  `conformance_test.go` (mechanical, following the exemplars above) and the
+  compiled-in-vs-plugin decision note (Do item 3 above) are follow-up, not
+  done by this task.
 
 ### E7: Documentation truth sweep
 
