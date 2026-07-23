@@ -96,8 +96,8 @@ func (p *Provider) Backup(ctx context.Context, req reconciler.Request, dest back
 		return backup.Manifest{}, err
 	}
 	dbHost := naming.RuntimeObjectName(req.Provider)
-	jobName := naming.RuntimeObjectName(req.Resource) + "-backup-" + started.Format("20060102T150405Z")
-	objectKey := strings.TrimPrefix(strings.TrimSuffix(dest.Prefix, "/")+"/"+req.Resource.Metadata.Name+"-"+started.Format("20060102T150405Z")+".sql", "/")
+	jobName := naming.RuntimeObjectName(req.Resource) + "-backup-" + started.Format("20060102t150405z")
+	objectKey := strings.TrimPrefix(strings.TrimSuffix(dest.Prefix, "/")+"/"+req.Resource.Metadata.Name+"-"+started.Format("20060102t150405z")+".sql", "/")
 
 	mcConfig, err := dbjob.MCConfig(dest)
 	if err != nil {
@@ -192,7 +192,7 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 	if err != nil {
 		return err
 	}
-	restoreTS := time.Now().UTC().Format("20060102T150405Z")
+	restoreTS := time.Now().UTC().Format("20060102t150405z")
 	jobName := naming.RuntimeObjectName(req.Resource) + "-restore-" + restoreTS
 	// Unlike Backup's dest.Prefix (a directory-like prefix Backup appends a
 	// generated filename under), src.Prefix for Restore names the exact

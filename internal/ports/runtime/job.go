@@ -103,6 +103,13 @@ type JobState struct {
 // path only when present; Docker/fake's existing per-side EnsureContainer
 // path is completely unchanged when it is absent.
 type JobCapableRuntime interface {
+	// EnsureJob creates spec's Job. Name (and every name derived from
+	// it, e.g. per-side file Secrets) must be a lowercase RFC 1123
+	// subdomain — callers embedding timestamps use lowercase formats
+	// ("20060102t150405z"), since Kubernetes rejects uppercase object
+	// names outright and adapters must NOT silently sanitize (a
+	// lowercasing rewrite could collide two distinct caller names).
+	//
 	// EnsureJob creates spec's Job (a single pod running every Containers
 	// entry as a sibling container sharing one emptyDir at
 	// SharedVolumeMountPath) if it does not already exist. Idempotent
