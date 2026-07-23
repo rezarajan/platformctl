@@ -11,6 +11,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -409,6 +410,36 @@ func (d *domainRuntime) RemoveTLSSecret(ctx context.Context, namespace, name str
 		return fmt.Errorf("runtime does not implement IngressCapableRuntime")
 	}
 	return tc.RemoveTLSSecret(ctx, namespace, name)
+}
+
+// QualifyTargetAddress implements runtime.AddressQualifier (docs/planning/08
+// H9): the mediated-Connection bind-side fix for the domain-of-record FQDN
+// gap the H6 Kubernetes addendum recorded as designed-but-unexercised.
+// Docker (d.namespaced false) is always a no-op — see the port doc comment
+// for why name-qualification cannot substitute for network membership
+// there. Kubernetes qualifies only when target and caller declare different
+// domains; same-domain (including both-default, the byte-identical-no-op
+// case every other Ring 1 mechanism in this file already pins) returns
+// hostport unchanged. d.token (not target's own spec.runtime.network,
+// which this decorator never reads off an arbitrary envelope) is reused
+// exactly the way holeNetworks() above reuses it: the caller's own resolved
+// token names the SAME base network/namespace family the target is assumed
+// to share, matching every other cross-domain name in this file.
+func (d *domainRuntime) QualifyTargetAddress(ctx context.Context, target, caller resource.Envelope, hostport string) (string, error) {
+	if !d.namespaced {
+		return hostport, nil
+	}
+	targetDomain := resource.NormalizeDomain(target.Metadata.Domain)
+	callerDomain := resource.NormalizeDomain(caller.Metadata.Domain)
+	if targetDomain == callerDomain {
+		return hostport, nil
+	}
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return hostport, nil
+	}
+	ns := naming.NetworkName(d.token, targetDomain)
+	return host + "." + ns + ".svc.cluster.local:" + port, nil
 }
 
 func (d *domainRuntime) ObserveIsolationEnforcement(ctx context.Context) (runtime.IsolationStatus, error) {
