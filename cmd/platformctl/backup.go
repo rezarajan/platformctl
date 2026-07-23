@@ -31,7 +31,7 @@ func newBackupCmd(a *app) *cobra.Command {
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
-			envelopes, _, err := a.loadAndValidate(pathArg(args[1:]))
+			envelopes, _, err := a.loadAndValidate(cmd.ErrOrStderr(), pathArg(args[1:]))
 			if err != nil {
 				return err
 			}
@@ -99,7 +99,7 @@ func newRestoreCmd(a *app) *cobra.Command {
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
-			envelopes, _, err := a.loadAndValidate(pathArg(args[1:]))
+			envelopes, _, err := a.loadAndValidate(cmd.ErrOrStderr(), pathArg(args[1:]))
 			if err != nil {
 				return err
 			}

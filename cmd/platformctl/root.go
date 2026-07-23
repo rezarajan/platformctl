@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -398,7 +399,11 @@ func (a *app) kubernetesPreflight(envelopes []resource.Envelope) error {
 // loadAndValidate runs the full validate pipeline: manifests → kind
 // validation → graph (cycles) → compatibility → (kubernetes runtime only)
 // a cluster reachability/permission preflight. Returns envelopes + graph.
-func (a *app) loadAndValidate(path string) ([]resource.Envelope, *graph.Graph, error) {
+// w is the destination for the structured policy-decision log seam
+// (docs/planning/08 K5): callers pass cmd.ErrOrStderr(), the same stream
+// I11 established for Engine.Logger, so a policy decision event and a
+// reconciliation-action event are observed on the identical seam/format.
+func (a *app) loadAndValidate(w io.Writer, path string) ([]resource.Envelope, *graph.Graph, error) {
 	envelopes, err := manifest.Load(path)
 	if err != nil {
 		return nil, nil, cliutil.Exit(cliutil.ExitValidation, err)
@@ -428,11 +433,22 @@ func (a *app) loadAndValidate(path string) ([]resource.Envelope, *graph.Graph, e
 	// docs/planning/08 §7.7 H3: policy evaluation is wired in after
 	// compatibility (checked above) and lint (computed, best-effort,
 	// inside enforcePolicies itself — see its doc comment) — the last
-	// validate-time gate before any command proceeds.
-	if err := a.enforcePolicies(envelopes, g); err != nil {
+	// validate-time gate before any command proceeds. Every decision
+	// (deny or warn, exempted or not) is logged on the K5 seam before
+	// enforcePolicies can turn a deny into a returned error.
+	if err := a.enforcePolicies(envelopes, g, a.logger(w)); err != nil {
 		return nil, nil, err
 	}
 	return envelopes, g, nil
+}
+
+// logger builds the slog.Logger backing out-of-Engine structured events —
+// currently just policy decision events (docs/planning/08 K5) — from the
+// SAME newEngineLogger factory (*app).newEngine uses for Engine.Logger, so
+// both seams share one --log-format switch and one byte-compatible text
+// rendering. w is typically cmd.ErrOrStderr().
+func (a *app) logger(w io.Writer) *slog.Logger {
+	return newEngineLogger(w, a.logFormat)
 }
 
 // newEngine wires an Engine's cross-cutting seams (state/secrets/clock/
@@ -482,7 +498,7 @@ func newValidateCmd(a *app) *cobra.Command {
 		Short: "Schema + graph + compatibility validation only; no state, no mutating runtime calls (a kubernetes-runtime Provider gets a fast, read-only connectivity/permission check)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envelopes, g, err := a.loadAndValidate(pathArg(args))
+			envelopes, g, err := a.loadAndValidate(cmd.ErrOrStderr(), pathArg(args))
 			if err != nil {
 				return err
 			}
@@ -539,7 +555,7 @@ func newPlanCmd(a *app) *cobra.Command {
 		Short: "Compute and print the plan; never mutates",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envelopes, g, err := a.loadAndValidate(pathArg(args))
+			envelopes, g, err := a.loadAndValidate(cmd.ErrOrStderr(), pathArg(args))
 			if err != nil {
 				return err
 			}
@@ -555,7 +571,7 @@ func newPlanCmd(a *app) *cobra.Command {
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
-			if err := a.enforcePlanPolicies(envelopes, p.Entries); err != nil {
+			if err := a.enforcePlanPolicies(envelopes, p.Entries, a.logger(cmd.ErrOrStderr())); err != nil {
 				return err
 			}
 			if err := printPlan(cmd, a.output, p); err != nil {
@@ -584,7 +600,7 @@ func newApplyCmd(a *app) *cobra.Command {
 			if includeExternal && !destructiveOK {
 				return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("--include-external additionally requires --yes-i-understand-this-is-destructive"))
 			}
-			envelopes, g, err := a.loadAndValidate(pathArg(args))
+			envelopes, g, err := a.loadAndValidate(cmd.ErrOrStderr(), pathArg(args))
 			if err != nil {
 				return err
 			}
@@ -621,7 +637,12 @@ func newApplyCmd(a *app) *cobra.Command {
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
-			if err := a.enforcePlanPolicies(envelopes, p.Entries); err != nil {
+			// eng.Logger (not a fresh a.logger call): apply/destroy already
+			// built the engine's logger off this same cmd.ErrOrStderr(),
+			// and reusing it means a policy decision event and the
+			// reconciliation-action events Apply emits below land on the
+			// exact same *slog.Logger instance.
+			if err := a.enforcePlanPolicies(envelopes, p.Entries, eng.Logger); err != nil {
 				return err
 			}
 			healDrift := a.gates.Enabled("DriftDetection")
@@ -704,7 +725,7 @@ func newDestroyCmd(a *app) *cobra.Command {
 			if includeExternal && !destructiveOK {
 				return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("--include-external additionally requires --yes-i-understand-this-is-destructive"))
 			}
-			envelopes, g, err := a.loadAndValidate(pathArg(args))
+			envelopes, g, err := a.loadAndValidate(cmd.ErrOrStderr(), pathArg(args))
 			if err != nil {
 				return err
 			}
@@ -726,7 +747,7 @@ func newDestroyCmd(a *app) *cobra.Command {
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
-			if err := a.enforcePlanPolicies(envelopes, p.Entries); err != nil {
+			if err := a.enforcePlanPolicies(envelopes, p.Entries, eng.Logger); err != nil {
 				return err
 			}
 			if isStructured(a.output) {
@@ -789,7 +810,7 @@ func newDriftCmd(a *app) *cobra.Command {
 			if err := a.gates.Require("DriftDetection"); err != nil {
 				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
-			envelopes, _, err := a.loadAndValidate(pathArg(args))
+			envelopes, _, err := a.loadAndValidate(cmd.ErrOrStderr(), pathArg(args))
 			if err != nil {
 				return err
 			}
@@ -887,7 +908,7 @@ func newImportCmd(a *app) *cobra.Command {
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitValidation, err)
 			}
-			envelopes, _, err := a.loadAndValidate(pathArg(args[1:]))
+			envelopes, _, err := a.loadAndValidate(cmd.ErrOrStderr(), pathArg(args[1:]))
 			if err != nil {
 				return err
 			}
@@ -940,7 +961,7 @@ func newInventoryCmd(a *app) *cobra.Command {
 			"SecretReference names holding them.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envelopes, _, err := a.loadAndValidate(pathArg(args))
+			envelopes, _, err := a.loadAndValidate(cmd.ErrOrStderr(), pathArg(args))
 			if err != nil {
 				return err
 			}
@@ -1098,7 +1119,7 @@ func newStatusCmd(a *app) *cobra.Command {
 		Short: "Print conditions per resource, rolled up to overall health",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envelopes, _, err := a.loadAndValidate(pathArg(args))
+			envelopes, _, err := a.loadAndValidate(cmd.ErrOrStderr(), pathArg(args))
 			if err != nil {
 				return err
 			}
@@ -1185,7 +1206,7 @@ func newGraphCmd(a *app) *cobra.Command {
 			"output contract: exactly one parseable document on stdout).",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envelopes, _, err := a.loadAndValidate(pathArg(args))
+			envelopes, _, err := a.loadAndValidate(cmd.ErrOrStderr(), pathArg(args))
 			if err != nil {
 				return err
 			}

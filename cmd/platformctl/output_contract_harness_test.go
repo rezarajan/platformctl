@@ -337,6 +337,51 @@ spec:
 				"--policies", dir, "--feature-gates", "PolicyEngine=true")
 		},
 	},
+	"policy audit": {
+		structured: true,
+		run: func(t *testing.T) {
+			dir := t.TempDir()
+			writePolicyFixture(t, dir, `
+apiVersion: policy.datascape.io/v1alpha1
+kind: Policy
+metadata:
+  name: harness-audit
+spec:
+  rules:
+    - id: deny-payments-to-analytics
+      matchEdge: {crossDomain: {from: payments, to: analytics}}
+      effect: deny
+`)
+			manifestDir := t.TempDir()
+			manifest := `
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: audit-svc
+  domain: analytics
+spec:
+  external: true
+  host: audit.example.com
+  port: 5432
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: audit-consumer
+  domain: payments
+spec:
+  type: noop
+  external: true
+  runtime: {type: fake}
+  connectionRef: {name: audit-svc}
+`
+			if err := os.WriteFile(filepath.Join(manifestDir, "manifests.yaml"), []byte(manifest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runBothFormats(t, "policy audit", "policy", "audit", manifestDir,
+				"--policies", dir, "--feature-gates", "PolicyEngine=true")
+		},
+	},
 	"policy init": {
 		structured: true,
 		run: func(t *testing.T) {

@@ -4671,7 +4671,7 @@ evidence pattern every leg reuses.
 - [ ] The mediator enforces label-derived attributes at dial time
       (attribute-based service-policies), and its policy state is
       asserted as positive evidence, H9-style, on both runtimes.
-- [ ] Every edge decision is auditable: structured decision events +
+- [x] Every edge decision is auditable: structured decision events +
       `platformctl policy audit` naming rule/selector/grant for any
       permitted edge; ADR 027 claims table updated.
 - [ ] Gate LabelScopedAccess (Alpha, disabled) guards all of it;
@@ -4869,6 +4869,117 @@ evidence pattern every leg reuses.
   claims-table row updated in the same commit.
 - **Accept:** stage criterion 5; an edge with no nameable justification
   is a test failure.
+- **Done (2026-07-23):** Two independent deliverables, both fast-tier
+  (Docker/Kubernetes untouched).
+
+  **1. Structured decision events.** `cmd/platformctl/policy.go`'s
+  `enforcePolicies`/`enforcePlanPolicies` (the sole call sites that ever
+  invoke `apppolicy.Run`/`RunPlan` from validate/plan/apply/destroy — see
+  K2's evaluator doc comment) now take a `*slog.Logger` parameter and call
+  a new `logPolicyDecisions` after evaluation, before `denyError` can turn
+  a deny into the returned error: every decision (deny or warn, exempted
+  or not) is logged via `slog.Logger.LogAttrs`, mirroring
+  `internal/application/engine.Engine.logAction`'s exact shape byte-for-
+  byte — message carries the full prose (resource, rule id, and the K2/K3
+  selector/crossDomain/grant match detail already embedded in
+  `Decision.Message`), attrs carry `resource`/`rule`/`effect`/`outcome`/
+  `exempted`(+`exemptReason`) for `--log-format json`. Decisions arrive
+  pre-sorted (`Run`/`RunPlan` already call `policy.SortDecisions`), so
+  iterating in place is the determinism guarantee. The logger itself
+  comes from a new `(*app).logger(w io.Writer) *slog.Logger` — the SAME
+  `newEngineLogger` factory `(*app).newEngine` uses for `Engine.Logger` —
+  so a policy decision event and a reconciliation-action event share one
+  `--log-format` switch and one text/json rendering. Threading required
+  widening `(*app).loadAndValidate`'s signature to `(w io.Writer, path
+  string)` (all ~12 call sites across `root.go`/`backup.go`/`lint.go`
+  updated to pass `cmd.ErrOrStderr()` — the same stream I11 already
+  routes `Engine.Logger` through) and `enforcePlanPolicies`'s to add a
+  trailing `logger *slog.Logger` (the `plan` command builds one fresh via
+  `a.logger(cmd.ErrOrStderr())`, since it never constructs an `Engine`;
+  `apply`/`destroy` reuse `eng.Logger` directly, so a policy decision and
+  the engine's own action events land on the identical `*slog.Logger`
+  instance). Gate-off (`PolicyEngine` disabled, the default) stays a full
+  no-op — `evaluatePolicies`/`enforcePlanPolicies` return before any
+  directory stat, so `logPolicyDecisions` is never reached and stderr is
+  byte-identical to pre-K5 (`TestPolicyDecisionEventsGateOffEmitsNoEvents`).
+  Proven end-to-end: `TestValidateLogFormatJSONEmitsPolicyDecisionEvent`,
+  `TestValidateLogFormatTextIncludesRuleAndResource`,
+  `TestPlanLogFormatJSONEmitsMatchPlanDecisionEvent`
+  (`cmd/platformctl/policy_decision_log_test.go`).
+
+  **2. `platformctl policy audit [path] [--policies ...]`.** New
+  `internal/application/policy.Audit` (`audit.go`, same package as the
+  evaluator so it reuses `crossDomainEdges`/`message` directly rather than
+  re-deriving them) computes, for EVERY edge declared in the CURRENT
+  manifests, a `Verdict` (`Permitted`/`Denied`) plus a `Justification`
+  drawn from a closed four-value vocabulary:
+  `no-matching-deny` (no `matchEdge`/`matchGrant` rule denies it —
+  the default-permit case, still explicitly named rather than left
+  blank), `deny-rule` (the specific unexempted deny that fired),
+  `exemption` (a deny fired but the owner's `policy.datascape.io/exempt`
+  annotation, honored only when the rule declares `exemptible: true`,
+  same bar `applyExemptions` enforces, unblocks it), and `grant` — ADR
+  033's own framing taken literally: "a permitted edge's justification
+  may be a grant, not only a policy rule." `Audit` covers TWO edge
+  shapes: the `crossDomainEdges` set (`EdgeKindBinding`/
+  `EdgeKindConnection` — a Binding's sourceRef->targetRef, or a
+  connectionRef consumption, the same edges `evaluateCrossDomain`/
+  `evaluateEdgeSelector` already match against, selector rules gated by
+  `labelScopedAccessEnabled` exactly as `Run` gates them) AND
+  `internal/application/graphaccess.AccessGrants` (`EdgeKindGrant` — a
+  `spec.access` wide/selector grant, which `crossDomainEdges`
+  deliberately never covers, matched against `matchGrant` rules by
+  namespace, mirroring `evaluateGrant`/K3's unchanged-scope note). Deny-
+  wins resolution (`resolveVerdict`) sorts an edge's matching deny rules
+  by id for determinism and returns the first unexempted one (Denied) or,
+  absent one, the first exempted one (Permitted/exemption) or, absent
+  any, the caller's own default (no-matching-deny for an edge,
+  grant for a grant). `cmd/platformctl/policy.go`'s `newPolicyAuditCmd`
+  wires this to `policy audit [path]`: requires `PolicyEngine` (mirroring
+  `policy test`) but, unlike `policy test`, never fails on a denied edge
+  — audit's job is to REPORT, including the ADR 021 severing amendment's
+  in-between state (a denied-but-standing edge from a prior apply reads
+  as Denied here, since `Audit` never touches state/runtime — manifests +
+  policies only, exactly the "reportable at validate/plan" contract the
+  amendment specifies). Absent `--policies`/no conventional dir is itself
+  a valid, reportable state (every edge becomes no-matching-deny/grant)
+  rather than an error, deliberately differing from `policy test`'s
+  "nothing to test" refusal. Machine output per the A7 harness:
+  `policyAuditOutput{Edges []policyAuditEdgeOutput}` on `-o json|yaml`
+  (`owner`/`from`/`to`/`kind`/`verdict`/`justification`/`ruleId`/`detail`/
+  `exemptReason`), a `VERDICT KIND OWNER FROM TO JUSTIFICATION RULE
+  DETAIL` table otherwise; registered in
+  `output_contract_harness_test.go`'s `commandScenarios["policy audit"]`
+  (`TestOutputContractHarnessCoversEveryCommand` would otherwise fail —
+  the guard this repo's A7 doc comment names).
+  `TestAuditEveryEdgeHasNameableJustification`
+  (`internal/application/policy/audit_test.go`) is this task's own accept
+  bar taken literally — a fixture mixing all three `EdgeKind`s and every
+  `Justification` asserts each row's `Detail` is non-empty and its
+  `RuleID`/`ExemptReason` are populated exactly when the justification
+  implies one exists; `TestAuditDeterministicOrdering` pins the same
+  stable-ordering bar `Run`/`RunPlan` hold. CLI-level coverage in
+  `cmd/platformctl/policy_audit_test.go`
+  (`TestPolicyAuditNamesDenyRuleJustification`,
+  `TestPolicyAuditNamesNoMatchingDenyJustification`,
+  `TestPolicyAuditNamesGrantJustification`,
+  `TestPolicyAuditRequiresPolicyEngineGate`) exercises the real CLI
+  end-to-end, reusing K2's `writePolicyDir`/`writeManifestDocs`/
+  `goldConnectionManifest` fixtures.
+
+  ADR 027's claims table gained a governance row (see the ADR's own
+  Addendum) naming the auditability guarantee this task delivers,
+  independent of the Layer 1/2 network claims the rest of the table
+  covers. README's CLI-surface table gained a `policy audit` row (the
+  F-003 guard). No new lint/status/reason codes were introduced, so no
+  explain-catalog entries were needed this task.
+  `gofmt`/`go build ./...`/`go vet` (both tag sets)/`golangci-lint run`
+  (v2.12.2) clean; unfiltered `go test ./...` true-exit=0.
+  **Open for Stage K's remaining exit criteria:** criterion 4 (mediator
+  attribute enforcement) is K4's own scope, still open per the strict
+  `K1 -> K2 -> {K3, K4} -> K5` sequencing this task did not touch;
+  criterion 6 ("gate guards ALL of it") is a stage-level rollup that
+  can only close once K4 lands too.
 
 ## 7.11 Stage L — Mediation as the default transport (ADR 034)
 

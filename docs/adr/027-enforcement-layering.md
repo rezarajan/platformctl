@@ -80,6 +80,7 @@ Two consequences:
 | Layer 1 active (mediated edges) | Zero-trust: identity-attested, policy-authorized edges — on ANY substrate |
 | Layer 2 only, enforcement observed active | Network-segmented least privilege (location-based; defense-in-depth) |
 | Layer 2 only, enforcement observed absent | Isolation NOT enforced — reported in status/preflight; validate warns |
+| Any configuration, `PolicyEngine` enabled (ADR 021/033) | Governance is auditable, not just enforced: every declared edge's admission is a structured decision event (docs/planning/08 I11 slog seam) and `platformctl policy audit` names, for every edge, WHY it is permitted (no matching deny, an exemption, or a `spec.access` grant) or denied (the specific rule) — including a denied-but-standing edge from a withdrawn allow (ADR 021's severing amendment) |
 
 ## Terraform / cloud substrates (future, recorded now)
 
