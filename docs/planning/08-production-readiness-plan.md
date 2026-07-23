@@ -2178,6 +2178,61 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
   compiled-in-vs-plugin decision note (Do item 3 above) are follow-up, not
   done by this task.
 
+  **Follow-up done (2026-07-23): the retrofit.** All thirteen remaining
+  shipped providers this task deferred now have their own
+  `conformance_test.go`, in the brief's stated order: `s3`, `s3sink`,
+  `debezium`, `grafana`, `prometheus`, `nessie`, `openlineage`, `trino`,
+  `wireguard`, `jdbcsink`, `s3source`, `ingress`, `placeholder`
+  (`postgres`/`mysql`/`openziti`/`dbjob` intentionally excluded — owned by
+  concurrent work). Every provider was independently read (Reconcile/Probe/
+  Destroy bodies plus its declared capability-interface set) and classified
+  per the SAME line the `redpanda` exemplar already drew: fast-tier-provable
+  when Ready rests solely on `runtime.ContainerRuntime` primitives settling
+  on the container's own declared HealthCheck (which the fake always
+  reports healthy for), out of scope when Reconcile OR the harness's
+  mandatory post-Reconcile Probe needs a real application-layer protocol
+  dial (HTTP, Kafka Connect REST, an S3-API client, a runtime-written status
+  file) with no seam the fake can serve honestly. That line was applied
+  uniformly to plain HTTP too — a GET-returns-200 check is still "a real
+  application-layer wire protocol" per this guide's own §6 framing, so no
+  new HTTP-response fake-technology harness was built (ADR 028 §2's
+  fake-honesty rule would require pinning any such fake against a real
+  system's observed behavior first, which this retrofit did not do).
+  Seven providers got the full `conformance.Run` harness (all seven
+  subtests, plus `CapabilityChecks` for every `SpecValidator`/
+  `BindingOptionsValidator` each declares): `placeholder` (trivial, like
+  `noop`); `s3` (`Provider`/instance, single-container path only — the
+  `Dataset` kind and the distributed-node-set path both dial a real S3 API
+  and stay out, mirroring `redpanda`'s own `EventStream` scoping exactly);
+  `s3sink`/`debezium`/`jdbcsink`/`s3source` (`Provider`/Connect-worker kind
+  — pure container-lifecycle; each provider's `Binding`/connector kind dials
+  a real Kafka Connect REST client and stays out); `wireguard` (`Provider`
+  kind — network-only, zero containers when no Connection declares
+  `spec.via` naming it; its `Connection` kind needs both a real dial-through
+  AND a runtime-written WireGuard handshake-status file the fake has no
+  mechanism to fabricate, so it stays out). Six providers had no
+  fast-tier-provable Kind at all — `grafana` (an unconditional real HTTP
+  login/health dial even on a fresh instance's first Reconcile),
+  `prometheus` (real HTTP plus JSON-decoded `/api/v1/targets` count
+  matching), `trino` (real HTTP `/v1/info`, two-container coordination),
+  `ingress` (Reconcile itself is dial-free, but the harness's mandatory
+  Probe requires Caddy's real admin-API check), `nessie` (real HTTP plus
+  stateful branch-create/exists REST semantics), and `openlineage` (real
+  HTTP, and it declares no capability interface at all) — each got a
+  `conformance_test.go` carrying only the scoping decision as a doc
+  comment, per this task's own "never a fabricated pass" instruction; the
+  four with an error-returning `SpecValidator` (`grafana`/`prometheus`/
+  `trino`/`ingress`) additionally got a small direct (non-harness) test of
+  that method, since it needs no runtime dial to exercise honestly. Live
+  evidence: `gofmt`/`go build ./...`/`go vet ./...`/`go vet -tags
+  integration ./...` all clean; every new test green under both `go test
+  -v` and `go test -race` (all thirteen packages complete in ≤1.1s
+  including race-instrumentation startup, comfortably inside the 60s
+  fast-tier budget); an unfiltered `go test ./...` sweep across the full
+  repo (64 packages) is clean with zero `FAIL` lines; `golangci-lint`
+  v2.12.2 reports zero issues. The compiled-in-vs-plugin decision note (Do
+  item 3 above) remains open — out of this retrofit's own scope.
+
 ### E7: Documentation truth sweep
 
 - **Size:** S. **Depends:** best done near stage close.

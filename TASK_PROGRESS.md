@@ -197,7 +197,9 @@ pinning to trust, which this retrofit did not build).
 - [x] All 13 new test files green under `go test -v` AND `go test -race`
       (sub-1.1s per package including race-instrumentation startup —
       comfortably under the 60s fast-tier budget).
-- [ ] Full unfiltered `go test ./...` sweep (in progress).
-- [ ] golangci-lint v2.12.2.
-- [ ] doc 08 E6 additive done-note recording the retrofit completion.
-- [ ] Final commit.
+- [x] Full unfiltered `go test ./...` sweep: 64 packages, zero FAIL,
+      true-exit=0 (scratchpad/e6-full-test.log).
+- [x] golangci-lint v2.12.2: 0 issues.
+- [x] doc 08 E6 additive done-note recording the retrofit completion,
+      per-provider coverage table, and evidence.
+- [x] Final commit.
