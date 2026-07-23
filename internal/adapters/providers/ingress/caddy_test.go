@@ -126,6 +126,7 @@ func handleFakeCert(f *fakeCaddyAdmin, w http.ResponseWriter, r *http.Request, i
 }
 
 func TestEnsureRouteCreatesThenUpdates(t *testing.T) {
+	t.Parallel()
 	srv := newFakeCaddyAdmin()
 	defer srv.Close()
 	ctx := context.Background()
@@ -158,6 +159,7 @@ func TestEnsureRouteCreatesThenUpdates(t *testing.T) {
 }
 
 func TestGetRouteNotFound(t *testing.T) {
+	t.Parallel()
 	srv := newFakeCaddyAdmin()
 	defer srv.Close()
 	_, found, err := getRoute(context.Background(), srv.URL, "route-missing")
@@ -170,6 +172,7 @@ func TestGetRouteNotFound(t *testing.T) {
 }
 
 func TestDeleteRouteIdempotent(t *testing.T) {
+	t.Parallel()
 	srv := newFakeCaddyAdmin()
 	defer srv.Close()
 	ctx := context.Background()
@@ -191,6 +194,7 @@ func TestDeleteRouteIdempotent(t *testing.T) {
 }
 
 func TestCaddyReady(t *testing.T) {
+	t.Parallel()
 	srv := newFakeCaddyAdmin()
 	defer srv.Close()
 	if !caddyReady(context.Background(), srv.URL) {
@@ -202,6 +206,7 @@ func TestCaddyReady(t *testing.T) {
 }
 
 func TestRoutesEquivalent(t *testing.T) {
+	t.Parallel()
 	a := desiredRoute("nessie", "nessie.localhost", "nessie:19120")
 	b := desiredRoute("nessie", "nessie.localhost", "nessie:19120")
 	if !routesEquivalent(a, b) {
@@ -218,6 +223,7 @@ func TestRoutesEquivalent(t *testing.T) {
 }
 
 func TestEnsureRouteOnHTTPSServer(t *testing.T) {
+	t.Parallel()
 	srv := newFakeCaddyAdmin()
 	defer srv.Close()
 	ctx := context.Background()
@@ -235,6 +241,7 @@ func TestEnsureRouteOnHTTPSServer(t *testing.T) {
 }
 
 func TestEnsureCertCreatesThenUpdates(t *testing.T) {
+	t.Parallel()
 	srv := newFakeCaddyAdmin()
 	defer srv.Close()
 	ctx := context.Background()
@@ -265,6 +272,7 @@ func TestEnsureCertCreatesThenUpdates(t *testing.T) {
 }
 
 func TestGetCertNotFound(t *testing.T) {
+	t.Parallel()
 	srv := newFakeCaddyAdmin()
 	defer srv.Close()
 	_, found, err := getCert(context.Background(), srv.URL, certID("missing"))
@@ -277,6 +285,7 @@ func TestGetCertNotFound(t *testing.T) {
 }
 
 func TestDeleteCertIdempotent(t *testing.T) {
+	t.Parallel()
 	srv := newFakeCaddyAdmin()
 	defer srv.Close()
 	ctx := context.Background()
@@ -296,6 +305,7 @@ func TestDeleteCertIdempotent(t *testing.T) {
 }
 
 func TestBootstrapConfigHasBothServersAndTLSApp(t *testing.T) {
+	t.Parallel()
 	cfg := bootstrapConfig(80, 443, 2019)
 	httpSrv, ok := cfg.Apps.HTTP.Servers[serverName]
 	if !ok {

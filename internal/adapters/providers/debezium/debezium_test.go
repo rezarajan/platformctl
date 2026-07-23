@@ -31,6 +31,7 @@ func workerEnvelope(name string, configuration map[string]any) resource.Envelope
 // providerState so it stays visible (`state inspect`), not silently baked
 // in.
 func TestReconcileWorkerBootstrapServersInferred(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("cdc", map[string]any{"replicationSecretRef": "creds"})
 	p := New()
@@ -61,6 +62,7 @@ func TestReconcileWorkerBootstrapServersInferred(t *testing.T) {
 // (nothing to infer from), the worker still fails clearly instead of
 // starting with an empty Kafka address.
 func TestReconcileWorkerBootstrapServersRequiredWithoutInference(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("cdc", map[string]any{"replicationSecretRef": "creds"})
 	p := New()
@@ -76,6 +78,7 @@ func TestReconcileWorkerBootstrapServersRequiredWithoutInference(t *testing.T) {
 // former is absent (engine.resolveKafkaBootstrapServers), but this guards
 // the provider's own fallback order too.
 func TestReconcileWorkerBootstrapServersExplicitWins(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("cdc", map[string]any{
 		"replicationSecretRef": "creds",
@@ -100,6 +103,7 @@ func TestReconcileWorkerBootstrapServersExplicitWins(t *testing.T) {
 // TestApplyConverterConfigJSON covers the default/unset format: unchanged
 // pre-D1 behavior (JsonConverter, schemas disabled), no registry needed.
 func TestApplyConverterConfigJSON(t *testing.T) {
+	t.Parallel()
 	for _, format := range []string{"", "json"} {
 		config := map[string]string{}
 		if err := applyConverterConfig(config, format, "", ""); err != nil {
@@ -123,6 +127,7 @@ func TestApplyConverterConfigJSON(t *testing.T) {
 // wrong config, when the registry URL is empty (dependency-graph ordering
 // should prevent this in practice; this is the defensive fallback).
 func TestApplyConverterConfigAvro(t *testing.T) {
+	t.Parallel()
 	config := map[string]string{}
 	if err := applyConverterConfig(config, "avro", "", "http://kafka-cluster:8081"); err != nil {
 		t.Fatalf("applyConverterConfig: %v", err)
@@ -159,6 +164,7 @@ func TestApplyConverterConfigAvro(t *testing.T) {
 
 // TestApplyConverterConfigProtobuf mirrors the avro case for protobuf.
 func TestApplyConverterConfigProtobuf(t *testing.T) {
+	t.Parallel()
 	config := map[string]string{}
 	if err := applyConverterConfig(config, "protobuf", "", "http://kafka-cluster:8081"); err != nil {
 		t.Fatalf("applyConverterConfig: %v", err)
@@ -175,6 +181,7 @@ func TestApplyConverterConfigProtobuf(t *testing.T) {
 // wins over the format-derived default class, for both json and
 // schema-carrying formats.
 func TestApplyConverterConfigConverterOverride(t *testing.T) {
+	t.Parallel()
 	config := map[string]string{}
 	if err := applyConverterConfig(config, "avro", "com.example.CustomAvroConverter", "http://kafka-cluster:8081"); err != nil {
 		t.Fatalf("applyConverterConfig: %v", err)
@@ -188,6 +195,7 @@ func TestApplyConverterConfigConverterOverride(t *testing.T) {
 // is rejected — compatibility.Check should already have caught this at
 // validate time, but the provider defends its own invariant too.
 func TestApplyConverterConfigUnknownFormat(t *testing.T) {
+	t.Parallel()
 	if err := applyConverterConfig(map[string]string{}, "xml", "", ""); err == nil {
 		t.Error("want an error for an unrecognized format")
 	}
@@ -196,6 +204,7 @@ func TestApplyConverterConfigUnknownFormat(t *testing.T) {
 // TestValidateBindingOptionsFormat covers the shape half of docs/planning/08
 // D1 (registry availability is compatibility.Check's job, not this one's).
 func TestValidateBindingOptionsFormat(t *testing.T) {
+	t.Parallel()
 	p := New()
 	for _, format := range []string{"json", "avro", "protobuf"} {
 		if err := p.ValidateBindingOptions("cdc", map[string]any{"format": format}); err != nil {
@@ -219,6 +228,7 @@ func TestValidateBindingOptionsFormat(t *testing.T) {
 // storage/hostname identity needed, unlike redpanda's brokers), and the
 // declared count is echoed into providerState for operators.
 func TestReconcileWorkerWorkersReplicaSet(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("cdc", map[string]any{
 		"replicationSecretRef": "creds",
@@ -247,6 +257,7 @@ func TestReconcileWorkerWorkersReplicaSet(t *testing.T) {
 // exact pre-C3 single-container shape (no "-0" ordinal suffix), the same
 // assertion ADR 017's brokers opt-in makes for redpanda.
 func TestReconcileWorkerWorkersUndeclaredIsSingleContainer(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("cdc", map[string]any{
 		"replicationSecretRef": "creds",
@@ -273,6 +284,7 @@ func TestReconcileWorkerWorkersUndeclaredIsSingleContainer(t *testing.T) {
 // negative-test corpus; this only covers that every legal value still
 // passes.
 func TestValidateSpecWorkers(t *testing.T) {
+	t.Parallel()
 	p := New()
 	base := map[string]any{"bootstrapServers": "broker:29092"}
 	for _, v := range []any{1, 2, float64(3)} {
@@ -290,6 +302,7 @@ func TestValidateSpecWorkers(t *testing.T) {
 // port-already-allocated error — refused at validate instead, mirroring
 // docs/adr/017 §a.4's identical refusal for redpanda's brokers.
 func TestValidateSpecWorkersRefusesConnectPortPin(t *testing.T) {
+	t.Parallel()
 	p := New()
 	cfg := provider.Provider{Configuration: map[string]any{
 		"bootstrapServers": "broker:29092",
@@ -315,6 +328,7 @@ func mergeConfig(base map[string]any, key string, value any) map[string]any {
 // previous formula was constant per engine, so they kicked each other's
 // binlog session off).
 func TestServerIDUniquePerConnector(t *testing.T) {
+	t.Parallel()
 	a := serverID("orders-cdc")
 	b := serverID("customers-cdc")
 	if a == b {

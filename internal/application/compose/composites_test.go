@@ -8,6 +8,7 @@ import (
 )
 
 func TestPlanSourceStandalone(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)
@@ -36,6 +37,7 @@ func TestPlanSourceStandalone(t *testing.T) {
 }
 
 func TestPlanCatalogNewAndReuse(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)
@@ -61,6 +63,7 @@ func TestPlanCatalogNewAndReuse(t *testing.T) {
 }
 
 func TestPlanMonitoringStandalone(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)
@@ -79,6 +82,7 @@ func TestPlanMonitoringStandalone(t *testing.T) {
 }
 
 func TestPlanSinkStandalone(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)
@@ -102,6 +106,7 @@ func TestPlanSinkStandalone(t *testing.T) {
 // regeneration bar: appending the same keys twice must not duplicate
 // lines or clobber a value the user has since filled in.
 func TestEnvAppendsAreIdempotent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)

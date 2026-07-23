@@ -58,6 +58,7 @@ func zitiOnly(zitiKey resource.Key) MediationCapable {
 }
 
 func TestDeriveEdgesIsCompleteAndDeterministic(t *testing.T) {
+	t.Parallel()
 	g, _, bindingKey, mediatedKey, plainKey, sourceKey, zitiKey := buildScenario(t)
 
 	first := DeriveEdges(g)
@@ -89,6 +90,7 @@ func TestDeriveEdgesIsCompleteAndDeterministic(t *testing.T) {
 }
 
 func TestMediatedSubsetIncludesOnlyMediationCapableConnections(t *testing.T) {
+	t.Parallel()
 	g, resources, bindingKey, mediatedKey, plainKey, _, zitiKey := buildScenario(t)
 	edges := DeriveEdges(g)
 	subset := MediatedSubset(edges, resources, zitiOnly(zitiKey))
@@ -108,6 +110,7 @@ func TestMediatedSubsetIncludesOnlyMediationCapableConnections(t *testing.T) {
 }
 
 func TestMediatedSubsetEmptyWhenNoProviderIsMediationCapable(t *testing.T) {
+	t.Parallel()
 	g, resources, _, _, _, _, _ := buildScenario(t)
 	edges := DeriveEdges(g)
 	subset := MediatedSubset(edges, resources, func(resource.Envelope) bool { return false })
@@ -117,6 +120,7 @@ func TestMediatedSubsetEmptyWhenNoProviderIsMediationCapable(t *testing.T) {
 }
 
 func TestCompileMediatedConnectionsProducesDialAndBindSides(t *testing.T) {
+	t.Parallel()
 	g, resources, bindingKey, mediatedKey, plainKey, sourceKey, zitiKey := buildScenario(t)
 	mcs := CompileMediatedConnections(g, resources, zitiOnly(zitiKey))
 
@@ -141,6 +145,7 @@ func TestCompileMediatedConnectionsProducesDialAndBindSides(t *testing.T) {
 }
 
 func TestCompileMediatedConnectionsIsDeterministic(t *testing.T) {
+	t.Parallel()
 	g, resources, _, _, _, _, zitiKey := buildScenario(t)
 	first := CompileMediatedConnections(g, resources, zitiOnly(zitiKey))
 	second := CompileMediatedConnections(g, resources, zitiOnly(zitiKey))
@@ -155,6 +160,7 @@ func TestCompileMediatedConnectionsIsDeterministic(t *testing.T) {
 }
 
 func TestCompileMediatedConnectionsNoTargetsWhenTargetIsExternal(t *testing.T) {
+	t.Parallel()
 	zitiProv := env("payments", "Provider", "ziti", map[string]any{})
 	mediated := env("payments", "Connection", "external-mediated", map[string]any{
 		"providerRef": map[string]any{"name": "ziti"},

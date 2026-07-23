@@ -18,6 +18,12 @@ import (
 // duration of a test, restoring them on cleanup — avoids waiting out a real
 // 45s timeout to exercise the honest-failure path (docs/planning/11 B1
 // finding 1).
+//
+// J1 fast-tier note: these are package-level vars (wireguard.go) mutated
+// directly — every caller of shrinkTunnelSettle must stay serial (no
+// t.Parallel()) with every other caller, or two goroutines race on the
+// same package globals (the same class of hazard `go test -race` found
+// live in the ingress package's shrinkRouteSettle).
 func shrinkTunnelSettle(t *testing.T) {
 	t.Helper()
 	prevTimeout, prevPoll, prevReachable, prevInterval := tunnelSettleTimeout, tunnelSettlePoll, tunnelReachableTimeout, tunnelReachableInterval
@@ -70,6 +76,8 @@ func tunnelConnectionEnvelope(name, providerRef string, port int, target string)
 // nothing ever answers (docs/planning/11 B1 finding 1, CONFIRMED, the
 // redpanda-93fbf14 signature).
 func TestReconcileConnectionFailsHonestlyWhenUpstreamNeverAnswers(t *testing.T) {
+	// serial: shrinkTunnelSettle mutates package-level tunnel settle vars
+	// (see its doc comment).
 	shrinkTunnelSettle(t)
 
 	ctx := context.Background()
@@ -115,6 +123,8 @@ func TestReconcileConnectionFailsHonestlyWhenUpstreamNeverAnswers(t *testing.T) 
 // via Request.Facts.Endpoint (docs/planning/08 I9; originally
 // Request.TunnelFacts, a bespoke field migrated and deleted).
 func TestReconcileInstanceCreatesViaTunnelForChainedConnection(t *testing.T) {
+	// serial: shrinkTunnelSettle mutates package-level tunnel settle vars
+	// (see its doc comment).
 	shrinkTunnelSettle(t)
 
 	ctx := context.Background()
@@ -184,6 +194,8 @@ func TestReconcileInstanceCreatesViaTunnelForChainedConnection(t *testing.T) {
 // network must fail the Provider's own reconcile honestly, not report
 // Ready from the container healthcheck alone.
 func TestReconcileInstanceFailsHonestlyWhenViaTunnelUpstreamUnreachable(t *testing.T) {
+	// serial: shrinkTunnelSettle mutates package-level tunnel settle vars
+	// (see its doc comment).
 	shrinkTunnelSettle(t)
 
 	ctx := context.Background()

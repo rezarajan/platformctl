@@ -315,6 +315,7 @@ func newTestClient(t *testing.T) (*edgeClient, *fakeZitiController) {
 }
 
 func TestUpsertIdentityIsIdempotent(t *testing.T) {
+	t.Parallel()
 	c, f := newTestClient(t)
 	ctx := context.Background()
 
@@ -345,6 +346,7 @@ func TestUpsertIdentityIsIdempotent(t *testing.T) {
 }
 
 func TestUpsertServiceIsIdempotent(t *testing.T) {
+	t.Parallel()
 	c, f := newTestClient(t)
 	ctx := context.Background()
 
@@ -373,6 +375,7 @@ func TestUpsertServiceIsIdempotent(t *testing.T) {
 // would let a stale encryptionRequired: true survive forever, silently
 // breaking every dial through the router-native terminator.
 func TestUpsertServiceConvergesEncryptionRequired(t *testing.T) {
+	t.Parallel()
 	c, f := newTestClient(t)
 	ctx := context.Background()
 
@@ -397,6 +400,7 @@ func TestUpsertServiceConvergesEncryptionRequired(t *testing.T) {
 }
 
 func TestUpsertDialPolicyCreatesThenUpdatesInPlace(t *testing.T) {
+	t.Parallel()
 	c, f := newTestClient(t)
 	ctx := context.Background()
 
@@ -427,6 +431,7 @@ func TestUpsertDialPolicyCreatesThenUpdatesInPlace(t *testing.T) {
 }
 
 func TestUpsertTransportTerminatorSkipsWhenAddressUnchanged(t *testing.T) {
+	t.Parallel()
 	c, f := newTestClient(t)
 	ctx := context.Background()
 
@@ -445,6 +450,7 @@ func TestUpsertTransportTerminatorSkipsWhenAddressUnchanged(t *testing.T) {
 }
 
 func TestUpsertTransportTerminatorRecreatesOnAddressChange(t *testing.T) {
+	t.Parallel()
 	c, f := newTestClient(t)
 	ctx := context.Background()
 
@@ -465,6 +471,7 @@ func TestUpsertTransportTerminatorRecreatesOnAddressChange(t *testing.T) {
 }
 
 func TestDeleteIdentityOnAlreadyAbsentIsNotAnError(t *testing.T) {
+	t.Parallel()
 	c, _ := newTestClient(t)
 	if err := c.deleteIdentity(context.Background(), "does-not-exist"); err != nil {
 		t.Fatalf("deleteIdentity on absent id should be a no-op, got: %v", err)
@@ -472,6 +479,7 @@ func TestDeleteIdentityOnAlreadyAbsentIsNotAnError(t *testing.T) {
 }
 
 func TestFindByNameReturnsFalseWhenAbsent(t *testing.T) {
+	t.Parallel()
 	c, _ := newTestClient(t)
 	_, ok, err := c.findByName(context.Background(), "identities", "nope")
 	if err != nil {

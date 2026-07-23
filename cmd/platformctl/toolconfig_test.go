@@ -74,6 +74,7 @@ func toolTestState() ([]resource.Envelope, state.State, map[resource.Key]string)
 // the exact endpoints from state into paste-ready tool config — and never
 // renders a secret value, only SecretReference names.
 func TestToolConfigViews(t *testing.T) {
+	t.Parallel()
 	envs, st, creds := toolTestState()
 	f := gatherToolFacts(envs, st, creds)
 
@@ -108,12 +109,14 @@ func TestToolConfigViews(t *testing.T) {
 }
 
 func TestToolConfigUnknownTool(t *testing.T) {
+	t.Parallel()
 	if err := renderToolConfig(&bytes.Buffer{}, "excel", toolFacts{}); err == nil {
 		t.Fatal("unknown tool accepted")
 	}
 }
 
 func TestToolConfigEmptyStateSelfDescribes(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	if err := renderToolConfig(&buf, "spark", toolFacts{}); err != nil {
 		t.Fatal(err)
@@ -129,6 +132,7 @@ func TestToolConfigEmptyStateSelfDescribes(t *testing.T) {
 // name via providerRef — not silently pick the last envelope in iteration
 // order.
 func TestToolConfigMultipleDatabases(t *testing.T) {
+	t.Parallel()
 	pg1 := resource.Envelope{}
 	pg1.Kind = "Provider"
 	pg1.Metadata.Name = "orders-pg"
@@ -211,6 +215,7 @@ func TestToolConfigMultipleDatabases(t *testing.T) {
 // accept criterion ("parse where a parser is stdlib-cheap, golden
 // otherwise") is met with a golden comparison instead.
 func TestRenderDagsterGolden(t *testing.T) {
+	t.Parallel()
 	envs, st, creds := toolTestState()
 	f := gatherToolFacts(envs, st, creds)
 
@@ -251,6 +256,7 @@ kafka_resource = {
 // with a regexp — cheap enough (stdlib) to be a real parse rather than a
 // substring check, per the E3 accept criterion.
 func TestRenderFlinkParses(t *testing.T) {
+	t.Parallel()
 	envs, st, creds := toolTestState()
 	f := gatherToolFacts(envs, st, creds)
 
@@ -291,6 +297,7 @@ func TestRenderFlinkParses(t *testing.T) {
 // TestRenderMetabaseParses parses metabase's KEY=VALUE env-var output with
 // bufio.Scanner (stdlib-cheap), per the E3 accept criterion.
 func TestRenderMetabaseParses(t *testing.T) {
+	t.Parallel()
 	envs, st, creds := toolTestState()
 	f := gatherToolFacts(envs, st, creds)
 
@@ -335,6 +342,7 @@ func TestRenderMetabaseParses(t *testing.T) {
 // secret value is embedded — only the DB_USER/DB_PASSWORD placeholder
 // tokens named in the note beneath it.
 func TestRenderSupersetParses(t *testing.T) {
+	t.Parallel()
 	envs, st, creds := toolTestState()
 	f := gatherToolFacts(envs, st, creds)
 
@@ -381,6 +389,7 @@ func TestRenderSupersetParses(t *testing.T) {
 // output must be byte-identical to the pre-plurality renderers (no section
 // header, no component-suffixed profile/alias names).
 func TestToolConfigSingleInstanceOutputUnchanged(t *testing.T) {
+	t.Parallel()
 	envs, st, creds := toolTestState()
 	f := gatherToolFacts(envs, st, creds)
 
@@ -407,6 +416,7 @@ func TestToolConfigSingleInstanceOutputUnchanged(t *testing.T) {
 // recorded in state — the note lines above it (rendered as "# ..." YAML
 // comments by note()) must not break the parse.
 func TestPrometheusInventorySnippetIsValidYAML(t *testing.T) {
+	t.Parallel()
 	envs, st, creds := toolTestState()
 	f := gatherToolFacts(envs, st, creds)
 
@@ -462,6 +472,7 @@ func TestPrometheusInventorySnippetIsValidYAML(t *testing.T) {
 // Prometheus joined to the same runtime network can still be configured
 // against them.
 func TestGatherToolFactsFallsBackToInternalForMetrics(t *testing.T) {
+	t.Parallel()
 	pgExporter := resource.Envelope{}
 	pgExporter.Kind = "Provider"
 	pgExporter.Metadata.Name = "local-pg"

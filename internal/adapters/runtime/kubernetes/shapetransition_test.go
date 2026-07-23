@@ -29,6 +29,7 @@ func statefulSetIn(ns, name string) *appsv1.StatefulSet {
 // refuse with the destroy-and-recreate remedy, not leave the old StatefulSet
 // serving the same app=<name> selector.
 func TestEnsureContainerRefusesStatefulSetToDeployment(t *testing.T) {
+	t.Parallel()
 	const ns = "shape-net"
 	clientset := fake.NewSimpleClientset(
 		managedNamespace(ns),
@@ -60,6 +61,7 @@ func TestEnsureContainerRefusesStatefulSetToDeployment(t *testing.T) {
 // Service half of this transition, but a portless Deployment has no Service —
 // this pins the Deployment-level refusal that covers that case too.
 func TestEnsureContainerRefusesDeploymentToStatefulSet(t *testing.T) {
+	t.Parallel()
 	const ns = "shape-net"
 	clientset := fake.NewSimpleClientset(
 		managedNamespace(ns),

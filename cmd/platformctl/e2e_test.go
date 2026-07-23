@@ -38,6 +38,7 @@ func run(t *testing.T, args ...string) (string, error, int) { //nolint:staticche
 // only noop-typed Providers can be validated, planned, applied, and shows
 // Ready in status, with state persisted and reloadable.
 func TestNoopEndToEnd(t *testing.T) {
+	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/noop-scenario"
 
@@ -83,6 +84,7 @@ func TestNoopEndToEnd(t *testing.T) {
 // TestApplyIdempotent covers the Phase 0 exit criterion: re-running apply
 // performs zero state mutations (NFR-2), asserted via no state-file diff.
 func TestApplyIdempotent(t *testing.T) {
+	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/noop-scenario"
 
@@ -118,6 +120,7 @@ func TestApplyIdempotent(t *testing.T) {
 // TestCycleRejected covers the Phase 0 exit criterion: a cyclic
 // providerRef/sourceRef graph is rejected by validate with a clear error.
 func TestCycleRejected(t *testing.T) {
+	t.Parallel()
 	_, err, code := run(t, "validate", "testdata/cycle")
 	if err == nil {
 		t.Fatal("validate accepted a cyclic graph")
@@ -134,6 +137,7 @@ func TestCycleRejected(t *testing.T) {
 // fixed manifest set + fixed prior state is compared byte-for-byte against a
 // committed golden file (NFR-1 determinism baseline).
 func TestPlanGoldenFile(t *testing.T) {
+	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 
 	out, _, _ := run(t, "plan", "testdata/noop-scenario", "--state-file", stateFile, "-o", "json")

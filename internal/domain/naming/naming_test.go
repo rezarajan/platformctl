@@ -13,6 +13,7 @@ import (
 // edit a future convention change would require — every provider and the
 // engine call this function rather than re-deriving the name themselves.
 func TestRuntimeObjectNameIsTheSingleAuthority(t *testing.T) {
+	t.Parallel()
 	env := resource.Envelope{}
 	env.Metadata.Name = "orders-db"
 	env.Metadata.Namespace = "default"
@@ -29,6 +30,7 @@ func TestRuntimeObjectNameIsTheSingleAuthority(t *testing.T) {
 // routes through (providerkit.Network, proxy's Connection realization), so
 // pinning it here pins the whole back-compat guarantee at its root.
 func TestNetworkNameDefaultDomainIsByteIdenticalNoOp(t *testing.T) {
+	t.Parallel()
 	for _, domain := range []string{"", "default"} {
 		if got := NetworkName("datascape", domain); got != "datascape" {
 			t.Errorf("NetworkName(%q, %q) = %q, want %q (unchanged)", "datascape", domain, got, "datascape")
@@ -40,6 +42,7 @@ func TestNetworkNameDefaultDomainIsByteIdenticalNoOp(t *testing.T) {
 // segmentation shape (docs/adr/022): a declared, non-default domain gets its
 // own network name, and distinct domains get distinct names.
 func TestNetworkNameNonDefaultDomainIsSuffixed(t *testing.T) {
+	t.Parallel()
 	alpha := NetworkName("datascape", "alpha")
 	beta := NetworkName("datascape", "beta")
 	if alpha != "datascape-alpha" {
@@ -58,6 +61,7 @@ func TestNetworkNameNonDefaultDomainIsSuffixed(t *testing.T) {
 // with a full-name hash suffix, so long names neither break Kubernetes
 // namespace creation nor silently collide with each other.
 func TestNetworkNameTruncation(t *testing.T) {
+	t.Parallel()
 	longBase := strings.Repeat("a", 50)
 	n1 := NetworkName(longBase, "team-analytics-platform")
 	n2 := NetworkName(longBase, "team-analytics-products")
@@ -79,6 +83,7 @@ func TestNetworkNameTruncation(t *testing.T) {
 // docs/adr/022 specifies for an undeclared/default-domain resource:
 // spiffe://datascape/<namespace>/<kind>/<name>.
 func TestWorkloadIdentityURIShape(t *testing.T) {
+	t.Parallel()
 	env := resource.Envelope{}
 	env.GroupVersionKind.Kind = "Source"
 	env.Metadata.Name = "orders-db"
@@ -97,6 +102,7 @@ func TestWorkloadIdentityURIShape(t *testing.T) {
 // NetworkName's own "undeclared domain is a no-op, declared domain gets its
 // own segment" rule (this file's TestNetworkName* tests, above).
 func TestWorkloadIdentityURIIncludesNonDefaultDomain(t *testing.T) {
+	t.Parallel()
 	env := resource.Envelope{}
 	env.GroupVersionKind.Kind = "Source"
 	env.Metadata.Name = "orders-db"
@@ -115,6 +121,7 @@ func TestWorkloadIdentityURIIncludesNonDefaultDomain(t *testing.T) {
 // detection, and re-apply must never mint a different identity for the
 // same resource.
 func TestWorkloadIdentityURIIsDeterministic(t *testing.T) {
+	t.Parallel()
 	env := resource.Envelope{}
 	env.GroupVersionKind.Kind = "Binding"
 	env.Metadata.Name = "cdc-orders"
@@ -133,6 +140,7 @@ func TestWorkloadIdentityURIIsDeterministic(t *testing.T) {
 // name in this codebase (resource.NormalizeNamespace), so an identity is
 // never minted with an empty path segment.
 func TestWorkloadIdentityURIDefaultNamespace(t *testing.T) {
+	t.Parallel()
 	env := resource.Envelope{}
 	env.GroupVersionKind.Kind = "Connection"
 	env.Metadata.Name = "edge"
@@ -147,6 +155,7 @@ func TestWorkloadIdentityURIDefaultNamespace(t *testing.T) {
 // graph nodes never collide on identity — the collision-free-by-
 // construction property docs/adr/022's Consequences section names.
 func TestWorkloadIdentityURIDistinctForDistinctNodes(t *testing.T) {
+	t.Parallel()
 	a := resource.Envelope{}
 	a.GroupVersionKind.Kind = "Source"
 	a.Metadata.Name = "orders-db"
@@ -166,6 +175,7 @@ func TestWorkloadIdentityURIDistinctForDistinctNodes(t *testing.T) {
 // with the same namespace/kind/name but different domains never collide —
 // the same collision-free property, extended to the H5 domain segment.
 func TestWorkloadIdentityURIDistinctForDistinctDomains(t *testing.T) {
+	t.Parallel()
 	a := resource.Envelope{}
 	a.GroupVersionKind.Kind = "Source"
 	a.Metadata.Name = "orders-db"

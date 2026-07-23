@@ -13,6 +13,7 @@ import (
 // behavior, no Affinity at all) and the new Replicas > 1 behavior (soft
 // anti-affinity applied automatically, independent of StableIdentity).
 func TestBuildDeployment_ReplicasAndAntiAffinity(t *testing.T) {
+	t.Parallel()
 	spec := runtimeport.ContainerSpec{
 		Name:  "trino-worker",
 		Image: "trinodb/trino:435",
@@ -66,6 +67,7 @@ func TestBuildDeployment_ReplicasAndAntiAffinity(t *testing.T) {
 // volume (deduplicated), and RWO access mode sized from the adapter's
 // existing default.
 func TestBuildStatefulSet(t *testing.T) {
+	t.Parallel()
 	spec := runtimeport.ContainerSpec{
 		Name:           "redpanda",
 		Image:          "redpandadata/redpanda:v24.2.1",
@@ -114,6 +116,7 @@ func TestBuildStatefulSet(t *testing.T) {
 }
 
 func TestBuildHeadlessService(t *testing.T) {
+	t.Parallel()
 	spec := runtimeport.ContainerSpec{
 		Name: "redpanda",
 		Ports: []runtimeport.PortBinding{
@@ -139,6 +142,7 @@ func TestBuildHeadlessService(t *testing.T) {
 }
 
 func TestBuildPodDisruptionBudget(t *testing.T) {
+	t.Parallel()
 	spec := runtimeport.ContainerSpec{Name: "redpanda"}
 	pdb := buildPodDisruptionBudget("ns", spec)
 	if pdb.Name != pdbName("redpanda") {

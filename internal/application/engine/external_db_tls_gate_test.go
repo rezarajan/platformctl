@@ -30,6 +30,7 @@ func externalTLSConnectionEnvelope() resource.Envelope {
 // managed https Connection, externalDatabaseTLSGate for a bare external
 // one — see that function's doc comment for why).
 func TestExternalDatabaseTLSGateBlocksUngatedApply(t *testing.T) {
+	t.Parallel()
 	conn := externalTLSConnectionEnvelope()
 	envelopes := []resource.Envelope{conn}
 	connKey := conn.Key()
@@ -73,6 +74,7 @@ func TestExternalDatabaseTLSGateBlocksUngatedApply(t *testing.T) {
 // at all — the pre-I2 plaintext path is untouched even when the gate is
 // unregistered.
 func TestExternalConnectionWithoutTLSUnaffectedByGate(t *testing.T) {
+	t.Parallel()
 	conn := envelope("Connection", "prod-db", map[string]any{
 		"external": true,
 		"host":     "prod-db.example.com",
@@ -92,6 +94,7 @@ func TestExternalConnectionWithoutTLSUnaffectedByGate(t *testing.T) {
 // naming the gate, mirroring probeOneAgainstState's own ReasonProbeFailed
 // conversion of a resolveRequest gate error.
 func TestExternalDatabaseTLSGateAlsoAppliesAtProbe(t *testing.T) {
+	t.Parallel()
 	conn := externalTLSConnectionEnvelope()
 	eng := newTestEngine(t, registry.New(featuregate.NewRegistry()))
 	st := eng.probeOne(context.Background(), conn, map[resource.Key]resource.Envelope{conn.Key(): conn}, nil)

@@ -8,6 +8,7 @@ import (
 )
 
 func TestWritePackZeroTrust(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	written, err := WritePack("zero-trust", dir, false)
 	if err != nil {
@@ -34,6 +35,7 @@ func TestWritePackZeroTrust(t *testing.T) {
 }
 
 func TestWritePackRefusesOverwriteWithoutForce(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if _, err := WritePack("zero-trust", dir, false); err != nil {
 		t.Fatalf("first WritePack: %v", err)
@@ -47,6 +49,7 @@ func TestWritePackRefusesOverwriteWithoutForce(t *testing.T) {
 }
 
 func TestWritePackUnknownName(t *testing.T) {
+	t.Parallel()
 	if _, err := WritePack("no-such-pack", t.TempDir(), false); err == nil {
 		t.Fatal("expected an unknown-pack error")
 	}
@@ -102,6 +105,7 @@ func fixtureFindings() []lint.Finding {
 }
 
 func TestBuiltinRuleIDs(t *testing.T) {
+	t.Parallel()
 	ids, err := BuiltinRuleIDs()
 	if err != nil {
 		t.Fatalf("BuiltinRuleIDs: %v", err)
@@ -124,6 +128,7 @@ func TestBuiltinRuleIDs(t *testing.T) {
 // separately in cmd/platformctl's policy command tests, since Run alone
 // never sees a plan).
 func TestBuiltinPackDeniesEveryFieldOrFindingRule(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if _, err := WritePack("zero-trust", dir, false); err != nil {
 		t.Fatalf("WritePack: %v", err)

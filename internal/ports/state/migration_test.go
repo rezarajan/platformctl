@@ -12,6 +12,7 @@ import (
 // (CurrentVersion++) means appending exactly one entry whose FromVersion is
 // the version being retired, never rewriting Normalize's decode loop.
 func TestMigrationChainHasNoGaps(t *testing.T) {
+	t.Parallel()
 	want := 1
 	for i, m := range migrations {
 		if m.FromVersion != want {
@@ -31,6 +32,7 @@ func TestMigrationChainHasNoGaps(t *testing.T) {
 // independent of any single migration's content: a v1 state runs through
 // every migrator up to CurrentVersion in one Normalize call.
 func TestNormalizeAppliesMigrationsInOrder(t *testing.T) {
+	t.Parallel()
 	s := State{Version: 1, RawResources: map[string]ResourceState{
 		"Provider/legacy": {SpecHash: "abc123", Lifecycle: "Managed"},
 	}}
@@ -52,6 +54,7 @@ func TestNormalizeAppliesMigrationsInOrder(t *testing.T) {
 // firing for state that's already current — Normalize must not mutate
 // RawResources when nothing needs upgrading.
 func TestNormalizeNoopAtCurrentVersion(t *testing.T) {
+	t.Parallel()
 	s := State{Version: CurrentVersion, RawResources: map[string]ResourceState{
 		"default/Provider/current": {SpecHash: "xyz"},
 	}}

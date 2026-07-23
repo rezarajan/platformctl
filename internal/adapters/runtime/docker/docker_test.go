@@ -9,6 +9,7 @@ import (
 )
 
 func TestPortMapsDefaultHostIPLocalhost(t *testing.T) {
+	t.Parallel()
 	_, bindings, err := portMaps([]runtime.PortBinding{{HostPort: 19092, ContainerPort: 9092}})
 	if err != nil {
 		t.Fatal(err)
@@ -24,6 +25,7 @@ func TestPortMapsDefaultHostIPLocalhost(t *testing.T) {
 }
 
 func TestPortMapsHonorsExplicitHostIP(t *testing.T) {
+	t.Parallel()
 	_, bindings, err := portMaps([]runtime.PortBinding{{HostIP: "0.0.0.0", HostPort: 19092, ContainerPort: 9092}})
 	if err != nil {
 		t.Fatal(err)

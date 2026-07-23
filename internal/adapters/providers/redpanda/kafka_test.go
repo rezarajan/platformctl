@@ -12,6 +12,7 @@ import (
 // verdicts — clean or drifted — return immediately, and a persistent
 // error surfaces honestly after the window.
 func TestRetryTransientProbe(t *testing.T) {
+	t.Parallel()
 	oldW, oldI := topicProbeRetryWindow, topicProbeRetryInterval
 	topicProbeRetryWindow, topicProbeRetryInterval = 200*time.Millisecond, 10*time.Millisecond
 	defer func() { topicProbeRetryWindow, topicProbeRetryInterval = oldW, oldI }()

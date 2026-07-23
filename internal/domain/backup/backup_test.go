@@ -13,6 +13,7 @@ import (
 // credentials must not survive into a Manifest under any serialization a
 // caller (the CLI's -o json|yaml, or a future log line) might use.
 func TestManifestNeverEmbedsPlaintextCredentials(t *testing.T) {
+	t.Parallel()
 	const accessKey = "AKIAVERYSECRETACCESSKEY"
 	const secretKey = "super-secret-key-value-do-not-leak"
 	loc := Location{

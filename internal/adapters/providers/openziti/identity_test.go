@@ -3,6 +3,7 @@ package openziti
 import "testing"
 
 func TestIdentityRoleAttributeSanitizesSPIFFEURI(t *testing.T) {
+	t.Parallel()
 	got := identityRoleAttribute("spiffe://datascape/payments/source/orders-db")
 	want := "spiffe-datascape-payments-source-orders-db"
 	if got != want {
@@ -11,6 +12,7 @@ func TestIdentityRoleAttributeSanitizesSPIFFEURI(t *testing.T) {
 }
 
 func TestIdentityRoleAttributeIsDeterministic(t *testing.T) {
+	t.Parallel()
 	uri := "spiffe://datascape/analytics/binding/cdc-orders"
 	first := identityRoleAttribute(uri)
 	for i := 0; i < 5; i++ {
@@ -21,6 +23,7 @@ func TestIdentityRoleAttributeIsDeterministic(t *testing.T) {
 }
 
 func TestIdentityRoleAttributeDistinctForDistinctURIs(t *testing.T) {
+	t.Parallel()
 	a := identityRoleAttribute("spiffe://datascape/payments/source/orders-db")
 	b := identityRoleAttribute("spiffe://datascape/analytics/source/orders-db")
 	if a == b {
@@ -29,6 +32,7 @@ func TestIdentityRoleAttributeDistinctForDistinctURIs(t *testing.T) {
 }
 
 func TestParseInstanceConfigDefaults(t *testing.T) {
+	t.Parallel()
 	ic := parseInstanceConfig(configOf(nil))
 	if ic.ControllerPort != 1280 {
 		t.Errorf("ControllerPort = %d, want 1280", ic.ControllerPort)
@@ -42,6 +46,7 @@ func TestParseInstanceConfigDefaults(t *testing.T) {
 }
 
 func TestParseInstanceConfigOverrides(t *testing.T) {
+	t.Parallel()
 	ic := parseInstanceConfig(configOf(map[string]any{
 		"controllerPort": float64(11280),
 		"routerPort":     float64(13022),

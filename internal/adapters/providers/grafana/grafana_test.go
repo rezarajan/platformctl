@@ -27,6 +27,7 @@ func grafanaEnvelope(name string, configuration map[string]any) resource.Envelop
 }
 
 func TestValidateSpecRequiresAdminSecret(t *testing.T) {
+	t.Parallel()
 	p := New()
 	if err := p.ValidateSpec(provider.Provider{Configuration: map[string]any{}}); err == nil {
 		t.Fatal("ValidateSpec accepted a spec with no secretRefs")
@@ -56,6 +57,7 @@ func TestValidateSpecRequiresAdminSecret(t *testing.T) {
 // test verify the datasource file was skipped while the dashboard file
 // (which never depends on PrometheusURL) was still written.
 func TestDatasourceProvisioningSkippedWithoutPrometheusURL(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := grafanaEnvelope("graf-test", map[string]any{})
 	secrets := map[string]map[string]string{"grafana-admin": {"username": "admin", "password": "adminpass"}}
@@ -75,6 +77,7 @@ func TestDatasourceProvisioningSkippedWithoutPrometheusURL(t *testing.T) {
 }
 
 func TestDatasourceYAMLNeverConstructsAddress(t *testing.T) {
+	t.Parallel()
 	// datasourceYAML only formats what it's given — it takes no
 	// runtime/naming dependency, proving by construction it cannot
 	// re-derive an address itself (ADR 015).
@@ -88,6 +91,7 @@ func TestDatasourceYAMLNeverConstructsAddress(t *testing.T) {
 }
 
 func TestStarterDashboardHasPinnedUID(t *testing.T) {
+	t.Parallel()
 	if !strings.Contains(string(starterDashboardJSON), `"uid": "`+dashboardUID+`"`) {
 		t.Errorf("starterDashboardJSON missing pinned uid %q", dashboardUID)
 	}

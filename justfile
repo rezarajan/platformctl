@@ -4,15 +4,35 @@
 build:
     CGO_ENABLED=0 go build -trimpath -buildvcs=false -o bin/platformctl ./cmd/platformctl
 
-# Unit + contract tests (no Docker required).
+# Fast tier (ADR 028): unit + contract tests against fakes only, no Docker,
+# no timing — t.Parallel() throughout. This is the TDD default: the ONLY
+# thing a developer waits for on every save. Budget-guarded in CI
+# (internal/tools/testbudget): any single test over 60s or the tier over
+# 90s fails the build.
 test:
     go test ./...
 
-# Minimal affected integration suites for your diff (docs/planning/06 §10):
-# impact-mapped, ledger-deduped per content-state, daemon-serialized.
-# `just test-affected` before reaching for the full sweep below.
-test-affected base="main":
-    scripts/test-impact.sh --base {{base}}
+# Deep tier (ADR 028): the existing integration suites, impact-mapped and
+# ledger-deduped per content-state (docs/planning/06 §10) — pre-push
+# confidence on what your diff touches, not the everyday loop. Wraps
+# scripts/test-impact.sh BARE: the script self-serializes on its own flock
+# (/tmp/platformctl-itest.lock, see the script's own header) — wrapping it
+# in another flock here would deadlock a nested invocation against itself
+# (docs/planning/11's flock note).
+#
+#   just test-deep                # impact-mapped set for your diff (--base main)
+#   just test-deep postgres,kafka # only the named suites (comma-separated ids)
+test-deep suites="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{suites}}" ]; then
+        scripts/test-impact.sh --only "{{suites}}"
+    else
+        scripts/test-impact.sh --base main
+    fi
+
+# Back-compat alias for the pre-ADR-028 name (docs/CLAUDE.md, doc 06 §10).
+alias test-affected := test-deep
 
 # Integration tests against a live Docker daemon. The suite stands up the
 # full provider set several times over (acceptance, chaos, lakehouse);

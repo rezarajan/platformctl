@@ -40,6 +40,7 @@ var scanDirs = []string{
 //     e.g. redpanda's advertisedAddr(), a sentinel string that is never
 //     dialed directly, only matched and redirected by a custom kgo.Dialer.
 func TestNoConstructedLoopbackAddresses(t *testing.T) {
+	t.Parallel()
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +91,7 @@ func scanFile(path string, violations *[]string) error {
 // TestScanFileDetectsAndExemptsCorrectly proves the detector itself works —
 // a rule with no positive-case coverage can silently rot into a no-op.
 func TestScanFileDetectsAndExemptsCorrectly(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fixture.go")
 	content := `package fixture

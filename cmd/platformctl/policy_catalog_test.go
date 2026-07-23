@@ -17,6 +17,7 @@ import (
 // pack itself) must have exactly one status.Catalog entry, and
 // status.Catalog must carry no orphan/duplicate policyRule entries.
 func TestExplainCatalogCoversEveryPolicyRule(t *testing.T) {
+	t.Parallel()
 	ids, err := apppolicy.BuiltinRuleIDs()
 	if err != nil {
 		t.Fatalf("BuiltinRuleIDs: %v", err)
@@ -67,6 +68,7 @@ func TestExplainCatalogCoversEveryPolicyRule(t *testing.T) {
 // TestEveryPolicyRuleExplains proves `platformctl explain <rule-id>`
 // actually resolves every built-in pack rule id end-to-end.
 func TestEveryPolicyRuleExplains(t *testing.T) {
+	t.Parallel()
 	ids, err := apppolicy.BuiltinRuleIDs()
 	if err != nil {
 		t.Fatalf("BuiltinRuleIDs: %v", err)

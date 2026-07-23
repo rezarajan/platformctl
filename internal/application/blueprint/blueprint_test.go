@@ -9,6 +9,7 @@ import (
 )
 
 func TestListAndNames(t *testing.T) {
+	t.Parallel()
 	infos := List()
 	if len(infos) == 0 {
 		t.Fatal("List() returned no blueprints")
@@ -40,6 +41,7 @@ func TestListAndNames(t *testing.T) {
 // could silently drift: catalog metadata (List/Names) advertising a
 // blueprint with no matching templates/<name> directory, or vice versa.
 func TestCatalogMatchesEmbeddedTemplates(t *testing.T) {
+	t.Parallel()
 	entries, err := fs.ReadDir(templatesFS, templatesRoot)
 	if err != nil {
 		t.Fatalf("read embedded templates root: %v", err)
@@ -68,6 +70,7 @@ func TestCatalogMatchesEmbeddedTemplates(t *testing.T) {
 // README, an env file (env.template renamed to .env), and one manifest,
 // with no leftover "env.template" name at the destination.
 func TestWriteEachBlueprint(t *testing.T) {
+	t.Parallel()
 	for _, name := range Names() {
 		name := name
 		t.Run(name, func(t *testing.T) {
@@ -109,6 +112,7 @@ func TestWriteEachBlueprint(t *testing.T) {
 }
 
 func TestWriteRefusesExistingFilesWithoutForce(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if _, err := Write("stream-basics", dir, false); err != nil {
 		t.Fatalf("first Write: %v", err)
@@ -125,6 +129,7 @@ func TestWriteRefusesExistingFilesWithoutForce(t *testing.T) {
 }
 
 func TestWriteForceOverwrites(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if _, err := Write("stream-basics", dir, false); err != nil {
 		t.Fatalf("first Write: %v", err)
@@ -145,6 +150,7 @@ func TestWriteForceOverwrites(t *testing.T) {
 }
 
 func TestWriteUnknownBlueprint(t *testing.T) {
+	t.Parallel()
 	if _, err := Write("does-not-exist", t.TempDir(), false); err == nil {
 		t.Fatal("Write on an unknown blueprint succeeded, want an error")
 	}

@@ -113,6 +113,7 @@ func dialWithConfig(t *testing.T, addr string, cfg *tls.Config) error {
 }
 
 func TestClientTLSConfigRequireAcceptsAnyCertificate(t *testing.T) {
+	t.Parallel()
 	caCertPEM, ca, caKey := generateTestCA(t)
 	_ = caCertPEM
 	leaf := generateTestLeaf(t, ca, caKey, "db.example.internal")
@@ -131,6 +132,7 @@ func TestClientTLSConfigRequireAcceptsAnyCertificate(t *testing.T) {
 }
 
 func TestClientTLSConfigVerifyFullSucceedsWithCorrectCAAndHostname(t *testing.T) {
+	t.Parallel()
 	caCertPEM, ca, caKey := generateTestCA(t)
 	leaf := generateTestLeaf(t, ca, caKey, "db.example.internal")
 	addr := tlsEchoServer(t, leaf)
@@ -145,6 +147,7 @@ func TestClientTLSConfigVerifyFullSucceedsWithCorrectCAAndHostname(t *testing.T)
 }
 
 func TestClientTLSConfigVerifyFullFailsWithWrongCA(t *testing.T) {
+	t.Parallel()
 	_, ca, caKey := generateTestCA(t)
 	leaf := generateTestLeaf(t, ca, caKey, "db.example.internal")
 	addr := tlsEchoServer(t, leaf)
@@ -160,6 +163,7 @@ func TestClientTLSConfigVerifyFullFailsWithWrongCA(t *testing.T) {
 }
 
 func TestClientTLSConfigVerifyCAFailsWithWrongCA(t *testing.T) {
+	t.Parallel()
 	_, ca, caKey := generateTestCA(t)
 	leaf := generateTestLeaf(t, ca, caKey, "db.example.internal")
 	addr := tlsEchoServer(t, leaf)
@@ -175,6 +179,7 @@ func TestClientTLSConfigVerifyCAFailsWithWrongCA(t *testing.T) {
 }
 
 func TestClientTLSConfigVerifyCASucceedsRegardlessOfHostname(t *testing.T) {
+	t.Parallel()
 	caCertPEM, ca, caKey := generateTestCA(t)
 	// The leaf covers "some-other-name", not "127.0.0.1" — verify-ca must
 	// still succeed (it does not check the hostname), unlike verify-full.
@@ -191,12 +196,14 @@ func TestClientTLSConfigVerifyCASucceedsRegardlessOfHostname(t *testing.T) {
 }
 
 func TestClientTLSConfigInvalidCAPEM(t *testing.T) {
+	t.Parallel()
 	if _, err := ClientTLSConfig(TLSModeVerifyFull, []byte("not a certificate"), "host"); err == nil {
 		t.Fatal("expected error for an unparseable CA bundle")
 	}
 }
 
 func TestClientTLSConfigUnknownMode(t *testing.T) {
+	t.Parallel()
 	if _, err := ClientTLSConfig("trust-me", nil, "host"); err == nil {
 		t.Fatal("expected error for an unknown TLS mode")
 	}

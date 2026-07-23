@@ -12,6 +12,7 @@ import (
 func (r *Runtime) Mutations() int { return r.MutationCount }
 
 func TestConformance(t *testing.T) {
+	t.Parallel()
 	conformance.Run(t, New(), "fake-conf")
 }
 
@@ -20,6 +21,7 @@ func TestConformance(t *testing.T) {
 // unit test, rather than reaching a permissive runtime (docs/planning/08 F2,
 // docs/planning/09 K10).
 func TestEnsureContainerRejectsUndeclaredPortAudience(t *testing.T) {
+	t.Parallel()
 	rt := New()
 	_, err := rt.EnsureContainer(context.Background(), runtime.ContainerSpec{
 		Name:  "audience-missing",
@@ -37,6 +39,7 @@ func TestEnsureContainerRejectsUndeclaredPortAudience(t *testing.T) {
 // is deliberately stricter than Kubernetes' default (port-forward) access
 // mode, which can reach any pod port regardless of declared audience.
 func TestEnsureReachableRefusesInternalAudience(t *testing.T) {
+	t.Parallel()
 	rt := New()
 	ctx := context.Background()
 	spec := runtime.ContainerSpec{

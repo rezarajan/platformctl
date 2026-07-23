@@ -52,6 +52,7 @@ func providerEnvelope(name string, configuration map[string]any) resource.Envelo
 // (docs/planning/08 D1) — unset and anything but the literal "enabled"
 // string leaves the registry off.
 func TestSchemaRegistryEnabled(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		v    any
@@ -82,6 +83,7 @@ func TestSchemaRegistryEnabled(t *testing.T) {
 // only covers that ValidateSpec still accepts every legal value (nothing
 // here rejects a legal manifest) and stays a no-op for the field otherwise.
 func TestValidateSpecSchemaRegistry(t *testing.T) {
+	t.Parallel()
 	p := New()
 	for _, v := range []string{"enabled", "disabled"} {
 		cfg := provider.Provider{Configuration: map[string]any{"schemaRegistry": v}}
@@ -99,6 +101,7 @@ func TestValidateSpecSchemaRegistry(t *testing.T) {
 // docs/planning/08 D1's compatibility check reads this to decide whether a
 // Binding's avro/protobuf format is viable against this broker's config.
 func TestSupportedSchemaFormats(t *testing.T) {
+	t.Parallel()
 	p := New()
 	disabled := provider.Provider{Configuration: map[string]any{}}
 	if got := p.SupportedSchemaFormats(disabled); len(got) != 1 || got[0] != "json" {
@@ -122,6 +125,7 @@ func TestSupportedSchemaFormats(t *testing.T) {
 // broker's own name) and collide — hostport.Resolve is deterministic per
 // *name*, so the schema registry's seed must differ from the Kafka port's.
 func TestSchemaRegistryHostPortDistinctFromKafkaPort(t *testing.T) {
+	t.Parallel()
 	cfg := provider.Provider{Configuration: map[string]any{}}
 	const name = "lake-redpanda"
 	kafkaPort := hostPort(cfg, name)
@@ -141,6 +145,7 @@ func TestSchemaRegistryHostPortDistinctFromKafkaPort(t *testing.T) {
 }
 
 func TestSchemaRegistryInternalAddr(t *testing.T) {
+	t.Parallel()
 	if got, want := schemaRegistryInternalAddr("kafka-cluster"), "http://kafka-cluster:8081"; got != want {
 		t.Errorf("schemaRegistryInternalAddr = %q, want %q", got, want)
 	}
@@ -150,6 +155,7 @@ func TestSchemaRegistryInternalAddr(t *testing.T) {
 // (docs/planning/08 E2): identical to internalAddr, and stable across an
 // empty vs. populated cfg since the internal Kafka port isn't configurable.
 func TestKafkaBootstrapAddress(t *testing.T) {
+	t.Parallel()
 	p := New()
 	if got, want := p.KafkaBootstrapAddress("lake-redpanda", provider.Provider{}), "lake-redpanda:29092"; got != want {
 		t.Errorf("KafkaBootstrapAddress = %q, want %q", got, want)
@@ -165,6 +171,7 @@ func TestKafkaBootstrapAddress(t *testing.T) {
 // "kafka" and the always-on admin-API "metrics" endpoint (docs/planning/08
 // C9) are the only two endpoints published.
 func TestReconcileBrokerRegistryDisabled(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("local-redpanda", map[string]any{})
 	p := New()
@@ -201,6 +208,7 @@ func TestReconcileBrokerRegistryDisabled(t *testing.T) {
 // is enough to prove the wiring reaches the runtime port, independent of
 // readiness (which the Docker integration test covers for real).
 func TestReconcileBrokerRegistryEnabledPublishesPort(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("local-redpanda", map[string]any{"schemaRegistry": "enabled"})
 	p := New()
@@ -240,6 +248,7 @@ func TestReconcileBrokerRegistryEnabledPublishesPort(t *testing.T) {
 // gate itself is enforced by cmd/platformctl's checkHighAvailabilityGate,
 // not here.)
 func TestValidateSpecBrokers(t *testing.T) {
+	t.Parallel()
 	p := New()
 	for _, v := range []any{1, 3, float64(3)} {
 		cfg := provider.Provider{Configuration: map[string]any{"brokers": v}}
@@ -267,6 +276,7 @@ func TestValidateSpecBrokers(t *testing.T) {
 // (docs/adr/017 §a.7): replication must not exceed the configured broker
 // count; an undeclared brokers key bounds it at 1.
 func TestValidateStreamReplication(t *testing.T) {
+	t.Parallel()
 	p := New()
 	if err := p.ValidateStreamReplication(provider.Provider{Configuration: map[string]any{"brokers": 3}}, 3); err != nil {
 		t.Errorf("replication 3 <= brokers 3 rejected: %v", err)
@@ -298,6 +308,7 @@ func TestValidateStreamReplication(t *testing.T) {
 // inferred bootstrap address is the comma-joined ordinal list (docs/adr/017
 // §a.4), still computed from manifest facts alone.
 func TestKafkaBootstrapAddressMultiBroker(t *testing.T) {
+	t.Parallel()
 	p := New()
 	cfg := provider.Provider{Configuration: map[string]any{"brokers": 3}}
 	want := "lake-redpanda-0:29092,lake-redpanda-1:29092,lake-redpanda-2:29092"
@@ -327,6 +338,7 @@ func reconcileBrokerSetOnFake(t *testing.T, rt *fakeruntime.Runtime, env resourc
 // container wiring. Cluster-formation readiness itself (which the fake
 // cannot serve) is covered live by TestRedpandaHAEndToEnd.
 func TestReconcileBrokerSet(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("rp-ha", map[string]any{"brokers": 3})
 	if err := reconcileBrokerSetOnFake(t, rt, env); err == nil {
@@ -393,6 +405,7 @@ func TestReconcileBrokerSet(t *testing.T) {
 // brokers is refused at reconcile with an error naming both counts and the
 // destroy-and-recreate remedy.
 func TestReconcileBrokerSetScaleDownRefused(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	p := New()
 	env3 := providerEnvelope("rp-ha", map[string]any{"brokers": 3})
@@ -420,6 +433,7 @@ func TestReconcileBrokerSetScaleDownRefused(t *testing.T) {
 // TestProbeBrokerSetMissingOrdinal covers docs/adr/017 §a.6's runtime half:
 // a missing ordinal is drift with a reason naming exactly which broker.
 func TestProbeBrokerSetMissingOrdinal(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	p := New()
 	env := providerEnvelope("rp-ha", map[string]any{"brokers": 3})

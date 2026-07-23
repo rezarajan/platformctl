@@ -19,6 +19,7 @@ func env(spec map[string]any) resource.Envelope {
 // nothing to verify reachable and must be refused, mirroring
 // source.Source's identical requirement.
 func TestExternalRequiresConnectionRef(t *testing.T) {
+	t.Parallel()
 	_, err := FromEnvelope(env(map[string]any{
 		"type":     "s3",
 		"runtime":  map[string]any{"type": "docker"},
@@ -30,6 +31,7 @@ func TestExternalRequiresConnectionRef(t *testing.T) {
 }
 
 func TestExternalWithConnectionRef(t *testing.T) {
+	t.Parallel()
 	p, err := FromEnvelope(env(map[string]any{
 		"type":          "s3",
 		"runtime":       map[string]any{"type": "docker"},
@@ -49,6 +51,7 @@ func TestExternalWithConnectionRef(t *testing.T) {
 }
 
 func TestNonExternalConnectionRefOptional(t *testing.T) {
+	t.Parallel()
 	p, err := FromEnvelope(env(map[string]any{
 		"type":    "s3",
 		"runtime": map[string]any{"type": "docker"},

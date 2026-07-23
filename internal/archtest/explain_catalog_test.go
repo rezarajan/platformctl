@@ -71,6 +71,7 @@ func declaredReasons(t *testing.T) map[string]string {
 // constant — both directions catch a reason added/renamed without its
 // explain entry landing in the same commit.
 func TestExplainCatalogCoversEveryReason(t *testing.T) {
+	t.Parallel()
 	declared := declaredReasons(t)
 
 	catalogTokens := map[string]int{}
@@ -121,6 +122,7 @@ func TestExplainCatalogCoversEveryReason(t *testing.T) {
 // (status.go) must each have a status.Catalog conditionType entry, since
 // `platformctl explain` resolves both vocabularies.
 func TestExplainCatalogCoversEveryConditionType(t *testing.T) {
+	t.Parallel()
 	want := []status.ConditionType{status.Ready, status.Progressing, status.Degraded, status.DriftDetected}
 	have := map[string]bool{}
 	for _, e := range status.Catalog {
@@ -145,6 +147,7 @@ func TestExplainCatalogCoversEveryConditionType(t *testing.T) {
 // TestScanReasonFileDetectsAndExemptsCorrectly's self-proof pattern in this
 // package.
 func TestDeclaredReasonsDetectsMissingCatalogEntry(t *testing.T) {
+	t.Parallel()
 	declared := map[string]string{
 		"ReasonReconcileComplete": status.ReasonReconcileComplete, // known-good, has a catalog entry
 		"ReasonTotallyFabricated": "TotallyFabricated",            // deliberately absent from status.Catalog

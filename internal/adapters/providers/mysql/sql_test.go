@@ -11,6 +11,7 @@ import (
 // TestDSNSurvivesSpecialCharacterCredentials guards docs/planning/07 §2.2:
 // the DSN must round-trip credentials containing @ : / # spaces and quotes.
 func TestDSNSurvivesSpecialCharacterCredentials(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ user, pass string }{
 		{"root", "p@ss:w/rd#1 x"},
 		{"we(rd)user", `quo"te'and\slash`},
@@ -37,6 +38,7 @@ func TestDSNSurvivesSpecialCharacterCredentials(t *testing.T) {
 // go-sql-driver TLS config and referencing it via the "tls" param — the
 // driver's own documented mechanism (there is no inline-PEM query param).
 func TestDSNTLSMode(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		tls  *providerkit.DatabaseTLS

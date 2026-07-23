@@ -42,6 +42,7 @@ var charmAllowedDirs = []string{
 // string is unambiguous and this test needs no build tags or module
 // resolution to run fast in every CI leg.
 func TestCharmImportsConfinedToCLIAndCliutil(t *testing.T) {
+	t.Parallel()
 	repoRoot, err := repoRootDir()
 	if err != nil {
 		t.Fatal(err)
@@ -88,6 +89,7 @@ func TestCharmImportsConfinedToCLIAndCliutil(t *testing.T) {
 // the tree, exactly as this task's report describes: the fixture below IS
 // the "documented, not committed as a real violation" proof.
 func TestScanForCharmImportsDetectsAndExemptsCorrectly(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fixture.go")
 	content := `package fixture

@@ -11,6 +11,7 @@ import (
 )
 
 func TestEnsureIngressCreatesAndUpdates(t *testing.T) {
+	t.Parallel()
 	clientset := fake.NewSimpleClientset()
 	r := &Runtime{clientset: clientset}
 	ctx := context.Background()
@@ -55,6 +56,7 @@ func TestEnsureIngressCreatesAndUpdates(t *testing.T) {
 }
 
 func TestGetIngressNotFound(t *testing.T) {
+	t.Parallel()
 	r := &Runtime{clientset: fake.NewSimpleClientset()}
 	_, found, err := r.GetIngress(context.Background(), "datascape", "route-missing")
 	if err != nil {
@@ -66,6 +68,7 @@ func TestGetIngressNotFound(t *testing.T) {
 }
 
 func TestRemoveIngressIdempotent(t *testing.T) {
+	t.Parallel()
 	clientset := fake.NewSimpleClientset()
 	r := &Runtime{clientset: clientset}
 	ctx := context.Background()
@@ -87,6 +90,7 @@ func TestRemoveIngressIdempotent(t *testing.T) {
 }
 
 func TestEnsureIngressSetsTLSBlock(t *testing.T) {
+	t.Parallel()
 	clientset := fake.NewSimpleClientset()
 	r := &Runtime{clientset: clientset}
 	ctx := context.Background()
@@ -119,6 +123,7 @@ func TestEnsureIngressSetsTLSBlock(t *testing.T) {
 }
 
 func TestBuildIngressNoTLSBlockWhenSecretNameEmpty(t *testing.T) {
+	t.Parallel()
 	ing := buildIngress(runtimeport.IngressSpec{Name: "route-x", Namespace: "datascape", Host: "x.localhost", TargetName: "x", TargetPort: 1})
 	if len(ing.Spec.TLS) != 0 {
 		t.Errorf("Spec.TLS = %+v, want empty for a plaintext (no TLSSecretName) spec", ing.Spec.TLS)
@@ -126,6 +131,7 @@ func TestBuildIngressNoTLSBlockWhenSecretNameEmpty(t *testing.T) {
 }
 
 func TestEnsureIngressRefusesUnmanaged(t *testing.T) {
+	t.Parallel()
 	clientset := fake.NewSimpleClientset()
 	r := &Runtime{clientset: clientset}
 	ctx := context.Background()

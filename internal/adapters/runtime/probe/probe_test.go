@@ -21,6 +21,7 @@ func listenerAddr(t *testing.T) (string, func()) {
 // TestDialableSucceedsAgainstOpenPort covers the base case: a listener is
 // up, Dialable reports true.
 func TestDialableSucceedsAgainstOpenPort(t *testing.T) {
+	t.Parallel()
 	addr, closeLn := listenerAddr(t)
 	defer closeLn()
 
@@ -33,6 +34,7 @@ func TestDialableSucceedsAgainstOpenPort(t *testing.T) {
 // listening, Dialable reports false quickly rather than hanging for the
 // full 2s default.
 func TestDialableFailsAgainstClosedPort(t *testing.T) {
+	t.Parallel()
 	addr, closeLn := listenerAddr(t)
 	closeLn() // release the port so nothing answers there anymore
 
@@ -46,6 +48,7 @@ func TestDialableFailsAgainstClosedPort(t *testing.T) {
 // dialable now shares: a ctx deadline shorter than the 2s default caps the
 // dial timeout instead of the full 2s always applying.
 func TestDialableCapsToRemainingDeadline(t *testing.T) {
+	t.Parallel()
 	addr, closeLn := listenerAddr(t)
 	defer closeLn()
 
@@ -71,6 +74,7 @@ func TestDialableCapsToRemainingDeadline(t *testing.T) {
 // ctx whose deadline has already passed refuses to dial at all rather than
 // attempting one with a non-positive timeout.
 func TestDialableRefusesExpiredDeadline(t *testing.T) {
+	t.Parallel()
 	addr, closeLn := listenerAddr(t)
 	defer closeLn()
 
@@ -90,6 +94,7 @@ func TestDialableRefusesExpiredDeadline(t *testing.T) {
 // ExecArgs passes them as positional args to `sh -c`, not interpolated
 // into the script string itself.
 func TestExecArgsAndCommand(t *testing.T) {
+	t.Parallel()
 	got := ExecArgs("db.example.com", "5432")
 	want := []string{"sh", "-c", TCPDialScript, "sh", "db.example.com", "5432"}
 	if len(got) != len(want) {

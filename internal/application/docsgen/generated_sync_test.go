@@ -17,6 +17,7 @@ const referenceDir = "../../../docs/reference"
 // without a regeneration pass). Failing this test names the fix: run
 // `go run ./cmd/platformctl docs build --out docs/reference` and commit.
 func TestGeneratedReferenceInSync(t *testing.T) {
+	t.Parallel()
 	pages, err := Build()
 	if err != nil {
 		t.Fatalf("Build: %v", err)

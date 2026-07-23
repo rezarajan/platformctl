@@ -13,6 +13,7 @@ import (
 )
 
 func TestMetricsEnabled(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		v    any
@@ -63,6 +64,7 @@ func postgresEnvelope(name string, configuration map[string]any) resource.Envelo
 // already recorded — mirroring redpanda_test.go's
 // TestReconcileBrokerRegistryEnabledPublishesPort pattern.
 func TestInstanceContainerSpecUnaffectedByMetrics(t *testing.T) {
+	t.Parallel()
 	secrets := map[string]map[string]string{"pg-admin": {"username": "admin", "password": "adminpass"}}
 	specOf := func(t *testing.T, metrics any) runtime.ContainerState {
 		t.Helper()
@@ -125,6 +127,7 @@ func TestInstanceContainerSpecUnaffectedByMetrics(t *testing.T) {
 // isolation (image/env/files/ports/healthcheck), independent of the SQL
 // admin connection the fake runtime cannot serve.
 func TestExporterContainerSpec(t *testing.T) {
+	t.Parallel()
 	if exporterPort != 9187 {
 		t.Fatalf("exporterPort = %d, want 9187 (postgres_exporter's own default)", exporterPort)
 	}

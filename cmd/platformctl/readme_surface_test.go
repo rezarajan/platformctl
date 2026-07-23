@@ -15,6 +15,7 @@ import (
 // visible top-level command must have a table row, and every command
 // named by a row must exist — drift in either direction fails.
 func TestREADMECLISurfaceInSync(t *testing.T) {
+	t.Parallel()
 	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
 	if err != nil {
 		t.Fatal(err)

@@ -13,6 +13,7 @@ import (
 // now it is a named refusal, so a Docker-only workload (wireguard) fails
 // honestly instead of running subtly broken.
 func TestEnsureContainerRefusesSysctls(t *testing.T) {
+	t.Parallel()
 	r := &Runtime{}
 	_, err := r.EnsureContainer(context.Background(), runtimeport.ContainerSpec{
 		Name:    "wg",

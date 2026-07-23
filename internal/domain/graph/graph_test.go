@@ -16,6 +16,7 @@ func graphEnv(namespace, kind, name string, spec map[string]any) resource.Envelo
 }
 
 func TestRefsResolveWithinNamespace(t *testing.T) {
+	t.Parallel()
 	left := graphEnv("left", "Provider", "shared", map[string]any{})
 	right := graphEnv("right", "Provider", "shared", map[string]any{})
 	stream := graphEnv("right", "EventStream", "events", map[string]any{"providerRef": map[string]any{"name": "shared"}})
@@ -30,6 +31,7 @@ func TestRefsResolveWithinNamespace(t *testing.T) {
 }
 
 func TestExplicitRefNamespace(t *testing.T) {
+	t.Parallel()
 	prov := graphEnv("infra", "Provider", "shared", map[string]any{})
 	stream := graphEnv("apps", "EventStream", "events", map[string]any{
 		"providerRef": map[string]any{"namespace": "infra", "name": "shared"},
@@ -44,6 +46,7 @@ func TestExplicitRefNamespace(t *testing.T) {
 }
 
 func TestAmbiguousBareRefRejectedWithinNamespace(t *testing.T) {
+	t.Parallel()
 	src := graphEnv("default", "Source", "same", map[string]any{})
 	ds := graphEnv("default", "Dataset", "same", map[string]any{})
 	binding := graphEnv("default", "Binding", "b", map[string]any{"sourceRef": map[string]any{"name": "same"}})
@@ -60,6 +63,7 @@ func TestAmbiguousBareRefRejectedWithinNamespace(t *testing.T) {
 // and create the same kind of dependency edge (Catalog reconciles before
 // the trino Provider that reads it).
 func TestNestedConfigurationRefResolvesAndOrders(t *testing.T) {
+	t.Parallel()
 	cat := graphEnv("default", "Catalog", "lakehouse-catalog", map[string]any{})
 	trino := graphEnv("default", "Provider", "lake-trino", map[string]any{
 		"configuration": map[string]any{"catalogRef": map[string]any{"name": "lakehouse-catalog"}},
@@ -90,6 +94,7 @@ func TestNestedConfigurationRefResolvesAndOrders(t *testing.T) {
 // do X" question (see docs/planning/03's trino section for the recorded
 // reasoning).
 func TestNestedConfigurationRefRejectsWrongKind(t *testing.T) {
+	t.Parallel()
 	notACatalog := graphEnv("default", "Provider", "lakehouse-catalog", map[string]any{})
 	trino := graphEnv("default", "Provider", "lake-trino", map[string]any{
 		"configuration": map[string]any{"catalogRef": map[string]any{"name": "lakehouse-catalog"}},
@@ -107,6 +112,7 @@ func TestNestedConfigurationRefRejectsWrongKind(t *testing.T) {
 // (docs/planning/08 D10's TASK_PROGRESS.md design note): same nested-ref
 // mechanism, allowed kind Provider instead of Catalog.
 func TestWarehouseProviderRefResolves(t *testing.T) {
+	t.Parallel()
 	minio := graphEnv("default", "Provider", "lake-minio", map[string]any{})
 	trino := graphEnv("default", "Provider", "lake-trino", map[string]any{
 		"configuration": map[string]any{"warehouseProviderRef": map[string]any{"name": "lake-minio"}},
@@ -127,6 +133,7 @@ func TestWarehouseProviderRefResolves(t *testing.T) {
 // refFields pass, kind-checked to Dataset, so a Catalog reconciles after the
 // Dataset it names.
 func TestCatalogWarehouseRefResolvesAndOrders(t *testing.T) {
+	t.Parallel()
 	ds := graphEnv("default", "Dataset", "warehouse", map[string]any{})
 	cat := graphEnv("default", "Catalog", "lakehouse-catalog", map[string]any{
 		"warehouseRef": map[string]any{"name": "warehouse"},
@@ -161,6 +168,7 @@ func TestCatalogWarehouseRefResolvesAndOrders(t *testing.T) {
 // ref resolves — so this wrong-kind rejection is the field-specific
 // negative path for warehouseRef.
 func TestCatalogWarehouseRefRejectsWrongKind(t *testing.T) {
+	t.Parallel()
 	notADataset := graphEnv("default", "Provider", "warehouse", map[string]any{})
 	cat := graphEnv("default", "Catalog", "lakehouse-catalog", map[string]any{
 		"warehouseRef": map[string]any{"name": "warehouse"},
@@ -184,6 +192,7 @@ func TestCatalogWarehouseRefRejectsWrongKind(t *testing.T) {
 // so the runtime-name and metadata-name match forms coincide — this test
 // pins the resolved edge either way (byRuntimeName indexes both).
 func TestManagedConnectionTargetOrdersAfterNamedUpstream(t *testing.T) {
+	t.Parallel()
 	edge := graphEnv("default", "Provider", "edge", map[string]any{})
 	upstream := graphEnv("default", "Provider", "ing-test-minio", map[string]any{})
 	conn := graphEnv("default", "Connection", "minio", map[string]any{
@@ -227,6 +236,7 @@ func TestManagedConnectionTargetOrdersAfterNamedUpstream(t *testing.T) {
 // target edge applies (external Connections have no spec.target at all
 // per domain validation; this pins the graph's own guard independently).
 func TestExternalConnectionTargetAddsNoEdge(t *testing.T) {
+	t.Parallel()
 	upstream := graphEnv("default", "Provider", "warehouse-db", map[string]any{})
 	conn := graphEnv("default", "Connection", "warehouse-conn", map[string]any{
 		"external": true,
@@ -251,6 +261,7 @@ func TestExternalConnectionTargetAddsNoEdge(t *testing.T) {
 // the entire reason managed Connections exist — it must add no edge and,
 // unlike refFields, must NOT error.
 func TestManagedConnectionTargetMatchingNothingAddsNoEdge(t *testing.T) {
+	t.Parallel()
 	edge := graphEnv("default", "Provider", "edge", map[string]any{})
 	conn := graphEnv("default", "Connection", "vpc-db", map[string]any{
 		"providerRef": map[string]any{"name": "edge"},
@@ -272,6 +283,7 @@ func TestManagedConnectionTargetMatchingNothingAddsNoEdge(t *testing.T) {
 // gain a self-edge — a self-edge is a one-node cycle and would fail every
 // Build for a mistake that harms nothing at the graph level.
 func TestManagedConnectionSelfTargetAddsNoSelfEdge(t *testing.T) {
+	t.Parallel()
 	edge := graphEnv("default", "Provider", "edge", map[string]any{})
 	conn := graphEnv("default", "Connection", "loop", map[string]any{
 		"providerRef": map[string]any{"name": "edge"},
@@ -295,6 +307,7 @@ func TestManagedConnectionSelfTargetAddsNoSelfEdge(t *testing.T) {
 // like this is a genuine design error the user must see, never silently
 // routed around by dropping the edge.
 func TestManagedConnectionTargetCycleIsReportedNotSkipped(t *testing.T) {
+	t.Parallel()
 	edge := graphEnv("default", "Provider", "edge", map[string]any{})
 	upstream := graphEnv("default", "Provider", "upstream-db", map[string]any{
 		"external":      true,

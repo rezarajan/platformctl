@@ -14,6 +14,7 @@ var cat = Catalog{
 }
 
 func TestResolveDefaultAndKnown(t *testing.T) {
+	t.Parallel()
 	def, err := cat.Resolve("")
 	if err != nil || def.Version != "16" {
 		t.Fatalf("default resolve = %+v, %v", def, err)
@@ -28,6 +29,7 @@ func TestResolveDefaultAndKnown(t *testing.T) {
 }
 
 func TestResolveUnknownErrors(t *testing.T) {
+	t.Parallel()
 	_, err := cat.Resolve("42")
 	if err == nil || !strings.Contains(err.Error(), "supported: 16, 18") {
 		t.Errorf("unexpected: %v", err)
@@ -35,6 +37,7 @@ func TestResolveUnknownErrors(t *testing.T) {
 }
 
 func TestValidateConfig(t *testing.T) {
+	t.Parallel()
 	// valid version
 	if err := cat.ValidateConfig(map[string]any{"version": "18"}); err != nil {
 		t.Errorf("valid version rejected: %v", err)

@@ -90,6 +90,7 @@ func kubernetesProviderEnvelope(name string) resource.Envelope {
 }
 
 func TestReconcileConnectionKubernetesSelfSigned(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	frt := newFakeIngressRuntime()
 	provEnv := kubernetesProviderEnvelope("edge-http")
@@ -144,6 +145,7 @@ func TestReconcileConnectionKubernetesSelfSigned(t *testing.T) {
 }
 
 func TestReconcileConnectionKubernetesSecretRef(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	frt := newFakeIngressRuntime()
 	provEnv := kubernetesProviderEnvelope("edge-http")
@@ -177,6 +179,7 @@ func TestReconcileConnectionKubernetesSecretRef(t *testing.T) {
 }
 
 func TestReconcileConnectionKubernetesSecretRefMissingFromRequestSecrets(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	frt := newFakeIngressRuntime()
 	provEnv := kubernetesProviderEnvelope("edge-http")
@@ -202,6 +205,7 @@ func TestReconcileConnectionKubernetesSecretRefMissingFromRequestSecrets(t *test
 }
 
 func TestReconcileConnectionKubernetesSecretNameNotYetIssued(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	frt := newFakeIngressRuntime()
 	provEnv := kubernetesProviderEnvelope("edge-http")
@@ -246,6 +250,7 @@ func TestReconcileConnectionKubernetesSecretNameNotYetIssued(t *testing.T) {
 }
 
 func TestDestroyConnectionKubernetesRemovesOwnSecretOnly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	frt := newFakeIngressRuntime()
 	provEnv := kubernetesProviderEnvelope("edge-http")
@@ -278,6 +283,7 @@ func TestDestroyConnectionKubernetesRemovesOwnSecretOnly(t *testing.T) {
 }
 
 func TestProbeConnectionKubernetesDetectsCertDrift(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	frt := newFakeIngressRuntime()
 	provEnv := kubernetesProviderEnvelope("edge-http")
@@ -322,6 +328,7 @@ func TestProbeConnectionKubernetesDetectsCertDrift(t *testing.T) {
 }
 
 func TestProbeConnectionKubernetesCertMissing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	frt := newFakeIngressRuntime()
 	provEnv := kubernetesProviderEnvelope("edge-http")

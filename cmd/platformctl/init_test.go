@@ -19,6 +19,7 @@ import (
 // manifest edits, for every shipped blueprint. No Docker required — this
 // only exercises manifest → schema → graph → compatibility validation.
 func TestInitBlueprintValidatesWithNoEdits(t *testing.T) {
+	t.Parallel()
 	for _, name := range blueprint.Names() {
 		name := name
 		t.Run(name, func(t *testing.T) {
@@ -44,6 +45,7 @@ func TestInitBlueprintValidatesWithNoEdits(t *testing.T) {
 // TestInitListHumanOutput is the default (prose) rendering of --list: one
 // line per blueprint, name then summary, no JSON/YAML.
 func TestInitListHumanOutput(t *testing.T) {
+	t.Parallel()
 	out, err, code := run(t, "init", "--list")
 	if err != nil || code != 0 {
 		t.Fatalf("init --list failed (code %d): %v\n%s", code, err, out)
@@ -59,6 +61,7 @@ func TestInitListHumanOutput(t *testing.T) {
 // machine-output contract mirrored from output_contract_test.go: -o
 // json|yaml must produce exactly one parseable document on stdout.
 func TestInitListStructuredOutput(t *testing.T) {
+	t.Parallel()
 	out, _, err := runSplit(t, "init", "--list", "-o", "json")
 	if err != nil {
 		t.Fatalf("init --list -o json: %v", err)
@@ -98,6 +101,7 @@ func TestInitListStructuredOutput(t *testing.T) {
 // TestInitWriteStructuredOutput: `init <blueprint> -o json` (no --list)
 // also emits exactly one parseable document naming the files written.
 func TestInitWriteStructuredOutput(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "stream-basics")
 	out, _, err := runSplit(t, "init", "stream-basics", "--dir", target, "-o", "json")
@@ -123,6 +127,7 @@ func TestInitWriteStructuredOutput(t *testing.T) {
 // TestInitUnknownBlueprintFails asserts a clear validation-exit error, not
 // a panic or an opaque failure, for an unknown blueprint name.
 func TestInitUnknownBlueprintFails(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	_, err, code := run(t, "init", "does-not-exist", "--dir", dir)
 	if err == nil {
@@ -140,6 +145,7 @@ func TestInitUnknownBlueprintFails(t *testing.T) {
 // the collision/--force contract at the CLI layer (blueprint_test.go
 // covers it at the package layer).
 func TestInitRefusesOverwriteWithoutForce(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "stream-basics")
 	if _, err, code := run(t, "init", "stream-basics", "--dir", target); err != nil || code != 0 {
@@ -153,6 +159,7 @@ func TestInitRefusesOverwriteWithoutForce(t *testing.T) {
 }
 
 func TestInitForceOverwrites(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	target := filepath.Join(dir, "stream-basics")
 	if _, err, code := run(t, "init", "stream-basics", "--dir", target); err != nil || code != 0 {

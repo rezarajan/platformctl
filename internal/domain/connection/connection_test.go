@@ -23,6 +23,7 @@ func baseManagedSpec() map[string]any {
 }
 
 func TestTLSSecretRefParsesAndValidates(t *testing.T) {
+	t.Parallel()
 	spec := baseManagedSpec()
 	spec["scheme"] = "https"
 	spec["tls"] = map[string]any{"secretRef": map[string]any{"name": "nessie-tls"}}
@@ -39,6 +40,7 @@ func TestTLSSecretRefParsesAndValidates(t *testing.T) {
 }
 
 func TestTLSSelfSignedParses(t *testing.T) {
+	t.Parallel()
 	spec := baseManagedSpec()
 	spec["scheme"] = "https"
 	spec["tls"] = map[string]any{"selfSigned": true}
@@ -52,6 +54,7 @@ func TestTLSSelfSignedParses(t *testing.T) {
 }
 
 func TestTLSSecretNameParses(t *testing.T) {
+	t.Parallel()
 	spec := baseManagedSpec()
 	spec["scheme"] = "https"
 	spec["tls"] = map[string]any{"secretName": "cert-manager-issued"}
@@ -65,6 +68,7 @@ func TestTLSSecretNameParses(t *testing.T) {
 }
 
 func TestTLSRequiresHTTPSScheme(t *testing.T) {
+	t.Parallel()
 	spec := baseManagedSpec()
 	spec["scheme"] = "http"
 	spec["tls"] = map[string]any{"selfSigned": true}
@@ -74,6 +78,7 @@ func TestTLSRequiresHTTPSScheme(t *testing.T) {
 }
 
 func TestHTTPSSchemeRequiresTLS(t *testing.T) {
+	t.Parallel()
 	spec := baseManagedSpec()
 	spec["scheme"] = "https"
 	if _, err := FromEnvelope(envelope(spec)); err == nil {
@@ -82,6 +87,7 @@ func TestHTTPSSchemeRequiresTLS(t *testing.T) {
 }
 
 func TestTLSExactlyOneOf(t *testing.T) {
+	t.Parallel()
 	cases := []map[string]any{
 		{}, // none set
 		{"secretRef": map[string]any{"name": "a"}, "selfSigned": true},
@@ -99,6 +105,7 @@ func TestTLSExactlyOneOf(t *testing.T) {
 }
 
 func TestManagedOnlyTLSFieldsRefusedOnExternalConnection(t *testing.T) {
+	t.Parallel()
 	spec := map[string]any{
 		"external": true,
 		"host":     "warehouse.corp.internal",
@@ -119,6 +126,7 @@ func baseExternalSpec() map[string]any {
 }
 
 func TestExternalTLSModeRequireParses(t *testing.T) {
+	t.Parallel()
 	spec := baseExternalSpec()
 	spec["tls"] = map[string]any{"mode": "require"}
 	c, err := FromEnvelope(envelope(spec))
@@ -134,6 +142,7 @@ func TestExternalTLSModeRequireParses(t *testing.T) {
 }
 
 func TestExternalTLSModeVerifyFullWithCASecretRefParses(t *testing.T) {
+	t.Parallel()
 	spec := baseExternalSpec()
 	spec["tls"] = map[string]any{"mode": "verify-full", "caSecretRef": map[string]any{"name": "rds-ca"}}
 	c, err := FromEnvelope(envelope(spec))
@@ -149,6 +158,7 @@ func TestExternalTLSModeVerifyFullWithCASecretRefParses(t *testing.T) {
 }
 
 func TestExternalTLSModeVerifyCAParses(t *testing.T) {
+	t.Parallel()
 	spec := baseExternalSpec()
 	spec["tls"] = map[string]any{"mode": "verify-ca", "caSecretRef": map[string]any{"name": "rds-ca"}}
 	c, err := FromEnvelope(envelope(spec))
@@ -161,6 +171,7 @@ func TestExternalTLSModeVerifyCAParses(t *testing.T) {
 }
 
 func TestExternalTLSRequiresMode(t *testing.T) {
+	t.Parallel()
 	spec := baseExternalSpec()
 	spec["tls"] = map[string]any{"caSecretRef": map[string]any{"name": "rds-ca"}}
 	if _, err := FromEnvelope(envelope(spec)); err == nil {
@@ -169,6 +180,7 @@ func TestExternalTLSRequiresMode(t *testing.T) {
 }
 
 func TestExternalTLSRejectsUnknownMode(t *testing.T) {
+	t.Parallel()
 	spec := baseExternalSpec()
 	spec["tls"] = map[string]any{"mode": "trust-me"}
 	if _, err := FromEnvelope(envelope(spec)); err == nil {
@@ -177,6 +189,7 @@ func TestExternalTLSRejectsUnknownMode(t *testing.T) {
 }
 
 func TestExternalConnectionWithoutTLSStaysPlaintext(t *testing.T) {
+	t.Parallel()
 	spec := baseExternalSpec()
 	c, err := FromEnvelope(envelope(spec))
 	if err != nil {
@@ -188,6 +201,7 @@ func TestExternalConnectionWithoutTLSStaysPlaintext(t *testing.T) {
 }
 
 func TestManagedTLSRejectsModeAndCASecretRef(t *testing.T) {
+	t.Parallel()
 	spec := baseManagedSpec()
 	spec["scheme"] = "https"
 	spec["tls"] = map[string]any{"selfSigned": true, "mode": "require"}
@@ -197,6 +211,7 @@ func TestManagedTLSRejectsModeAndCASecretRef(t *testing.T) {
 }
 
 func TestPlainHTTPConnectionUnaffected(t *testing.T) {
+	t.Parallel()
 	spec := baseManagedSpec()
 	spec["scheme"] = "http"
 	c, err := FromEnvelope(envelope(spec))

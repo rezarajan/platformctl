@@ -30,6 +30,7 @@ func runSplit(t *testing.T, args ...string) (stdout, stderr string, err error) {
 // json|yaml must override --format with a single parseable document on
 // stdout, for every graph format request.
 func TestGraphStructuredOutput(t *testing.T) {
+	t.Parallel()
 	out, _, err := runSplit(t, "graph", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true", "-o", "json")
 	if err != nil {
 		t.Fatalf("graph -o json: %v", err)
@@ -61,6 +62,7 @@ func TestGraphStructuredOutput(t *testing.T) {
 // TestGraphDefaultOutputUnchanged is the regression guard: graph with no
 // -o override must still render the tree view, not JSON.
 func TestGraphDefaultOutputUnchanged(t *testing.T) {
+	t.Parallel()
 	out, _, err := runSplit(t, "graph", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true")
 	if err != nil {
 		t.Fatalf("graph: %v", err)
@@ -73,6 +75,7 @@ func TestGraphDefaultOutputUnchanged(t *testing.T) {
 // TestGraphFormatFlagStillWorks: --format continues to select the
 // non-structured presentation when -o is not json/yaml.
 func TestGraphFormatFlagStillWorks(t *testing.T) {
+	t.Parallel()
 	out, _, err := runSplit(t, "graph", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true", "--format", "dot")
 	if err != nil {
 		t.Fatalf("graph --format dot: %v", err)
@@ -84,6 +87,7 @@ func TestGraphFormatFlagStillWorks(t *testing.T) {
 
 // TestValidateStructuredOutput guards docs/planning/07 §0.5 / F-001.
 func TestValidateStructuredOutput(t *testing.T) {
+	t.Parallel()
 	out, _, err := runSplit(t, "validate", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true", "-o", "json")
 	if err != nil {
 		t.Fatalf("validate -o json: %v", err)
@@ -106,6 +110,7 @@ func TestValidateStructuredOutput(t *testing.T) {
 // TestValidateDefaultOutputUnchanged is the regression guard for the
 // existing prose contract.
 func TestValidateDefaultOutputUnchanged(t *testing.T) {
+	t.Parallel()
 	out, _, err := runSplit(t, "validate", "../../examples/cdc-attendance", "--feature-gates", "SchemaRegistrySupport=true")
 	if err != nil {
 		t.Fatalf("validate: %v", err)
@@ -119,6 +124,7 @@ func TestValidateDefaultOutputUnchanged(t *testing.T) {
 // --for with -o json must still emit exactly one parseable document, even
 // though the underlying snippet is prose.
 func TestInventoryForStructuredOutput(t *testing.T) {
+	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	out, _, err := runSplit(t, "inventory", "testdata/redpanda-scenario", "--state-file", stateFile, "--for", "spark", "-o", "json")
 	if err != nil {
@@ -142,6 +148,7 @@ func TestInventoryForStructuredOutput(t *testing.T) {
 // TestInventoryForDefaultOutputUnchanged is the regression guard: --for
 // without -o json still writes the raw snippet to stdout.
 func TestInventoryForDefaultOutputUnchanged(t *testing.T) {
+	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	out, _, err := runSplit(t, "inventory", "testdata/redpanda-scenario", "--state-file", stateFile, "--for", "spark")
 	if err != nil {

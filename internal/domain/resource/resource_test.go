@@ -6,6 +6,7 @@ import (
 )
 
 func TestValidateDNSLabelRejectsInvalidNames(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		value string
@@ -32,6 +33,7 @@ func TestValidateDNSLabelRejectsInvalidNames(t *testing.T) {
 }
 
 func TestValidateDNSLabelAcceptsValidNames(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		"a",
 		"abc",
@@ -47,6 +49,7 @@ func TestValidateDNSLabelAcceptsValidNames(t *testing.T) {
 }
 
 func TestEnvelopeValidateRejectsSlashDotColonNames(t *testing.T) {
+	t.Parallel()
 	cases := []string{"a/b", "a.b", "a:b", "a b", "café", strings.Repeat("a", 64)}
 	for _, name := range cases {
 		e := Envelope{
@@ -60,6 +63,7 @@ func TestEnvelopeValidateRejectsSlashDotColonNames(t *testing.T) {
 }
 
 func TestEnvelopeValidateRejectsInvalidNamespace(t *testing.T) {
+	t.Parallel()
 	e := Envelope{
 		GroupVersionKind: GroupVersionKind{APIVersion: "datascape.io/v1alpha1", Kind: "Provider"},
 		Metadata:         Metadata{Name: "ok", Namespace: "Bad_NS"},
@@ -70,6 +74,7 @@ func TestEnvelopeValidateRejectsInvalidNamespace(t *testing.T) {
 }
 
 func TestEnvelopeValidateRejectsInvalidObserverNames(t *testing.T) {
+	t.Parallel()
 	e := Envelope{
 		GroupVersionKind: GroupVersionKind{APIVersion: "datascape.io/v1alpha1", Kind: "Provider"},
 		Metadata: Metadata{
@@ -83,6 +88,7 @@ func TestEnvelopeValidateRejectsInvalidObserverNames(t *testing.T) {
 }
 
 func TestEnvelopeValidateRejectsInvalidObserverNamespace(t *testing.T) {
+	t.Parallel()
 	e := Envelope{
 		GroupVersionKind: GroupVersionKind{APIVersion: "datascape.io/v1alpha1", Kind: "Provider"},
 		Metadata: Metadata{
@@ -100,6 +106,7 @@ func TestEnvelopeValidateRejectsInvalidObserverNamespace(t *testing.T) {
 // kind+name in different namespaces must produce distinct keys and distinct
 // serialized forms.
 func TestKeySameNameDifferentNamespaceDoNotCollide(t *testing.T) {
+	t.Parallel()
 	a := Key{Namespace: "team-a", Kind: "Source", Name: "orders"}
 	b := Key{Namespace: "team-b", Kind: "Source", Name: "orders"}
 	if a == b {
@@ -114,6 +121,7 @@ func TestKeySameNameDifferentNamespaceDoNotCollide(t *testing.T) {
 // cross-kind ambiguity (docs/planning/07 §0.2): Key includes Kind, so
 // Provider/foo and Source/foo in the same namespace are distinct.
 func TestKeySameNamespaceSameNameDifferentKindDoNotCollide(t *testing.T) {
+	t.Parallel()
 	a := Key{Namespace: DefaultNamespace, Kind: "Provider", Name: "foo"}
 	b := Key{Namespace: DefaultNamespace, Kind: "Source", Name: "foo"}
 	if a == b {
@@ -122,6 +130,7 @@ func TestKeySameNamespaceSameNameDifferentKindDoNotCollide(t *testing.T) {
 }
 
 func TestKeyInNamespaceNormalizesEmpty(t *testing.T) {
+	t.Parallel()
 	k := Key{Kind: "Provider", Name: "foo"}.InNamespace("")
 	if k.Namespace != DefaultNamespace {
 		t.Errorf("InNamespace(\"\") = %q, want %q", k.Namespace, DefaultNamespace)
@@ -129,6 +138,7 @@ func TestKeyInNamespaceNormalizesEmpty(t *testing.T) {
 }
 
 func TestEnvelopeKeyNormalizesEmptyNamespace(t *testing.T) {
+	t.Parallel()
 	e := Envelope{
 		GroupVersionKind: GroupVersionKind{Kind: "Provider"},
 		Metadata:         Metadata{Name: "foo"},
@@ -139,6 +149,7 @@ func TestEnvelopeKeyNormalizesEmptyNamespace(t *testing.T) {
 }
 
 func TestParseSelectorRejectsMalformedSelectors(t *testing.T) {
+	t.Parallel()
 	cases := []string{"", "NoSlash", "Kind/", "/name", "Kind/a/b"}
 	for _, sel := range cases {
 		if _, err := ParseSelector(sel, ""); err == nil {
@@ -148,6 +159,7 @@ func TestParseSelectorRejectsMalformedSelectors(t *testing.T) {
 }
 
 func TestParseSelectorRejectsInvalidNameOrNamespace(t *testing.T) {
+	t.Parallel()
 	if _, err := ParseSelector("Kind/Bad_Name", ""); err == nil {
 		t.Error("ParseSelector with invalid name = nil, want error")
 	}
@@ -157,6 +169,7 @@ func TestParseSelectorRejectsInvalidNameOrNamespace(t *testing.T) {
 }
 
 func TestParseSelectorAcceptsValidSelector(t *testing.T) {
+	t.Parallel()
 	k, err := ParseSelector("Source/orders", "team-a")
 	if err != nil {
 		t.Fatalf("ParseSelector: %v", err)
@@ -168,6 +181,7 @@ func TestParseSelectorAcceptsValidSelector(t *testing.T) {
 }
 
 func TestNameRefKeyDefaultsNamespace(t *testing.T) {
+	t.Parallel()
 	ref := NameRef{Name: "orders"}
 	k := ref.Key("default", "Source")
 	if k.Namespace != DefaultNamespace {

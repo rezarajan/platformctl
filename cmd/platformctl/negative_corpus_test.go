@@ -20,6 +20,7 @@ import (
 // exits non-zero, and the error text names both the offending resource
 // (Kind + metadata.name) and the specific field/value at fault.
 func TestNegativeCorpus(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		file  string
 		gates []string // extra --feature-gates entries, beyond the CLI's own defaults

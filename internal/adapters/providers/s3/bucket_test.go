@@ -15,6 +15,7 @@ import (
 // ruleMatches), and a shared bucket's other Dataset's rule (a different
 // name, a different ID) is never touched by this Dataset's own reconcile.
 func TestLifecycleRuleIDDeterministic(t *testing.T) {
+	t.Parallel()
 	if lifecycleRuleID("attendance-raw") != lifecycleRuleID("attendance-raw") { //nolint:staticcheck // SA4000: deliberate same-input-twice determinism check, not a copy-paste bug
 		t.Error("lifecycleRuleID is not deterministic for the same name")
 	}
@@ -24,6 +25,7 @@ func TestLifecycleRuleIDDeterministic(t *testing.T) {
 }
 
 func TestDesiredLifecycleRule(t *testing.T) {
+	t.Parallel()
 	ds := dataset.Dataset{
 		Prefix:    "attendance/",
 		Lifecycle: dataset.Lifecycle{ExpireAfterDays: 30},
@@ -44,6 +46,7 @@ func TestDesiredLifecycleRule(t *testing.T) {
 }
 
 func TestRuleMatches(t *testing.T) {
+	t.Parallel()
 	ds := dataset.Dataset{Prefix: "p/", Lifecycle: dataset.Lifecycle{ExpireAfterDays: 7}}
 	want := desiredLifecycleRule("id", ds)
 
@@ -67,6 +70,7 @@ func TestRuleMatches(t *testing.T) {
 }
 
 func TestVersioningStatus(t *testing.T) {
+	t.Parallel()
 	if versioningStatus(dataset.VersioningEnabled) != minio.Enabled {
 		t.Errorf("versioningStatus(enabled) = %q, want %q", versioningStatus(dataset.VersioningEnabled), minio.Enabled)
 	}
@@ -76,6 +80,7 @@ func TestVersioningStatus(t *testing.T) {
 }
 
 func TestFindRule(t *testing.T) {
+	t.Parallel()
 	cfg := &minlifecycle.Configuration{Rules: []minlifecycle.Rule{
 		{ID: "a"}, {ID: "b"},
 	}}

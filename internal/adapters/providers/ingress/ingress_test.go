@@ -10,6 +10,7 @@ import (
 )
 
 func TestSupportedConnectionSchemesIsHTTPAndHTTPS(t *testing.T) {
+	t.Parallel()
 	p := New()
 	schemes := p.SupportedConnectionSchemes()
 	if len(schemes) != 2 || schemes[0] != "http" || schemes[1] != "https" {
@@ -18,6 +19,7 @@ func TestSupportedConnectionSchemesIsHTTPAndHTTPS(t *testing.T) {
 }
 
 func TestDomainSuffixDefaultsToLocalhost(t *testing.T) {
+	t.Parallel()
 	if got := domainSuffix(provider.Provider{}); got != "localhost" {
 		t.Errorf("domainSuffix(empty) = %q, want %q", got, "localhost")
 	}
@@ -28,6 +30,7 @@ func TestDomainSuffixDefaultsToLocalhost(t *testing.T) {
 }
 
 func TestRouteHostAndID(t *testing.T) {
+	t.Parallel()
 	cfg := provider.Provider{}
 	if got := routeHost("nessie", cfg); got != "nessie.localhost" {
 		t.Errorf("routeHost = %q, want nessie.localhost", got)
@@ -38,6 +41,7 @@ func TestRouteHostAndID(t *testing.T) {
 }
 
 func TestParseTarget(t *testing.T) {
+	t.Parallel()
 	host, port, err := parseTarget("nessie:19120")
 	if err != nil {
 		t.Fatalf("parseTarget: %v", err)
@@ -57,6 +61,7 @@ func TestParseTarget(t *testing.T) {
 }
 
 func TestIsKubernetes(t *testing.T) {
+	t.Parallel()
 	if isKubernetes(provider.Provider{RuntimeType: "docker"}) {
 		t.Error("docker runtime misclassified as kubernetes")
 	}
@@ -66,6 +71,7 @@ func TestIsKubernetes(t *testing.T) {
 }
 
 func TestValidateSpecRejectsEmptyImageAndDomain(t *testing.T) {
+	t.Parallel()
 	p := New()
 	if err := p.ValidateSpec(provider.Provider{Configuration: map[string]any{"image": ""}}); err == nil {
 		t.Error("empty image should be rejected")
@@ -79,6 +85,7 @@ func TestValidateSpecRejectsEmptyImageAndDomain(t *testing.T) {
 }
 
 func TestReconcileDestroyProbeRejectUnknownKind(t *testing.T) {
+	t.Parallel()
 	p := New()
 	req := reconciler.Request{Resource: resource.Envelope{GroupVersionKind: resource.GroupVersionKind{Kind: "Binding"}}}
 	ctx := context.Background()
@@ -94,6 +101,7 @@ func TestReconcileDestroyProbeRejectUnknownKind(t *testing.T) {
 }
 
 func TestImageDefaultAndOverride(t *testing.T) {
+	t.Parallel()
 	if got := image(provider.Provider{}); got != defaultImage {
 		t.Errorf("image(empty) = %q, want default %q", got, defaultImage)
 	}

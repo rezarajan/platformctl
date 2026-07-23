@@ -62,6 +62,19 @@ jobs:
       - name: Unit & contract tests
         run: go test ./...
 
+      # docs/planning/08 §7.8 J1 / ADR 028: the fast tier's budget is
+      # enforced, not aspirational — any single test over 60s, or the
+      # whole tier over 90s, fails the build. Re-runs the same scope as
+      # "Unit & contract tests" above (a few seconds, see
+      # internal/tools/testbudget's own doc comment) with -json so
+      # internal/tools/testbudget can parse cmd/test2json's event stream;
+      # kept as its own step (rather than folded into the step above) so
+      # the human-readable `go test` step above stays exactly that —
+      # readable — while this one's output is silent unless something is
+      # over budget.
+      - name: Fast-tier budget guard (ADR 028)
+        run: go test -json ./... | go run ./internal/tools/testbudget
+
       # docs/planning/08 §7 E8: "unit+race" leg. Scoped to the same set as
       # "Unit & contract tests" above (no `-tags integration`, so it never
       # touches adapters needing Docker/K8s) — measured locally at ~41s

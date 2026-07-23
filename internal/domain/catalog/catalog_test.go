@@ -19,6 +19,7 @@ func env(spec map[string]any) resource.Envelope {
 // nested inside the engine block), and decodes to a bare name exactly like
 // the pre-existing ProviderRef/ConnectionRef fields.
 func TestWarehouseRefDecodesWhenSet(t *testing.T) {
+	t.Parallel()
 	c, err := FromEnvelope(env(map[string]any{
 		"engine":       "nessie",
 		"providerRef":  map[string]any{"name": "catalog-svc"},
@@ -36,6 +37,7 @@ func TestWarehouseRefDecodesWhenSet(t *testing.T) {
 // no warehouseRef decodes exactly as it did before D8 — nil, not an error,
 // not a required field.
 func TestWarehouseRefNilWhenUnset(t *testing.T) {
+	t.Parallel()
 	c, err := FromEnvelope(env(map[string]any{
 		"engine":      "nessie",
 		"providerRef": map[string]any{"name": "catalog-svc"},

@@ -89,6 +89,7 @@ func newBackupTestEngine(t *testing.T, prov reconciler.Provider, providerType st
 }
 
 func TestBackupDispatchesToCapableProvider(t *testing.T) {
+	t.Parallel()
 	prov := &fakeBackupProvider{}
 	eng, envelopes := newBackupTestEngine(t, prov, "fakebackup")
 	dest := backup.Location{Endpoint: "http://s3:9000", Bucket: "backups", Prefix: "orders", AccessKey: "AKIA", SecretKey: "shh"}
@@ -110,6 +111,7 @@ func TestBackupDispatchesToCapableProvider(t *testing.T) {
 }
 
 func TestBackupRefusesForNonCapableProvider(t *testing.T) {
+	t.Parallel()
 	eng, envelopes := newBackupTestEngine(t, noop.New(), "noop-typed")
 	// Point the Source at a provider whose type isn't BackupCapableProvider.
 	envelopes[0].Spec["type"] = "noop-typed"
@@ -125,6 +127,7 @@ func TestBackupRefusesForNonCapableProvider(t *testing.T) {
 // mechanism dbjob relies on has no Kubernetes equivalent, so the engine must
 // refuse before ever calling into the provider.
 func TestBackupRefusesForNonDockerRuntime(t *testing.T) {
+	t.Parallel()
 	prov := &fakeBackupProvider{}
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
@@ -161,6 +164,7 @@ func TestBackupRefusesForNonDockerRuntime(t *testing.T) {
 }
 
 func TestRestoreRefusesWithoutAllowOverwrite(t *testing.T) {
+	t.Parallel()
 	prov := &fakeBackupProvider{}
 	eng, envelopes := newBackupTestEngine(t, prov, "fakebackup")
 	eng.AllowOverwrite = false
@@ -176,6 +180,7 @@ func TestRestoreRefusesWithoutAllowOverwrite(t *testing.T) {
 }
 
 func TestRestoreCallsProviderWhenAllowed(t *testing.T) {
+	t.Parallel()
 	prov := &fakeBackupProvider{}
 	eng, envelopes := newBackupTestEngine(t, prov, "fakebackup")
 	eng.AllowOverwrite = true
@@ -198,6 +203,7 @@ func TestRestoreCallsProviderWhenAllowed(t *testing.T) {
 // restore even with --yes-i-understand-this-overwrites-existing-data
 // (AllowOverwrite) set — protect is not something a single flag can waive.
 func TestRestoreRefusesForProtectedResource(t *testing.T) {
+	t.Parallel()
 	prov := &fakeBackupProvider{}
 	eng, envelopes := newBackupTestEngine(t, prov, "fakebackup")
 	eng.AllowOverwrite = true
@@ -309,6 +315,7 @@ func TestResolveDatasetLocation(t *testing.T) {
 }
 
 func TestResolveDatasetLocationRejectsProviderWithNoEndpointFact(t *testing.T) {
+	t.Parallel()
 	eng := newLocationTestEngine(t)
 	eng.Registry.RegisterProvider("postgres", func() reconciler.Provider { return noop.New() }, "")
 	envelopes := []resource.Envelope{
@@ -354,6 +361,7 @@ func TestResolveURLLocation(t *testing.T) {
 }
 
 func TestResolveURLLocationRequiresCredentialsSecretRef(t *testing.T) {
+	t.Parallel()
 	eng := newLocationTestEngine(t)
 	_, err := eng.ResolveObjectStoreLocation(context.Background(), nil, "http://minio.example:9000/bucket/prefix", "", "", "default")
 	if err == nil || !strings.Contains(err.Error(), "credentials-secret-ref") {

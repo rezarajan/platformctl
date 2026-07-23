@@ -79,6 +79,7 @@ func newTLSGateTestEngine(t *testing.T, gates *featuregate.Registry) *Engine {
 // single choke point (engine.resolveRequest), mirroring HighAvailability's
 // own backstop-at-point-of-use pattern.
 func TestTLSTerminationGateBlocksUngatedApply(t *testing.T) {
+	t.Parallel()
 	envelopes := tlsConnectionEnvelopes()
 	connKey := envelopes[1].Key()
 
@@ -117,6 +118,7 @@ func TestTLSTerminationGateBlocksUngatedApply(t *testing.T) {
 // spec.tls never consults the TLSTermination gate at all — the pre-C8
 // plaintext path is untouched even when the gate is unregistered.
 func TestPlainHTTPConnectionUnaffectedByTLSGate(t *testing.T) {
+	t.Parallel()
 	prov := envelope("Provider", "edge", map[string]any{
 		"type":    "fakeconn",
 		"runtime": map[string]any{"type": "fake", "network": "datascape"},

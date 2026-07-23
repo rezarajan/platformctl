@@ -16,6 +16,7 @@ import (
 // carries must itself be reviewed (grep the templates/ tree for
 // lint.datascape.io/waive to see the reasons).
 func TestBlueprintsLintClean(t *testing.T) {
+	t.Parallel()
 	for _, name := range blueprint.Names() {
 		name := name
 		t.Run(name, func(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 // TestConnectorPathEscapesName guards docs/planning/07 §2.2: a connector
 // name containing path metacharacters must not corrupt the REST path.
 func TestConnectorPathEscapesName(t *testing.T) {
+	t.Parallel()
 	got := connectorPath("http://x:8083", "a/b c?d", "/config")
 	if strings.Contains(got, "a/b c") {
 		t.Fatalf("connector name not escaped: %q", got)
@@ -23,6 +24,7 @@ func TestConnectorPathEscapesName(t *testing.T) {
 }
 
 func TestConnectorPathPlainNameUnchanged(t *testing.T) {
+	t.Parallel()
 	got := connectorPath("http://x:8083", "orders-cdc", "/status")
 	want := "http://x:8083/connectors/orders-cdc/status"
 	if got != want {
@@ -33,6 +35,7 @@ func TestConnectorPathPlainNameUnchanged(t *testing.T) {
 // TestTryEachFirstSuccess covers the common case: the first candidate
 // answers, so tryEach never touches the rest.
 func TestTryEachFirstSuccess(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	got, err := tryEach([]string{"a", "b", "c"}, func(baseURL string) (string, error) {
 		calls++
@@ -50,6 +53,7 @@ func TestTryEachFirstSuccess(t *testing.T) {
 // test: "connector REST calls go to any live worker" — a dead first
 // candidate must not block a live second one.
 func TestTryEachFailsOverToLiveCandidate(t *testing.T) {
+	t.Parallel()
 	tried := []string{}
 	got, err := tryEach([]string{"dead-1", "dead-2", "live"}, func(baseURL string) (string, error) {
 		tried = append(tried, baseURL)
@@ -72,6 +76,7 @@ func TestTryEachFailsOverToLiveCandidate(t *testing.T) {
 // TestTryEachAllFail joins every candidate's failure into one error naming
 // how many were tried, rather than surfacing only the last one.
 func TestTryEachAllFail(t *testing.T) {
+	t.Parallel()
 	_, err := tryEach([]string{"a", "b"}, func(baseURL string) (string, error) {
 		return "", errors.New("boom:" + baseURL)
 	})
@@ -85,6 +90,7 @@ func TestTryEachAllFail(t *testing.T) {
 }
 
 func TestTryEachEmptyCandidates(t *testing.T) {
+	t.Parallel()
 	if _, err := tryEach([]string{}, func(string) (string, error) { return "", nil }); err == nil {
 		t.Fatal("expected an error for zero candidates")
 	}
@@ -107,6 +113,7 @@ func equalStrings(a, b []string) bool {
 // first worker address plus a live second one still yields the connector's
 // state.
 func TestConnectorStateFailsOverAcrossRealServers(t *testing.T) {
+	t.Parallel()
 	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"connector":{"state":"RUNNING"},"tasks":[{"state":"RUNNING"}]}`))
@@ -132,6 +139,7 @@ func TestConnectorStateFailsOverAcrossRealServers(t *testing.T) {
 // surfaces as an HTTP 500 whose body embeds a plain connection failure, or
 // as a bare transport-level connection-reset error.
 func TestIsTransientConnectErrorRecognizesForwardingFailure(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		err  error
@@ -156,6 +164,7 @@ func TestIsTransientConnectErrorRecognizesForwardingFailure(t *testing.T) {
 // retried until it clears (or the deadline elapses), a non-transient one
 // returns immediately.
 func TestRetryTransientRetriesThenSucceeds(t *testing.T) {
+	t.Parallel()
 	attempts := 0
 	err := retryTransient(context.Background(), time.Second, time.Millisecond, func() error {
 		attempts++
@@ -173,6 +182,7 @@ func TestRetryTransientRetriesThenSucceeds(t *testing.T) {
 }
 
 func TestRetryTransientReturnsNonTransientImmediately(t *testing.T) {
+	t.Parallel()
 	attempts := 0
 	err := retryTransient(context.Background(), time.Second, time.Millisecond, func() error {
 		attempts++
@@ -190,6 +200,7 @@ func TestRetryTransientReturnsNonTransientImmediately(t *testing.T) {
 // C3 failover contract) still lets DeleteConnector succeed against the
 // live second one.
 func TestDeleteConnectorFailsOverOnForwardingError(t *testing.T) {
+	t.Parallel()
 	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))

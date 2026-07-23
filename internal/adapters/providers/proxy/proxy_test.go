@@ -20,6 +20,12 @@ import (
 // for the duration of a test, restoring them on cleanup — avoids waiting
 // out a real 45s timeout to exercise the honest-failure path
 // (docs/planning/11 B1 finding 3).
+//
+// J1 fast-tier note: these are package-level vars (proxy.go) mutated
+// directly — every caller of shrinkForwarderSettle must stay serial (no
+// t.Parallel()) with every other caller, or two goroutines race on the
+// same package globals (the same class of hazard `go test -race` found
+// live in the ingress package's shrinkRouteSettle).
 func shrinkForwarderSettle(t *testing.T) {
 	t.Helper()
 	prevTimeout, prevPoll := forwarderSettleTimeout, forwarderSettlePoll
@@ -80,6 +86,8 @@ func viaProviderEnvelope(name, peerNetwork string) resource.Envelope {
 // upstream (probeThroughForwarder, the same check Probe uses) and fail
 // honestly, naming the last observed state, when nothing ever answers.
 func TestReconcileConnectionFailsHonestlyWhenUpstreamNeverAnswers(t *testing.T) {
+	// serial: shrinkForwarderSettle mutates package-level forwarder settle
+	// vars (see its doc comment).
 	shrinkForwarderSettle(t)
 
 	ctx := context.Background()
@@ -132,6 +140,8 @@ func (r *noHostAddrRuntime) Inspect(ctx context.Context, name string) (runtime.C
 // upstream answer: the target may be a genuinely external host
 // unresolvable from the cluster).
 func TestReconcileConnectionReadyWhenRuntimePublishesNoHostAddress(t *testing.T) {
+	// serial: shrinkForwarderSettle mutates package-level forwarder settle
+	// vars (see its doc comment).
 	shrinkForwarderSettle(t)
 
 	ctx := context.Background()
@@ -161,6 +171,8 @@ func TestReconcileConnectionReadyWhenRuntimePublishesNoHostAddress(t *testing.T)
 // port, reconcile settles and reports Ready — the settle poll must not
 // regress the healthy path.
 func TestReconcileConnectionSucceedsWhenUpstreamAnswers(t *testing.T) {
+	// serial: shrinkForwarderSettle mutates package-level forwarder settle
+	// vars (see its doc comment).
 	shrinkForwarderSettle(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -213,6 +225,7 @@ func TestReconcileConnectionSucceedsWhenUpstreamAnswers(t *testing.T) {
 // to an empty StaticFacts, the same "not published yet" shape
 // engine.factsSnapshot(nil st) produces for Import.
 func TestReconcileConnectionViaFailsHonestlyWithoutTunnelFacts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	rt := fakeruntime.New()
 	p := New()
@@ -246,6 +259,8 @@ func TestReconcileConnectionViaFailsHonestlyWithoutTunnelFacts(t *testing.T) {
 // symmetry, I4) — via-awareness lives entirely in which address the
 // forwarder was built to dial, not in a separate settledness path.
 func TestReconcileConnectionViaJoinsTransitNetworkAndDialsTunnel(t *testing.T) {
+	// serial: shrinkForwarderSettle mutates package-level forwarder settle
+	// vars (see its doc comment).
 	shrinkForwarderSettle(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

@@ -88,6 +88,7 @@ func applyAll(t *testing.T, eng *Engine, envelopes []resource.Envelope) Result {
 // with metadata.observers whose provider is LineageAware receives a
 // correctly-populated LineageEndpoint.
 func TestLineageEndpointForwarded(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 
@@ -128,6 +129,7 @@ func TestLineageEndpointForwarded(t *testing.T) {
 // the informational LineageEndpointDeclaredNotConsumed condition and does not
 // block Ready.
 func TestLineageNotConsumedCondition(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
@@ -214,6 +216,7 @@ func driftFixture(t *testing.T) (*Engine, *driftingProvider, []resource.Envelope
 // TestApplyHealsDrift: an unchanged manifest set re-applied with HealDrift
 // probes plan-noop resources and re-reconciles the drifted ones.
 func TestApplyHealsDrift(t *testing.T) {
+	t.Parallel()
 	eng, prov, envelopes := driftFixture(t)
 	applyAll(t, eng, envelopes)
 	if prov.ReconcileCount != 1 {
@@ -239,6 +242,7 @@ func TestApplyHealsDrift(t *testing.T) {
 // TestApplyWithoutHealDriftLeavesDrift: with the gate off, apply trusts
 // recorded state and never probes.
 func TestApplyWithoutHealDriftLeavesDrift(t *testing.T) {
+	t.Parallel()
 	eng, prov, envelopes := driftFixture(t)
 	applyAll(t, eng, envelopes)
 	applyAll(t, eng, envelopes)
@@ -274,6 +278,7 @@ func (p *externalConfigProvider) ConfigureExternal(_ context.Context, req reconc
 }
 
 func TestExternalProviderRefUsesConfigureExternal(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	prov := &externalConfigProvider{}
@@ -301,6 +306,7 @@ func TestExternalProviderRefUsesConfigureExternal(t *testing.T) {
 }
 
 func TestApplyRefusesLegacyOrphanUnknown(t *testing.T) {
+	t.Parallel()
 	eng := newTestEngine(t, registry.New(featuregate.NewRegistry()))
 	key := resource.Key{Namespace: resource.DefaultNamespace, Kind: "Provider", Name: "legacy"}
 	if err := eng.StateStore.Save(context.Background(), state.State{
@@ -332,6 +338,7 @@ func TestApplyRefusesLegacyOrphanUnknown(t *testing.T) {
 // fail an authoritative delete for a resource whose last-applied manifest
 // carried metadata.protect: true, naming the resource and the remedy.
 func TestApplyRefusesProtectedDelete(t *testing.T) {
+	t.Parallel()
 	eng := newTestEngine(t, registry.New(featuregate.NewRegistry()))
 	protected := envelope("Provider", "protected", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
 	protected.Metadata.Protect = true
@@ -365,6 +372,7 @@ func TestApplyRefusesProtectedDelete(t *testing.T) {
 // TestDestroyRefusesProtectedResource guards docs/planning/08 A5: destroy
 // must fail against a protect: true data-bearing resource.
 func TestDestroyRefusesProtectedResource(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
@@ -402,6 +410,7 @@ func TestDestroyRefusesProtectedResource(t *testing.T) {
 // TestProbeRecordsDrift: Probe merges observed DriftDetected/Ready
 // conditions into recorded state so `status` reflects the last observation.
 func TestProbeRecordsDrift(t *testing.T) {
+	t.Parallel()
 	eng, _, envelopes := driftFixture(t)
 	applyAll(t, eng, envelopes)
 
@@ -430,6 +439,7 @@ func TestProbeRecordsDrift(t *testing.T) {
 // marks an External resource for deletion, the engine refuses unless the
 // destructive double opt-in was given.
 func TestDestroyExternalGuard(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	eng := newTestEngine(t, reg)
@@ -506,6 +516,7 @@ func (s *slowProvider) Reconcile(_ context.Context, _ reconciler.Request) (statu
 // same topological level reconcile concurrently, bounded by Parallelism,
 // with all state persisted correctly.
 func TestParallelReconciliation(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	prov := &slowProvider{}
@@ -657,6 +668,7 @@ func applyWithSecretHashes(t *testing.T, eng *Engine, envelopes []resource.Envel
 // a dead-upstream forwarder (accepts then closes immediately), and nothing
 // listening — the basis for honest external-resource health.
 func TestProbeTCPReachable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Live server that waits for the client to speak (like Postgres).
@@ -714,6 +726,7 @@ func TestProbeTCPReachable(t *testing.T) {
 // (RuntimeName/ContainerPort) recorded in the Connection's own
 // Status.ProviderState, not by guessing the Connection's own name.
 func TestConnectionDialAddressUsesPublishedFactNotResourceName(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
@@ -833,6 +846,7 @@ func (p *fakeCDCProvider) Reconcile(ctx context.Context, req reconciler.Request)
 // endpoint's Internal address — read back from st.Resources (mutated
 // in-place across the run), never constructed by string convention.
 func TestResolveSchemaRegistryURLFromEventStreamProvider(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	streamProv := &fakeSchemaRegistryProvider{internalAddr: "http://stream-broker:8081"}
@@ -874,6 +888,7 @@ func TestResolveSchemaRegistryURLFromEventStreamProvider(t *testing.T) {
 // case never resolves a registry URL at all, even when the upstream
 // Provider happens to publish one.
 func TestResolveSchemaRegistryURLEmptyForJSONFormat(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	streamProv := &fakeSchemaRegistryProvider{internalAddr: "http://stream-broker:8081"}
@@ -959,6 +974,7 @@ func (p *fakeMonitoringProvider) Reconcile(ctx context.Context, req reconciler.R
 // dependency edge to the monitoring Provider that would otherwise order a
 // single Apply's topological levels for us.
 func TestResolveMetricsTargetsFromPublishedEndpoints(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	rp := &fakeMetricsProvider{internalAddr: "http://redpanda:9644/public_metrics"}
@@ -1043,6 +1059,7 @@ func (p *fakeGrafanaConsumerProvider) Reconcile(ctx context.Context, req reconci
 // sole prometheus-typed Provider and resolves its already-published
 // endpoint fact (ADR 015 — never constructed).
 func TestResolvePrometheusURLFromPublishedEndpoint(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	prom := &fakePrometheusEndpointProvider{internalAddr: "http://prom-test:9090"}
@@ -1074,6 +1091,7 @@ func TestResolvePrometheusURLFromPublishedEndpoint(t *testing.T) {
 // candidates (mirrors resolveCatalogFacts's warehouseProviderRef
 // ambiguity rule).
 func TestResolvePrometheusURLAmbiguousLeavesUnresolved(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	prom := &fakePrometheusEndpointProvider{internalAddr: "http://prom-shared:9090"}
@@ -1170,6 +1188,7 @@ func (p *fakeTrinoLikeProvider) Reconcile(ctx context.Context, req reconciler.Re
 // published, the same two-phase shape TestResolveMetricsTargetsFromPublishedEndpoints
 // documents.
 func TestResolveCatalogFactsFromCatalogRef(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	cat := &fakeCatalogProvider{internalAddr: "catalog-svc:19120/iceberg"}
@@ -1237,6 +1256,7 @@ func (p *fakeNessieLikeProvider) Reconcile(ctx context.Context, req reconciler.R
 // eventual-consistency window like TestResolveCatalogFactsFromCatalogRef's
 // auto-inferred warehouse case.
 func TestResolveWarehouseFactsFromWarehouseRef(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	minio := &fakeWarehouseProvider{internalAddr: "lake-minio:9000"}
@@ -1282,6 +1302,7 @@ func TestResolveWarehouseFactsFromWarehouseRef(t *testing.T) {
 // over the trino Provider's own (still fully supported, unremoved)
 // configuration.warehouseProviderRef disambiguator.
 func TestResolveCatalogFactsPrefersWarehouseRefOverWarehouseProviderRef(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	reg := registry.New(gates)
 	cat := &fakeCatalogProvider{internalAddr: "catalog-svc:19120/iceberg"}
@@ -1351,6 +1372,7 @@ func TestResolveCatalogFactsPrefersWarehouseRefOverWarehouseProviderRef(t *testi
 // declares the probed port, exactly the under- vs over-declaration
 // distinction C10 exists to catch.
 func TestExternalConnectionInNetworkReachability(t *testing.T) {
+	t.Parallel()
 	newFixture := func(t *testing.T) (*Engine, *fakeruntime.Runtime, []resource.Envelope, int) {
 		t.Helper()
 		ln, err := net.Listen("tcp", "127.0.0.1:0")

@@ -28,6 +28,7 @@ func writeStateFixture(t *testing.T, content string) string {
 // a fresh empty instance per invocation — exactly what makes it useful here
 // (no real Docker needed to prove the check fires).
 func TestStateDoctorReportsAllDefectClasses(t *testing.T) {
+	t.Parallel()
 	// A genuine v1 file predates namespaces entirely, so its raw keys are
 	// bare "Kind/Name" (no namespace segment) — a 3-part key here would be
 	// misinterpreted by the v1 migration, which is exactly the kind of
@@ -91,6 +92,7 @@ func TestStateDoctorReportsAllDefectClasses(t *testing.T) {
 // scoping: "re-key legacy entries, drop entries for confirmed-gone
 // objects", nothing else).
 func TestStateRepairFixesStaleVersionAndDropsGoneObjects(t *testing.T) {
+	t.Parallel()
 	stateFile := writeStateFixture(t, `{
   "version": 1,
   "resources": {
@@ -168,6 +170,7 @@ func TestStateRepairFixesStaleVersionAndDropsGoneObjects(t *testing.T) {
 // a matching last-applied manifest, no Provider entries to check liveness
 // against) must come back untouched byte-for-byte.
 func TestStateRepairNoopOnHealthyState(t *testing.T) {
+	t.Parallel()
 	healthy := `{
   "version": 2,
   "resources": {
@@ -220,6 +223,7 @@ func TestStateRepairNoopOnHealthyState(t *testing.T) {
 // third state subcommand (doctor/repair are covered above and in the
 // output-contract harness).
 func TestStateInspectStructuredOutput(t *testing.T) {
+	t.Parallel()
 	stateFile := writeStateFixture(t, `{
   "version": 2,
   "resources": {
@@ -254,6 +258,7 @@ func TestStateInspectStructuredOutput(t *testing.T) {
 // host ports already rely on (`inventory`'s narrower "endpoints" projection
 // of this same map).
 func TestStateInspectSurfacesProviderState(t *testing.T) {
+	t.Parallel()
 	stateFile := writeStateFixture(t, `{
   "version": 2,
   "resources": {
@@ -286,6 +291,7 @@ func TestStateInspectSurfacesProviderState(t *testing.T) {
 // initialized to a non-nil empty slice so an empty state reports
 // "resources": [] rather than null.
 func TestStateInspectEmptyResourcesIsEmptyArray(t *testing.T) {
+	t.Parallel()
 	stateFile := writeStateFixture(t, `{"version": 2, "resources": {}}`)
 	out, err, code := run(t, "state", "inspect", "--state-file", stateFile, "-o", "json")
 	if err != nil || code != 0 {

@@ -3,6 +3,7 @@ package storagesize
 import "testing"
 
 func TestParseBytes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in      string
 		want    int64

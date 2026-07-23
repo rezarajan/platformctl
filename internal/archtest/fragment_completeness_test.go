@@ -139,6 +139,7 @@ func refName(spec map[string]any, field string) string {
 // manifest.FragmentCheck so this test can never silently drift from
 // production behavior.
 func TestFragmentCompletenessSweep(t *testing.T) {
+	t.Parallel()
 	docs := collectFragmentCorpusDocs(t)
 
 	// providerTypeByKey resolves a Binding's providerRef to its Provider's

@@ -6,6 +6,7 @@ import (
 )
 
 func TestRoundTrip(t *testing.T) {
+	t.Parallel()
 	in := List{
 		{Name: "kafka", Scheme: "kafka", Host: "127.0.0.1:19092", Internal: "rp:29092", RuntimeName: "rp", ContainerPort: 29092, Audience: "internal"},
 		{Name: "admin", Scheme: "http", Internal: "rp:9644"}, // no host
@@ -39,6 +40,7 @@ func TestRoundTrip(t *testing.T) {
 // direct map[string]any construction TestRoundTrip uses — since a real
 // decode yields float64 for a JSON number, not int (docs/planning/08 F4).
 func TestRuntimeFactsSurviveRealJSONRoundTrip(t *testing.T) {
+	t.Parallel()
 	in := List{{Name: "forward", Scheme: "tcp", Host: "127.0.0.1:15432", RuntimeName: "orders-db", ContainerPort: 5432, Audience: "host"}}
 	raw, err := json.Marshal(in.ToState())
 	if err != nil {
@@ -66,6 +68,7 @@ func TestRuntimeFactsSurviveRealJSONRoundTrip(t *testing.T) {
 // TestResolveSchemaRegistryURLFromEventStreamProvider in
 // internal/application/engine).
 func TestFromStateAcceptsRawToStateShape(t *testing.T) {
+	t.Parallel()
 	in := List{{Name: "schema-registry", Scheme: "http", Internal: "http://stream-broker:8081"}}
 	out := FromState(in.ToState())
 	if len(out) != 1 {

@@ -23,6 +23,7 @@ func sinkEnvelope(name string, options map[string]any) resource.Envelope {
 // stream/tolerance parses through, and an omitted tolerance defaults to
 // "all" (the only value that makes declaring a DLQ meaningful by default).
 func TestDeadLetterParsedAndDefaulted(t *testing.T) {
+	t.Parallel()
 	b, err := FromEnvelope(sinkEnvelope("s1", map[string]any{
 		"deadLetter": map[string]any{"stream": "dlq-events"},
 	}))
@@ -41,6 +42,7 @@ func TestDeadLetterParsedAndDefaulted(t *testing.T) {
 }
 
 func TestDeadLetterExplicitToleranceNone(t *testing.T) {
+	t.Parallel()
 	b, err := FromEnvelope(sinkEnvelope("s1", map[string]any{
 		"deadLetter": map[string]any{"stream": "dlq-events", "tolerance": "none"},
 	}))
@@ -53,6 +55,7 @@ func TestDeadLetterExplicitToleranceNone(t *testing.T) {
 }
 
 func TestDeadLetterAbsentIsNil(t *testing.T) {
+	t.Parallel()
 	b, err := FromEnvelope(sinkEnvelope("s1", map[string]any{}))
 	if err != nil {
 		t.Fatalf("FromEnvelope: %v", err)
@@ -63,6 +66,7 @@ func TestDeadLetterAbsentIsNil(t *testing.T) {
 }
 
 func TestDeadLetterMissingStreamRejected(t *testing.T) {
+	t.Parallel()
 	_, err := FromEnvelope(sinkEnvelope("s1", map[string]any{
 		"deadLetter": map[string]any{"tolerance": "all"},
 	}))
@@ -72,6 +76,7 @@ func TestDeadLetterMissingStreamRejected(t *testing.T) {
 }
 
 func TestDeadLetterInvalidToleranceRejected(t *testing.T) {
+	t.Parallel()
 	_, err := FromEnvelope(sinkEnvelope("s1", map[string]any{
 		"deadLetter": map[string]any{"stream": "dlq-events", "tolerance": "some"},
 	}))
@@ -84,6 +89,7 @@ func TestDeadLetterInvalidToleranceRejected(t *testing.T) {
 // Bindings only; a cdc-mode Binding declaring options.deadLetter must fail
 // at validate, not silently ignore it.
 func TestDeadLetterRejectedOutsideSinkMode(t *testing.T) {
+	t.Parallel()
 	e := resource.Envelope{
 		Metadata: resource.Metadata{Name: "c1"},
 		Spec: map[string]any{

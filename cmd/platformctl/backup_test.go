@@ -16,6 +16,7 @@ import (
 // demonstrate (mirroring apply/destroy's --include-external +
 // --yes-i-understand-this-is-destructive client-side pre-check).
 func TestRestoreRefusesWithoutOverwriteFlag(t *testing.T) {
+	t.Parallel()
 	out, err, code := run(t, "restore", "Source/orders", "nonexistent-path-never-read", "--from", "Dataset/wherever")
 	if err == nil {
 		t.Fatal("restore without the overwrite flag: expected a refusal, got success")
@@ -32,6 +33,7 @@ func TestRestoreRefusesWithoutOverwriteFlag(t *testing.T) {
 // default: both commands refuse, naming the gate, even with an otherwise
 // well-formed invocation.
 func TestBackupRestoreRequireGate(t *testing.T) {
+	t.Parallel()
 	_, err, code := run(t, "backup", "Source/orders", "testdata/noop-scenario", "--to", "Dataset/wherever")
 	if err == nil || code != cliutil.ExitValidation {
 		t.Fatalf("backup with BackupRestore disabled: got code %d, err %v; want ExitValidation naming the gate", code, err)
@@ -53,6 +55,7 @@ func TestBackupRestoreRequireGate(t *testing.T) {
 // TestBackupRestoreHelp is a smoke check that both commands are wired into
 // the CLI with their documented flags.
 func TestBackupRestoreHelp(t *testing.T) {
+	t.Parallel()
 	out, err, code := run(t, "backup", "--help")
 	if err != nil || code != 0 {
 		t.Fatalf("backup --help failed (code %d): %v", code, err)

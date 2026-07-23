@@ -13,12 +13,14 @@ import (
 )
 
 func TestConformance(t *testing.T) {
+	t.Parallel()
 	conformance.Run(t, func(t *testing.T) state.StateStore {
 		return New(filepath.Join(t.TempDir(), "state.json"))
 	})
 }
 
 func TestLoadMigratesV1KeysToDefaultNamespace(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "state.json")
 	if err := os.WriteFile(path, []byte(`{
   "version": 1,

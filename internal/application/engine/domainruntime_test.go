@@ -25,6 +25,7 @@ func envWithDomain(kind, name, namespace, domain string, spec map[string]any) re
 // domain (or "default") must translate the platform-network token to
 // itself, unchanged.
 func TestDomainRuntimeUndeclaredDomainIsByteIdenticalNoOp(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := envWithDomain("Provider", "pg", "default", "", nil)
 	d := newDomainRuntime(rt, map[string]any{}, env, env, nil)
@@ -46,6 +47,7 @@ func TestDomainRuntimeUndeclaredDomainIsByteIdenticalNoOp(t *testing.T) {
 // network name for the platform-network token, with zero provider-side
 // signal — this decorator is the only place the translation happens.
 func TestDomainRuntimeScopesTheDefaultToken(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := envWithDomain("Provider", "pg", "default", "payments", nil)
 	d := newDomainRuntime(rt, map[string]any{}, env, env, nil)
@@ -67,6 +69,7 @@ func TestDomainRuntimeScopesTheDefaultToken(t *testing.T) {
 // spec.runtime.network override passes through VERBATIM even in a
 // non-default domain — never domain-scoped.
 func TestDomainRuntimePinnedOverrideNeverScoped(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := envWithDomain("Provider", "pg", "default", "payments", nil)
 	d := newDomainRuntime(rt, map[string]any{"network": "custom-net"}, env, env, nil)
@@ -88,6 +91,7 @@ func TestDomainRuntimePinnedOverrideNeverScoped(t *testing.T) {
 // transit network is the shipped example) is never touched — only a call
 // naming EXACTLY the resolved token is domain-scoped.
 func TestDomainRuntimeNonTokenNamePassesThroughVerbatim(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := envWithDomain("Connection", "bridge", "default", "payments", nil)
 	d := newDomainRuntime(rt, map[string]any{}, env, env, nil)
@@ -111,6 +115,7 @@ func TestDomainRuntimeNonTokenNamePassesThroughVerbatim(t *testing.T) {
 // "exactly the holes the mediated entrypoint needs" — with zero code in
 // internal/adapters/providers/proxy.
 func TestDomainRuntimeConnectionOpensHolesForCrossDomainConsumers(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	conn := envWithDomain("Connection", "bridge", "default", "analytics", nil)
 	consumer := envWithDomain("Provider", "payments-src", "default", "payments", map[string]any{
@@ -158,6 +163,7 @@ func TestDomainRuntimeConnectionOpensHolesForCrossDomainConsumers(t *testing.T) 
 // realized by a Provider in another must translate the token to the
 // provider's domain (the containers live there), never its own.
 func TestDomainRuntimeUsesProviderDomainOfRecord(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	provEnv := envWithDomain("Provider", "broker", "default", "infra", nil)
 	esEnv := envWithDomain("EventStream", "events", "default", "analytics", nil)

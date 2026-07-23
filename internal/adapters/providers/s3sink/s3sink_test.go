@@ -29,6 +29,7 @@ func workerEnvelope(name string, configuration map[string]any) resource.Envelope
 // falls back to the engine's graph-inferred req.KafkaBootstrapServers, and
 // the effective value is published into providerState for visibility.
 func TestReconcileWorkerBootstrapServersInferred(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("sink", map[string]any{
 		"image":                "datascape-s3sink-connect:local",
@@ -61,6 +62,7 @@ func TestReconcileWorkerBootstrapServersInferred(t *testing.T) {
 // value and nothing inferable fails clearly rather than starting with an
 // empty Kafka address.
 func TestReconcileWorkerBootstrapServersRequiredWithoutInference(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("sink", map[string]any{
 		"image":                "datascape-s3sink-connect:local",
@@ -130,6 +132,7 @@ func sinkRequest(datasetFormat, registryURL string, options map[string]any) reco
 // TestConnectorConfigJSONStaysSchemaless: the pre-D2 default — a json
 // Dataset keeps the schemaless JSON converters, byte-for-byte.
 func TestConnectorConfigJSONStaysSchemaless(t *testing.T) {
+	t.Parallel()
 	_, cfg, err := desiredConnectorConfig(sinkRequest("json", "", nil))
 	if err != nil {
 		t.Fatalf("desiredConnectorConfig: %v", err)
@@ -156,6 +159,7 @@ func TestConnectorConfigJSONStaysSchemaless(t *testing.T) {
 // a parquet Dataset implies Avro converters wired to the engine-resolved
 // registry URL — the schema-carrying records the parquet writer requires.
 func TestConnectorConfigParquetWiresAvroConverters(t *testing.T) {
+	t.Parallel()
 	_, cfg, err := desiredConnectorConfig(sinkRequest("parquet", "http://broker:8081", nil))
 	if err != nil {
 		t.Fatalf("desiredConnectorConfig: %v", err)
@@ -185,6 +189,7 @@ func TestConnectorConfigParquetWiresAvroConverters(t *testing.T) {
 // upstream Provider hasn't reconciled; fail with a pointed message instead
 // of registering a connector that cannot decode its records.
 func TestConnectorConfigParquetWithoutRegistryFails(t *testing.T) {
+	t.Parallel()
 	if _, _, err := desiredConnectorConfig(sinkRequest("parquet", "", nil)); err == nil {
 		t.Fatal("want an error for parquet without a resolved registry URL")
 	}
@@ -195,6 +200,7 @@ func TestConnectorConfigParquetWithoutRegistryFails(t *testing.T) {
 // options.converter overrides the converter class for both key and value
 // (docs/planning/03 §7.3's escape hatch).
 func TestConnectorConfigExplicitFormatAndConverterOverride(t *testing.T) {
+	t.Parallel()
 	_, cfg, err := desiredConnectorConfig(sinkRequest("parquet", "http://broker:8081", map[string]any{
 		"format":    "avro",
 		"converter": "io.example.CustomConverter",
@@ -212,6 +218,7 @@ func TestConnectorConfigExplicitFormatAndConverterOverride(t *testing.T) {
 // TestValidateBindingOptionsFormatShape: option-shape validation mirrors
 // debezium's — a bogus format or empty converter fails at validate.
 func TestValidateBindingOptionsFormatShape(t *testing.T) {
+	t.Parallel()
 	p := New()
 	if err := p.ValidateBindingOptions("sink", map[string]any{"format": "xml"}); err == nil {
 		t.Error("bogus options.format accepted")
@@ -230,6 +237,7 @@ func TestValidateBindingOptionsFormatShape(t *testing.T) {
 // named EventStream isn't present in req.Resources (e.g. a stub Request in
 // a unit test, or a not-yet-graph-resolved DLQ stream).
 func TestDeadLetterConfigTranslation(t *testing.T) {
+	t.Parallel()
 	req := sinkRequest("json", "", map[string]any{
 		"deadLetter": map[string]any{"stream": "dlq-events"},
 	})
@@ -254,6 +262,7 @@ func TestDeadLetterConfigTranslation(t *testing.T) {
 // EventStream is present in req.Resources (the normal engine-resolved
 // case), its own spec.replication wins over the "1" fallback.
 func TestDeadLetterConfigReplicationFromEventStream(t *testing.T) {
+	t.Parallel()
 	req := sinkRequest("json", "", map[string]any{
 		"deadLetter": map[string]any{"stream": "dlq-events", "tolerance": "none"},
 	})
@@ -277,6 +286,7 @@ func TestDeadLetterConfigReplicationFromEventStream(t *testing.T) {
 // TestDeadLetterAbsentNoConfig: zero behavior change when deadLetter is
 // unset — none of the errors.* keys appear at all.
 func TestDeadLetterAbsentNoConfig(t *testing.T) {
+	t.Parallel()
 	_, cfg, err := desiredConnectorConfig(sinkRequest("json", "", nil))
 	if err != nil {
 		t.Fatalf("desiredConnectorConfig: %v", err)
@@ -292,6 +302,7 @@ func TestDeadLetterAbsentNoConfig(t *testing.T) {
 // docs/planning/08 C3: configuration.workers: N fans the Connect worker out
 // to N ordinals.
 func TestReconcileWorkerWorkersReplicaSet(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("sink", map[string]any{
 		"image":                "datascape-s3sink-connect:local",
@@ -319,6 +330,7 @@ func TestReconcileWorkerWorkersReplicaSet(t *testing.T) {
 // TestReconcileWorkerWorkersUndeclaredIsSingleContainer guards the zero-
 // behavior-change bar, mirroring debezium's identical test.
 func TestReconcileWorkerWorkersUndeclaredIsSingleContainer(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("sink", map[string]any{
 		"image":                "datascape-s3sink-connect:local",
@@ -341,6 +353,7 @@ func TestReconcileWorkerWorkersUndeclaredIsSingleContainer(t *testing.T) {
 // negative-test corpus; this only covers that every legal value still
 // passes.
 func TestValidateSpecWorkers(t *testing.T) {
+	t.Parallel()
 	p := New()
 	base := map[string]any{
 		"image":                "datascape-s3sink-connect:local",
@@ -362,6 +375,7 @@ func TestValidateSpecWorkers(t *testing.T) {
 // coverage of the real Docker port-collision bug a pinned connectPort
 // combined with workers > 1 would hit.
 func TestValidateSpecWorkersRefusesConnectPortPin(t *testing.T) {
+	t.Parallel()
 	p := New()
 	cfg := provider.Provider{
 		Configuration: map[string]any{
