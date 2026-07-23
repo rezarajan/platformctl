@@ -166,9 +166,14 @@ func TestCrossDomainMediatedPolicyEndToEnd(t *testing.T) {
 
 	// --- Leg 5: remove the Binding+Connection+Source, apply — manifest-
 	// driven teardown (the amendment's severing leg (b)): the Ziti
-	// service/policies/identities for the edge are GONE. ------------------
+	// service/policies/identities for the edge are GONE. The External
+	// Source's removal is a destructive delete guarded by the NFR-3 double
+	// flags — passing them here IS the amendment's own "proposed by a plan
+	// and approved like any other destructive change" (found live: without
+	// them, apply refuses exactly the Source's delete and nothing else). --
 	teardownDir := writeManifest(t, withoutMediation)
-	out, err, code = run(t, "apply", teardownDir, "--state-file", stateFile, "--auto-approve", "--policies", policies, "--feature-gates", gates)
+	out, err, code = run(t, "apply", teardownDir, "--state-file", stateFile, "--auto-approve", "--policies", policies, "--feature-gates", gates,
+		"--include-external", "--yes-i-understand-this-is-destructive")
 	if err != nil || code != 0 {
 		t.Fatalf("leg5: apply (teardown) failed (code %d): %v\n%s", code, err, out)
 	}

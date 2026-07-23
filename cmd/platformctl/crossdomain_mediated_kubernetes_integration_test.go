@@ -149,9 +149,12 @@ func TestOpenZitiCrossDomainPolicyOnKubernetesEndToEnd(t *testing.T) {
 
 	// --- Leg 5: remove the Binding+Connection+Source, apply — manifest-
 	// driven teardown: the Ziti service/policies/identities for the edge
-	// are GONE. ---------------------------------------------------------------
+	// are GONE. The External Source's removal needs the NFR-3 double flags
+	// (see the Docker leg's comment — the amendment's own "approved like
+	// any other destructive change"). -----------------------------------------
 	teardownDir := writeManifest(t, withoutMediation)
-	out, err, code = run(t, "apply", teardownDir, "--state-file", stateFile, "--auto-approve", "--policies", policies, "--feature-gates", gates)
+	out, err, code = run(t, "apply", teardownDir, "--state-file", stateFile, "--auto-approve", "--policies", policies, "--feature-gates", gates,
+		"--include-external", "--yes-i-understand-this-is-destructive")
 	if err != nil || code != 0 {
 		t.Fatalf("leg5: apply (teardown) failed (code %d): %v\n%s", code, err, out)
 	}

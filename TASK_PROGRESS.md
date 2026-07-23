@@ -64,6 +64,37 @@ criterion 3 composed end-to-end (cross-domain deny/exempt/mediate/withdraw).
 - [ ] doc 08 H9 Done-note (additive)
 - [ ] Final commit
 
+## Coordinator correction (2026-07-23, mid-task)
+- Merged main again (now at e993a07): H10 (CA pinning via EST/PKCS7,
+  InsecureSkipVerify removed except the documented TOFU bootstrap fetch;
+  enrollment JWTs moved Env->FileMount with waitTunnelEnrolled) and K1/K2
+  (label grammar + selector policy vocabulary). Merge was CLEAN — no
+  conflicts; verified my AddressQualifier fix (connection.go) and my
+  listDialPolicies client-side-filter fix (client.go) both survived
+  coherently on top of H10's rewrites.
+- Re-examined my client fix against H10: main's H10 client.go STILL
+  carries the broken `filter=type=%22Dial%22` query (confirmed via
+  `git show main:...`), so my fix is a genuinely different defect
+  (drift-detection/ObservedEdges broken since H6), NOT a duplicate of
+  H10 — kept, applied cleanly by the merge itself.
+- GPG signing is unavailable in this session (pinentry timeout/killed,
+  reproduced twice). WIP + merge commits made with `-c
+  commit.gpgsign=false` (one-off flag, no config change). Final commit
+  will follow the brief's GPG protocol (attempt signed; else leave
+  staged + COMMIT_MSG.txt).
+
+## Live Docker findings so far (pre-merge, recorded in 4b5eec9)
+1. Binding metadata.domain must match realizing Provider's domain
+   (ADR 022 addendum coherence check) — fixed in both testdata files.
+2. listDialPolicies filter defect (above).
+3. Manual live apply of the Docker scenario succeeded end-to-end
+   (10/10 Ready, ~24s); Ziti state manually verified EXACT: 1 service
+   (spiffe-datascape-default-analytics-connection-xd-conn), 1
+   datascape-mediated identity
+   (spiffe-datascape-default-payments-source-xd-src), 1 Dial policy
+   (dial-<identity>-<service>) with exact @id role refs. Manually
+   destroyed cleanly afterward (9 destroyed, external Source no-op'd).
+
 ## Names/ports used (avoid colliding with other suites)
 - Resources: xd-pg, xd-mesh (ctrl/router), xd-conn, xd-rp, xd-dbz, xd-src,
   xd-events, xd-cdc. Docker host ports: controller 12895, connection port
