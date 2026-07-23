@@ -1,0 +1,15 @@
+# docs/planning/08 H9's cross-domain governance half (ADR 021 §2/§3): a
+# payments -> analytics data flow is denied by default, with an explicit,
+# reasoned exemption the only legitimate escape (ADR 021 §3: "unlike lint
+# waivers — only honored if the policy itself declares exemptible: true").
+apiVersion: policy.datascape.io/v1alpha1
+kind: Policy
+metadata:
+  name: crossdomain-mediated-pack
+spec:
+  rules:
+    - id: deny-payments-to-analytics
+      matchEdge: {crossDomain: {from: payments, to: analytics}}
+      effect: deny
+      exemptible: true
+      message: "payments may not feed analytics directly — route through an approved, mediated Connection and record why in the exemption"

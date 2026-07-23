@@ -49,13 +49,26 @@ criterion 3 composed end-to-end (cross-domain deny/exempt/mediate/withdraw).
 - [x] AddressQualifier port + domainRuntime impl + openziti adapter fix.
   Build clean, archtest clean (domain_decoupling, wrapper_completeness,
   mediation_layering, request_facts_frozen), full `go test ./...` green.
-- [ ] testdata/crossdomain-mediated-scenario (Docker)
-- [ ] testdata/crossdomain-mediated-k8s-scenario (Kubernetes)
-- [ ] cmd/platformctl/crossdomain_mediated_integration_test.go (Docker, 5 legs)
-- [ ] cmd/platformctl/crossdomain_mediated_kubernetes_integration_test.go
-      (TestOpenZitiCrossDomainPolicyOnKubernetesEndToEnd — CI shard name match)
-- [ ] scripts/test-impact.sh suite row + TestIntegrationSuiteMapCoversEveryTest
-- [ ] Live Docker run (flock-wrapped)
+- [x] testdata/crossdomain-mediated-scenario (Docker) + policies/policy.yaml
+- [x] testdata/crossdomain-mediated-k8s-scenario (Kubernetes) + policies/
+- [x] cmd/platformctl/crossdomain_mediated_integration_test.go (Docker, 5 legs)
+- [x] cmd/platformctl/crossdomain_mediated_kubernetes_integration_test.go
+      (TestOpenZitiCrossDomainPolicyOnKubernetesEndToEnd — CI shard name
+      match confirmed via TestCIScenarioShardsPartitionKubernetesTests)
+- [x] scripts/test-impact.sh suite row (`crossdomain-mediated`) +
+      TestIntegrationSuiteMapCoversEveryTest green
+- [x] gofmt/vet(both tag sets)/build all clean; full `go test ./...` green
+- [ ] Live Docker run (flock-wrapped) — next step
 - [ ] Live K8s run (flock-wrapped) — or record token-expired if blocked
+- [ ] golangci-lint
 - [ ] doc 08 H9 Done-note (additive)
 - [ ] Final commit
+
+## Names/ports used (avoid colliding with other suites)
+- Resources: xd-pg, xd-mesh (ctrl/router), xd-conn, xd-rp, xd-dbz, xd-src,
+  xd-events, xd-cdc. Docker host ports: controller 12895, connection port
+  25795, redpanda kafka 19295, debezium connect 18295.
+- Docker leg postgres volume "xd-pg-data", redpanda volume "xd-rp-data"
+  (providerkit.EnsureInstance's "<name>-data" convention) — if the live
+  run reports Janitor residue on these, the actual name differs and needs
+  correcting from what EnsureInstance/postgres.go/redpanda.go actually do.
