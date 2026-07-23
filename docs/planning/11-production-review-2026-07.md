@@ -565,3 +565,15 @@ static. Dimensions, each producing findings verified before fixing:
   CDC proof on BOTH runtimes; picks up H5's domains via mid-task main
   re-merge). E6/E7 remain queued behind this per owner priority.
   Wave-4 merge queue (I12, I9, H5) continues as evidence lands.
+- 2026-07-23: WAVE 4 MERGED. I10+I11 7bc49d4 (with ADR 027), I12
+  3defefc (evidence 22/22), I9 b78a404 (evidence 22/22, wireguard
+  migration proof included), H5 7add89f (evidence: Docker segmentation
+  7.4s + domains ledger green at branch state; engine conflict with I9
+  composed decorator-first; merge-gate add-ons: 63-char NetworkName
+  truncation with collision-safe hash suffix [caveat D closed] — and
+  the lint gate caught logf orphaned by the H5xI11 composition, deleted
+  c204885). All worktrees cleaned. Stage I is now FULLY COMPLETE
+  (I1-I12); Stage H: H1-H5 done, H6+H8 in flight (ADR 027 wave), H7
+  queued. Merged-state gate sweep running. Remaining after the 027
+  wave: E6→E7, H7, local-minikube Calico recreation (caveat B), owner
+  decisions.
