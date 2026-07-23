@@ -106,6 +106,7 @@ func codesOf(findings []Finding) map[string]int {
 // --- DL001 -----------------------------------------------------------------
 
 func TestDuplicateCapture(t *testing.T) {
+	t.Parallel()
 	base := []resource.Envelope{
 		envelope("Provider", "src-p", map[string]any{"type": "source-stub", "runtime": map[string]any{"type": "fake"}}),
 		envelope("Provider", "cdc-p", map[string]any{"type": "cdc-stub", "runtime": map[string]any{"type": "fake"}}),
@@ -175,6 +176,7 @@ func TestDuplicateCapture(t *testing.T) {
 // --- DL002 -----------------------------------------------------------------
 
 func TestSinkCollision(t *testing.T) {
+	t.Parallel()
 	envelopes := []resource.Envelope{
 		envelope("Provider", "broker-p", map[string]any{"type": "broker-stub", "runtime": map[string]any{"type": "fake"}}),
 		envelope("Provider", "sink-p", map[string]any{"type": "sink-stub", "runtime": map[string]any{"type": "fake"}}),
@@ -198,6 +200,7 @@ func TestSinkCollision(t *testing.T) {
 // --- DL003 -------------------------------------------------------------------
 
 func TestObserverNotConsumed(t *testing.T) {
+	t.Parallel()
 	makeEnvelopes := func(cdcType string) []resource.Envelope {
 		e := envelope("Binding", "cdc1", map[string]any{
 			"mode": "cdc", "sourceRef": ref("db"), "targetRef": ref("es1"), "providerRef": ref("cdc-p"),
@@ -229,6 +232,7 @@ func TestObserverNotConsumed(t *testing.T) {
 // --- DL004 -------------------------------------------------------------------
 
 func TestPlaintextBoundary(t *testing.T) {
+	t.Parallel()
 	newEnvelopes := func(schemes []string, scheme string) []resource.Envelope {
 		spec := map[string]any{"providerRef": ref("edge-p"), "port": 9999, "target": "internal:9999"}
 		if scheme != "" {
@@ -271,6 +275,7 @@ func TestPlaintextBoundary(t *testing.T) {
 // --- DL010/011/012/013 -------------------------------------------------------
 
 func TestOrphanedEventStreamAndUnreferenced(t *testing.T) {
+	t.Parallel()
 	envelopes := []resource.Envelope{
 		envelope("Provider", "broker-p", map[string]any{"type": "broker-stub", "runtime": map[string]any{"type": "fake"}}),
 		envelope("Provider", "catalog-p", map[string]any{"type": "catalog-stub", "runtime": map[string]any{"type": "fake"}}),
@@ -299,6 +304,7 @@ func TestOrphanedEventStreamAndUnreferenced(t *testing.T) {
 }
 
 func TestDeadEndPipeline(t *testing.T) {
+	t.Parallel()
 	envelopes := []resource.Envelope{
 		envelope("Provider", "src-p", map[string]any{"type": "source-stub", "runtime": map[string]any{"type": "fake"}}),
 		envelope("Provider", "cdc-p", map[string]any{"type": "cdc-stub", "runtime": map[string]any{"type": "fake"}}),
@@ -320,6 +326,7 @@ func TestDeadEndPipeline(t *testing.T) {
 // --- DL014 -------------------------------------------------------------------
 
 func TestSingleReplicaWithHAGate(t *testing.T) {
+	t.Parallel()
 	envelopes := []resource.Envelope{
 		envelope("Provider", "broker-p", map[string]any{
 			"type": "broker-stub", "runtime": map[string]any{"type": "fake"},
@@ -351,6 +358,7 @@ func TestSingleReplicaWithHAGate(t *testing.T) {
 // --- DL020/DL021 --------------------------------------------------------------
 
 func TestDeletionPolicyAndProtectUnset(t *testing.T) {
+	t.Parallel()
 	envelopes := []resource.Envelope{
 		envelope("Provider", "src-p", map[string]any{"type": "source-stub", "runtime": map[string]any{"type": "fake"}}),
 		envelope("Source", "db", map[string]any{"engine": "postgres", "providerRef": ref("src-p")}),
@@ -392,6 +400,7 @@ func TestDeletionPolicyAndProtectUnset(t *testing.T) {
 // --- Waivers -------------------------------------------------------------------
 
 func TestWaivers(t *testing.T) {
+	t.Parallel()
 	base := []resource.Envelope{
 		envelope("Provider", "broker-p", map[string]any{"type": "broker-stub", "runtime": map[string]any{"type": "fake"}}),
 	}
@@ -443,6 +452,7 @@ func TestWaivers(t *testing.T) {
 // --- Provider orchestration -----------------------------------------------
 
 func TestProviderDesignLinterCalledOncePerType(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	stub := designLinterStub{
 		stubProvider: stubProvider{"multi-stub"},
@@ -472,6 +482,7 @@ func TestProviderDesignLinterCalledOncePerType(t *testing.T) {
 // --- Determinism + ordering --------------------------------------------------
 
 func TestRunDeterminism(t *testing.T) {
+	t.Parallel()
 	envelopes, resolve, opts := allCodesFixture(t)
 	g := mustGraph(t, envelopes)
 
@@ -491,6 +502,7 @@ func TestRunDeterminism(t *testing.T) {
 }
 
 func TestFindingsAreSorted(t *testing.T) {
+	t.Parallel()
 	envelopes, resolve, opts := allCodesFixture(t)
 	g := mustGraph(t, envelopes)
 	findings, err := Run(envelopes, g, resolve, opts)
@@ -507,6 +519,7 @@ func TestFindingsAreSorted(t *testing.T) {
 // built-in code (DL000 plus the full ADR 020 §4 table), asserting the exact
 // set of codes produced.
 func TestAllBuiltinCodesFixture(t *testing.T) {
+	t.Parallel()
 	envelopes, resolve, opts := allCodesFixture(t)
 	g := mustGraph(t, envelopes)
 	findings, err := Run(envelopes, g, resolve, opts)

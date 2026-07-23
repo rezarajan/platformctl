@@ -37,6 +37,7 @@ spec:
 // Provider declaring configuration.brokers > 1 fails `validate` with the
 // HighAvailability gate's standard disabled message, never at apply.
 func TestValidateRefusesBrokersWithoutHighAvailabilityGate(t *testing.T) {
+	t.Parallel()
 	dir := writeHAManifest(t, haBrokersManifest)
 	_, err, code := run(t, "validate", dir)
 	if err == nil {
@@ -56,6 +57,7 @@ func TestValidateRefusesBrokersWithoutHighAvailabilityGate(t *testing.T) {
 // TestValidateAcceptsBrokersWithHighAvailabilityGate: the same manifest
 // validates once the gate is enabled — the check is the gate, not the field.
 func TestValidateAcceptsBrokersWithHighAvailabilityGate(t *testing.T) {
+	t.Parallel()
 	dir := writeHAManifest(t, haBrokersManifest)
 	out, err, code := run(t, "validate", dir, "--feature-gates", "HighAvailability=true")
 	if err != nil || code != 0 {
@@ -68,6 +70,7 @@ func TestValidateAcceptsBrokersWithHighAvailabilityGate(t *testing.T) {
 // StreamReplicationValidator: replication > brokers fails validate with an
 // error naming both numbers.
 func TestValidateRefusesReplicationExceedingBrokers(t *testing.T) {
+	t.Parallel()
 	dir := writeHAManifest(t, haBrokersManifest+`---
 apiVersion: datascape.io/v1alpha1
 kind: EventStream
@@ -111,6 +114,7 @@ spec:
 // same mechanism as brokers, generalized by checkHighAvailabilityGate to
 // name whichever field triggered it.
 func TestValidateRefusesWorkersWithoutHighAvailabilityGate(t *testing.T) {
+	t.Parallel()
 	dir := writeHAManifest(t, haWorkersManifest)
 	_, err, code := run(t, "validate", dir)
 	if err == nil {
@@ -130,6 +134,7 @@ func TestValidateRefusesWorkersWithoutHighAvailabilityGate(t *testing.T) {
 // TestValidateAcceptsWorkersWithHighAvailabilityGate: the same manifest
 // validates once the gate is enabled.
 func TestValidateAcceptsWorkersWithHighAvailabilityGate(t *testing.T) {
+	t.Parallel()
 	dir := writeHAManifest(t, haWorkersManifest)
 	out, err, code := run(t, "validate", dir, "--feature-gates", "HighAvailability=true")
 	if err != nil || code != 0 {
@@ -141,6 +146,7 @@ func TestValidateAcceptsWorkersWithHighAvailabilityGate(t *testing.T) {
 // validate-time closure of docs/adr/004's known limitation: a fixed host
 // port cannot be combined with a replicated set.
 func TestValidateRefusesHostPortPinWithBrokers(t *testing.T) {
+	t.Parallel()
 	dir := writeHAManifest(t, `
 apiVersion: datascape.io/v1alpha1
 kind: Provider
@@ -192,6 +198,7 @@ spec:
 // so a distributed-MinIO Provider fails validate the same way, naming both
 // the gate and the declaring field.
 func TestValidateRefusesNodesWithoutHighAvailabilityGate(t *testing.T) {
+	t.Parallel()
 	dir := writeHAManifest(t, s3NodesManifest)
 	_, err, code := run(t, "validate", dir)
 	if err == nil {
@@ -211,6 +218,7 @@ func TestValidateRefusesNodesWithoutHighAvailabilityGate(t *testing.T) {
 // TestValidateAcceptsNodesWithHighAvailabilityGate: the same manifest
 // validates once the gate is enabled.
 func TestValidateAcceptsNodesWithHighAvailabilityGate(t *testing.T) {
+	t.Parallel()
 	dir := writeHAManifest(t, s3NodesManifest)
 	out, err, code := run(t, "validate", dir, "--feature-gates", "HighAvailability=true")
 	if err != nil || code != 0 {
@@ -224,6 +232,7 @@ func TestValidateAcceptsNodesWithHighAvailabilityGate(t *testing.T) {
 // nodes: 2 has no supported erasure-coding scheme and is refused even with
 // the gate enabled.
 func TestValidateRefusesNodesTopology2Or3(t *testing.T) {
+	t.Parallel()
 	dir := writeHAManifest(t, `
 apiVersion: datascape.io/v1alpha1
 kind: SecretReference
@@ -273,6 +282,7 @@ spec:
 // list: spec.configuration.workers > 1 (trino) fails validate exactly like
 // configuration.brokers > 1 (redpanda) — same gate, same error shape.
 func TestValidateRefusesTrinoWorkersWithoutHighAvailabilityGate(t *testing.T) {
+	t.Parallel()
 	dir := writeHAManifest(t, haTrinoWorkersManifest)
 	_, err, code := run(t, "validate", dir, "--feature-gates", "TrinoProvider=true")
 	if err == nil {
@@ -294,6 +304,7 @@ func TestValidateRefusesTrinoWorkersWithoutHighAvailabilityGate(t *testing.T) {
 // itself, Alpha/disabled per ADR 006) and HighAvailability (the replica
 // count).
 func TestValidateAcceptsTrinoWorkersWithHighAvailabilityGate(t *testing.T) {
+	t.Parallel()
 	dir := writeHAManifest(t, haTrinoWorkersManifest)
 	out, err, code := run(t, "validate", dir, "--feature-gates", "TrinoProvider=true,HighAvailability=true")
 	if err != nil || code != 0 {

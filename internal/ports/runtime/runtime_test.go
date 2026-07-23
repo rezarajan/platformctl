@@ -3,6 +3,7 @@ package runtime
 import "testing"
 
 func TestContainerSpec_ReplicaCount(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		replicas int
 		want     int
@@ -21,6 +22,7 @@ func TestContainerSpec_ReplicaCount(t *testing.T) {
 }
 
 func TestOrdinalName(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		i    int

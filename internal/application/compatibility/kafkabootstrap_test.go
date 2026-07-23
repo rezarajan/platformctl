@@ -63,6 +63,7 @@ func cdcSinkManifests(workerName, brokerName, eventStreamName, bindingName strin
 }
 
 func TestResolveKafkaBootstrapAddress_InfersFromGraph(t *testing.T) {
+	t.Parallel()
 	manifests := cdcSinkManifests("worker", "broker", "events", "cdc-binding")
 	resolve := typeResolver(map[string]reconciler.Provider{
 		"debezium": stubProvider{"debezium"},
@@ -77,6 +78,7 @@ func TestResolveKafkaBootstrapAddress_InfersFromGraph(t *testing.T) {
 }
 
 func TestResolveKafkaBootstrapAddress_NoMatchingBindingReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	manifests := cdcSinkManifests("worker", "broker", "events", "cdc-binding")
 	resolve := typeResolver(map[string]reconciler.Provider{
 		"debezium": stubProvider{"debezium"},
@@ -94,6 +96,7 @@ func TestResolveKafkaBootstrapAddress_NoMatchingBindingReturnsEmpty(t *testing.T
 }
 
 func TestResolveKafkaBootstrapAddress_AmbiguousReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	// Two Bindings on the same worker, wired to two different brokers via
 	// two different EventStreams — an unambiguous single answer doesn't
 	// exist, so the caller must fall back to requiring an explicit value.
@@ -149,6 +152,7 @@ func TestResolveKafkaBootstrapAddress_AmbiguousReturnsEmpty(t *testing.T) {
 }
 
 func TestResolveKafkaBootstrapAddress_NonCapableProviderReturnsEmpty(t *testing.T) {
+	t.Parallel()
 	manifests := cdcSinkManifests("worker", "broker", "events", "cdc-binding")
 	// The EventStream's own realizing Provider doesn't implement
 	// KafkaBootstrapAddressProvider (e.g. a future non-Kafka EventStream
@@ -182,6 +186,7 @@ func (specValidatingBootstrapStub) ValidateSpec(cfg provider.Provider) error {
 // checked through the full Check() path (not just ResolveKafkaBootstrapAddress
 // in isolation).
 func TestCheck_BootstrapServersInferredAtValidate(t *testing.T) {
+	t.Parallel()
 	manifests := cdcSinkManifests("worker", "broker", "events", "cdc-binding")
 	// The worker must also be CDC-capable for Check()'s mode-pairing
 	// capability check to pass.
@@ -200,6 +205,7 @@ func TestCheck_BootstrapServersInferredAtValidate(t *testing.T) {
 // unambiguously supply bootstrapServers, ValidateSpec's own requirement
 // still fires.
 func TestCheck_BootstrapServersAmbiguousStillRequiresExplicit(t *testing.T) {
+	t.Parallel()
 	manifests := []resource.Envelope{
 		envelope("Provider", "worker", map[string]any{
 			"type":    "debezium",

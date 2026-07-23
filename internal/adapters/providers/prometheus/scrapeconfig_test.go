@@ -10,6 +10,7 @@ import (
 )
 
 func TestTargetsFromMetrics(t *testing.T) {
+	t.Parallel()
 	metrics := []reconciler.MetricsTarget{
 		{JobName: "redpanda", Endpoint: endpoint.Endpoint{Name: "metrics", Internal: "http://redpanda:9644/public_metrics"}},
 		{JobName: "minio", Endpoint: endpoint.Endpoint{Name: "metrics", Internal: "http://minio:9000/minio/v2/metrics/cluster"}},
@@ -30,6 +31,7 @@ func TestTargetsFromMetrics(t *testing.T) {
 }
 
 func TestRenderScrapeConfigDeterministic(t *testing.T) {
+	t.Parallel()
 	targets := []ScrapeTarget{
 		{Job: "minio", Target: "minio:9000", Path: "/minio/v2/metrics/cluster"},
 		{Job: "redpanda", Target: "redpanda:9644", Path: "/public_metrics"},
@@ -54,6 +56,7 @@ func TestRenderScrapeConfigDeterministic(t *testing.T) {
 }
 
 func TestRenderScrapeConfigCustomInterval(t *testing.T) {
+	t.Parallel()
 	out, err := RenderScrapeConfig(nil, "5s")
 	if err != nil {
 		t.Fatalf("RenderScrapeConfig: %v", err)
@@ -64,6 +67,7 @@ func TestRenderScrapeConfigCustomInterval(t *testing.T) {
 }
 
 func TestParseScrapeConfigRoundTrip(t *testing.T) {
+	t.Parallel()
 	targets := []ScrapeTarget{
 		{Job: "minio", Target: "minio:9000", Path: "/minio/v2/metrics/cluster"},
 		{Job: "redpanda", Target: "redpanda:9644", Path: "/public_metrics"},
@@ -82,6 +86,7 @@ func TestParseScrapeConfigRoundTrip(t *testing.T) {
 }
 
 func TestDiffScrapeConfig(t *testing.T) {
+	t.Parallel()
 	base := []ScrapeTarget{
 		{Job: "minio", Target: "minio:9000", Path: "/minio/v2/metrics/cluster"},
 		{Job: "redpanda", Target: "redpanda:9644", Path: "/public_metrics"},

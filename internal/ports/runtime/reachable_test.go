@@ -26,6 +26,7 @@ func (s *stubReachableRuntime) EnsureReachable(ctx context.Context, name string,
 }
 
 func TestWithReachableSucceedsFirstTry(t *testing.T) {
+	t.Parallel()
 	rt := &stubReachableRuntime{}
 	calls := 0
 	err := WithReachable(context.Background(), rt, "svc", 1234, ReachableOptions{}, func(ctx context.Context, addr string) error {
@@ -48,6 +49,7 @@ func TestWithReachableSucceedsFirstTry(t *testing.T) {
 // EnsureReachable call on the next attempt, not a retry against the same
 // tunnel/address.
 func TestWithReachableReResolvesPerAttempt(t *testing.T) {
+	t.Parallel()
 	rt := &stubReachableRuntime{}
 	attempt := 0
 	opts := ReachableOptions{Timeout: time.Second, Interval: time.Millisecond}
@@ -73,6 +75,7 @@ func TestWithReachableReResolvesPerAttempt(t *testing.T) {
 }
 
 func TestWithReachableTimesOut(t *testing.T) {
+	t.Parallel()
 	rt := &stubReachableRuntime{}
 	opts := ReachableOptions{Timeout: 20 * time.Millisecond, Interval: 5 * time.Millisecond}
 	err := WithReachable(context.Background(), rt, "svc", 1234, opts, func(ctx context.Context, addr string) error {
@@ -84,6 +87,7 @@ func TestWithReachableTimesOut(t *testing.T) {
 }
 
 func TestWithReachableSurfacesResolveErrors(t *testing.T) {
+	t.Parallel()
 	rt := &stubReachableRuntime{resolveErr: errors.New("container not found")}
 	opts := ReachableOptions{Timeout: 10 * time.Millisecond, Interval: 5 * time.Millisecond}
 	err := WithReachable(context.Background(), rt, "svc", 1234, opts, func(ctx context.Context, addr string) error {
@@ -96,6 +100,7 @@ func TestWithReachableSurfacesResolveErrors(t *testing.T) {
 }
 
 func TestWithReachableRespectsContextCancellation(t *testing.T) {
+	t.Parallel()
 	rt := &stubReachableRuntime{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

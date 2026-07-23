@@ -17,6 +17,7 @@ func env(spec map[string]any) resource.Envelope {
 // TestDeletionPolicyDefaultsToRetain guards docs/planning/07 §2.2: data
 // loss must be opted into, never implied.
 func TestDeletionPolicyDefaultsToRetain(t *testing.T) {
+	t.Parallel()
 	s, err := FromEnvelope(env(map[string]any{
 		"engine":      "postgres",
 		"providerRef": map[string]any{"name": "pg"},
@@ -30,6 +31,7 @@ func TestDeletionPolicyDefaultsToRetain(t *testing.T) {
 }
 
 func TestDeletionPolicyRejectsUnknownValue(t *testing.T) {
+	t.Parallel()
 	_, err := FromEnvelope(env(map[string]any{
 		"engine":         "postgres",
 		"providerRef":    map[string]any{"name": "pg"},

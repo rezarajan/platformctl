@@ -60,6 +60,7 @@ var providerScanDirs = []string{"../adapters/providers"}
 // naming.NetworkName/resource.NormalizeDomain itself — move that logic back
 // into the engine's decorator instead.
 func TestProvidersContainNoDomainScopedNetworkNaming(t *testing.T) {
+	t.Parallel()
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +110,7 @@ func scanFileForDomainNaming(path string, violations *[]string) error {
 // no-op (the same discipline loopback_test.go's own
 // TestScanFileDetectsAndExemptsCorrectly holds itself to).
 func TestScanFileForDomainNamingDetectsViolation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fixture.go")
 	content := `package fixture
@@ -167,6 +169,7 @@ func peers(edges []graphaccess.Edge, self resource.Key, resources map[resource.K
 // — passes cleanly, so this test can't have accidentally started flagging
 // legitimate, unrelated code.
 func TestScanFileForDomainNamingClean(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fixture.go")
 	content := `package fixture

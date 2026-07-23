@@ -15,6 +15,7 @@ func strPtr(s string) *string { return &s }
 // managed (non-external) Source with no Connection resolves to its own
 // Provider container name at the engine's default port.
 func TestResolveEndpointProviderRefOnly(t *testing.T) {
+	t.Parallel()
 	src := source.Source{ProviderRef: strPtr("pg")}
 	srcEnv := resource.Envelope{Metadata: resource.Metadata{Name: "src1", Namespace: "default"}}
 	req := reconciler.Request{Resources: map[resource.Key]resource.Envelope{}}
@@ -36,6 +37,7 @@ func TestResolveEndpointProviderRefOnly(t *testing.T) {
 // Connection's own name on the shared network, and preflight resolves
 // through the Connection's forwarder name/port, not a bare host:port dial.
 func TestResolveEndpointManagedConnection(t *testing.T) {
+	t.Parallel()
 	src := source.Source{External: true, ConnectionRef: strPtr("conn1")}
 	srcEnv := resource.Envelope{
 		Metadata: resource.Metadata{Name: "src1", Namespace: "default"},
@@ -77,6 +79,7 @@ func TestResolveEndpointManagedConnection(t *testing.T) {
 // at an external Connection: the address is the Connection's declared host,
 // and preflight dials that host:port directly (no runtime involved).
 func TestResolveEndpointExternalConnection(t *testing.T) {
+	t.Parallel()
 	src := source.Source{External: true, ConnectionRef: strPtr("conn1")}
 	srcEnv := resource.Envelope{
 		Metadata: resource.Metadata{Name: "src1", Namespace: "default"},
@@ -117,6 +120,7 @@ func TestResolveEndpointExternalConnection(t *testing.T) {
 // options.databaseHostname/databasePort override whatever the Connection or
 // ProviderRef resolved to.
 func TestResolveEndpointOptionsOverride(t *testing.T) {
+	t.Parallel()
 	src := source.Source{ProviderRef: strPtr("pg")}
 	srcEnv := resource.Envelope{Metadata: resource.Metadata{Name: "src1", Namespace: "default"}}
 	req := reconciler.Request{Resources: map[resource.Key]resource.Envelope{}}
@@ -144,6 +148,7 @@ func TestResolveEndpointOptionsOverride(t *testing.T) {
 // ProviderRef, no Connection, no options override — ok is false so the
 // caller can construct its own error message.
 func TestResolveEndpointNoAddress(t *testing.T) {
+	t.Parallel()
 	src := source.Source{}
 	srcEnv := resource.Envelope{Metadata: resource.Metadata{Name: "src1", Namespace: "default"}}
 	req := reconciler.Request{Resources: map[resource.Key]resource.Envelope{}}
@@ -161,6 +166,7 @@ func TestResolveEndpointNoAddress(t *testing.T) {
 // fallback chain's first tier: the Connection's own secretRef wins over the
 // Provider-level key when both resolved into req.Secrets.
 func TestResolveEndpointCredentialsConnectionSecretPreferred(t *testing.T) {
+	t.Parallel()
 	req := reconciler.Request{Secrets: map[string]map[string]string{
 		"conn-creds":     {"username": "conn-user", "password": "conn-pass"},
 		"provider-creds": {"username": "prov-user", "password": "prov-pass"},
@@ -180,6 +186,7 @@ func TestResolveEndpointCredentialsConnectionSecretPreferred(t *testing.T) {
 // Connection secretRef (or one not resolved into req.Secrets) falls back to
 // the Provider-level configuration key.
 func TestResolveEndpointCredentialsProviderFallback(t *testing.T) {
+	t.Parallel()
 	req := reconciler.Request{Secrets: map[string]map[string]string{
 		"provider-creds": {"username": "prov-user", "password": "prov-pass"},
 	}}
@@ -198,6 +205,7 @@ func TestResolveEndpointCredentialsProviderFallback(t *testing.T) {
 // neither the Connection's secretRef nor the Provider-level key resolved
 // into req.Secrets.
 func TestResolveEndpointCredentialsNoneResolved(t *testing.T) {
+	t.Parallel()
 	req := reconciler.Request{Secrets: map[string]map[string]string{}}
 	cfg := provider.Provider{Configuration: map[string]any{}}
 

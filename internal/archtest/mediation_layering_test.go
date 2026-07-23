@@ -52,6 +52,7 @@ var zitiAllowedDirs = []string{
 // construction (only .go files are scanned, and this file lives in an
 // allowed dir) — the point is production code coupling, not prose.
 func TestZitiImportsConfinedToOpenzitiAdapter(t *testing.T) {
+	t.Parallel()
 	repoRoot, err := repoRootDir()
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +94,7 @@ func TestZitiImportsConfinedToOpenzitiAdapter(t *testing.T) {
 // gives — a fixture the scanner is run against directly, not a committed
 // violation.
 func TestScanForZitiCouplingDetectsAndExemptsCorrectly(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fixture.go")
 	content := `package fixture

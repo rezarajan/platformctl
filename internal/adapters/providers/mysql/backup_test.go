@@ -13,6 +13,7 @@ import (
 // object-store credentials) — it rides an env var the shell expands
 // quoted, postgres's PGDATABASE pattern.
 func TestDBSideDoesNotInterpolateDatabaseName(t *testing.T) {
+	t.Parallel()
 	hostile := `appdb; touch /tmp/pwned $(cat /run/datascape/client.cnf)`
 	cfg := provider.Provider{Type: "mysql", Configuration: map[string]any{}}
 	for _, tool := range []string{dumpTool(cfg), restoreTool(cfg)} {

@@ -21,6 +21,13 @@ import (
 // duration of a test, restoring them on cleanup — avoids waiting out a
 // real 45s timeout to exercise the honest-failure path (docs/planning/11
 // B1 finding 2).
+//
+// J1 fast-tier note: routeSettleTimeout/routeSettlePoll are package-level
+// vars (docker.go) this helper mutates directly — every caller of
+// shrinkRouteSettle must stay serial (no t.Parallel()) with every other
+// caller, or two goroutines race on the same package globals (found live
+// via `go test -race`: TestReconcileConnectionDockerFailsHonestlyWhenRouteNeverServes
+// vs TestReconcileConnectionDockerSucceedsWhenRouteServes).
 func shrinkRouteSettle(t *testing.T) {
 	t.Helper()
 	prevTimeout, prevPoll := routeSettleTimeout, routeSettlePoll
@@ -107,6 +114,8 @@ func ingressConnectionEnvelope(name, providerRef string, port int, target string
 // on the shared proxy's published http port (docs/planning/11 B1 finding
 // 2).
 func TestReconcileConnectionDockerFailsHonestlyWhenRouteNeverServes(t *testing.T) {
+	// serial: shrinkRouteSettle mutates package-level routeSettleTimeout/
+	// routeSettlePoll (see its doc comment).
 	shrinkRouteSettle(t)
 
 	ctx := context.Background()
@@ -147,6 +156,8 @@ func TestReconcileConnectionDockerFailsHonestlyWhenRouteNeverServes(t *testing.T
 // reconcile settles and reports Ready — the settle poll must not regress
 // the healthy path.
 func TestReconcileConnectionDockerSucceedsWhenRouteServes(t *testing.T) {
+	// serial: shrinkRouteSettle mutates package-level routeSettleTimeout/
+	// routeSettlePoll (see its doc comment).
 	shrinkRouteSettle(t)
 
 	ctx := context.Background()

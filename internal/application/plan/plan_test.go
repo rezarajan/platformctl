@@ -18,6 +18,7 @@ func testEnvelope(kind, name string, spec map[string]any) resource.Envelope {
 }
 
 func TestComputePlansAuthoritativeDeletes(t *testing.T) {
+	t.Parallel()
 	keep := testEnvelope("Provider", "keep", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
 	removed := testEnvelope("EventStream", "removed", map[string]any{"providerRef": map[string]any{"name": "keep"}})
 	g, err := graph.Build([]resource.Envelope{keep})
@@ -61,6 +62,7 @@ func TestComputePlansAuthoritativeDeletes(t *testing.T) {
 // removing a protected resource from manifests must never fall through to an
 // authoritative delete — it must be reported as a refusal naming the remedy.
 func TestComputePlansProtectedDeleteAsRefused(t *testing.T) {
+	t.Parallel()
 	keep := testEnvelope("Provider", "keep", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
 	protected := testEnvelope("EventStream", "protected", map[string]any{"providerRef": map[string]any{"name": "keep"}})
 	protected.Metadata.Protect = true
@@ -105,6 +107,7 @@ func TestComputePlansProtectedDeleteAsRefused(t *testing.T) {
 }
 
 func TestComputeDestroyRefusesProtectedResource(t *testing.T) {
+	t.Parallel()
 	protected := testEnvelope("Provider", "protected", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
 	protected.Metadata.Protect = true
 	g, err := graph.Build([]resource.Envelope{protected})
@@ -129,6 +132,7 @@ func TestComputeDestroyRefusesProtectedResource(t *testing.T) {
 }
 
 func TestComputeReportsLegacyOrphanUnknown(t *testing.T) {
+	t.Parallel()
 	keep := testEnvelope("Provider", "keep", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
 	legacy := resource.Key{Namespace: resource.DefaultNamespace, Kind: "Provider", Name: "legacy"}
 	g, err := graph.Build([]resource.Envelope{keep})
@@ -162,6 +166,7 @@ func TestComputeReportsLegacyOrphanUnknown(t *testing.T) {
 // must be explicit — an authoritative delete of the old key plus a create
 // of the new key — never a silent update-in-place of one for the other.
 func TestComputePlansRenameAsDeleteAndCreate(t *testing.T) {
+	t.Parallel()
 	prov := testEnvelope("Provider", "keep", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
 	oldName := testEnvelope("EventStream", "old-name", map[string]any{"providerRef": map[string]any{"name": "keep"}})
 	newName := testEnvelope("EventStream", "new-name", map[string]any{"providerRef": map[string]any{"name": "keep"}})
@@ -206,6 +211,7 @@ func TestComputePlansRenameAsDeleteAndCreate(t *testing.T) {
 // without renaming the resource must show up as an in-place update, driven
 // purely by the spec-hash diff — never silently treated as a no-op.
 func TestComputePlansProviderTypeChangeAsUpdate(t *testing.T) {
+	t.Parallel()
 	before := testEnvelope("EventStream", "events", map[string]any{"providerRef": map[string]any{"name": "old-provider"}})
 	after := testEnvelope("EventStream", "events", map[string]any{"providerRef": map[string]any{"name": "new-provider"}})
 	oldProv := testEnvelope("Provider", "old-provider", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
@@ -239,6 +245,7 @@ func TestComputePlansProviderTypeChangeAsUpdate(t *testing.T) {
 }
 
 func TestComputePlansSecretHashChangeAndDependents(t *testing.T) {
+	t.Parallel()
 	creds := testEnvelope("SecretReference", "db-creds", map[string]any{"backend": "env", "keys": []any{"password"}})
 	prov := testEnvelope("Provider", "postgres", map[string]any{
 		"type":       "noop",
@@ -288,6 +295,7 @@ func TestComputePlansSecretHashChangeAndDependents(t *testing.T) {
 }
 
 func TestComputePlansSecretBaselineWhenHashMissing(t *testing.T) {
+	t.Parallel()
 	creds := testEnvelope("SecretReference", "db-creds", map[string]any{"backend": "env", "keys": []any{"password"}})
 	g, err := graph.Build([]resource.Envelope{creds})
 	if err != nil {
@@ -315,6 +323,7 @@ func TestComputePlansSecretBaselineWhenHashMissing(t *testing.T) {
 }
 
 func TestComputePlansDependentWhenSecretAlreadyAdvancedAfterFailedApply(t *testing.T) {
+	t.Parallel()
 	creds := testEnvelope("SecretReference", "db-creds", map[string]any{"backend": "env", "keys": []any{"password"}})
 	prov := testEnvelope("Provider", "mysql", map[string]any{
 		"type":       "noop",

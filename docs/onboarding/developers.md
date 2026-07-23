@@ -111,23 +111,43 @@ this is the recipe (docs/planning/02-architecture.md §11):
    (docs/planning/03-resource-model-reference.md §1, docs/adr/014-feature-gate-strategy.md) —
    `gates.Register("YourProvider", featuregate.Alpha, false)`.
 6. **Update the impact map** — add your provider's package(s) to `scripts/test-impact.sh`'s
-   suite↔scope table in the same commit as your first integration test, so `test-affected`
+   suite↔scope table in the same commit as your first integration test, so `test-deep`
    actually selects it.
 7. **Cover it with an integration test** stood up against real Docker (and, if it touches the
    Kubernetes runtime path, under the minimal-RBAC kubeconfig — see Testing below).
 
 ## Testing
 
-- **Unit** (`go test ./...`, no Docker) — domain logic, application-layer orchestration against
-  the `fake` runtime/test doubles, schema validation.
+Three tiers (ADR 028: [docs/adr/028-test-tiering.md](../adr/028-test-tiering.md)) — **`just
+test` is the TDD default, the only thing you wait for on every save.** Deep and stress exist so
+the fast tier can stay honest about that.
+
+- **Fast** (`just test` = `go test ./...`, no Docker, no timing) — domain logic,
+  application-layer orchestration against the `fake` runtime/test doubles, schema validation,
+  the provider conformance suite (E6). `t.Parallel()` throughout — every non-integration test is
+  parallel-safe by default; a test that mutates shared package-level state (an env var via
+  `os.Setenv`/`t.Setenv`, a package-level tuning var like `internal/domain/hostport`'s claims
+  table or a provider's `shrink*Settle` test helper, a global registry) stays serial with a
+  one-line comment explaining why, right next to the test — see
+  `internal/domain/hostport/hostport_test.go` and
+  `internal/adapters/providers/wireguard/wireguard_test.go` for the pattern. Budget-guarded in CI
+  (`internal/tools/testbudget` parses `go test -json`): any single test over 60s, or the tier
+  over 90s total, fails the build — a slow fast-tier test is a defect, not a nuisance to route
+  around.
 - **Conformance** — every port with a conformance suite (`runtime.ContainerRuntime`,
   `reconciler.Provider` families) must have every adapter pass it; this is what proves a second
-  runtime adapter (Kubernetes) is a drop-in, not a special case.
-- **Integration** (`-tags integration`, real Docker/Kubernetes) — `just test-integration` runs
-  the full sweep (budget ~30-60 min); prefer `just test-affected` (`scripts/test-impact.sh
-  --base main`) day to day — it impact-maps your diff to the affected suites and dedups against
-  a shared ledger keyed by content-state, so the same green isn't re-earned redundantly across
-  sessions and agents (docs/planning/06 §10).
+  runtime adapter (Kubernetes) is a drop-in, not a special case. Runs in the fast tier (against
+  fakes), not the deep tier.
+- **Deep** (`-tags integration`, real Docker/Kubernetes) — `just test-integration` runs the full
+  sweep (budget ~30-60 min); prefer `just test-deep` (`scripts/test-impact.sh --base main`;
+  `test-affected` still works as an alias) day to day — it impact-maps your diff to the affected
+  suites and dedups against a shared ledger keyed by content-state, so the same green isn't
+  re-earned redundantly across sessions and agents (docs/planning/06 §10). `just test-deep`
+  wraps `scripts/test-impact.sh` bare — the script self-serializes on its own flock; never wrap
+  it in another flock or two invocations deadlock each other.
+- **Stress** — CI's per-suite matrix + the race detector + Calico-enforced Kubernetes, on every
+  PR. Local green is a signal; CI green is the verdict — pass-local/fail-CI divergence is an
+  environment-timing bug to fix, not a reason to run integration suites locally by default.
 - **Kubernetes/minimal-RBAC rule**: Kubernetes verification must run under the minimal-RBAC
   kubeconfig minted for the `platformctl` ServiceAccount (exactly as CI's K8s job does), never
   ambient admin credentials — a new Kubernetes API call that passes under admin creds but isn't

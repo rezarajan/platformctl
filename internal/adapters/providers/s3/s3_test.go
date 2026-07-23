@@ -12,6 +12,7 @@ import (
 // provider reads, must be listed in spec.secretRefs or validate must catch
 // it — never a runtime surprise from an unresolved credential.
 func TestValidateSpecRequiresImagePullSecretRefWiring(t *testing.T) {
+	t.Parallel()
 	p := New()
 	cfg := provider.Provider{
 		Type:          "s3",
@@ -37,6 +38,7 @@ func TestValidateSpecRequiresImagePullSecretRefWiring(t *testing.T) {
 // naming the missing secretRef, not a nil-pointer surprise later), and
 // resolved (username/password/registry carried through unchanged).
 func TestImagePullAuthResolution(t *testing.T) {
+	t.Parallel()
 	cfg := provider.Provider{Configuration: map[string]any{}}
 	const name = "store"
 
@@ -68,6 +70,7 @@ func TestImagePullAuthResolution(t *testing.T) {
 // clear message, not accepted and left to fail unpredictably at container
 // start.
 func TestValidateSpecNodesTopology(t *testing.T) {
+	t.Parallel()
 	p := New()
 	base := provider.Provider{
 		Type:          "s3",
@@ -99,6 +102,7 @@ func TestValidateSpecNodesTopology(t *testing.T) {
 // auto-assigned under the StableIdentity set shape, so a fixed pin cannot
 // be combined with nodes.
 func TestValidateSpecNodesRefusesPortPin(t *testing.T) {
+	t.Parallel()
 	p := New()
 	cfg := provider.Provider{
 		Type:          "s3",
@@ -115,6 +119,7 @@ func TestValidateSpecNodesRefusesPortPin(t *testing.T) {
 }
 
 func TestNodesDeclared(t *testing.T) {
+	t.Parallel()
 	if _, declared := nodesDeclared(provider.Provider{Configuration: map[string]any{}}); declared {
 		t.Error("nodesDeclared() = true with no nodes key")
 	}
@@ -129,6 +134,7 @@ func TestNodesDeclared(t *testing.T) {
 }
 
 func TestMinioNodeURLs(t *testing.T) {
+	t.Parallel()
 	got := minioNodeURLs("store", 4)
 	want := []string{
 		"http://store-0:9000/data",

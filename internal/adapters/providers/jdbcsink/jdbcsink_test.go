@@ -42,6 +42,7 @@ func simpleEnvelope(kind, name string, spec map[string]any) resource.Envelope {
 }
 
 func TestSupportedSinkEngines(t *testing.T) {
+	t.Parallel()
 	p := New()
 	got := p.SupportedSinkEngines()
 	want := map[string]bool{"postgres": true, "mysql": true}
@@ -56,6 +57,7 @@ func TestSupportedSinkEngines(t *testing.T) {
 }
 
 func TestReconcileWorkerBootstrapServersInferred(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("jsink", map[string]any{
 		"image": "datascape-jdbcsink-connect:local",
@@ -84,6 +86,7 @@ func TestReconcileWorkerBootstrapServersInferred(t *testing.T) {
 }
 
 func TestReconcileWorkerBootstrapServersRequiredWithoutInference(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("jsink", map[string]any{"image": "datascape-jdbcsink-connect:local"})
 	p := New()
@@ -140,6 +143,7 @@ func sinkRequest(registryURL string, options map[string]any) reconciler.Request 
 }
 
 func TestBuildDesiredConnectorInsertModeDefault(t *testing.T) {
+	t.Parallel()
 	d, err := buildDesiredConnector(sinkRequest("http://broker:8081", map[string]any{"format": "avro"}))
 	if err != nil {
 		t.Fatalf("buildDesiredConnector: %v", err)
@@ -165,6 +169,7 @@ func TestBuildDesiredConnectorInsertModeDefault(t *testing.T) {
 }
 
 func TestBuildDesiredConnectorUpsertModeDefaultsToRecordKey(t *testing.T) {
+	t.Parallel()
 	d, err := buildDesiredConnector(sinkRequest("http://broker:8081", map[string]any{
 		"format": "avro",
 		"mode":   "upsert",
@@ -184,6 +189,7 @@ func TestBuildDesiredConnectorUpsertModeDefaultsToRecordKey(t *testing.T) {
 }
 
 func TestBuildDesiredConnectorUpsertWithExplicitPKFields(t *testing.T) {
+	t.Parallel()
 	d, err := buildDesiredConnector(sinkRequest("http://broker:8081", map[string]any{
 		"format":   "avro",
 		"mode":     "upsert",
@@ -201,6 +207,7 @@ func TestBuildDesiredConnectorUpsertWithExplicitPKFields(t *testing.T) {
 }
 
 func TestBuildDesiredConnectorTableOverride(t *testing.T) {
+	t.Parallel()
 	d, err := buildDesiredConnector(sinkRequest("http://broker:8081", map[string]any{
 		"format": "avro",
 		"table":  "attendance",
@@ -214,6 +221,7 @@ func TestBuildDesiredConnectorTableOverride(t *testing.T) {
 }
 
 func TestBuildDesiredConnectorUnwrapOption(t *testing.T) {
+	t.Parallel()
 	d, err := buildDesiredConnector(sinkRequest("http://broker:8081", map[string]any{
 		"format": "avro",
 		"unwrap": true,
@@ -230,6 +238,7 @@ func TestBuildDesiredConnectorUnwrapOption(t *testing.T) {
 }
 
 func TestBuildDesiredConnectorUnwrapAbsentByDefault(t *testing.T) {
+	t.Parallel()
 	d, err := buildDesiredConnector(sinkRequest("http://broker:8081", map[string]any{"format": "avro"}))
 	if err != nil {
 		t.Fatalf("buildDesiredConnector: %v", err)
@@ -240,6 +249,7 @@ func TestBuildDesiredConnectorUnwrapAbsentByDefault(t *testing.T) {
 }
 
 func TestBuildDesiredConnectorAvroConverters(t *testing.T) {
+	t.Parallel()
 	d, err := buildDesiredConnector(sinkRequest("http://broker:8081", map[string]any{"format": "avro"}))
 	if err != nil {
 		t.Fatalf("buildDesiredConnector: %v", err)
@@ -257,12 +267,14 @@ func TestBuildDesiredConnectorAvroConverters(t *testing.T) {
 }
 
 func TestBuildDesiredConnectorAvroWithoutRegistryFails(t *testing.T) {
+	t.Parallel()
 	if _, err := buildDesiredConnector(sinkRequest("", map[string]any{"format": "avro"})); err == nil {
 		t.Fatal("want an error for avro without a resolved registry URL")
 	}
 }
 
 func TestBuildDesiredConnectorMissingCredentialsFails(t *testing.T) {
+	t.Parallel()
 	req := sinkRequest("http://broker:8081", map[string]any{"format": "avro"})
 	req.Secrets = nil
 	if _, err := buildDesiredConnector(req); err == nil {
@@ -273,6 +285,7 @@ func TestBuildDesiredConnectorMissingCredentialsFails(t *testing.T) {
 // TestDeadLetterConfigTranslation covers docs/planning/08 D6's requirement
 // that DLQ options work on this provider's sink Binding too.
 func TestDeadLetterConfigTranslation(t *testing.T) {
+	t.Parallel()
 	req := sinkRequest("http://broker:8081", map[string]any{
 		"format":     "avro",
 		"deadLetter": map[string]any{"stream": "dlq-events"},
@@ -295,6 +308,7 @@ func TestDeadLetterConfigTranslation(t *testing.T) {
 }
 
 func TestDeadLetterConfigReplicationFromEventStream(t *testing.T) {
+	t.Parallel()
 	req := sinkRequest("http://broker:8081", map[string]any{
 		"format":     "avro",
 		"deadLetter": map[string]any{"stream": "dlq-events", "tolerance": "none"},
@@ -322,6 +336,7 @@ func TestDeadLetterConfigReplicationFromEventStream(t *testing.T) {
 // runtime.EnsureReachable and supplies its own secretRef credentials in
 // preference to the provider-level credentialsSecretRef.
 func TestBuildDesiredConnectorExternalSourceViaConnection(t *testing.T) {
+	t.Parallel()
 	worker := workerEnvelope("jsink-worker", map[string]any{
 		"image":                "datascape-jdbcsink-connect:local",
 		"bootstrapServers":     "broker:29092",
@@ -382,6 +397,7 @@ func TestBuildDesiredConnectorExternalSourceViaConnection(t *testing.T) {
 }
 
 func TestValidateBindingOptionsRequiresSchemaCarryingFormat(t *testing.T) {
+	t.Parallel()
 	p := New()
 	if err := p.ValidateBindingOptions("sink", map[string]any{}); err == nil {
 		t.Error("unset options.format accepted, want an error (jdbcsink requires avro/protobuf)")
@@ -395,6 +411,7 @@ func TestValidateBindingOptionsRequiresSchemaCarryingFormat(t *testing.T) {
 }
 
 func TestValidateBindingOptionsMode(t *testing.T) {
+	t.Parallel()
 	p := New()
 	base := map[string]any{"format": "avro"}
 	if err := p.ValidateBindingOptions("sink", merge(base, "mode", "upsert")); err != nil {
@@ -406,6 +423,7 @@ func TestValidateBindingOptionsMode(t *testing.T) {
 }
 
 func TestValidateBindingOptionsPKFieldsShape(t *testing.T) {
+	t.Parallel()
 	p := New()
 	base := map[string]any{"format": "avro"}
 	if err := p.ValidateBindingOptions("sink", merge(base, "pkFields", []any{"id"})); err != nil {
@@ -420,6 +438,7 @@ func TestValidateBindingOptionsPKFieldsShape(t *testing.T) {
 }
 
 func TestValidateSpecCredentialsSecretRefOptional(t *testing.T) {
+	t.Parallel()
 	p := New()
 	cfg := provider.Provider{
 		Configuration: map[string]any{
@@ -433,6 +452,7 @@ func TestValidateSpecCredentialsSecretRefOptional(t *testing.T) {
 }
 
 func TestValidateSpecCredentialsSecretRefMustBeDeclared(t *testing.T) {
+	t.Parallel()
 	p := New()
 	cfg := provider.Provider{
 		Configuration: map[string]any{
@@ -451,6 +471,7 @@ func TestValidateSpecCredentialsSecretRefMustBeDeclared(t *testing.T) {
 // E5) — see cmd/platformctl's negative-test corpus; this only covers that
 // every legal value still passes.
 func TestValidateSpecWorkers(t *testing.T) {
+	t.Parallel()
 	p := New()
 	base := map[string]any{
 		"image":            "datascape-jdbcsink-connect:local",
@@ -465,6 +486,7 @@ func TestValidateSpecWorkers(t *testing.T) {
 }
 
 func TestValidateSpecWorkersRefusesConnectPortPin(t *testing.T) {
+	t.Parallel()
 	p := New()
 	cfg := provider.Provider{
 		Configuration: map[string]any{
@@ -482,6 +504,7 @@ func TestValidateSpecWorkersRefusesConnectPortPin(t *testing.T) {
 // TestReconcileWorkerWorkersReplicaSet mirrors s3sink's/debezium's identical
 // coverage of docs/planning/08 C3.
 func TestReconcileWorkerWorkersReplicaSet(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("jsink", map[string]any{
 		"image":            "datascape-jdbcsink-connect:local",

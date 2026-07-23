@@ -15,6 +15,7 @@ import (
 // TestInventorySurfacesEndpoints: inventory reads recorded endpoints and
 // pairs each with the SecretReference holding its credentials.
 func TestInventorySurfacesEndpoints(t *testing.T) {
+	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	store := localfile.New(stateFile)
 
@@ -54,6 +55,7 @@ func TestInventorySurfacesEndpoints(t *testing.T) {
 // only, per docs/planning/03 §8.2.2) surfaces both as a human-readable
 // pointer and, structured, as the actual PEM for tools to consume.
 func TestInventorySurfacesSelfSignedCALocation(t *testing.T) {
+	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	store := localfile.New(stateFile)
 
@@ -105,6 +107,7 @@ func TestInventorySurfacesSelfSignedCALocation(t *testing.T) {
 // TestInventoryEmptyState: with nothing applied, inventory says so rather
 // than printing an empty table.
 func TestInventoryEmptyState(t *testing.T) {
+	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	out, err, code := run(t, "inventory", "testdata/redpanda-scenario", "--state-file", stateFile)
 	if err != nil || code != 0 {

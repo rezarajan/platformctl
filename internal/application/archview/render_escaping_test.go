@@ -17,6 +17,7 @@ import (
 var safeUnquotedID = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func TestGraphIDIsSafeUnquotedIdentifier(t *testing.T) {
+	t.Parallel()
 	keys := []resource.Key{
 		{Namespace: "default", Kind: "Source", Name: "orders-db"},
 		{Namespace: "team-a", Kind: "Provider", Name: "pg"},
@@ -34,6 +35,7 @@ func TestGraphIDIsSafeUnquotedIdentifier(t *testing.T) {
 // keys -> different ids (the encoding must stay injective after the
 // base64->hex change).
 func TestGraphIDStableAndCollisionResistant(t *testing.T) {
+	t.Parallel()
 	a := resource.Key{Namespace: "default", Kind: "Source", Name: "orders"}
 	b := resource.Key{Namespace: "default", Kind: "Source", Name: "orders2"}
 	if graphID(a) != graphID(a) { //nolint:staticcheck // SA4000: deliberate same-input-twice determinism check, not a copy-paste bug
@@ -60,6 +62,7 @@ func adversarialSet() []resource.Envelope {
 }
 
 func TestRenderFormatsSurviveAdversarialCharacters(t *testing.T) {
+	t.Parallel()
 	v := Build(adversarialSet())
 	for _, f := range []string{"tree", "dot", "mermaid", "json"} {
 		var buf bytes.Buffer
@@ -70,6 +73,7 @@ func TestRenderFormatsSurviveAdversarialCharacters(t *testing.T) {
 }
 
 func TestRenderJSONValidWithAdversarialCharacters(t *testing.T) {
+	t.Parallel()
 	v := Build(adversarialSet())
 	var buf bytes.Buffer
 	if err := v.Render(&buf, "json"); err != nil {
@@ -85,6 +89,7 @@ func TestRenderJSONValidWithAdversarialCharacters(t *testing.T) {
 // double-quoted with embedded quotes escaped, and ids must never contain a
 // bare '-' outside quotes.
 func TestRenderDOTQuotesAndEscapesAdversarialLabels(t *testing.T) {
+	t.Parallel()
 	v := Build(adversarialSet())
 	var buf bytes.Buffer
 	if err := v.Render(&buf, "dot"); err != nil {
@@ -116,6 +121,7 @@ func TestRenderDOTQuotesAndEscapesAdversarialLabels(t *testing.T) {
 // TestRenderMermaidEscapesAdversarialLabels: pipe/quote/backslash/newline
 // must be neutralized so they cannot break Mermaid edge/node syntax.
 func TestRenderMermaidEscapesAdversarialLabels(t *testing.T) {
+	t.Parallel()
 	v := Build(adversarialSet())
 	var buf bytes.Buffer
 	if err := v.Render(&buf, "mermaid"); err != nil {
@@ -128,6 +134,7 @@ func TestRenderMermaidEscapesAdversarialLabels(t *testing.T) {
 }
 
 func TestMermaidEscapeNeutralizesControlCharacters(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"a\"b":   `a#quot;b`,
 		"a|b":    `a#124;b`,

@@ -526,6 +526,7 @@ func composeFixtureDir(t *testing.T) string {
 
 // TestOutputContractHarness runs every registered scenario.
 func TestOutputContractHarness(t *testing.T) {
+	t.Parallel()
 	for name, scenario := range commandScenarios {
 		t.Run(name, func(t *testing.T) {
 			if scenario.run == nil {
@@ -573,6 +574,7 @@ func leafCommandPaths(cmd *cobra.Command) []string {
 // asked for: every cobra command registered on the real root must have a
 // commandScenarios entry, or this fails naming exactly what's missing.
 func TestOutputContractHarnessCoversEveryCommand(t *testing.T) {
+	t.Parallel()
 	root := newRootCmd(defaultWiring)
 	var missing []string
 	for _, path := range leafCommandPaths(root) {
@@ -589,6 +591,7 @@ func TestOutputContractHarnessCoversEveryCommand(t *testing.T) {
 // guard actually works, against a synthetic tree rather than mutating the
 // real CLI: a command absent from a table must be reported, by name.
 func TestLeafCommandPathsCatchesUnregisteredCommand(t *testing.T) {
+	t.Parallel()
 	fakeRoot := &cobra.Command{Use: "fake"}
 	fakeRoot.AddCommand(
 		&cobra.Command{Use: "known", Run: func(*cobra.Command, []string) {}},

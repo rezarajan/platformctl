@@ -11,6 +11,7 @@ func configOf(cfg map[string]any) provider.Provider {
 }
 
 func TestProviderType(t *testing.T) {
+	t.Parallel()
 	p := New()
 	if got := p.Type(); got != "openziti" {
 		t.Errorf("Type() = %q, want %q", got, "openziti")
@@ -18,6 +19,7 @@ func TestProviderType(t *testing.T) {
 }
 
 func TestSupportedConnectionSchemesIsTCPOnly(t *testing.T) {
+	t.Parallel()
 	p := New()
 	schemes := p.SupportedConnectionSchemes()
 	if len(schemes) != 1 || schemes[0] != "tcp" {

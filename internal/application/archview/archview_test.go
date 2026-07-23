@@ -41,6 +41,7 @@ func cdcSet() []resource.Envelope {
 // TestPipelineEdgesFollowDataFlow: a Binding renders as a source→target
 // pipeline edge (the actual data movement), not a reverse-dependency hub.
 func TestPipelineEdgesFollowDataFlow(t *testing.T) {
+	t.Parallel()
 	v := Build(cdcSet())
 
 	var pipeline *Edge
@@ -77,6 +78,7 @@ func TestPipelineEdgesFollowDataFlow(t *testing.T) {
 }
 
 func TestRenderFormats(t *testing.T) {
+	t.Parallel()
 	v := Build(cdcSet())
 	for _, f := range []string{"tree", "dot", "mermaid", "json"} {
 		var buf bytes.Buffer
@@ -111,6 +113,7 @@ func TestRenderFormats(t *testing.T) {
 // TestConnectionTargetVisible: a managed Connection's external target shows
 // as a synthetic node so the real system is visible in the picture.
 func TestConnectionTargetVisible(t *testing.T) {
+	t.Parallel()
 	set := []resource.Envelope{
 		env("Provider", "edge", map[string]any{"type": "proxy"}),
 		env("Connection", "orders-db", map[string]any{

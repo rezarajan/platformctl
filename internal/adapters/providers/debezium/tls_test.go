@@ -21,6 +21,7 @@ func simpleEnv(kind, name string, spec map[string]any) resource.Envelope {
 // I2's back-compat requirement: no spec.tls declared means the connector
 // config is byte-for-byte the pre-I2 shape.
 func TestApplyTLSConfigNilPostureLeavesConfigUntouched(t *testing.T) {
+	t.Parallel()
 	config := map[string]string{"database.hostname": "db.example.com"}
 	applyTLSConfig(config, "postgres", nil)
 	if len(config) != 1 {
@@ -33,6 +34,7 @@ func TestApplyTLSConfigNilPostureLeavesConfigUntouched(t *testing.T) {
 // path (the same path CATrustFileMounts placed the CA at during this
 // Provider's own worker-level reconcile).
 func TestApplyTLSConfigPostgres(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		mode        string
 		caSecretRef string
@@ -66,6 +68,7 @@ func TestApplyTLSConfigPostgres(t *testing.T) {
 // mysql/mariadb — Debezium's own enum, distinct from the require/verify-ca/
 // verify-full vocabulary spec.tls.mode carries.
 func TestApplyTLSConfigMySQL(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		mode string
 		want string
@@ -98,6 +101,7 @@ func TestApplyTLSConfigMySQL(t *testing.T) {
 // providerkit.ResolveDatabaseTLS enforces), and the resulting connector
 // config must carry the resolved database.sslmode/database.sslrootcert.
 func TestBuildDesiredConnectorAppliesTLSFromExternalConnection(t *testing.T) {
+	t.Parallel()
 	worker := workerEnvelope("dbz-worker", map[string]any{
 		"bootstrapServers": "broker:29092",
 	})
@@ -158,6 +162,7 @@ func TestBuildDesiredConnectorAppliesTLSFromExternalConnection(t *testing.T) {
 // secretRefs discipline: a caSecretRef this Provider never declared in its
 // own spec.secretRefs must fail clearly, not silently resolve.
 func TestBuildDesiredConnectorTLSCASecretRefMustBeDeclared(t *testing.T) {
+	t.Parallel()
 	worker := workerEnvelope("dbz-worker", map[string]any{
 		"bootstrapServers": "broker:29092",
 	})

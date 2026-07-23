@@ -13,6 +13,7 @@ import (
 )
 
 func TestCAFilePathDeterministic(t *testing.T) {
+	t.Parallel()
 	if got, want := CAFilePath("rds-ca"), CATrustDir+"/rds-ca.ca.pem"; got != want {
 		t.Errorf("CAFilePath = %q, want %q", got, want)
 	}
@@ -25,6 +26,7 @@ func TestCAFilePathDeterministic(t *testing.T) {
 }
 
 func TestCATrustFileMountsOnlyMountsSecretsCarryingCA(t *testing.T) {
+	t.Parallel()
 	cfg := provider.Provider{SecretRefs: []string{"db-creds", "rds-ca", "unresolved-ref"}}
 	secrets := map[string]map[string]string{
 		"db-creds": {"username": "u", "password": "p"}, // no "ca" key
@@ -44,6 +46,7 @@ func TestCATrustFileMountsOnlyMountsSecretsCarryingCA(t *testing.T) {
 }
 
 func TestCATrustFileMountsEmptyWhenNoSecretCarriesCA(t *testing.T) {
+	t.Parallel()
 	cfg := provider.Provider{SecretRefs: []string{"db-creds"}}
 	secrets := map[string]map[string]string{"db-creds": {"username": "u", "password": "p"}}
 	if mounts := CATrustFileMounts(cfg, secrets); len(mounts) != 0 {
@@ -52,6 +55,7 @@ func TestCATrustFileMountsEmptyWhenNoSecretCarriesCA(t *testing.T) {
 }
 
 func TestResolveDatabaseTLSNilWhenNoConnectionTLS(t *testing.T) {
+	t.Parallel()
 	req := reconciler.Request{}
 	cfg := provider.Provider{}
 	posture, err := ResolveDatabaseTLS(req, cfg, EndpointResolution{})
@@ -64,6 +68,7 @@ func TestResolveDatabaseTLSNilWhenNoConnectionTLS(t *testing.T) {
 }
 
 func TestResolveDatabaseTLSRequiresCASecretRefInProviderSecretRefs(t *testing.T) {
+	t.Parallel()
 	caRef := "rds-ca"
 	ep := EndpointResolution{TLS: &connection.TLS{Mode: "verify-full", CASecretRef: &caRef}}
 	req := reconciler.Request{Secrets: map[string]map[string]string{"rds-ca": {"ca": "pem"}}}
@@ -74,6 +79,7 @@ func TestResolveDatabaseTLSRequiresCASecretRefInProviderSecretRefs(t *testing.T)
 }
 
 func TestResolveDatabaseTLSRequiresCAKey(t *testing.T) {
+	t.Parallel()
 	caRef := "rds-ca"
 	ep := EndpointResolution{TLS: &connection.TLS{Mode: "verify-full", CASecretRef: &caRef}}
 	cfg := provider.Provider{SecretRefs: []string{"rds-ca"}}
@@ -84,6 +90,7 @@ func TestResolveDatabaseTLSRequiresCAKey(t *testing.T) {
 }
 
 func TestResolveDatabaseTLSSuccess(t *testing.T) {
+	t.Parallel()
 	caRef := "rds-ca"
 	ep := EndpointResolution{TLS: &connection.TLS{Mode: "require", CASecretRef: &caRef}}
 	cfg := provider.Provider{SecretRefs: []string{"rds-ca"}}
@@ -98,6 +105,7 @@ func TestResolveDatabaseTLSSuccess(t *testing.T) {
 }
 
 func TestResolveDatabaseTLSNoCASecretRefResolvesModeOnly(t *testing.T) {
+	t.Parallel()
 	ep := EndpointResolution{TLS: &connection.TLS{Mode: "require"}}
 	posture, err := ResolveDatabaseTLS(reconciler.Request{}, provider.Provider{}, ep)
 	if err != nil {
@@ -124,6 +132,7 @@ func closedPort(t *testing.T) string {
 }
 
 func TestVerifyDatabaseConnectionPostgresSurfacesRealError(t *testing.T) {
+	t.Parallel()
 	addr := closedPort(t)
 	host, portText, _ := net.SplitHostPort(addr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -135,6 +144,7 @@ func TestVerifyDatabaseConnectionPostgresSurfacesRealError(t *testing.T) {
 }
 
 func TestVerifyDatabaseConnectionPostgresInvalidCA(t *testing.T) {
+	t.Parallel()
 	addr := closedPort(t)
 	host, portText, _ := net.SplitHostPort(addr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -147,6 +157,7 @@ func TestVerifyDatabaseConnectionPostgresInvalidCA(t *testing.T) {
 }
 
 func TestVerifyDatabaseConnectionMySQLSurfacesRealError(t *testing.T) {
+	t.Parallel()
 	addr := closedPort(t)
 	host, portText, _ := net.SplitHostPort(addr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -158,6 +169,7 @@ func TestVerifyDatabaseConnectionMySQLSurfacesRealError(t *testing.T) {
 }
 
 func TestVerifyDatabaseConnectionMySQLInvalidCA(t *testing.T) {
+	t.Parallel()
 	addr := closedPort(t)
 	host, portText, _ := net.SplitHostPort(addr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -170,6 +182,7 @@ func TestVerifyDatabaseConnectionMySQLInvalidCA(t *testing.T) {
 }
 
 func TestVerifyDatabaseConnectionUnknownEngineNoop(t *testing.T) {
+	t.Parallel()
 	if err := VerifyDatabaseConnection(context.Background(), "mongodb", "h", 1, "db", "u", "p", nil); err != nil {
 		t.Errorf("unknown engine should no-op (mirrors the pre-I2 default case), got: %v", err)
 	}

@@ -13,6 +13,7 @@ import (
 // --sink-prefix emits a second sink Binding to the same bucket at a
 // different location).
 func TestPipelineReusesBrokerAndDataset(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)
@@ -118,6 +119,7 @@ func TestPipelineReusesBrokerAndDataset(t *testing.T) {
 // TestPipelineNewSinkChain exercises the --sink new path (no existing
 // Dataset to reuse): a fresh lake+worker+Dataset chain.
 func TestPipelineNewSinkChain(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)
@@ -168,6 +170,7 @@ func TestPipelineNewSinkChain(t *testing.T) {
 // overwritten silently" rule: a --name colliding with a differently-shaped
 // existing resource is a hard error, not a rewrite.
 func TestPipelineNameCollisionNeverOverwrites(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)

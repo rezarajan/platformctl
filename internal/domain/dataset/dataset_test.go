@@ -17,6 +17,7 @@ func env(spec map[string]any) resource.Envelope {
 // TestDeletionPolicyDefaultsToRetain guards docs/planning/07 §2.2: data
 // loss must be opted into, never implied.
 func TestDeletionPolicyDefaultsToRetain(t *testing.T) {
+	t.Parallel()
 	d, err := FromEnvelope(env(map[string]any{
 		"providerRef": map[string]any{"name": "minio"},
 		"bucket":      "b", "format": "json",
@@ -30,6 +31,7 @@ func TestDeletionPolicyDefaultsToRetain(t *testing.T) {
 }
 
 func TestDeletionPolicyExplicitDelete(t *testing.T) {
+	t.Parallel()
 	d, err := FromEnvelope(env(map[string]any{
 		"providerRef": map[string]any{"name": "minio"},
 		"bucket":      "b", "format": "json", "deletionPolicy": "delete",
@@ -43,6 +45,7 @@ func TestDeletionPolicyExplicitDelete(t *testing.T) {
 }
 
 func TestDeletionPolicyRejectsUnknownValue(t *testing.T) {
+	t.Parallel()
 	_, err := FromEnvelope(env(map[string]any{
 		"providerRef": map[string]any{"name": "minio"},
 		"bucket":      "b", "format": "json", "deletionPolicy": "obliterate",
@@ -56,6 +59,7 @@ func TestDeletionPolicyRejectsUnknownValue(t *testing.T) {
 // spec.lifecycle must leave the provider's lifecycle reconciliation a no-op
 // (Empty() true), not an implicit "expire immediately"/"suspend versioning".
 func TestLifecycleOmittedIsEmpty(t *testing.T) {
+	t.Parallel()
 	d, err := FromEnvelope(env(map[string]any{
 		"providerRef": map[string]any{"name": "minio"},
 		"bucket":      "b", "format": "json",
@@ -72,6 +76,7 @@ func TestLifecycleOmittedIsEmpty(t *testing.T) {
 }
 
 func TestLifecycleExpireAfterDaysAndVersioning(t *testing.T) {
+	t.Parallel()
 	d, err := FromEnvelope(env(map[string]any{
 		"providerRef": map[string]any{"name": "minio"},
 		"bucket":      "b", "format": "json",
@@ -92,6 +97,7 @@ func TestLifecycleExpireAfterDaysAndVersioning(t *testing.T) {
 }
 
 func TestLifecycleRejectsUnknownVersioningValue(t *testing.T) {
+	t.Parallel()
 	_, err := FromEnvelope(env(map[string]any{
 		"providerRef": map[string]any{"name": "minio"},
 		"bucket":      "b", "format": "json",
@@ -103,6 +109,7 @@ func TestLifecycleRejectsUnknownVersioningValue(t *testing.T) {
 }
 
 func TestLifecycleRejectsNegativeExpireAfterDays(t *testing.T) {
+	t.Parallel()
 	_, err := FromEnvelope(env(map[string]any{
 		"providerRef": map[string]any{"name": "minio"},
 		"bucket":      "b", "format": "json",

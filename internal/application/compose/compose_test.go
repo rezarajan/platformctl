@@ -103,6 +103,7 @@ func mustLoad(t *testing.T, dir string) Snapshot {
 }
 
 func TestLoadTolerantDegradesOnGraphError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// A dangling providerRef makes graph.Build fail.
 	bad := "apiVersion: datascape.io/v1alpha1\nkind: Source\nmetadata:\n  name: orphan\nspec:\n  engine: postgres\n  providerRef:\n    name: nope\n  postgres:\n    database: x\n"
@@ -125,6 +126,7 @@ func TestLoadTolerantDegradesOnGraphError(t *testing.T) {
 }
 
 func TestLoadTolerantDegradesOnCompatibilityError(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	// A resolver that knows no provider types makes compatibility.Check fail
@@ -148,6 +150,7 @@ func TestLoadTolerantDegradesOnCompatibilityError(t *testing.T) {
 var errUnknown = &unknownProviderErr{"?"}
 
 func TestBrokerAndDatasetCandidatesFromExistingBlueprint(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)

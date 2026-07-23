@@ -72,6 +72,7 @@ spec:
 `
 
 func TestDebeziumReplicationSlotPressureLint(t *testing.T) {
+	t.Parallel()
 	t.Run("positive: two connectors against one physical database", func(t *testing.T) {
 		dir := writeManifests(t, map[string]string{
 			"common.yaml": debeziumFixtureCommon,
@@ -236,6 +237,7 @@ spec:
 }
 
 func TestDebeziumOverlappingPatternCaptureLint(t *testing.T) {
+	t.Parallel()
 	common := debeziumFixtureCommon + `
 ---
 apiVersion: datascape.io/v1alpha1
@@ -339,6 +341,7 @@ spec:
 // --- redpanda ------------------------------------------------------------------
 
 func TestRedpandaReplicationBelowBrokersLint(t *testing.T) {
+	t.Parallel()
 	fixture := func(replication string) string {
 		return `
 apiVersion: datascape.io/v1alpha1
@@ -475,6 +478,7 @@ spec:
 }
 
 func TestS3SinkPrefixHierarchyCollisionLint(t *testing.T) {
+	t.Parallel()
 	t.Run("positive: one prefix contains the other", func(t *testing.T) {
 		dir := writeManifests(t, map[string]string{
 			"common.yaml":  s3sinkFixtureCommon,

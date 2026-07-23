@@ -34,6 +34,7 @@ func providerEnvelope(name string, configuration map[string]any) resource.Envelo
 // almost immediately instead, the same pattern prometheus_test.go and
 // redpanda_test.go document).
 func TestReconcileInstanceProvisionsCoordinatorAndWorkers(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("lake-trino", map[string]any{"workers": 3})
 	req := reconciler.Request{Resource: env, Provider: env, Runtime: rt}
@@ -67,6 +68,7 @@ func TestReconcileInstanceProvisionsCoordinatorAndWorkers(t *testing.T) {
 // fake-runtime HTTP limit above) with no etc/catalog/lakehouse.properties
 // file at all.
 func TestReconcileWithoutCatalogRefWritesNoCatalogFile(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("lake-trino-nocat", nil)
 	req := reconciler.Request{Resource: env, Provider: env, Runtime: rt}
@@ -84,6 +86,7 @@ func TestReconcileWithoutCatalogRefWritesNoCatalogFile(t *testing.T) {
 // Provider's own spec.secretRefs does not list fails clearly, rather than
 // silently writing an unauthenticated (or empty-credential) catalog config.
 func TestReconcileWithCatalogRefRequiresSecretRefListed(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("lake-trino-badsecret", map[string]any{"catalogRef": map[string]any{"name": "lakehouse-catalog"}})
 	req := reconciler.Request{
@@ -113,6 +116,7 @@ func TestReconcileWithCatalogRefRequiresSecretRefListed(t *testing.T) {
 // (and, per the doc comment on reconcileInstance, every worker) with the
 // exact facts/credentials embedded — never a guessed value (ADR 015).
 func TestReconcileWithCatalogRefWritesCatalogFile(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("lake-trino-cat", map[string]any{"catalogRef": map[string]any{"name": "lakehouse-catalog"}})
 	req := reconciler.Request{
@@ -163,6 +167,7 @@ func TestReconcileWithCatalogRefWritesCatalogFile(t *testing.T) {
 }
 
 func TestProbeReportsNotFoundWhenNeverReconciled(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("never-applied", nil)
 	req := reconciler.Request{Resource: env, Provider: env, Runtime: rt}
@@ -176,6 +181,7 @@ func TestProbeReportsNotFoundWhenNeverReconciled(t *testing.T) {
 }
 
 func TestValidateSpecRejectsInvalidWorkers(t *testing.T) {
+	t.Parallel()
 	p := New()
 	cases := []struct {
 		name string

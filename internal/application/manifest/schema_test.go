@@ -18,6 +18,7 @@ func loadOne(t *testing.T, doc string) error {
 }
 
 func TestSchemaRejectsMalformedManifests(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		doc  string
@@ -86,6 +87,7 @@ func TestSchemaRejectsMalformedManifests(t *testing.T) {
 }
 
 func TestSchemaAcceptsValidManifest(t *testing.T) {
+	t.Parallel()
 	doc := "apiVersion: datascape.io/v1alpha1\nkind: EventStream\nmetadata: {name: events, namespace: analytics}\n" +
 		"spec:\n  providerRef: {namespace: infra, name: rp}\n  partitions: 3\n  retention: {duration: 7d}\n"
 	if err := loadOne(t, doc); err != nil {
@@ -94,6 +96,7 @@ func TestSchemaAcceptsValidManifest(t *testing.T) {
 }
 
 func TestSchemaValidatesNewKinds(t *testing.T) {
+	t.Parallel()
 	valid := []string{
 		// Managed catalog with an engine block.
 		"apiVersion: datascape.io/v1alpha1\nkind: Catalog\nmetadata: {name: c}\n" +

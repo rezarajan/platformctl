@@ -8,6 +8,7 @@ import (
 )
 
 func TestParseWaivers(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		raw  string
@@ -49,6 +50,7 @@ func TestParseWaivers(t *testing.T) {
 }
 
 func TestLessOrdersBySeverityThenCodeThenResource(t *testing.T) {
+	t.Parallel()
 	a := Finding{Code: "DL002", Severity: Warning, Resource: resource.Key{Kind: "Binding", Name: "b"}}
 	b := Finding{Code: "DL002", Severity: Warning, Resource: resource.Key{Kind: "Binding", Name: "a"}}
 	c := Finding{Code: "DL001", Severity: Warning, Resource: resource.Key{Kind: "Binding", Name: "z"}}

@@ -13,6 +13,7 @@ import (
 )
 
 func TestTLSServerDispatch(t *testing.T) {
+	t.Parallel()
 	server, isTLS := tlsServer(connection.Connection{})
 	if server != serverName || isTLS {
 		t.Errorf("plain connection: server=%q isTLS=%v, want %q/false", server, isTLS, serverName)
@@ -25,6 +26,7 @@ func TestTLSServerDispatch(t *testing.T) {
 }
 
 func TestEnsureLocalCAGeneratesOnceThenReuses(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	rt := fakeruntime.New()
 
@@ -61,6 +63,7 @@ func TestEnsureLocalCAGeneratesOnceThenReuses(t *testing.T) {
 }
 
 func TestEnsureLocalCARegeneratesWhenExistingFilesAreGarbage(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	rt := fakeruntime.New()
 	if _, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
@@ -82,6 +85,7 @@ func TestEnsureLocalCARegeneratesWhenExistingFilesAreGarbage(t *testing.T) {
 }
 
 func TestResolveCertDockerSecretRefValidatesPair(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	rt := fakeruntime.New()
 	refName := "nessie-tls"
@@ -129,6 +133,7 @@ func TestResolveCertDockerSecretRefValidatesPair(t *testing.T) {
 }
 
 func TestResolveCertDockerSecretNameIsKubernetesOnly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	rt := fakeruntime.New()
 	name := "cert-manager-issued"
@@ -142,6 +147,7 @@ func TestResolveCertDockerSecretNameIsKubernetesOnly(t *testing.T) {
 }
 
 func TestResolveCertDockerSelfSignedRequiresProvisionedCA(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	rt := fakeruntime.New()
 	tlsSpec := &connection.TLS{SelfSigned: true}
@@ -154,6 +160,7 @@ func TestResolveCertDockerSelfSignedRequiresProvisionedCA(t *testing.T) {
 }
 
 func TestResolveCertDockerSelfSignedGeneratesAndReuses(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	rt := fakeruntime.New()
 	caCert, caKey, err := generateCA()

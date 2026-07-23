@@ -12,6 +12,7 @@ import (
 // directly, so the NFR-3 refusal never fired for a real manifest. This
 // test goes through the REAL loader, the path that was broken.
 func TestLoadDecodesMetadataProtect(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "m.yaml"), []byte(`apiVersion: datascape.io/v1alpha1
 kind: Provider

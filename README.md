@@ -429,12 +429,21 @@ platformctl-as-a-Terraform-provider, a state bridge):
 
 ```sh
 just build             # CGO_ENABLED=0 static build
-just test              # unit + contract tests (no Docker)
-just test-affected     # impact-mapped, ledger-deduped integration suites for your diff
-just test-integration  # real Docker: the full suite (runtime conformance + every provider e2e)
+just test              # fast tier: unit + contract tests vs fakes only (no Docker, no timing)
+just test-deep         # deep tier: impact-mapped, ledger-deduped integration suites for your diff
+just test-integration  # stress tier: real Docker, the full suite (runtime conformance + every provider e2e)
 just check             # gofmt + go vet (both build-tag variants)
 golangci-lint run      # tuned .golangci.yml, 0 issues enforced in CI
 ```
+
+**`just test` is the TDD default** — the only thing you wait for on every
+save (ADR 028: [docs/adr/028-test-tiering.md](docs/adr/028-test-tiering.md)).
+It's `t.Parallel()` throughout, runs entirely against fakes (no Docker, no
+real timing), and is CI-budget-guarded: any single test over 60s, or the
+whole tier over 90s, fails the build (`internal/tools/testbudget`, wired
+into `.github/workflows/ci.yml`). Reach for `just test-deep` before a push,
+and `just test-integration` only for the full sweep — CI, not your local
+loop, is the arbiter for both.
 
 The integration suite stands up real Postgres, Debezium, Redpanda, and MinIO
 containers on non-default host ports and verifies the roadmap's exit
@@ -442,13 +451,13 @@ criteria literally — including "re-apply makes zero mutating calls" and
 "destroy leaves no orphans". A chaos-monkey suite additionally kills and
 stops managed containers out-of-band (and SIGKILLs the CLI mid-apply) and
 requires drift reporting, healing, recovery, and convergent teardown.
-`just test-affected` (`scripts/test-impact.sh --base main`) is the
-day-to-day default for contributors — it maps your diff to only the
-integration suites it could plausibly affect and skips any suite already
-proven green against the same content-state (a shared ledger keyed by a
-hash of each suite's scoped files, including uncommitted changes), so
-routine changes don't re-earn a green they already have
-(docs/planning/06-agentic-execution-guide.md §10).
+`just test-deep` (`scripts/test-impact.sh --base main`; `just test-affected`
+still works as an alias) is the pre-push default for contributors — it maps
+your diff to only the integration suites it could plausibly affect and
+skips any suite already proven green against the same content-state (a
+shared ledger keyed by a hash of each suite's scoped files, including
+uncommitted changes), so routine changes don't re-earn a green they already
+have (docs/planning/06-agentic-execution-guide.md §10).
 
 **Adding a provider:** implement `reconciler.Provider` (plus capability
 interfaces you support), register it in `application/registry` wiring behind

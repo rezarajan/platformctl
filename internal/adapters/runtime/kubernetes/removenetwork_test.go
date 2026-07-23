@@ -41,6 +41,7 @@ func deploymentIn(ns, name string) *appsv1.Deployment {
 // lakehouse integration test (external-orders-db surviving destroy); here it
 // is pinned in `go test ./...`.
 func TestRemoveNetworkRefusesWhileWorkloadsRemain(t *testing.T) {
+	t.Parallel()
 	const ns = "shared"
 	clientset := fake.NewSimpleClientset(
 		managedNamespace(ns),
@@ -63,6 +64,7 @@ func TestRemoveNetworkRefusesWhileWorkloadsRemain(t *testing.T) {
 // Deployment is gone), RemoveNetwork actually deletes it and reports success —
 // exactly what the conformance suite's Remove_then_absent step relies on.
 func TestRemoveNetworkDeletesEmptyNamespace(t *testing.T) {
+	t.Parallel()
 	const ns = "empty"
 	clientset := fake.NewSimpleClientset(managedNamespace(ns))
 	r := &Runtime{clientset: clientset}
@@ -82,6 +84,7 @@ func TestRemoveNetworkDeletesEmptyNamespace(t *testing.T) {
 // again once no domain is allowed in — the same create/converge/delete
 // lifecycle every other managed object in this adapter gets.
 func TestEnsureNetworkCrossDomainIngressConverges(t *testing.T) {
+	t.Parallel()
 	const ns = "datascape-analytics"
 	clientset := fake.NewSimpleClientset()
 	r := &Runtime{clientset: clientset}
@@ -128,6 +131,7 @@ func TestEnsureNetworkCrossDomainIngressConverges(t *testing.T) {
 // guard intact: a namespace lacking the managed-by label is never touched,
 // regardless of whether it is empty.
 func TestRemoveNetworkRefusesUnmanagedNamespace(t *testing.T) {
+	t.Parallel()
 	const ns = "not-ours"
 	clientset := fake.NewSimpleClientset(&corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: ns},

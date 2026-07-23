@@ -49,6 +49,7 @@ var frozenRequestFields = map[string]string{
 // same commit) — never a silent accretion nobody notices, the exact
 // failure mode I9 closes off (docs/planning/08 §7.8 I9's "Why").
 func TestReconcilerRequestFieldsFrozen(t *testing.T) {
+	t.Parallel()
 	typ := reflect.TypeOf(reconciler.Request{})
 
 	got := make(map[string]bool, typ.NumField())

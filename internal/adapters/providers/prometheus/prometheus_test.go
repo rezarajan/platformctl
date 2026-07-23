@@ -36,6 +36,7 @@ func providerEnvelope(name string, configuration map[string]any) resource.Envelo
 // instead, the same pattern redpanda's
 // TestReconcileBrokerRegistryEnabledPublishesPort documents).
 func TestReconcileInstanceGeneratesConfigAndPublishesPort(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("local-prom", map[string]any{"scrapeInterval": "5s"})
 	req := reconciler.Request{
@@ -93,6 +94,7 @@ func TestReconcileInstanceGeneratesConfigAndPublishesPort(t *testing.T) {
 // participates in the spec hash, so RenderScrapeConfig's determinism
 // (scrapeconfig_test.go) is exactly what this depends on.
 func TestReconcileInstanceIdempotent(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("local-prom", map[string]any{})
 	req := reconciler.Request{
@@ -121,6 +123,7 @@ func TestReconcileInstanceIdempotent(t *testing.T) {
 }
 
 func TestValidateSpec(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		cfg     map[string]any
@@ -146,6 +149,7 @@ func TestValidateSpec(t *testing.T) {
 }
 
 func TestType(t *testing.T) {
+	t.Parallel()
 	if got := New().Type(); got != "prometheus" {
 		t.Errorf("Type() = %q, want %q", got, "prometheus")
 	}

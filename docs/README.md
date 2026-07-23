@@ -52,7 +52,8 @@ only, never identifiers).
 | Pick up a backlog task (agents) | [planning/08](planning/08-production-readiness-plan.md) §2.1 protocol → your task's entry → the ADRs it names |
 | Know why a design is the way it is | [adr/README.md](adr/README.md) index → the numbered record; narrative: [planning/10](planning/10-project-history-and-evolution.md) |
 | Check what's shipped vs planned | [planning/08](planning/08-production-readiness-plan.md) done-notes + [planning/04](planning/04-roadmap-and-feature-gates.md) §12 gate table |
-| Run only the tests my change affects | `just test-affected` ([planning/06](planning/06-agentic-execution-guide.md) §10) |
+| Run the fast TDD loop | `just test` — ≤1 min, CI-budget-guarded ([adr/028](adr/028-test-tiering.md)) |
+| Run only the integration suites my change affects | `just test-deep` (`test-affected` alias; [planning/06](planning/06-agentic-execution-guide.md) §10) |
 | Understand an operational migration | [upgrade-notes.md](upgrade-notes.md) |
 | Check my wiring / design quality, or enforce org guardrails | [adr/020](adr/020-design-lints.md) (lints), [adr/021](adr/021-policy-engine-zero-trust.md) (policy), [adr/022](adr/022-identity-aware-mediation.md) (domains/mTLS mediation) — scheduled as doc 08 Stage H |
 

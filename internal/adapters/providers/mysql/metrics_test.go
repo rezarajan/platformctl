@@ -13,6 +13,7 @@ import (
 )
 
 func TestMetricsEnabled(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		v    any
@@ -59,6 +60,7 @@ func mysqlEnvelope(name string, configuration map[string]any) resource.Envelope 
 // no real MySQL) but only after the main container's spec is already
 // recorded.
 func TestInstanceContainerSpecUnaffectedByMetrics(t *testing.T) {
+	t.Parallel()
 	secrets := map[string]map[string]string{"mysql-root": {"password": "rootpass"}}
 	specOf := func(t *testing.T, metrics any) runtime.ContainerState {
 		t.Helper()
@@ -110,6 +112,7 @@ func TestInstanceContainerSpecUnaffectedByMetrics(t *testing.T) {
 }
 
 func TestExporterNaming(t *testing.T) {
+	t.Parallel()
 	if exporterPort != 9104 {
 		t.Fatalf("exporterPort = %d, want 9104 (mysqld_exporter's own default)", exporterPort)
 	}
@@ -122,6 +125,7 @@ func TestExporterNaming(t *testing.T) {
 }
 
 func TestParseMyCnfPassword(t *testing.T) {
+	t.Parallel()
 	cnf := "[client]\nhost = my\nport = 3306\nuser = my-monitor\npassword = s3cr3t!\n"
 	if got, want := parseMyCnfPassword(cnf), "s3cr3t!"; got != want {
 		t.Errorf("parseMyCnfPassword() = %q, want %q", got, want)

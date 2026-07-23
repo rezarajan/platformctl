@@ -102,6 +102,7 @@ func assertZeroTrustPackDecisions(t *testing.T, label, dir, policiesDir string) 
 // the CI job that runs it (pure evaluation, no Docker: trivial runtime
 // cost).
 func TestZeroTrustPackAgainstExamplesAndBlueprints(t *testing.T) {
+	t.Parallel()
 	policiesDir := t.TempDir()
 	if _, err := apppolicy.WritePack("zero-trust", policiesDir, false); err != nil {
 		t.Fatalf("write zero-trust pack: %v", err)

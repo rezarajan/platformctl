@@ -27,6 +27,7 @@ func newTestRegistry(t *testing.T, haEnabled bool) *Registry {
 // the HighAvailability gate is enabled — the backstop that holds even
 // though no provider yet exposes a schema field setting Replicas.
 func TestRuntime_HighAvailabilityGate_BlocksMultiReplica(t *testing.T) {
+	t.Parallel()
 	reg := newTestRegistry(t, false)
 	rt, err := reg.Runtime("fake", nil)
 	if err != nil {
@@ -46,6 +47,7 @@ func TestRuntime_HighAvailabilityGate_BlocksMultiReplica(t *testing.T) {
 }
 
 func TestRuntime_HighAvailabilityGate_AllowsMultiReplicaWhenEnabled(t *testing.T) {
+	t.Parallel()
 	reg := newTestRegistry(t, true)
 	rt, err := reg.Runtime("fake", nil)
 	if err != nil {
@@ -121,6 +123,7 @@ func (f *ingressCapableFake) RemoveTLSSecret(ctx context.Context, namespace, nam
 // cluster caught this — the Kubernetes adapter's own fake-clientset unit
 // tests call EnsureIngress directly and never go through this wrapper.
 func TestRuntime_PromotesIngressCapableRuntime(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	gates.Register("HighAvailability", featuregate.Alpha, false)
 	reg := New(gates)
@@ -206,6 +209,7 @@ func (memberSetCapableFake) AddressesMembersCollectively() bool { return true }
 // genuinely implements it — the identical bug class ADR 018's addendum
 // caught live for IngressCapableRuntime.
 func TestRuntime_PromotesMemberSetRuntime(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	gates.Register("HighAvailability", featuregate.Alpha, false)
 	reg := New(gates)
@@ -269,6 +273,7 @@ func (isolationCapableFake) ObserveIsolationEnforcement(context.Context) (runtim
 // real Kubernetes adapter that genuinely implements it — the identical bug
 // class ADR 018's addendum caught live for IngressCapableRuntime.
 func TestRuntime_PromotesIsolationObserver(t *testing.T) {
+	t.Parallel()
 	gates := featuregate.NewRegistry()
 	gates.Register("HighAvailability", featuregate.Alpha, false)
 	reg := New(gates)

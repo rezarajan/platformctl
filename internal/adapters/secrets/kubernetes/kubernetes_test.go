@@ -14,6 +14,7 @@ import (
 )
 
 func TestResolve(t *testing.T) {
+	t.Parallel()
 	secretObj := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "db-creds", Namespace: "default"},
 		Data:       map[string][]byte{"username": []byte("admin"), "password": []byte("hunter2")},
@@ -32,6 +33,7 @@ func TestResolve(t *testing.T) {
 }
 
 func TestResolveWithKubernetesOverride(t *testing.T) {
+	t.Parallel()
 	secretObj := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "actual-secret-name", Namespace: "prod"},
 		Data:       map[string][]byte{"token": []byte("abc123")},
@@ -53,6 +55,7 @@ func TestResolveWithKubernetesOverride(t *testing.T) {
 }
 
 func TestResolveMissingSecretIsClear(t *testing.T) {
+	t.Parallel()
 	s := &Store{clientsetFor: func() (kubernetes.Interface, error) { return fake.NewSimpleClientset(), nil }}
 	ref := secret.SecretReference{Name: "nope", Namespace: "default", Backend: secret.BackendKubernetes, Keys: []string{"x"}}
 	_, err := s.Resolve(context.Background(), ref)
@@ -68,6 +71,7 @@ func TestResolveMissingSecretIsClear(t *testing.T) {
 // accept criterion: every missing key is named in one error, not just the
 // first.
 func TestPreflightAggregatesMissingKeys(t *testing.T) {
+	t.Parallel()
 	secretObj := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "partial", Namespace: "default"},
 		Data:       map[string][]byte{"username": []byte("admin")},
@@ -86,6 +90,7 @@ func TestPreflightAggregatesMissingKeys(t *testing.T) {
 }
 
 func TestNamespaceDefaultsToSecretReferenceNamespace(t *testing.T) {
+	t.Parallel()
 	secretObj := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "team-secret", Namespace: "team-a"},
 		Data:       map[string][]byte{"key": []byte("value")},

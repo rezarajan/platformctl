@@ -12,6 +12,7 @@ import (
 // tick, stops on release, stops permanently when the lease is lost, and
 // keeps trying through transient failures.
 func TestRenewLoop(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	calls := 0
 	stop := make(chan struct{})

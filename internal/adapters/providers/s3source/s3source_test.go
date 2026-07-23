@@ -42,6 +42,7 @@ func simpleEnvelope(kind, name string, spec map[string]any) resource.Envelope {
 }
 
 func TestSupportedIngestFormats(t *testing.T) {
+	t.Parallel()
 	p := New()
 	got := p.SupportedIngestFormats()
 	want := map[string]bool{"jsonl": true, "avro": true, "parquet": true}
@@ -63,6 +64,7 @@ func TestSupportedIngestFormats(t *testing.T) {
 }
 
 func TestReconcileWorkerBootstrapServersInferred(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("s3src", map[string]any{
 		"image":                "datascape-s3source-connect:local",
@@ -85,6 +87,7 @@ func TestReconcileWorkerBootstrapServersInferred(t *testing.T) {
 }
 
 func TestReconcileWorkerBootstrapServersRequiredWithoutInference(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("s3src", map[string]any{
 		"image":                "datascape-s3source-connect:local",
@@ -144,6 +147,7 @@ func ingestRequest(datasetFormat, registryURL string, options map[string]any) re
 }
 
 func TestDesiredConnectorConfigJSONLNoRegistry(t *testing.T) {
+	t.Parallel()
 	_, cfg, err := desiredConnectorConfig(ingestRequest("jsonl", "", nil))
 	if err != nil {
 		t.Fatalf("desiredConnectorConfig: %v", err)
@@ -175,6 +179,7 @@ func TestDesiredConnectorConfigJSONLNoRegistry(t *testing.T) {
 }
 
 func TestDesiredConnectorConfigAvroWiresRegistry(t *testing.T) {
+	t.Parallel()
 	_, cfg, err := desiredConnectorConfig(ingestRequest("avro", "http://broker:8081", nil))
 	if err != nil {
 		t.Fatalf("desiredConnectorConfig: %v", err)
@@ -191,12 +196,14 @@ func TestDesiredConnectorConfigAvroWiresRegistry(t *testing.T) {
 }
 
 func TestDesiredConnectorConfigParquetWithoutRegistryFails(t *testing.T) {
+	t.Parallel()
 	if _, _, err := desiredConnectorConfig(ingestRequest("parquet", "", nil)); err == nil {
 		t.Fatal("want an error for parquet without a resolved registry URL")
 	}
 }
 
 func TestDesiredConnectorConfigConverterOverride(t *testing.T) {
+	t.Parallel()
 	_, cfg, err := desiredConnectorConfig(ingestRequest("avro", "http://broker:8081", map[string]any{
 		"converter": "io.example.CustomConverter",
 	}))
@@ -209,6 +216,7 @@ func TestDesiredConnectorConfigConverterOverride(t *testing.T) {
 }
 
 func TestDesiredConnectorConfigPrefix(t *testing.T) {
+	t.Parallel()
 	worker := workerEnvelope("s3src-worker", map[string]any{
 		"image":                "datascape-s3source-connect:local",
 		"bootstrapServers":     "broker:29092",
@@ -246,6 +254,7 @@ func TestDesiredConnectorConfigPrefix(t *testing.T) {
 }
 
 func TestDesiredConnectorConfigMissingCredentialsFails(t *testing.T) {
+	t.Parallel()
 	req := ingestRequest("jsonl", "", nil)
 	req.Secrets = nil
 	if _, _, err := desiredConnectorConfig(req); err == nil {
@@ -254,6 +263,7 @@ func TestDesiredConnectorConfigMissingCredentialsFails(t *testing.T) {
 }
 
 func TestValidateBindingOptionsEndpointShape(t *testing.T) {
+	t.Parallel()
 	p := New()
 	if err := p.ValidateBindingOptions("ingest", map[string]any{"endpoint": "not-a-url"}); err == nil {
 		t.Error("malformed options.endpoint accepted")
@@ -274,6 +284,7 @@ func TestValidateBindingOptionsEndpointShape(t *testing.T) {
 // still be resolvable against spec.secretRefs, which needs the sibling
 // field's contents and so cannot move into the fragment.
 func TestValidateSpecCredentialsSecretRefMustBeDeclared(t *testing.T) {
+	t.Parallel()
 	p := New()
 	cfg := provider.Provider{
 		Configuration: map[string]any{
@@ -292,6 +303,7 @@ func TestValidateSpecCredentialsSecretRefMustBeDeclared(t *testing.T) {
 // E5) — see cmd/platformctl's negative-test corpus; this only covers that
 // every legal value still passes.
 func TestValidateSpecWorkers(t *testing.T) {
+	t.Parallel()
 	p := New()
 	base := map[string]any{
 		"image":                "datascape-s3source-connect:local",
@@ -307,6 +319,7 @@ func TestValidateSpecWorkers(t *testing.T) {
 }
 
 func TestValidateSpecWorkersRefusesConnectPortPin(t *testing.T) {
+	t.Parallel()
 	p := New()
 	cfg := provider.Provider{
 		Configuration: map[string]any{
@@ -324,6 +337,7 @@ func TestValidateSpecWorkersRefusesConnectPortPin(t *testing.T) {
 }
 
 func TestReconcileWorkerWorkersReplicaSet(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := workerEnvelope("s3src", map[string]any{
 		"image":                "datascape-s3source-connect:local",

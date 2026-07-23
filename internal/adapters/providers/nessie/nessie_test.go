@@ -29,6 +29,7 @@ func providerEnvelope(name string, configuration map[string]any) resource.Envelo
 // explicit-config path already established (D10), just sourced from
 // WarehouseFacts instead of static Provider configuration.
 func TestWarehouseFactsEnvDerivesLocationAndS3(t *testing.T) {
+	t.Parallel()
 	facts := &reconciler.WarehouseFacts{
 		Bucket: "lake", Prefix: "iceberg-warehouse/",
 		S3Internal: "lake-minio:9000", S3SecretRef: "minio-root",
@@ -67,6 +68,7 @@ func TestWarehouseFactsEnvDerivesLocationAndS3(t *testing.T) {
 // that the nessie Provider itself never listed in spec.secretRefs cannot
 // have its credential values resolved.
 func TestWarehouseFactsEnvErrorsWithoutSecretRefListed(t *testing.T) {
+	t.Parallel()
 	facts := &reconciler.WarehouseFacts{
 		Bucket: "lake", Prefix: "iceberg/", S3Internal: "lake-minio:9000", S3SecretRef: "minio-root",
 	}
@@ -80,6 +82,7 @@ func TestWarehouseFactsEnvErrorsWithoutSecretRefListed(t *testing.T) {
 // applicable" no-op: no warehouseRef resolved (req.WarehouseFacts nil)
 // leaves the container alone.
 func TestEnsureDerivedWarehouseConfigSkippedWithoutFacts(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("catalog-svc", map[string]any{})
 	req := reconciler.Request{Resource: env, Provider: env, Runtime: rt}
@@ -96,6 +99,7 @@ func TestEnsureDerivedWarehouseConfigSkippedWithoutFacts(t *testing.T) {
 // explicit configuration.defaultWarehouseLocation always wins outright over
 // warehouseRef-derived facts — no removal of the pre-D8 explicit path.
 func TestEnsureDerivedWarehouseConfigSkippedWhenExplicitOverrideSet(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("catalog-svc", map[string]any{"defaultWarehouseLocation": "s3://explicit/loc/"})
 	req := reconciler.Request{
@@ -117,6 +121,7 @@ func TestEnsureDerivedWarehouseConfigSkippedWhenExplicitOverrideSet(t *testing.T
 // of facts a clean recreate — the exact bar CLAUDE.md's "every Ensure*
 // runtime method must be idempotent" conformance rule sets.
 func TestEnsureDerivedWarehouseConfigRecreatesOnceThenIdempotent(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	env := providerEnvelope("catalog-svc", map[string]any{})
 	facts := &reconciler.WarehouseFacts{Bucket: "lake", Prefix: "iceberg/", S3Internal: "lake-minio:9000", S3SecretRef: "minio-root"}

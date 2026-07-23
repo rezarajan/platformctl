@@ -20,6 +20,7 @@ import (
 // within a bounded time — not hang until some long client-go default
 // timeout, and not panic.
 func TestPreflightFailsFastOnUnreachableCluster(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "kubeconfig")
 	// 127.0.0.1:1 is a reserved port nothing binds — the connection refusal
 	// is immediate, unlike a routing black hole that would need the timeout
@@ -57,6 +58,7 @@ current-context: nowhere
 // SelfSubjectAccessReview for one verb/resource must be named in the error;
 // an all-allowed clientset must pass clean.
 func TestPreflightWithClientReportsMissingPermissions(t *testing.T) {
+	t.Parallel()
 	clientset := fake.NewSimpleClientset()
 	clientset.PrependReactor("create", "selfsubjectaccessreviews", func(action k8stesting.Action) (bool, apiruntime.Object, error) {
 		review := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
@@ -75,6 +77,7 @@ func TestPreflightWithClientReportsMissingPermissions(t *testing.T) {
 }
 
 func TestPreflightWithClientPassesWhenFullyAllowed(t *testing.T) {
+	t.Parallel()
 	clientset := fake.NewSimpleClientset()
 	clientset.PrependReactor("create", "selfsubjectaccessreviews", func(action k8stesting.Action) (bool, apiruntime.Object, error) {
 		review := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)

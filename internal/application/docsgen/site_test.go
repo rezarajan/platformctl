@@ -6,6 +6,7 @@ import (
 )
 
 func TestSiteRendersAllKindsAsHTML(t *testing.T) {
+	t.Parallel()
 	site, err := Site()
 	if err != nil {
 		t.Fatal(err)

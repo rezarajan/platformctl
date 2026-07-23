@@ -12,6 +12,7 @@ import (
 )
 
 func TestEnsureTLSSecretCreatesAndUpdates(t *testing.T) {
+	t.Parallel()
 	clientset := fake.NewSimpleClientset()
 	r := &Runtime{clientset: clientset}
 	ctx := context.Background()
@@ -51,6 +52,7 @@ func TestEnsureTLSSecretCreatesAndUpdates(t *testing.T) {
 }
 
 func TestGetTLSSecretNotFound(t *testing.T) {
+	t.Parallel()
 	r := &Runtime{clientset: fake.NewSimpleClientset()}
 	cert, key, found, err := r.GetTLSSecret(context.Background(), "datascape", "missing")
 	if err != nil {
@@ -62,6 +64,7 @@ func TestGetTLSSecretNotFound(t *testing.T) {
 }
 
 func TestGetTLSSecretRoundTrips(t *testing.T) {
+	t.Parallel()
 	clientset := fake.NewSimpleClientset()
 	r := &Runtime{clientset: clientset}
 	ctx := context.Background()
@@ -78,6 +81,7 @@ func TestGetTLSSecretRoundTrips(t *testing.T) {
 }
 
 func TestRemoveTLSSecretIdempotent(t *testing.T) {
+	t.Parallel()
 	clientset := fake.NewSimpleClientset()
 	r := &Runtime{clientset: clientset}
 	ctx := context.Background()
@@ -96,6 +100,7 @@ func TestRemoveTLSSecretIdempotent(t *testing.T) {
 }
 
 func TestEnsureTLSSecretRefusesUnmanaged(t *testing.T) {
+	t.Parallel()
 	clientset := fake.NewSimpleClientset()
 	r := &Runtime{clientset: clientset}
 	ctx := context.Background()
@@ -115,5 +120,6 @@ func TestEnsureTLSSecretRefusesUnmanaged(t *testing.T) {
 // found only via a real end-to-end apply through the registry wrapper, not
 // a fake-clientset unit test, so this at least pins the adapter side).
 func TestRuntimeImplementsIngressCapableRuntimeTLSMethods(t *testing.T) {
+	t.Parallel()
 	var _ runtimeport.IngressCapableRuntime = (*Runtime)(nil)
 }

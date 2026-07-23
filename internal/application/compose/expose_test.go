@@ -6,6 +6,7 @@ import (
 )
 
 func TestExposeSourceTCPCreatesProxyAndConnection(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)
@@ -47,6 +48,7 @@ func TestExposeSourceTCPCreatesProxyAndConnection(t *testing.T) {
 }
 
 func TestExposeHTTPSDegradesCleanlyBeforeC8(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)
@@ -71,6 +73,7 @@ func TestExposeHTTPSDegradesCleanlyBeforeC8(t *testing.T) {
 }
 
 func TestExposeRejectsUnknownTarget(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)

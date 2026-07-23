@@ -96,6 +96,7 @@ func resolver(impl reconciler.Provider) ProviderResolver {
 // validate-time error matches the documented shape exactly
 // (docs/planning/02-architecture.md §5.2) — on the character, not in spirit.
 func TestUnsupportedEngineErrorFormat(t *testing.T) {
+	t.Parallel()
 	err := Check(cdcManifests("sqlite"), resolver(cdcStub{stubProvider{"debezium"}}))
 	if err == nil {
 		t.Fatal("validate accepted an unsupported source engine")
@@ -110,6 +111,7 @@ does not support source engine "sqlite" (supported: mongodb, mysql, postgres)`
 // TestNonCDCCapableProviderRejected: a Binding referencing a Provider that
 // does not implement CDCCapableProvider fails at validate, not apply.
 func TestNonCDCCapableProviderRejected(t *testing.T) {
+	t.Parallel()
 	err := Check(cdcManifests("postgres"), resolver(stubProvider{"redpanda"}))
 	if err == nil {
 		t.Fatal("validate accepted a non-CDC-capable provider behind a cdc Binding")
@@ -120,6 +122,7 @@ func TestNonCDCCapableProviderRejected(t *testing.T) {
 }
 
 func TestSupportedEngineAccepted(t *testing.T) {
+	t.Parallel()
 	if err := Check(cdcManifests("postgres"), resolver(cdcStub{stubProvider{"debezium"}})); err != nil {
 		t.Fatalf("valid CDC binding rejected: %v", err)
 	}
@@ -157,6 +160,7 @@ func sinkManifests(format string) []resource.Envelope {
 // at validate with the documented error shape
 // (docs/planning/02-architecture.md §5.2).
 func TestUnsupportedSinkFormatErrorFormat(t *testing.T) {
+	t.Parallel()
 	err := Check(sinkManifests("avro"), resolver(sinkStub{stubProvider{"s3sink"}}))
 	if err == nil {
 		t.Fatal("validate accepted an unsupported sink format")
@@ -172,6 +176,7 @@ does not support sink format "avro" (supported: json, parquet)`
 // Provider that does not implement SinkCapableProvider fails at validate,
 // not apply.
 func TestNonSinkCapableProviderRejected(t *testing.T) {
+	t.Parallel()
 	err := Check(sinkManifests("json"), resolver(stubProvider{"redpanda"}))
 	if err == nil {
 		t.Fatal("validate accepted a non-sink-capable provider behind a sink Binding")
@@ -182,6 +187,7 @@ func TestNonSinkCapableProviderRejected(t *testing.T) {
 }
 
 func TestSupportedSinkFormatAccepted(t *testing.T) {
+	t.Parallel()
 	if err := Check(sinkManifests("json"), resolver(sinkStub{stubProvider{"s3sink"}})); err != nil {
 		t.Fatalf("valid sink binding rejected: %v", err)
 	}
@@ -225,6 +231,7 @@ func dbSinkManifests(engine string) []resource.Envelope {
 // sink-mode target — the taxonomy encodes direction in the Binding, not the
 // noun. Capability gates which providers can realize it.
 func TestDatabaseAsSink(t *testing.T) {
+	t.Parallel()
 	if err := Check(dbSinkManifests("postgres"), resolver(dbSinkStub{stubProvider{"jdbcsink"}})); err != nil {
 		t.Fatalf("sink Binding into a Source rejected despite capability: %v", err)
 	}
@@ -267,6 +274,7 @@ func ingestManifests() []resource.Envelope {
 
 // TestObjectStoreAsSource: a Dataset is a legitimate ingest-mode origin.
 func TestObjectStoreAsSource(t *testing.T) {
+	t.Parallel()
 	if err := Check(ingestManifests(), resolver(ingestStub{stubProvider{"s3source"}})); err != nil {
 		t.Fatalf("ingest Binding from a Dataset rejected despite capability: %v", err)
 	}
@@ -279,6 +287,7 @@ func TestObjectStoreAsSource(t *testing.T) {
 // TestDisallowedPairingListsAlternatives: nonsense pairings name what the
 // mode actually connects.
 func TestDisallowedPairingListsAlternatives(t *testing.T) {
+	t.Parallel()
 	ms := ingestManifests()
 	// ingest with the refs swapped: EventStream -> Dataset is not an ingest pairing.
 	ms[4] = envelope("Binding", "files-to-events", map[string]any{
@@ -317,6 +326,7 @@ func catalogManifests(engine string) []resource.Envelope {
 // TestCatalogEngineCapability: a Catalog names an engine its provider must
 // declare — the Catalog kind stays provider-agnostic, capability gates it.
 func TestCatalogEngineCapability(t *testing.T) {
+	t.Parallel()
 	if err := Check(catalogManifests("nessie"), resolver(catalogStub{stubProvider{"nessie"}})); err != nil {
 		t.Fatalf("valid catalog rejected: %v", err)
 	}
@@ -353,6 +363,7 @@ func connectionManifests(scheme string) []resource.Envelope {
 // declare its transport scheme; external Connections are skipped (nothing
 // realizes them).
 func TestConnectionSchemeCapability(t *testing.T) {
+	t.Parallel()
 	if err := Check(connectionManifests("tcp"), resolver(connStub{stubProvider{"proxy"}})); err != nil {
 		t.Fatalf("valid connection rejected: %v", err)
 	}
@@ -391,6 +402,7 @@ func (specValidatingStub) ValidateSpec(cfg provider.Provider) error {
 // requirements surface at validate — a developer can never reach apply with
 // a mis-wired Provider.
 func TestProviderSpecValidatedAtValidate(t *testing.T) {
+	t.Parallel()
 	manifests := []resource.Envelope{
 		envelope("Provider", "worker", map[string]any{
 			"type":    "debezium",
@@ -414,6 +426,7 @@ func TestProviderSpecValidatedAtValidate(t *testing.T) {
 // TestConnectionRefTargetKind: connectionRef must resolve to a Connection or
 // SecretReference — pointing it at anything else fails at validate.
 func TestConnectionRefTargetKind(t *testing.T) {
+	t.Parallel()
 	manifests := []resource.Envelope{
 		envelope("Provider", "not-a-connection", map[string]any{
 			"type":    "postgres",
@@ -437,6 +450,7 @@ func TestConnectionRefTargetKind(t *testing.T) {
 // TestConnectionSecretRefTargetKind: a Connection's secretRef must resolve
 // to a SecretReference.
 func TestConnectionSecretRefTargetKind(t *testing.T) {
+	t.Parallel()
 	manifests := []resource.Envelope{
 		envelope("Connection", "orders-db", map[string]any{
 			"external":  true,
@@ -455,6 +469,7 @@ func TestConnectionSecretRefTargetKind(t *testing.T) {
 }
 
 func TestExternalProviderRefRequiresConfigurer(t *testing.T) {
+	t.Parallel()
 	manifests := []resource.Envelope{
 		envelope("Provider", "object-store", map[string]any{
 			"type":    "minio",
@@ -489,6 +504,7 @@ func TestExternalProviderRefRequiresConfigurer(t *testing.T) {
 // (a Provider cannot reference itself), so an external Provider always takes
 // the connection-resolvable-only path, never this check.
 func TestExternalProviderRefRequiresConfigurerPerKind(t *testing.T) {
+	t.Parallel()
 	prov := envelope("Provider", "svc", map[string]any{
 		"type":    "svc",
 		"runtime": map[string]any{"type": "fake"},
@@ -541,6 +557,7 @@ func TestExternalProviderRefRequiresConfigurerPerKind(t *testing.T) {
 // rejected, valid version accepted. Uses the real registry resolver via a
 // stub that returns the postgres provider.
 func TestVersionedProviderValidation(t *testing.T) {
+	t.Parallel()
 	pg := func(cfg map[string]any) []resource.Envelope {
 		return []resource.Envelope{
 			envelope("Provider", "db", map[string]any{
@@ -595,6 +612,7 @@ func (optionsValidatingStub) ValidateBindingOptions(_ string, options map[string
 // BindingOptionsValidator gets its Binding options checked at validate time
 // (docs/planning/07 §2.2) — a bad option block fails before apply.
 func TestBindingOptionsValidated(t *testing.T) {
+	t.Parallel()
 	manifests := cdcManifests("postgres")
 	// Inject a bad option block into the Binding.
 	for i := range manifests {
@@ -690,6 +708,7 @@ func schemaFormatManifests(format string) []resource.Envelope {
 // EventStream's own Provider — the one whose configuration actually decides
 // registry availability — not the Binding's providerRef.
 func TestSchemaFormatWithoutRegistryErrorFormat(t *testing.T) {
+	t.Parallel()
 	resolve := multiResolver(map[string]reconciler.Provider{
 		"debezium": cdcStub{stubProvider{"debezium"}},
 		"postgres": stubProvider{"postgres"},
@@ -709,6 +728,7 @@ does not support format "avro" (supported: json)`
 // TestSchemaFormatWithRegistryAccepted: the same Binding validates once the
 // EventStream's Provider declares the format supported (registry enabled).
 func TestSchemaFormatWithRegistryAccepted(t *testing.T) {
+	t.Parallel()
 	resolve := multiResolver(map[string]reconciler.Provider{
 		"debezium": cdcStub{stubProvider{"debezium"}},
 		"postgres": stubProvider{"postgres"},
@@ -724,6 +744,7 @@ func TestSchemaFormatWithRegistryAccepted(t *testing.T) {
 // that doesn't implement SchemaRegistryCapableProvider is still a valid
 // target for a plain json-format (or format-unset) Binding.
 func TestSchemaFormatUnsetOrJSONNeedsNoRegistry(t *testing.T) {
+	t.Parallel()
 	resolve := multiResolver(map[string]reconciler.Provider{
 		"debezium": cdcStub{stubProvider{"debezium"}},
 		"postgres": stubProvider{"postgres"},
@@ -778,6 +799,7 @@ func parquetSinkManifests(format string) []resource.Envelope {
 // EventStream's own Provider — the resource whose configuration decides
 // registry availability — not the Binding's providerRef.
 func TestParquetSinkWithoutRegistryErrorFormat(t *testing.T) {
+	t.Parallel()
 	resolve := multiResolver(map[string]reconciler.Provider{
 		"s3sink":   sinkStub{stubProvider{"s3sink"}},
 		"minio":    stubProvider{"minio"},
@@ -798,6 +820,7 @@ does not support format "parquet" (supported: json)`
 // no SchemaRegistryCapableProvider implementation at all is refused the same
 // way as an explicitly registry-less one.
 func TestParquetSinkNoCapabilityFallsBackToJSON(t *testing.T) {
+	t.Parallel()
 	resolve := multiResolver(map[string]reconciler.Provider{
 		"s3sink":   sinkStub{stubProvider{"s3sink"}},
 		"minio":    stubProvider{"minio"},
@@ -812,6 +835,7 @@ func TestParquetSinkNoCapabilityFallsBackToJSON(t *testing.T) {
 // EventStream's Provider supports avro (registry enabled) — parquet's
 // schema-carrying requirement is satisfied by the Avro converter chain.
 func TestParquetSinkWithRegistryAccepted(t *testing.T) {
+	t.Parallel()
 	resolve := multiResolver(map[string]reconciler.Provider{
 		"s3sink":   sinkStub{stubProvider{"s3sink"}},
 		"minio":    stubProvider{"minio"},
@@ -826,6 +850,7 @@ func TestParquetSinkWithRegistryAccepted(t *testing.T) {
 // schemaless path — no registry demand is made of the EventStream's
 // Provider (gate-off manifests are behavior-identical to pre-D2).
 func TestNonParquetSinkNeedsNoRegistry(t *testing.T) {
+	t.Parallel()
 	resolve := multiResolver(map[string]reconciler.Provider{
 		"s3sink":   allFormatSinkStub{stubProvider{"s3sink"}},
 		"minio":    stubProvider{"minio"},
@@ -850,6 +875,7 @@ func (allFormatSinkStub) SupportedSinkFormats() []string {
 // "supported: json" — the same message shape as an explicitly registry-less
 // one, since from the Binding's perspective the two are indistinguishable.
 func TestSchemaFormatNoCapabilityFallsBackToJSON(t *testing.T) {
+	t.Parallel()
 	resolve := multiResolver(map[string]reconciler.Provider{
 		"debezium": cdcStub{stubProvider{"debezium"}},
 		"postgres": stubProvider{"postgres"},
@@ -905,6 +931,7 @@ func replicationManifests(replication any) []resource.Envelope {
 // an error naming the resource, the provider, and both numbers
 // (docs/adr/017 §a.7).
 func TestCheckEventStreamReplicationExceedsBrokers(t *testing.T) {
+	t.Parallel()
 	err := Check(replicationManifests(3), resolver(streamReplicationStub{stubProvider{"redpanda"}, 2}))
 	if err == nil {
 		t.Fatal("Check accepted replication 3 against a 2-broker provider")
@@ -921,6 +948,7 @@ func TestCheckEventStreamReplicationExceedsBrokers(t *testing.T) {
 // replication against a provider without the capability (the pre-C2 path,
 // unchanged).
 func TestCheckEventStreamReplicationWithinBrokers(t *testing.T) {
+	t.Parallel()
 	if err := Check(replicationManifests(2), resolver(streamReplicationStub{stubProvider{"redpanda"}, 2})); err != nil {
 		t.Errorf("Check rejected replication 2 against a 2-broker provider: %v", err)
 	}
@@ -963,6 +991,7 @@ func sinkManifestsWithDeadLetter(dlqStream string, includeDLQStream bool) []reso
 // deadLetter.stream naming an EventStream present in the manifest set
 // validates cleanly.
 func TestDeadLetterQueueExistingStreamAccepted(t *testing.T) {
+	t.Parallel()
 	err := Check(sinkManifestsWithDeadLetter("dlq-events", true), resolver(sinkStub{stubProvider{"s3sink"}}))
 	if err != nil {
 		t.Fatalf("valid deadLetter.stream rejected: %v", err)
@@ -972,6 +1001,7 @@ func TestDeadLetterQueueExistingStreamAccepted(t *testing.T) {
 // TestDeadLetterQueueMissingStreamRejected covers the D6 Accept item
 // verbatim: "validate rejects a deadLetter naming a missing EventStream."
 func TestDeadLetterQueueMissingStreamRejected(t *testing.T) {
+	t.Parallel()
 	err := Check(sinkManifestsWithDeadLetter("dlq-events", false), resolver(sinkStub{stubProvider{"s3sink"}}))
 	if err == nil {
 		t.Fatal("Check accepted a deadLetter.stream naming a missing EventStream")
@@ -987,6 +1017,7 @@ func TestDeadLetterQueueMissingStreamRejected(t *testing.T) {
 // concept (docs/planning/08 D6); binding.FromEnvelope refuses it on any
 // other mode, and Check surfaces that refusal at validate.
 func TestDeadLetterQueueOnCDCBindingRejected(t *testing.T) {
+	t.Parallel()
 	manifests := cdcManifests("postgres")
 	for i, e := range manifests {
 		if e.Kind == "Binding" {
@@ -1053,6 +1084,7 @@ func typedResolver(byType map[string]reconciler.Provider) ProviderResolver {
 // actually route the forwarder's egress through the named tunnel rather
 // than realizing an unconsumed, silently-inert field.
 func TestConnectionViaRealized(t *testing.T) {
+	t.Parallel()
 	impls := map[string]reconciler.Provider{
 		"proxy":     viaStub{connStub{stubProvider{"proxy"}}},
 		"wireguard": tunnelStub{stubProvider{"wireguard"}},
@@ -1092,6 +1124,7 @@ func TestConnectionViaRealized(t *testing.T) {
 // Provider's is refused at validate (runtime objects live in the
 // provider's domain); an undeclared domain inherits silently.
 func TestDomainCoherenceWithProvider(t *testing.T) {
+	t.Parallel()
 	prov := envelope("Provider", "broker", map[string]any{
 		"type": "redpanda", "runtime": map[string]any{"type": "fake"},
 	})

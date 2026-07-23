@@ -40,6 +40,7 @@ var reasonScanDirs = []string{
 //     scoped per-line like loopback's exemption, for a genuine future
 //     exception.
 func TestNoConditionReasonStringLiterals(t *testing.T) {
+	t.Parallel()
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -102,6 +103,7 @@ func scanReasonFile(path string, violations *[]string) error {
 // works, mirroring TestScanFileDetectsAndExemptsCorrectly in
 // loopback_test.go.
 func TestScanReasonFileDetectsAndExemptsCorrectly(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fixture.go")
 	content := `package fixture
@@ -138,6 +140,7 @@ func markedExempt() status.Condition {
 // TestIsStatusPackageFile proves the status-package exemption is scoped to
 // the actual package directory and doesn't over-match a similarly named one.
 func TestIsStatusPackageFile(t *testing.T) {
+	t.Parallel()
 	cases := map[string]bool{
 		filepath.FromSlash("internal/domain/status/reasons.go"):    true,
 		filepath.FromSlash("internal/domain/status/status.go"):     true,

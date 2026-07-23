@@ -12,6 +12,7 @@ import (
 // TestJDBCURLNilPosturePlaintext guards docs/planning/08 I2's back-compat
 // requirement: no spec.tls declared appends nothing to connection.url.
 func TestJDBCURLNilPosturePlaintext(t *testing.T) {
+	t.Parallel()
 	for _, engine := range []string{"postgres", "mysql", "mariadb"} {
 		url, err := jdbcURL(engine, "db.example.com", 5432, "analytics", nil)
 		if err != nil {
@@ -28,6 +29,7 @@ func TestJDBCURLNilPosturePlaintext(t *testing.T) {
 // vocabulary, matching connection.TLSModeRequire/VerifyCA/VerifyFull
 // exactly.
 func TestJDBCURLPostgresTLSModes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		mode        string
 		caSecretRef string
@@ -63,6 +65,7 @@ func TestJDBCURLPostgresTLSModes(t *testing.T) {
 // MySQL binlog client, Connector/J accepts a raw PEM CA directly, so full
 // verification is supported here.
 func TestJDBCURLMySQLTLSModes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		mode     string
 		wantSSL  string
@@ -99,6 +102,7 @@ func TestJDBCURLMySQLTLSModes(t *testing.T) {
 // providerkit.ResolveDatabaseTLS enforces), and the resulting
 // connection.url must carry the resolved TLS query params.
 func TestBuildDesiredConnectorAppliesTLSFromExternalConnection(t *testing.T) {
+	t.Parallel()
 	worker := workerEnvelope("jsink-worker", map[string]any{
 		"image":            "datascape-jdbcsink-connect:local",
 		"bootstrapServers": "broker:29092",
@@ -168,6 +172,7 @@ func TestBuildDesiredConnectorAppliesTLSFromExternalConnection(t *testing.T) {
 // worker Provider itself never declared in spec.secretRefs must fail
 // clearly, not silently resolve.
 func TestBuildDesiredConnectorTLSCASecretRefMustBeDeclared(t *testing.T) {
+	t.Parallel()
 	worker := workerEnvelope("jsink-worker", map[string]any{
 		"image":            "datascape-jdbcsink-connect:local",
 		"bootstrapServers": "broker:29092",

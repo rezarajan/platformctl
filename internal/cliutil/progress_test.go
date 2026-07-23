@@ -11,6 +11,7 @@ import (
 )
 
 func TestProgressReporterStreamsOrderedSteps(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	r := NewProgressReporter(&buf, false) // no color for stable assertions
 	k1 := resource.Key{Kind: "Provider", Name: "pg"}
@@ -37,6 +38,7 @@ func TestProgressReporterStreamsOrderedSteps(t *testing.T) {
 }
 
 func TestProgressReporterHealingBeyondPlan(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	r := NewProgressReporter(&buf, false)
 	r.Begin(0) // drift-probe apply: no planned changes
@@ -55,6 +57,7 @@ func TestProgressReporterHealingBeyondPlan(t *testing.T) {
 }
 
 func TestProgressReporterSilentOnNoChanges(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	r := NewProgressReporter(&buf, false)
 	r.Begin(0)

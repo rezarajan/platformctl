@@ -24,6 +24,11 @@ import (
 // table, this test would fail with "no providerRef to resolve a provider
 // from" rather than exercising the fake handler.
 func TestFakeKindHandlerReachesAllFourDispatchPoints(t *testing.T) {
+	// serial: this test appends to and truncates the package-level
+	// kindHandlers table directly (below) — every other engine test that
+	// goes through Apply/Probe/Destroy reads it via lookupKindHandler, so
+	// running this one in parallel races the read against the
+	// append/truncate (found live via `go test -race`).
 	const fakeKind = "FakeSpecialKind"
 	var reconcileCalls, probeCalls, deleteCalls int
 

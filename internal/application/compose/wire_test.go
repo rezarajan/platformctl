@@ -6,6 +6,7 @@ import (
 )
 
 func TestWireCDCCreatesMissingEventStreamReuseFirst(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)
@@ -45,6 +46,7 @@ func TestWireCDCCreatesMissingEventStreamReuseFirst(t *testing.T) {
 }
 
 func TestWireSinkReusesExistingWorker(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)
@@ -69,6 +71,7 @@ func TestWireSinkReusesExistingWorker(t *testing.T) {
 }
 
 func TestWireRejectsUnknownFromResource(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)
@@ -83,6 +86,7 @@ func TestWireRejectsUnknownFromResource(t *testing.T) {
 }
 
 func TestWireRejectsInvalidKindPairing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeCDCToLakeFixture(t, dir)
 	snap := mustLoad(t, dir)

@@ -40,6 +40,7 @@ func writePolicyDir(t *testing.T, content string) string {
 // otherwise be denied by a --policies dir must validate/apply exactly as if
 // no --policies flag were given at all, with zero evaluation.
 func TestPolicyGateDisabledIsFullOffSwitch(t *testing.T) {
+	t.Parallel()
 	dir := writePolicyDir(t, alwaysDenyPolicyYAML)
 
 	out, err, code := run(t, "validate", "testdata/noop-scenario", "--policies", dir)
@@ -52,6 +53,7 @@ func TestPolicyGateDisabledIsFullOffSwitch(t *testing.T) {
 // blocks once PolicyEngine is enabled, via the standard validation-error
 // exit path naming the rule id, message, and resource.
 func TestPolicyGateEnabledDeniesAtValidate(t *testing.T) {
+	t.Parallel()
 	dir := writePolicyDir(t, alwaysDenyPolicyYAML)
 
 	out, err, code := run(t, "validate", "testdata/noop-scenario", "--policies", dir, "--feature-gates", "PolicyEngine=true")
@@ -67,6 +69,7 @@ func TestPolicyGateEnabledDeniesAtValidate(t *testing.T) {
 // mechanism end-to-end: an exemptible deny rule, once the target resource
 // carries a matching exemption annotation, no longer blocks validate.
 func TestPolicyExemptionUnblocksValidate(t *testing.T) {
+	t.Parallel()
 	dir := writePolicyDir(t, `
 apiVersion: policy.datascape.io/v1alpha1
 kind: Policy
@@ -109,6 +112,7 @@ spec:
 // blocks a destroy plan that deletes the matched kind, even though the
 // manifest set itself validates cleanly (no field/finding rule fires).
 func TestPolicyMatchPlanDeniesApply(t *testing.T) {
+	t.Parallel()
 	dir := writePolicyDir(t, `
 apiVersion: policy.datascape.io/v1alpha1
 kind: Policy
@@ -145,6 +149,7 @@ spec:
 // deny{from:payments,to:analytics} matchEdge.crossDomain rule, before any
 // infrastructure exists (runtime: docker, never touched by validate).
 func TestPolicyCrossDomainDeniesCDCBindingAtValidate(t *testing.T) {
+	t.Parallel()
 	dir := writePolicyDir(t, `
 apiVersion: policy.datascape.io/v1alpha1
 kind: Policy

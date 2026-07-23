@@ -10,6 +10,7 @@ import (
 // is optional and, when present, its size string parses through
 // storagesize.ParseBytes into VolumeSpec's runtime-agnostic bytes/class.
 func TestStorageResolution(t *testing.T) {
+	t.Parallel()
 	cfg := provider.Provider{Configuration: map[string]any{}}
 	const name = "db"
 

@@ -1885,6 +1885,105 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
   deliberate 61s sleep test is added in a scratch branch); no
   integration-tagged test runs in the fast tier.
 - **Gate:** none (dev-loop infrastructure).
+- **Done (2026-07-23):** (1) AST-driven audit of all 684 top-level
+  `func Test*` in non-integration files: 674 gained `t.Parallel()`
+  (mechanical, verified idempotent by re-run); 10 stayed serial with a
+  one-line reason comment at the call site — `internal/domain/hostport`'s
+  process-level claims table (all 3 tests: the exact case named in the
+  task prompt), 6 tests mutating process env via `t.Setenv`/`os.Setenv`/
+  `os.Unsetenv` (`cmd/platformctl/preflight_test.go` x2,
+  `internal/adapters/secrets/router`, `internal/application/engine/
+  backup_test.go` x2), and — found live, not anticipated —
+  `internal/application/engine/kind_handler_test.go`'s
+  `TestFakeKindHandlerReachesAllFourDispatchPoints` (appends to/truncates
+  the package-level `kindHandlers` dispatch table every other engine test
+  reads). `go test -race ./...` on the first blanket pass caught 3 more
+  real races the audit's static heuristics missed: `internal/adapters/
+  providers/{ingress,wireguard,proxy}` each have a
+  `shrink<X>Settle(t)` test helper that mutates package-level settle-
+  timeout vars directly (`routeSettleTimeout`/`tunnelSettleTimeout`/
+  `forwarderSettleTimeout` + poll siblings) to avoid waiting out a real
+  45s timeout; every caller of each helper (2/3/4 tests respectively) now
+  stays serial with a comment on the helper itself plus each call site.
+  Confirmed clean after the fix: `go test -race -count=1 ./...`
+  true-exit=0, zero DATA RACE reports, and `go test ./...` (unfiltered)
+  true-exit=0. Audited for hidden Docker/K8s/time dependencies in
+  non-integration files: `internal/adapters/runtime/kubernetes/*_test.go`
+  and `internal/adapters/secrets/kubernetes/kubernetes_test.go` all use
+  `k8s.io/client-go/kubernetes/fake`, not a live cluster; no
+  `exec.Command("docker"|"kubectl")`, no fixed shared paths outside
+  `t.TempDir()`, no test-facing `time.Sleep` over tens of milliseconds —
+  nothing needed moving behind the `integration` tag.
+  (2) `internal/tools/testbudget` (new `package main` + unit tests): reads
+  a `go test -json` event stream, fails on any single test's `Elapsed`
+  over `-per-test` (default 60s) or the stream's first-to-last-event span
+  over `-total` (default 90s); a report line always prints test count +
+  observed total. Wired into `.github/workflows/ci.yml`'s `unit` job as
+  its own step (`go test -json ./... | go run ./internal/tools/
+  testbudget`) right after the existing human-readable `go test ./...`
+  step, so a violation doesn't cost the readable step's log. Proven both
+  directions live: green against the real fast tier (954 tests, ~0.2-3s
+  observed depending on cache) exit 0; a scratch commit adding
+  `TestScratchDeliberately61Seconds` (`time.Sleep(61 * time.Second)`)
+  under `internal/tools/testbudget` produced `testbudget: FAIL
+  .../testbudget.TestScratchDeliberately61Seconds took 1m1.06s, budget is
+  1m0s`, exit 1 — then `git reset --hard HEAD~1` dropped the scratch
+  commit (the audit/fix commit itself was not affected; see the note
+  below on how that reset was used with more care the second time).
+  (3) `justfile`: `test-deep suites=""` wraps `scripts/test-impact.sh`
+  BARE — `--only <suites>` when given, else `--base main` — never
+  flock-wrapped (doc 11's self-deadlock note: the script already
+  self-serializes on `/tmp/platformctl-itest.lock`); `test-affected` kept
+  as a `just` alias to `test-deep` so existing callers (CLAUDE.md, README,
+  doc 06 §10) don't break. `just test`'s recipe body is unchanged
+  (`go test ./...` already was the fast tier) but its comment now states
+  the ADR 028 role explicitly. (4) README's Development section and
+  docs/onboarding/developers.md's Testing section rewritten around the
+  three ADR 028 tiers, `just test` named as the TDD default in both;
+  docs/README.md's task-index table gained a fast-tier row.
+  **Wall-clock** (`time just test`, `go clean -testcache` between runs,
+  16-core dev machine): native (no GOMAXPROCS constraint) ~6-8s before
+  and ~7-8s after — this machine's core count already lets `go test`'s
+  own cross-package `-p` parallelism saturate, masking most of the
+  within-package win; under `GOMAXPROCS=2` (a closer proxy for a
+  constrained CI runner) 14.8s before vs 11.7s after. Both states clear
+  the 60s Accept bar by a wide margin on this machine; the CI budget
+  guard (not a specific dev-machine number) is what actually enforces the
+  SLA going forward.
+  **Deviations, recorded as found:**
+  1. J1 §Do item 4 says the ADR 028 §2 technology-fake-honesty rule
+     should be "documented in the E6 guide" — E6
+     (`docs/contributing/provider-authoring.md`) has not landed
+     (docs/onboarding/developers.md's own "not yet landed" note,
+     confirmed unchanged this session); nothing here fabricates that
+     file. The rule already lives in `docs/adr/028-test-tiering.md` §2
+     ("Fakes must be honest") for E6 to pick up when it lands.
+  2. **Gate note:** this task's gate says "no integration runs needed...
+     cite `--print` if scopes untouched" — but `scripts/test-impact.sh
+     --print` on the final diff selects 29 suites, not zero. The
+     `t.Parallel()` audit's file footprint spans nearly every package's
+     `_test.go` (that IS the task), and the impact map's scoping is
+     path-based, not diff-semantics-aware, so it reads "a `_test.go`
+     under this suite's scope changed" as "affected" even though every
+     edit here is test-structure-only (a `t.Parallel()` call, a
+     serial-reason comment) — no production code and no
+     integration-tagged test changed. No integration suite was run this
+     session: a 29-suite/multi-hour Docker sweep isn't what "no
+     integration runs needed" was asking for and conflicts with this
+     task's own "no polling" instruction. Recorded here as a finding for
+     the merge gate to weigh, not silently resolved either way.
+  3. Mid-task, a `git reset --hard HEAD~1` (used to drop the scratch
+     61s-test commit above) was run one command too early and discarded
+     the *uncommitted* `t.Parallel()` audit along with it (the scratch
+     commit had only staged its own new file, so the audit's 124 modified
+     tracked files were never protected by a commit). Recovered by
+     re-running the same mechanical AST tool plus manually redoing the 10
+     serial-exclusion edits from memory of the first pass — verified
+     identical (`git diff --stat` matched, all gates re-passed) — then
+     committed immediately as a checkpoint before continuing. No data
+     was silently lost; this is why: `git reset --hard` only discards
+     *uncommitted* tracked-file changes, so anything not yet committed is
+     one command away from this — commit before any reset, always.
 
 ### E6: Provider author contract — guide, conformance suite, exemplars
 

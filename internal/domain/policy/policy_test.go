@@ -15,6 +15,7 @@ func envelope(kind, name string, spec map[string]any, labels map[string]string) 
 }
 
 func TestMatchSelects(t *testing.T) {
+	t.Parallel()
 	e := envelope("Connection", "db-conn", map[string]any{"scheme": "tcp"}, map[string]string{"env": "prod"})
 
 	cases := []struct {
@@ -42,6 +43,7 @@ func TestMatchSelects(t *testing.T) {
 }
 
 func TestAssertSatisfied(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		a       Assert
@@ -78,12 +80,14 @@ func TestAssertSatisfied(t *testing.T) {
 }
 
 func TestAssertSatisfiedNoOperatorErrors(t *testing.T) {
+	t.Parallel()
 	if _, err := (Assert{Field: "spec.x"}).Satisfied("x", true); err == nil {
 		t.Fatal("expected an error for an Assert with no operator set")
 	}
 }
 
 func TestFieldValue(t *testing.T) {
+	t.Parallel()
 	e := envelope("Connection", "db-conn", map[string]any{
 		"scheme": "https",
 		"tls":    map[string]any{"selfSigned": true},
@@ -118,6 +122,7 @@ func validPolicy(id string, rule Rule) Policy {
 }
 
 func TestValidateDuplicateRuleID(t *testing.T) {
+	t.Parallel()
 	rule := Rule{ID: "dup", Effect: Deny, Match: &Match{Kind: StringList{"Connection"}}, Assert: &Assert{Field: "spec.scheme", In: []any{"https"}}}
 	policies := []Policy{validPolicy("a", rule), validPolicy("b", rule)}
 	if err := Validate(policies); err == nil {
@@ -126,6 +131,7 @@ func TestValidateDuplicateRuleID(t *testing.T) {
 }
 
 func TestValidateRequiresExactlyOneSelectorShape(t *testing.T) {
+	t.Parallel()
 	cases := []Rule{
 		{ID: "r1", Effect: Deny}, // none of match+assert/matchFinding/matchPlan
 		{ID: "r2", Effect: Deny, Match: &Match{Kind: StringList{"Connection"}}},                                                                                                        // match without assert
@@ -142,6 +148,7 @@ func TestValidateRequiresExactlyOneSelectorShape(t *testing.T) {
 }
 
 func TestRuleKindMatchEdge(t *testing.T) {
+	t.Parallel()
 	rule := Rule{ID: "cross-domain", Effect: Deny, MatchEdge: &EdgeMatch{CrossDomain: &CrossDomainSelector{From: "payments", To: "analytics"}}}
 	if got := rule.Kind(); got != RuleKindEdge {
 		t.Fatalf("Kind() = %v, want RuleKindEdge", got)
@@ -152,6 +159,7 @@ func TestRuleKindMatchEdge(t *testing.T) {
 }
 
 func TestValidateMatchEdgeRequiresFromAndTo(t *testing.T) {
+	t.Parallel()
 	cases := []Rule{
 		{ID: "no-from", Effect: Deny, MatchEdge: &EdgeMatch{CrossDomain: &CrossDomainSelector{To: "analytics"}}},
 		{ID: "no-to", Effect: Deny, MatchEdge: &EdgeMatch{CrossDomain: &CrossDomainSelector{From: "payments"}}},
@@ -186,6 +194,7 @@ func TestValidateMatchGrantRequiresNamespace(t *testing.T) {
 }
 
 func TestValidateAssertOperatorExclusivity(t *testing.T) {
+	t.Parallel()
 	rule := Rule{
 		ID:     "multi-op",
 		Effect: Deny,
@@ -198,6 +207,7 @@ func TestValidateAssertOperatorExclusivity(t *testing.T) {
 }
 
 func TestValidateInvalidEffect(t *testing.T) {
+	t.Parallel()
 	rule := Rule{ID: "bad-effect", Effect: Effect("block"), Match: &Match{Kind: StringList{"Connection"}}, Assert: &Assert{Field: "spec.scheme", In: []any{"https"}}}
 	if err := Validate([]Policy{validPolicy("p", rule)}); err == nil {
 		t.Fatal("expected an invalid-effect error")
@@ -205,6 +215,7 @@ func TestValidateInvalidEffect(t *testing.T) {
 }
 
 func TestValidateBadRegexRejected(t *testing.T) {
+	t.Parallel()
 	rule := Rule{ID: "bad-regex", Effect: Deny, Match: &Match{Kind: StringList{"Provider"}}, Assert: &Assert{Field: "spec.configuration.image", Matches: "(unclosed"}}
 	if err := Validate([]Policy{validPolicy("p", rule)}); err == nil {
 		t.Fatal("expected a regex compile error")
@@ -212,6 +223,7 @@ func TestValidateBadRegexRejected(t *testing.T) {
 }
 
 func TestDecodeRoundTrip(t *testing.T) {
+	t.Parallel()
 	raw := map[string]any{
 		"apiVersion": APIVersion,
 		"kind":       KindName,
@@ -253,6 +265,7 @@ func TestDecodeRoundTrip(t *testing.T) {
 }
 
 func TestDecodeRejectsWrongAPIVersion(t *testing.T) {
+	t.Parallel()
 	raw := map[string]any{
 		"apiVersion": "datascape.io/v1alpha1",
 		"kind":       KindName,
@@ -265,6 +278,7 @@ func TestDecodeRejectsWrongAPIVersion(t *testing.T) {
 }
 
 func TestSortDecisionsDeterministic(t *testing.T) {
+	t.Parallel()
 	decisions := []Decision{
 		{RuleID: "z-rule", Effect: Warn, Resource: resource.Key{Namespace: "default", Kind: "Connection", Name: "b"}},
 		{RuleID: "a-rule", Effect: Deny, Resource: resource.Key{Namespace: "default", Kind: "Connection", Name: "a"}},
@@ -280,6 +294,7 @@ func TestSortDecisionsDeterministic(t *testing.T) {
 }
 
 func TestParseExemptions(t *testing.T) {
+	t.Parallel()
 	anns := map[string]string{
 		ExemptAnnotation: "no-plaintext-connections: local dev only\nforbid-env-secret-backend: no vault available\nmalformed-entry\nno-reason:   ",
 	}
@@ -296,6 +311,7 @@ func TestParseExemptions(t *testing.T) {
 }
 
 func TestParseExemptionsEmpty(t *testing.T) {
+	t.Parallel()
 	if got := ParseExemptions(nil); got != nil {
 		t.Errorf("ParseExemptions(nil) = %v, want nil", got)
 	}

@@ -30,6 +30,7 @@ func replicaSpec(name string, n int) runtime.ContainerSpec {
 // change bar: members <= 1 is byte-for-byte the single-address ReachableURL
 // path, wrapped in a one-element slice.
 func TestReachableURLsSingleMember(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	if _, err := rt.EnsureContainer(context.Background(), runtime.ContainerSpec{
 		Name: "connect", Image: "test-image",
@@ -51,6 +52,7 @@ func TestReachableURLsSingleMember(t *testing.T) {
 // unreachable ordinal among several must not fail resolution — the survivors
 // are returned as failover candidates.
 func TestReachableURLsSkipsDeadOrdinal(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	if _, err := rt.EnsureContainer(context.Background(), replicaSpec("connect", 2)); err != nil {
 		t.Fatalf("EnsureContainer: %v", err)
@@ -71,6 +73,7 @@ func TestReachableURLsSkipsDeadOrdinal(t *testing.T) {
 // TestReachableURLsAllDeadErrors covers the "error only when zero members
 // are reachable" rule.
 func TestReachableURLsAllDeadErrors(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	if _, err := rt.EnsureContainer(context.Background(), replicaSpec("connect", 2)); err != nil {
 		t.Fatalf("EnsureContainer: %v", err)
@@ -89,6 +92,7 @@ func TestReachableURLsAllDeadErrors(t *testing.T) {
 // TestProbeConnectWorkerSetAllPresent covers the healthy path: every
 // ordinal running yields Ready/no-drift.
 func TestProbeConnectWorkerSetAllPresent(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	if _, err := rt.EnsureContainer(context.Background(), replicaSpec("connect", 2)); err != nil {
 		t.Fatalf("EnsureContainer: %v", err)
@@ -109,6 +113,7 @@ func TestProbeConnectWorkerSetAllPresent(t *testing.T) {
 // "worker-count drift detected" Accept item: a missing ordinal is reported
 // as drift naming it, via the shared ConnectWorkerMissing prefix.
 func TestProbeConnectWorkerSetMissingOrdinal(t *testing.T) {
+	t.Parallel()
 	rt := fakeruntime.New()
 	if _, err := rt.EnsureContainer(context.Background(), replicaSpec("connect", 2)); err != nil {
 		t.Fatalf("EnsureContainer: %v", err)
@@ -158,6 +163,7 @@ func (collectiveRuntime) AddressesMembersCollectively() bool { return true }
 // here at all — a regression back to the ordinal loop would fail this test
 // outright with "container not found").
 func TestReachableURLsCollectiveRuntimeAddressesByBareName(t *testing.T) {
+	t.Parallel()
 	rt := collectiveRuntime{fakeruntime.New()}
 	if _, err := rt.EnsureContainer(context.Background(), runtime.ContainerSpec{
 		Name: "connect", Image: "test-image",
@@ -178,6 +184,7 @@ func TestReachableURLsCollectiveRuntimeAddressesByBareName(t *testing.T) {
 // TestReachableURLsCollectiveRuntimeErrorsWhenUnreachable covers the "error
 // only when the set is genuinely unreachable" rule on the collective path.
 func TestReachableURLsCollectiveRuntimeErrorsWhenUnreachable(t *testing.T) {
+	t.Parallel()
 	rt := collectiveRuntime{fakeruntime.New()}
 	if _, _, err := ReachableURLs(context.Background(), rt, "connect", 8083, 2); err == nil {
 		t.Fatal("want an error when the set's bare name resolves to nothing")
@@ -187,6 +194,7 @@ func TestReachableURLsCollectiveRuntimeErrorsWhenUnreachable(t *testing.T) {
 // TestProbeConnectWorkerSetCollectiveAllReady covers the collective branch's
 // healthy path: the aggregate ReadyReplicas matches the declared count.
 func TestProbeConnectWorkerSetCollectiveAllReady(t *testing.T) {
+	t.Parallel()
 	rt := collectiveRuntime{fakeruntime.New()}
 	if _, err := rt.EnsureContainer(context.Background(), replicaSpec("connect", 2)); err != nil {
 		t.Fatalf("EnsureContainer: %v", err)
@@ -207,6 +215,7 @@ func TestProbeConnectWorkerSetCollectiveAllReady(t *testing.T) {
 // degraded path: one of two members gone reports drift naming a ready/
 // expected count (there is no ordinal name to name on this runtime).
 func TestProbeConnectWorkerSetCollectiveDegraded(t *testing.T) {
+	t.Parallel()
 	rt := collectiveRuntime{fakeruntime.New()}
 	if _, err := rt.EnsureContainer(context.Background(), replicaSpec("connect", 2)); err != nil {
 		t.Fatalf("EnsureContainer: %v", err)

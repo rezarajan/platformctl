@@ -39,6 +39,7 @@ func allLintCodes() []string {
 // status.Catalog entry, and status.Catalog must carry no orphan/duplicate
 // lintCode entries.
 func TestExplainCatalogCoversEveryLintCode(t *testing.T) {
+	t.Parallel()
 	codes := allLintCodes()
 	if len(codes) == 0 {
 		t.Fatal("allLintCodes() returned zero codes — wiring is broken")
@@ -87,6 +88,7 @@ func TestExplainCatalogCoversEveryLintCode(t *testing.T) {
 // resolves every registered code end-to-end (schema/CLI path, not just the
 // catalog data structure the test above checks).
 func TestEveryLintCodeExplains(t *testing.T) {
+	t.Parallel()
 	for _, code := range allLintCodes() {
 		code := code
 		t.Run(code, func(t *testing.T) {

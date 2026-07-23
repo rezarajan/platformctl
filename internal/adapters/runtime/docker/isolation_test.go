@@ -13,6 +13,7 @@ import (
 // Docker daemon at all — a zero-value *Runtime (no client) proves the
 // method never touches r.cli.
 func TestObserveIsolationEnforcement(t *testing.T) {
+	t.Parallel()
 	r := &Runtime{}
 	status, err := r.ObserveIsolationEnforcement(context.Background())
 	if err != nil {

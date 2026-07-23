@@ -18,6 +18,7 @@ import (
 // = nil`, cmd/platformctl/root.go), so destroy is the live path that
 // exercises the seam this task changed.
 func TestLogFormatJSONEmitsStructuredEventsPerAction(t *testing.T) {
+	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	if _, err, code := run(t, "apply", "testdata/noop-scenario", "--state-file", stateFile, "--auto-approve"); err != nil || code != 0 {
 		t.Fatalf("apply failed (code %d): %v", code, err)
@@ -55,6 +56,7 @@ func TestLogFormatJSONEmitsStructuredEventsPerAction(t *testing.T) {
 // prose — no slog timestamp/level prefix, no attrs — for the same destroy
 // action.
 func TestLogFormatTextIsByteCompatible(t *testing.T) {
+	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	if _, err, code := run(t, "apply", "testdata/noop-scenario", "--state-file", stateFile, "--auto-approve"); err != nil || code != 0 {
 		t.Fatalf("apply failed (code %d): %v", code, err)

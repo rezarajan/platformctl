@@ -7,6 +7,7 @@ import (
 )
 
 func TestGenerateCAIsSelfSignedAndValid(t *testing.T) {
+	t.Parallel()
 	certPEM, keyPEM, err := generateCA()
 	if err != nil {
 		t.Fatalf("generateCA: %v", err)
@@ -27,6 +28,7 @@ func TestGenerateCAIsSelfSignedAndValid(t *testing.T) {
 }
 
 func TestGenerateLeafCertChainsToCA(t *testing.T) {
+	t.Parallel()
 	caCert, caKey, err := generateCA()
 	if err != nil {
 		t.Fatalf("generateCA: %v", err)
@@ -47,6 +49,7 @@ func TestGenerateLeafCertChainsToCA(t *testing.T) {
 }
 
 func TestLeafCertDoesNotChainToADifferentCA(t *testing.T) {
+	t.Parallel()
 	caCert, caKey, err := generateCA()
 	if err != nil {
 		t.Fatalf("generateCA: %v", err)
@@ -65,6 +68,7 @@ func TestLeafCertDoesNotChainToADifferentCA(t *testing.T) {
 }
 
 func TestCertValidForHostRejectsExpiry(t *testing.T) {
+	t.Parallel()
 	caCert, caKey, err := generateCA()
 	if err != nil {
 		t.Fatalf("generateCA: %v", err)
@@ -81,12 +85,14 @@ func TestCertValidForHostRejectsExpiry(t *testing.T) {
 }
 
 func TestCertValidForHostRejectsUnparsable(t *testing.T) {
+	t.Parallel()
 	if err := certValidForHost([]byte("not a cert"), "x", time.Now()); err == nil {
 		t.Error("expected parse error for garbage PEM")
 	}
 }
 
 func TestCertMatchesSecret(t *testing.T) {
+	t.Parallel()
 	a := []byte("-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n")
 	b := []byte("-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n")
 	c := []byte("-----BEGIN CERTIFICATE-----\ndifferent\n-----END CERTIFICATE-----\n")
@@ -99,6 +105,7 @@ func TestCertMatchesSecret(t *testing.T) {
 }
 
 func TestGeneratedCertsArePEMEncoded(t *testing.T) {
+	t.Parallel()
 	certPEM, keyPEM, err := generateCA()
 	if err != nil {
 		t.Fatalf("generateCA: %v", err)

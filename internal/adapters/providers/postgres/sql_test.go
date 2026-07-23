@@ -13,6 +13,7 @@ import (
 // §2.2: secrets commonly contain @ : / # spaces and quotes; the connection
 // URL must parse back to the exact same credentials.
 func TestConnStringSurvivesSpecialCharacterCredentials(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ user, pass string }{
 		{"admin", "p@ss:w/rd#1 x"},
 		{"we?rd@user", `quo"te'and\slash`},
@@ -37,6 +38,7 @@ func TestConnStringSurvivesSpecialCharacterCredentials(t *testing.T) {
 // postures this DSN builder must produce: nil (back-compat plaintext) and
 // each of connection.TLSModeRequire/VerifyCA/VerifyFull.
 func TestConnStringSSLMode(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		tls     *providerkit.DatabaseTLS

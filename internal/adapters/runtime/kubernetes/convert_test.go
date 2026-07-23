@@ -16,6 +16,7 @@ import (
 // reachability_integration_test.go on a policy-enforcing cluster; this unit
 // test pins the pure translation so a regression fails in `go test ./...`.
 func TestBuildExternalIngressPolicy(t *testing.T) {
+	t.Parallel()
 	baseSpec := func(mode string) runtimeport.ContainerSpec {
 		return runtimeport.ContainerSpec{
 			Name:       "reach",
@@ -131,6 +132,7 @@ func TestBuildExternalIngressPolicy(t *testing.T) {
 // container's multi-network attach, so this NetworkPolicy is the mechanism
 // instead).
 func TestBuildCrossDomainIngressPolicy(t *testing.T) {
+	t.Parallel()
 	t.Run("nil when no domain is allowed in", func(t *testing.T) {
 		if p := buildCrossDomainIngressPolicy("analytics", nil, nil); p != nil {
 			t.Errorf("expected nil policy for an empty allow-list, got %+v", p)

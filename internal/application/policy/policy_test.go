@@ -22,6 +22,7 @@ func writeFile(t *testing.T, dir, name, content string) {
 }
 
 func TestLoadDirMissingIsNoPolicies(t *testing.T) {
+	t.Parallel()
 	policies, err := LoadDir(filepath.Join(t.TempDir(), "does-not-exist"))
 	if err != nil || policies != nil {
 		t.Fatalf("LoadDir(missing) = (%v, %v), want (nil, nil)", policies, err)
@@ -29,6 +30,7 @@ func TestLoadDirMissingIsNoPolicies(t *testing.T) {
 }
 
 func TestLoadDirHappyPath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, dir, "deny.yaml", `
 apiVersion: policy.datascape.io/v1alpha1
@@ -54,6 +56,7 @@ spec:
 }
 
 func TestLoadDirSchemaRejectsBadShape(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, dir, "bad.yaml", `
 apiVersion: policy.datascape.io/v1alpha1
@@ -95,6 +98,7 @@ func denyPlaintextPolicy(id string, exemptible bool) policy.Policy {
 }
 
 func TestRunFieldAssertDeny(t *testing.T) {
+	t.Parallel()
 	envelopes := []resource.Envelope{conn("plain", "tcp"), conn("secure", "https")}
 	decisions, err := Run([]policy.Policy{denyPlaintextPolicy("no-plaintext", false)}, envelopes, nil, nil)
 	if err != nil {
@@ -109,6 +113,7 @@ func TestRunFieldAssertDeny(t *testing.T) {
 }
 
 func TestRunExemptionOnlyHonoredWhenExemptible(t *testing.T) {
+	t.Parallel()
 	exempted := conn("plain", "tcp")
 	exempted.Metadata.Annotations = map[string]string{
 		policy.ExemptAnnotation: "no-plaintext: local dev only",
@@ -134,6 +139,7 @@ func TestRunExemptionOnlyHonoredWhenExemptible(t *testing.T) {
 }
 
 func TestRunMatchFindingEscalation(t *testing.T) {
+	t.Parallel()
 	var p policy.Policy
 	p.APIVersion = policy.APIVersion
 	p.Kind = policy.KindName
@@ -158,6 +164,7 @@ func TestRunMatchFindingEscalation(t *testing.T) {
 }
 
 func TestRunPlanMatchesActionAndKind(t *testing.T) {
+	t.Parallel()
 	var p policy.Policy
 	p.APIVersion = policy.APIVersion
 	p.Kind = policy.KindName
@@ -235,6 +242,7 @@ func crossDomainPolicy(id, from, to string, effect policy.Effect) policy.Policy 
 // deny{from:payments,to:analytics} matchEdge.crossDomain rule (docs/adr/022
 // Ring 0). The Decision must name both domains and the edge.
 func TestRunCrossDomainDeniesBindingAcrossDomains(t *testing.T) {
+	t.Parallel()
 	envelopes, g := cdcCrossDomainFixture(t, "payments", "analytics")
 	p := crossDomainPolicy("deny-payments-to-analytics", "payments", "analytics", policy.Deny)
 
@@ -264,6 +272,7 @@ func TestRunCrossDomainDeniesBindingAcrossDomains(t *testing.T) {
 // share a domain never fires a crossDomain rule naming two different
 // domains, and undeclared (default) domains behave identically.
 func TestRunCrossDomainSameDomainNoDecision(t *testing.T) {
+	t.Parallel()
 	envelopes, g := cdcCrossDomainFixture(t, "payments", "payments")
 	p := crossDomainPolicy("deny-payments-to-analytics", "payments", "analytics", policy.Deny)
 
@@ -281,6 +290,7 @@ func TestRunCrossDomainSameDomainNoDecision(t *testing.T) {
 // declaring connectionRef in one domain, naming a Connection in another,
 // denied the same way a Binding's source/target edge is.
 func TestRunCrossDomainConnectionConsumption(t *testing.T) {
+	t.Parallel()
 	conn := domainEnv("Connection", "ext-db", "analytics", map[string]any{
 		"target": "10.0.0.5:5432", "port": 5432, "scheme": "tcp",
 	})
@@ -369,6 +379,7 @@ func TestRunMatchGrantOtherNamespaceNoDecision(t *testing.T) {
 // accept: "determinism golden") — two independent Run calls over the same
 // inputs must produce byte-identical (deep-equal, stably ordered) output.
 func TestRunDeterministic(t *testing.T) {
+	t.Parallel()
 	envelopes := []resource.Envelope{conn("a", "tcp"), conn("b", "tcp"), conn("c", "https")}
 	policies := []policy.Policy{denyPlaintextPolicy("no-plaintext", false)}
 
@@ -393,6 +404,7 @@ func TestRunDeterministic(t *testing.T) {
 // deny sorts first (Less's effect rank) — the SCP-style guarantee ADR 021
 // §1 names explicitly ("deny cannot be overridden by a later allow").
 func TestDenyWinsPrecedence(t *testing.T) {
+	t.Parallel()
 	var warnPolicy policy.Policy
 	warnPolicy.APIVersion = policy.APIVersion
 	warnPolicy.Kind = policy.KindName
