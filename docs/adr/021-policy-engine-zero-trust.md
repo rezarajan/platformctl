@@ -146,11 +146,31 @@ the shipped posture mandatory.
    (onboarding §governance, doc 03 sibling reference page); 6. lint
    dependency: ADR 020 lands first (policies consume findings).
 
+## Addendum (2026-07-23, docs/planning/08 E7 truth sweep)
+
+§5's "Not in scope" table lists "Per-request identity / mTLS service mesh /
+L7 authz between workloads" as out of scope, reasoning "that is a
+mesh/gateway product." ADR 027 (accepted 2026-07-22, after this ADR)
+reverses that call for one specific case: OpenZiti-mediated Connections
+(ADR 022 Ring 2, H6) are IN Datascape, as `internal/ports/mediation`'s
+first-class `MediationProvider` capability seam, and ADR 027 promotes
+exactly that mechanism to THE authoritative zero-trust guarantee (Layer
+1) — the network-level controls this ADR's built-in pack makes mandatory
+(§4) are downgraded to Layer 2, best-effort defense-in-depth. This ADR's
+own decision stands unchanged for everything else in scope (§3's
+enforcement points, the pack's rule set, exemption semantics); only the
+"per-request identity is out of scope" framing is superseded. See ADR
+027's claims table for the phrasing this repo's docs must use, and
+`docs/onboarding/users.md`'s "Network isolation: what's actually
+enforced" section for the user-facing version.
+
 ## References
 
 ADR 011 (the enforcement point's contract), 012/013 (the mechanisms
 policy makes mandatory), 018 + C8 (TLS boundary), 020 (findings as policy
-facts), doc 09 §4 (plane analysis; one-shot posture), doc 01 NG2/NG3.
+facts), 022 (domains/mediation), 027 (enforcement layering — supersedes
+this ADR's per-request-identity scope call, see Addendum), doc 09 §4
+(plane analysis; one-shot posture), doc 01 NG2/NG3.
 
 ## Addendum (2026-07-22, owner decision at H4): one rule per fact
 

@@ -66,7 +66,9 @@ func TestDomainSegmentationOnKubernetesEndToEnd(t *testing.T) {
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/domains-k8s-scenario"
-	const gateVal = "KubernetesRuntime=true,ContainerProvider=true"
+	// The "container" placeholder provider is registered ungated
+	// (docs/planning/08 E7 retired the ContainerProvider gate).
+	const gateVal = "KubernetesRuntime=true"
 
 	out, err, code := run(t, "apply", manifests, "--state-file", stateFile, "--auto-approve", "--feature-gates", gateVal)
 	if err != nil || code != 0 {

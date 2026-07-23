@@ -2090,6 +2090,65 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
 - **Accept:** schema-doc-sync agent clean; a support-level table exists in
   doc 04; no planning doc contradicts docs/history/checkpoint.md or this plan.
 
+**Done (2026-07-23):** (1) **Sweep.** Single-namespace-era prose: already
+fully resolved by the 2026-07-20 consolidation (doc 07 §0.1's own
+"Resolved" list); grep for the residual patterns found nothing further.
+Stale roadmap checkboxes: doc 04 already carries a 2026-07-20
+historical-record note over its Phase 0–6.5 checklists; doc 05 (the
+`v1.0.0` spec's own per-phase acceptance checklists) lacked the
+equivalent note and got one, additively, pointing at doc 04/checkpoint/
+doc 08 as the live tracker. One doc 08 checkbox (H5's
+"undeclared domains byte-identical" exit criterion) had standing test
+evidence in its own Done-note and is now ticked; H5's other exit
+criterion (the owner's mediated-Connection scenario) remains open —
+verified not yet built, left unchecked. ADR 027 claims-table conformance:
+`docs/planning/03` §8.2.5 and `docs/onboarding/users.md`'s "Network
+isolation" section were already conformant (a prior pass evidently
+covered them); found and fixed one residual — `docs/onboarding/users.md`'s
+"zero-trust starter pack" section named a Layer-2-only pack (TLS, digest
+pins, secret backends, network isolation — no mediation rule anywhere in
+`internal/application/policy/templates/zero-trust`) with "zero-trust"
+posture language the claims table reserves for Layer 1; added a
+clarifying paragraph distinguishing the pack's *name* (ADR 021, predates
+ADR 027) from what it *earns* (Network-segmented least privilege, not
+Zero-trust), plus an ADR 021 addendum reconciling its now-superseded
+"per-request identity is out of scope" framing with ADR 027/H6. ADR 028
+test-workflow prose: nothing contradicts it — J1 (sequenced, not yet
+executed) owns the full local-loop restructure and its README/
+docs/onboarding/developers.md updates; out of E7's scope to pre-empt.
+(2) **Support-level statement.** `docs/planning/04` new §12.1 (one
+paragraph per Alpha/Beta/GA: shape-change contract, default-on/off norm,
+test-coverage bar) plus a `ContainerProvider`-retirement footnote on the
+table itself; README's "Provider maturity" section now points there
+instead of re-deriving the commitment informally. (3) **`ContainerProvider`
+gate retirement — decision recorded.** Evidence
+(`grep 'type: container' cmd/platformctl/testdata`) confirmed it
+load-bearing for `docker-acceptance` (`TestDockerProviderEndToEnd`) and
+`domains` (H5's Docker AND Kubernetes segmentation legs) — not
+"nothing outside tests consumes it." Per the spec's own fallback: the
+*gate* is retired (`gates.Register("ContainerProvider", ...)` deleted
+from `cmd/platformctl/main.go`), the *provider* stays, registered
+ungated exactly like `noop`; the three integration test files' gate
+strings (`docker_integration_test.go`, `domains_integration_test.go`,
+`domains_kubernetes_integration_test.go`) dropped `ContainerProvider=true`
+accordingly. Verified: `gofmt`/`go build`/`go vet` (plain and
+`-tags integration`)/`golangci-lint run` all clean; `go test ./...`
+0 failed; `scripts/test-impact.sh --print` selected 0 suites (neither
+`cmd/platformctl/main.go` nor the three edited test files are declared
+triggers in any suite's scope in `scripts/test-impact.sh` — a pre-existing
+map gap, not fixed here, out of scope) so the map's own "affected only"
+rule permitted skipping integration; ran the two suites known from the
+evidence search to be affected anyway (`--only docker-acceptance,domains
+--force`) for real confidence: `docker-acceptance` passed
+(`TestDockerProviderEndToEnd` green, live Docker); `domains` failed —
+bisected to a **pre-existing, unrelated regression** (commit `d0017d5`,
+landed the same evening as H5, ADR 022 addendum's Connection/Provider
+domain-coherence check, against which H5's own testdata was never
+updated) reproduced identically with this task's diff stashed out —
+recorded in H5's own section above, not this task's fault, not fixed
+here. (4) **Doc 10 history catch-up** through today: §5.y appended
+(waves 2–3, ADR 026/027/028, the production-review saga, H5/H6/E7).
+
 ### E8: Release engineering and CI matrix
 
 - **Size:** M. **Depends:** B8 (K8s CI leg), A10 (digest workflow).
@@ -2580,7 +2639,7 @@ ADRs and is not restated.
       same manifest reconciles the path through a MediatedConnection and
       the mediator's own logs/policy state show the identity-checked
       dial; removing the allow and re-applying severs it.
-- [ ] Undeclared domains remain byte-identical to today's behavior
+- [x] Undeclared domains remain byte-identical to today's behavior
       (no segmentation, no mediation) — pinned by tests.
 
 ### H1: Lint engine and built-in set (ADR 020)
@@ -2859,6 +2918,30 @@ mechanism itself (manually verified: cross-domain dial without a declared
 path failed at the network layer once addressed correctly, before this
 cluster's non-enforcement was identified as the reason the automated
 assertion couldn't rely on it).
+
+**Regression found (2026-07-23, 08 E7 truth sweep):** the "full pass"
+Docker-leg claim immediately above no longer holds against current
+`main`. Re-running `TestDomainSegmentationEndToEnd` and
+`TestDomainSegmentationOnKubernetesEndToEnd` (unmodified, via
+`scripts/test-impact.sh --only domains --force`) both fail immediately
+(0.01s — before any runtime call) with `Connection "domains-it-bridge":
+metadata.domain "alpha" does not match realizing Provider
+"domains-it-edge"'s domain "default"`. Bisected: commit `d0017d5`
+("domain-of-record is the realizing Provider's — decorator rekeyed,
+coherence enforced, ADR 022 addendum"), which landed the same evening
+*after* H5's own `11d728c` feat commit, added this coherence check but
+did not update `cmd/platformctl/testdata/domains-scenario` /
+`domains-k8s-scenario` to declare a matching domain on the
+`domains-it-edge` proxy Provider — so H5's own fixture now trips the
+rule H5's sibling commit introduced. Confirmed unrelated to E7's own
+changes (reproduced identically with E7's diff stashed, against the
+merged-main state E7 started from). Not fixed here — out of E7's scope
+(a testdata/behavior fix, not a docs or gate-retirement change) — but
+recorded so the "Both-runtime segmentation timings" claim above is not
+read as current. Follow-up: add `domain: alpha` to `domains-it-edge` in
+both scenario files (or omit `domain: alpha` from the Connection, per
+the error's own remedy), re-run both suites, and correct the timing
+claim above in the same commit as the fix.
 
 **Deviations / known gaps:** (1) Ring 1's domain-of-record for a
 non-Connection, non-Provider dependent kind (Source, EventStream, Dataset,

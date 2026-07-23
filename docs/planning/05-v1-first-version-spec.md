@@ -4,6 +4,19 @@ This document is the precise, testable definition of what ships as `v1.0.0`. It 
 the close of **Phase 5** in the roadmap. If a reviewer can't check a box below against a running
 binary, it isn't done.
 
+**Historical-record note (2026-07-23, 08 E7 truth sweep):** `v1.0.0` was
+declared at Phase 5 close; Phases 0–6.5 are complete and verified per
+`docs/planning/04-roadmap-and-feature-gates.md` §2, and `v1.1`/`v1.2` were
+later collapsed into a single `v1.2.0` tag (`docs/planning/08` §10). The
+per-item checkboxes in §3–8 below were this document's phase-entry
+acceptance bar at authoring time; they were not retroactively ticked as
+each phase's work landed, because doc 04 §2 and `docs/history/checkpoint.md`
+took over as the live phase-status tracker once Phase 6.5 closed, and
+`docs/planning/08-production-readiness-plan.md` (stage-gated) took over for
+everything after. Treat an unchecked box below as this document's own
+tracking having stopped, not as evidence the work is undone — check
+`docs/history/checkpoint.md` / doc 04 §2 / doc 08 for current status.
+
 ## 1. What "v1.0.0" means here
 
 A from-scratch implementation of the layered model (resource / provider / runtime) described in

@@ -9,7 +9,10 @@ import (
 	"testing"
 )
 
-const phase1Gates = "DockerRuntime=true,ContainerProvider=true"
+// The "container" placeholder provider is registered ungated (docs/planning/08
+// E7 retired the ContainerProvider gate — see cmd/platformctl/main.go), so
+// only DockerRuntime needs enabling here.
+const phase1Gates = "DockerRuntime=true"
 
 // TestDockerProviderEndToEnd covers the Phase 1 exit criteria: a manifest
 // with a Docker-typed Provider creates a real network, volume, and container,

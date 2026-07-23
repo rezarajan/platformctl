@@ -8,13 +8,15 @@ import (
 	"testing"
 )
 
-// domainsGates enables the Docker container provider (used throughout this
-// scenario for its minimal footprint) and the proxy Connection provider
-// realizing the mediated entrypoint — PolicyEngine is deliberately NOT
-// enabled here: docs/planning/08 H5's accept criterion (b) is Ring 1
-// segmentation alone, proven with no crossDomain policy declared at all
-// (see the Done-note under H5 for the full activation-semantics writeup).
-const domainsGates = "DockerRuntime=true,ContainerProvider=true"
+// domainsGates enables the Docker runtime (the "container" placeholder
+// provider used throughout this scenario for its minimal footprint is
+// registered ungated — docs/planning/08 E7 retired the ContainerProvider
+// gate) and the proxy Connection provider realizing the mediated entrypoint
+// — PolicyEngine is deliberately NOT enabled here: docs/planning/08 H5's
+// accept criterion (b) is Ring 1 segmentation alone, proven with no
+// crossDomain policy declared at all (see the Done-note under H5 for the
+// full activation-semantics writeup).
+const domainsGates = "DockerRuntime=true"
 
 // TestDomainSegmentationEndToEnd is docs/planning/08 H5's accept criterion
 // (b): segmentation on the Docker runtime — two domains, no allowed path

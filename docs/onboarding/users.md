@@ -258,6 +258,14 @@ your organization's own values. `PolicyEngine` stays **Alpha and disabled by def
 policy evaluation happens anywhere until you both load a policies directory *and* pass
 `--feature-gates PolicyEngine=true`.
 
+**Naming vs. claim (docs/adr/027, checked 2026-07-23):** `zero-trust` is this pack's *name*
+(ADR 021 predates ADR 027's claims table) — its rules are entirely Layer 2 (TLS, digest pins,
+secrets backends, default-deny network isolation) plus a couple of workflow guards. Per the
+"Network isolation" table above, that combination earns the **Network-segmented least privilege**
+claim, not the **Zero-trust** one — the Zero-trust claim is reserved for Layer 1 (a
+`MediatedConnections`-gated, identity-attested edge). Load this pack for real hardening defaults;
+add `openziti`-mediated Connections (§8.2.5, doc 03) for the actual zero-trust guarantee.
+
 ### A worked example: deny, then waive
 
 Say the pack is enabled and you `validate` a manifest set with a plaintext Connection:
