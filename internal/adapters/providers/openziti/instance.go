@@ -62,6 +62,12 @@ func toInt(v any, def int) int {
 func controllerName(providerName string) string { return providerName + "-ctrl" }
 func routerName(providerName string) string     { return providerName + "-router" }
 
+// routerEnrollTokenPath is where the router's one-time enrollment JWT is
+// FileMount-ed (docs/planning/08 H10) — deliberately outside "/ziti-router"
+// (the router's persisted data volume, see reconcileInstance's routerSpec
+// doc comment for why).
+const routerEnrollTokenPath = "/run/ziti-enroll/token.jwt"
+
 // reconcileInstance bootstraps the controller and router containers and
 // ensures the controller's default admin identity + router enrollment are
 // in place. See this package's doc comment for the mechanism and the live
@@ -195,7 +201,33 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 		if enrollJWT == "" {
 			return st, fmt.Errorf("Provider %q (type: openziti): edge-router %q has no enrollment JWT and is not yet verified", res.Metadata.Name, routerNm)
 		}
-		routerSpec.Env["ZITI_ENROLL_TOKEN"] = enrollJWT
+		// docs/planning/08 H10: the JWT itself goes in a FileMount, never
+		// literally as an Env value — a `docker inspect`/`kubectl get pod
+		// -o yaml` no longer reveals it. ZITI_ENROLL_TOKEN stays set, but
+		// to a PATH: verified live against the pinned router image's own
+		// bootstrap.bash (its enroll() function already treats
+		// ZITI_ENROLL_TOKEN as a file path whenever that value names an
+		// existing non-empty file, falling back to literal-JWT only
+		// otherwise) — the "documented equivalent" of a ZITI_ENROLL_TOKEN_FILE
+		// var this image doesn't actually define. Mode 0o644, not the
+		// wireguard-precedent 0o600: this image's bootstrap process runs as
+		// an unprivileged "ziggy" user while Docker's copyFilesIn (and
+		// Kubernetes' Secret-volume projection) place the file root-owned —
+		// a 0o600 file is then unreadable by ziggy at all (live-verified: the
+		// router panics "could not load JWT file"); 0o644's world-read bit
+		// is what a non-root reader in a *different* filesystem namespace
+		// than the copying root needs, and the file only ever exists inside
+		// this one container's own mount namespace regardless. Path is
+		// deliberately OUTSIDE "/ziti-router" (the persisted volume mounted
+		// below): Docker's copyFilesIn writes into the container's own
+		// writable layer, which the settle-recreate below discards along
+		// with the container it belonged to (named volumes are NOT removed
+		// on that recreate) — inside the volume, the JWT would instead
+		// persist indefinitely as on-disk residue the settle pass could
+		// never clean up, live-verified via the same recreate-on-hash-
+		// mismatch path CLAUDE.md's idempotency bar already documents.
+		routerSpec.Env["ZITI_ENROLL_TOKEN"] = routerEnrollTokenPath
+		routerSpec.Files = []runtime.FileMount{{Path: routerEnrollTokenPath, Content: []byte(enrollJWT), Mode: 0o644}}
 	}
 	if _, err := rt.EnsureContainer(ctx, routerSpec); err != nil {
 		return st, err
@@ -221,7 +253,10 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	// status assertion occasionally caught one mid-restart. Wait out the
 	// router's real enrollment handshake here and re-converge to the
 	// no-token spec before Reconcile returns Ready, so every later call
-	// computes the exact spec this one already settled to.
+	// computes the exact spec this one already settled to. The FileMount
+	// carrying the JWT is stripped in this same settle pass, exactly as
+	// Env is — the steady-state spec must not carry either (docs/planning/08
+	// H10).
 	if !verified {
 		if err := waitEdgeRouterVerified(ctx, client, routerNm); err != nil {
 			return st, fmt.Errorf("Provider %q (type: openziti): edge-router %q did not verify: %w", res.Metadata.Name, routerNm, err)
@@ -234,6 +269,7 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 			}
 		}
 		stableSpec.Env = stableEnv
+		stableSpec.Files = nil
 		if _, err := rt.EnsureContainer(ctx, stableSpec); err != nil {
 			return st, err
 		}
@@ -276,7 +312,13 @@ func dialController(ctx context.Context, rt runtime.ContainerRuntime, ctrlName s
 	if err != nil {
 		return nil, nil, fmt.Errorf("openziti: reach controller %q: %w", ctrlName, err)
 	}
-	return newEdgeClient("https://" + addr), closeAddr, nil
+	baseURL := "https://" + addr
+	pool, err := pinnedCAPool(ctx, baseURL)
+	if err != nil {
+		_ = closeAddr()
+		return nil, nil, fmt.Errorf("openziti: pin controller %q CA: %w", ctrlName, err)
+	}
+	return newEdgeClient(baseURL, pool), closeAddr, nil
 }
 
 // waitControllerServing bounded-polls the controller's REST API until it
@@ -289,7 +331,18 @@ func dialController(ctx context.Context, rt runtime.ContainerRuntime, ctrlName s
 func waitControllerServing(ctx context.Context, rt runtime.ContainerRuntime, ctrlName string, port int) error {
 	opts := runtime.ReachableOptions{Timeout: 90 * time.Second, Interval: 2 * time.Second}
 	return runtime.WithReachable(ctx, rt, ctrlName, port, opts, func(ctx context.Context, addr string) error {
-		return newEdgeClient("https://" + addr).Version(ctx)
+		baseURL := "https://" + addr
+		// pinnedCAPool re-fetched every poll attempt, same "fresh tunnel
+		// per attempt" discipline this function's own doc comment already
+		// holds for the reachability tunnel itself: while the controller
+		// is still mid-bootstrap the EST endpoint may not answer yet
+		// either, and that failure is exactly what should keep this
+		// bounded loop retrying rather than a hard error.
+		pool, err := pinnedCAPool(ctx, baseURL)
+		if err != nil {
+			return err
+		}
+		return newEdgeClient(baseURL, pool).Version(ctx)
 	})
 }
 
