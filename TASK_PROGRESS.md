@@ -60,8 +60,20 @@ verify-then-promote backup/restore orchestration into one implementation.
 - [x] `go test ./...` green (62 ok packages, 0 FAIL) — archtest
       (naming-authority, adapter-streams, wrapper-completeness) all green.
 - [x] golangci-lint v2.12.2 clean (both scoped and full-repo run).
-- [ ] Live: `go test -tags integration -count=1 -run 'TestBackupRestore'
-      -timeout 1800s ./cmd/platformctl/` under flock — queued behind another
-      session's sweep, running now.
-- [ ] Doc 08 J4 Done-note (additive).
-- [ ] Final commit.
+- [x] Live: `go test -tags integration -count=1 -run 'TestBackupRestore'
+      -timeout 1800s ./cmd/platformctl/` under flock (queued behind another
+      session's sweep, ran after it released) — ALL GREEN, 190.8s total:
+      TestBackupRestorePostgresRoundTrip, TestBackupRestoreMySQLRoundTrip,
+      TestBackupRestoreS3DatasetRoundTrip, all 3 I12 fault-injection tests,
+      both I13 corruption-never-reaches-target tests (postgres + mysql),
+      and TestBackupRestoreKubernetesPostgresRoundTrip (the I15 Job
+      realization round trip, KUBECONFIG=/tmp/claude-1000/platformctl-rbac/
+      platformctl.kubeconfig — token was live, no K8s gap). Log at
+      /tmp/claude-1000/-home-cascadura-git-platformctl/
+      3ff96d5f-6a0c-4676-8628-0810b1d9fe68/scratchpad/j4-integration.log.
+- [x] Doc 08 J4 Done-note appended (additive).
+- [x] Final commit.
+
+## Result
+J4 complete. One orchestration implementation (dbbackup), both providers
+are profiles, backup + backup-K8s suites green — no open items.
