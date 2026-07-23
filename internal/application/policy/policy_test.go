@@ -100,7 +100,7 @@ func denyPlaintextPolicy(id string, exemptible bool) policy.Policy {
 func TestRunFieldAssertDeny(t *testing.T) {
 	t.Parallel()
 	envelopes := []resource.Envelope{conn("plain", "tcp"), conn("secure", "https")}
-	decisions, err := Run([]policy.Policy{denyPlaintextPolicy("no-plaintext", false)}, envelopes, nil, nil)
+	decisions, err := Run([]policy.Policy{denyPlaintextPolicy("no-plaintext", false)}, envelopes, nil, nil, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestRunExemptionOnlyHonoredWhenExemptible(t *testing.T) {
 	}
 
 	// Non-exemptible rule: annotation present but ignored.
-	decisions, err := Run([]policy.Policy{denyPlaintextPolicy("no-plaintext", false)}, []resource.Envelope{exempted}, nil, nil)
+	decisions, err := Run([]policy.Policy{denyPlaintextPolicy("no-plaintext", false)}, []resource.Envelope{exempted}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestRunExemptionOnlyHonoredWhenExemptible(t *testing.T) {
 	}
 
 	// Exemptible rule: same annotation now honored.
-	decisions, err = Run([]policy.Policy{denyPlaintextPolicy("no-plaintext", true)}, []resource.Envelope{exempted}, nil, nil)
+	decisions, err = Run([]policy.Policy{denyPlaintextPolicy("no-plaintext", true)}, []resource.Envelope{exempted}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestRunMatchFindingEscalation(t *testing.T) {
 		{Code: "DL001", Severity: lint.Warning, Resource: resource.Key{Namespace: "default", Kind: "Binding", Name: "b1"}, Message: "overlap"},
 		{Code: "DL002", Severity: lint.Warning, Resource: resource.Key{Namespace: "default", Kind: "Binding", Name: "b2"}, Message: "collision"},
 	}
-	decisions, err := Run([]policy.Policy{p}, nil, nil, findings)
+	decisions, err := Run([]policy.Policy{p}, nil, nil, findings, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestRunCrossDomainDeniesBindingAcrossDomains(t *testing.T) {
 	envelopes, g := cdcCrossDomainFixture(t, "payments", "analytics")
 	p := crossDomainPolicy("deny-payments-to-analytics", "payments", "analytics", policy.Deny)
 
-	decisions, err := Run([]policy.Policy{p}, envelopes, g, nil)
+	decisions, err := Run([]policy.Policy{p}, envelopes, g, nil, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestRunCrossDomainSameDomainNoDecision(t *testing.T) {
 	envelopes, g := cdcCrossDomainFixture(t, "payments", "payments")
 	p := crossDomainPolicy("deny-payments-to-analytics", "payments", "analytics", policy.Deny)
 
-	decisions, err := Run([]policy.Policy{p}, envelopes, g, nil)
+	decisions, err := Run([]policy.Policy{p}, envelopes, g, nil, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -305,12 +305,168 @@ func TestRunCrossDomainConnectionConsumption(t *testing.T) {
 	}
 	p := crossDomainPolicy("deny-payments-to-analytics", "payments", "analytics", policy.Deny)
 
-	decisions, err := Run([]policy.Policy{p}, envelopes, g, nil)
+	decisions, err := Run([]policy.Policy{p}, envelopes, g, nil, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(decisions) != 1 || decisions[0].Resource.Name != "ext-src" {
 		t.Fatalf("got %+v, want exactly one decision on the connectionRef-declaring consumer", decisions)
+	}
+}
+
+// labelEnv builds a minimal envelope carrying metadata.labels, for the
+// docs/adr/033 (Stage K2) matchEdge.selector tests below — the label-
+// granularity counterpart to domainEnv's metadata.domain.
+func labelEnv(kind, name string, labels map[string]string, spec map[string]any) resource.Envelope {
+	return resource.Envelope{
+		GroupVersionKind: resource.GroupVersionKind{APIVersion: "datascape.io/v1alpha1", Kind: kind},
+		Metadata:         resource.Metadata{Name: name, Labels: labels},
+		Spec:             spec,
+	}
+}
+
+// goldTierEdgeSelectorFixture builds a connectionRef edge — the same
+// crossDomainEdges shape TestRunCrossDomainConnectionConsumption exercises
+// — between a consumer and a Connection labeled tier: gold.
+func goldTierEdgeSelectorFixture(t *testing.T, consumerLabels map[string]string) ([]resource.Envelope, *graph.Graph) {
+	t.Helper()
+	conn := labelEnv("Connection", "gold-svc", map[string]string{"tier": "gold"}, map[string]any{
+		"external": true, "host": "gold.example.com", "port": float64(5432),
+	})
+	consumer := labelEnv("Provider", "consumer", consumerLabels, map[string]any{
+		"type": "noop", "external": true, "runtime": map[string]any{"type": "fake"},
+		"connectionRef": map[string]any{"name": "gold-svc"},
+	})
+	envelopes := []resource.Envelope{conn, consumer}
+	g, err := graph.Build(envelopes)
+	if err != nil {
+		t.Fatalf("graph.Build: %v", err)
+	}
+	return envelopes, g
+}
+
+func edgeSelectorPolicy(id string, from, to *policy.Selector, effect policy.Effect) policy.Policy {
+	var p policy.Policy
+	p.APIVersion = policy.APIVersion
+	p.Kind = policy.KindName
+	p.Metadata.Name = "edge-selector-pack"
+	p.Spec.Rules = []policy.Rule{{
+		ID:        id,
+		MatchEdge: &policy.EdgeMatch{Selector: &policy.EdgeSelector{From: from, To: to}},
+		Effect:    effect,
+	}}
+	return p
+}
+
+// TestRunEdgeSelectorDeniesMatchingEdge is docs/planning/08 K2's accept
+// criterion (b): an edge matches when the FROM endpoint's labels satisfy
+// selector.from AND the TO endpoint's labels satisfy selector.to,
+// evaluated over the SAME graph-derived edges crossDomain already uses.
+// The Decision must name the edge (accept: "rule id, both selectors, and
+// the edge key pair" — RuleID/Resource are the Decision's own fields; the
+// Message names both selectors).
+func TestRunEdgeSelectorDeniesMatchingEdge(t *testing.T) {
+	t.Parallel()
+	envelopes, g := goldTierEdgeSelectorFixture(t, nil) // no clearance label at all
+	from := &policy.Selector{MatchExpressions: []policy.SelectorRequirement{{Key: "clearance", Operator: policy.SelectorNotIn, Values: []string{"gold"}}}}
+	to := &policy.Selector{MatchLabels: map[string]string{"tier": "gold"}}
+	p := edgeSelectorPolicy("gold-tier-requires-clearance", from, to, policy.Deny)
+
+	decisions, err := Run([]policy.Policy{p}, envelopes, g, nil, true)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(decisions) != 1 {
+		t.Fatalf("got %d decisions, want 1: %+v", len(decisions), decisions)
+	}
+	d := decisions[0]
+	if d.Resource.Kind != "Provider" || d.Resource.Name != "consumer" {
+		t.Errorf("decision resource = %+v, want the connectionRef-declaring consumer", d.Resource)
+	}
+	if d.Effect != policy.Deny {
+		t.Errorf("effect = %v, want Deny", d.Effect)
+	}
+	for _, want := range []string{"gold-svc", "consumer", "clearance", "tier", "gold"} {
+		if !strings.Contains(d.Message, want) {
+			t.Errorf("message %q does not name %q (both selectors + the edge)", d.Message, want)
+		}
+	}
+}
+
+// TestRunEdgeSelectorNoMatchNoDecision is the positive polarity: a
+// consumer that already satisfies selector.from (carries clearance: gold)
+// never triggers the deny.
+func TestRunEdgeSelectorNoMatchNoDecision(t *testing.T) {
+	t.Parallel()
+	envelopes, g := goldTierEdgeSelectorFixture(t, map[string]string{"clearance": "gold"})
+	from := &policy.Selector{MatchExpressions: []policy.SelectorRequirement{{Key: "clearance", Operator: policy.SelectorNotIn, Values: []string{"gold"}}}}
+	to := &policy.Selector{MatchLabels: map[string]string{"tier": "gold"}}
+	p := edgeSelectorPolicy("gold-tier-requires-clearance", from, to, policy.Deny)
+
+	decisions, err := Run([]policy.Policy{p}, envelopes, g, nil, true)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(decisions) != 0 {
+		t.Fatalf("got %d decisions, want 0 (consumer already satisfies selector.from): %+v", len(decisions), decisions)
+	}
+}
+
+// TestRunLabelScopedAccessGateOffIsByteIdentical is docs/planning/08 K2's
+// gate-off pin (accept: "gate-off is byte-identical"), mirroring
+// internal/application/engine/graphscoped_test.go's
+// TestGraphScopedAccessGateOffIsByteIdentical shape at this package's own
+// level: a policy set mixing a pre-existing matchEdge.crossDomain rule
+// (unaffected by this gate) with a new matchEdge.selector rule (this
+// gate's own vocabulary) produces the SAME decisions with the gate off as
+// a policy set that never had the selector rule at all — the selector
+// rule is skipped outright, not silently degraded.
+func TestRunLabelScopedAccessGateOffIsByteIdentical(t *testing.T) {
+	t.Parallel()
+	crossDomainEnvelopes, g := cdcCrossDomainFixture(t, "payments", "analytics")
+	crossDomain := crossDomainPolicy("deny-payments-to-analytics", "payments", "analytics", policy.Deny)
+
+	baseline, err := Run([]policy.Policy{crossDomain}, crossDomainEnvelopes, g, nil, false)
+	if err != nil {
+		t.Fatalf("Run (baseline, no selector rule): %v", err)
+	}
+
+	edgeEnvelopes, _ := goldTierEdgeSelectorFixture(t, nil)
+	edgeSelector := edgeSelectorPolicy("gold-tier-requires-clearance",
+		&policy.Selector{MatchExpressions: []policy.SelectorRequirement{{Key: "clearance", Operator: policy.SelectorNotIn, Values: []string{"gold"}}}},
+		&policy.Selector{MatchLabels: map[string]string{"tier": "gold"}}, policy.Deny)
+
+	// Combine both fixtures/policies into one Run call, gate OFF: the
+	// crossDomain decision must still fire (pre-existing behavior
+	// untouched) while the selector rule produces nothing at all.
+	combinedEnvelopes := append(append([]resource.Envelope{}, crossDomainEnvelopes...), edgeEnvelopes...)
+	combinedGraph, err := graph.Build(combinedEnvelopes)
+	if err != nil {
+		t.Fatalf("graph.Build(combined): %v", err)
+	}
+	gateOff, err := Run([]policy.Policy{crossDomain, edgeSelector}, combinedEnvelopes, combinedGraph, nil, false)
+	if err != nil {
+		t.Fatalf("Run (gate off): %v", err)
+	}
+	if len(gateOff) != len(baseline) {
+		t.Fatalf("gate-off: got %d decisions, want %d (byte-identical to the selector rule never existing): %+v", len(gateOff), len(baseline), gateOff)
+	}
+	for _, d := range gateOff {
+		if d.RuleID == "gold-tier-requires-clearance" {
+			t.Errorf("gate-off: the selector rule must never fire, got decision %+v", d)
+		}
+	}
+
+	// Sanity: the SAME combined policy set + graph with the gate ON
+	// produces MORE decisions than gate-off — proving the gate-off run
+	// above genuinely suppressed something real, not that the selector
+	// rule was inert for an unrelated reason.
+	gateOn, err := Run([]policy.Policy{crossDomain, edgeSelector}, combinedEnvelopes, combinedGraph, nil, true)
+	if err != nil {
+		t.Fatalf("Run (gate on, sanity): %v", err)
+	}
+	if len(gateOn) <= len(gateOff) {
+		t.Errorf("gate-on sanity: expected MORE decisions than gate-off, got %d vs %d", len(gateOn), len(gateOff))
 	}
 }
 
@@ -340,7 +496,7 @@ func TestRunMatchGrantDeniesWideGrant(t *testing.T) {
 	envelopes := []resource.Envelope{r1}
 	p := grantPolicy("no-wide-grants-to-b", "b", policy.Deny)
 
-	decisions, err := Run([]policy.Policy{p}, envelopes, nil, nil)
+	decisions, err := Run([]policy.Policy{p}, envelopes, nil, nil, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -366,7 +522,7 @@ func TestRunMatchGrantOtherNamespaceNoDecision(t *testing.T) {
 	envelopes := []resource.Envelope{r1}
 	p := grantPolicy("no-wide-grants-to-b", "b", policy.Deny)
 
-	decisions, err := Run([]policy.Policy{p}, envelopes, nil, nil)
+	decisions, err := Run([]policy.Policy{p}, envelopes, nil, nil, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -383,11 +539,11 @@ func TestRunDeterministic(t *testing.T) {
 	envelopes := []resource.Envelope{conn("a", "tcp"), conn("b", "tcp"), conn("c", "https")}
 	policies := []policy.Policy{denyPlaintextPolicy("no-plaintext", false)}
 
-	first, err := Run(policies, envelopes, nil, nil)
+	first, err := Run(policies, envelopes, nil, nil, false)
 	if err != nil {
 		t.Fatalf("Run (1st): %v", err)
 	}
-	second, err := Run(policies, envelopes, nil, nil)
+	second, err := Run(policies, envelopes, nil, nil, false)
 	if err != nil {
 		t.Fatalf("Run (2nd): %v", err)
 	}
@@ -418,7 +574,7 @@ func TestDenyWinsPrecedence(t *testing.T) {
 	denyPolicy := denyPlaintextPolicy("deny-plaintext", false)
 
 	envelopes := []resource.Envelope{conn("plain", "tcp")}
-	decisions, err := Run([]policy.Policy{warnPolicy, denyPolicy}, envelopes, nil, nil)
+	decisions, err := Run([]policy.Policy{warnPolicy, denyPolicy}, envelopes, nil, nil, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

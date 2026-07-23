@@ -1770,6 +1770,20 @@ Remedies:
 - Point spec.backend at vault or kubernetes for non-dev use.
 - This rule ships exemptible: true — waive with metadata.annotations["policy.datascape.io/exempt"]: "forbid-env-secret-backend: <reason>" for local/dev use.
 
+### `who-may-wear-clearance-label` (policyRule)
+
+A resource carries a "clearance" label but is not declared in namespace "trusted" — docs/adr/033's label-integrity guardrail: who may WEAR a sensitive label is itself policy-governed, closing the self-claim attack where a consumer labels itself into a matchEdge.selector audience. Evaluated only when the LabelScopedAccess feature gate is enabled.
+
+Likely causes:
+
+- A resource declares metadata.labels.clearance outside namespace "trusted" — whether genuinely unauthorized or a self-claimed label attempting to satisfy a selector-scoped audience elsewhere.
+
+Remedies:
+
+- Move the resource into namespace "trusted", or remove the clearance label if it was not authorized.
+- Tailor this rule's label key and namespace to your organization's actual sensitive label(s) in your local copy of the pack.
+- This rule ships exemptible: true — waive with metadata.annotations["policy.datascape.io/exempt"]: "who-may-wear-clearance-label: <reason>" for a reviewed exception.
+
 ## openziti
 
 ### `MediationPlaneHealthy` (reason)

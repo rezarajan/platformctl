@@ -4427,10 +4427,10 @@ zero-trust. Sequencing is strict: K1 -> K2 -> {K3, K4} -> K5; H9 is the
 evidence pattern every leg reuses.
 
 **Stage exit criteria:**
-- [ ] A policy can deny/permit a specific declared edge by label
+- [x] A policy can deny/permit a specific declared edge by label
       selectors on BOTH endpoints; crossDomain remains as the
       compartment special case; deny names rule, selectors, and edge.
-- [ ] Label integrity is governable: the zero-trust pack ships a
+- [x] Label integrity is governable: the zero-trust pack ships a
       who-may-wear-this-label rule shape, and the self-claim attack
       (consumer labels itself into an audience) is a fixture that FAILS
       policy in CI.
@@ -4455,6 +4455,17 @@ evidence pattern every leg reuses.
   key); doc 03 additive entry; fixtures for valid/invalid.
 - **Accept:** invalid labels refused at validate with named keys; doc
   03 updated same commit.
+- **Done (2026-07-23):** `internal/domain/resource.ValidateLabelKey`/
+  `ValidateLabelValue` (Kubernetes label grammar: optional DNS-subdomain
+  prefix + name segment for keys, name-segment grammar for values), wired
+  into `Envelope.Validate()` — invalid keys/values refused at `validate`,
+  naming the offending key and the resource Kind/name (the repo's
+  capitalized-Kind error convention). Positive+negative fixtures in
+  `internal/domain/resource/resource_test.go`
+  (`TestValidateLabelKeyRejectsInvalid`/`AcceptsValid`,
+  `TestValidateLabelValueRejectsInvalid`/`AcceptsValid`,
+  `TestEnvelopeValidateRejectsInvalidLabels`/`AcceptsValidLabels`). Doc 03
+  §2 additive entry in the same commit.
 
 ### K2: Selector vocabulary in policy — matchEdge.selector + matchResource.selector
 
@@ -4469,6 +4480,54 @@ evidence pattern every leg reuses.
   explain catalog entries.
 - **Accept:** stage criteria 1-2; deny output names rule id, both
   selectors, and the edge key pair.
+- **Done (2026-07-23):** `schemas/policy/v1alpha1/policy.json` gained a
+  shared `$defs/selector` (`matchLabels`/`matchExpressions` with
+  In/NotIn/Exists/DoesNotExist), referenced from both `match.selector`
+  and `matchEdge.selector.{from,to}`.
+  `internal/domain/policy.Selector`/`SelectorRequirement`/`EdgeSelector`
+  implement the same Kubernetes `labels.Requirement.Matches` semantics
+  (NotIn matches an absent key too, letting a matchExpressions entry
+  express a negative audience condition); `Match` gained `Selector`,
+  `EdgeMatch` gained `Selector` alongside `CrossDomain` (exactly one of
+  the two, enforced by `Rule.Kind()`/`Validate()`).
+  `internal/application/policy.Run` gained a `labelScopedAccessEnabled
+  bool` parameter: a selector-bearing rule (`match.selector` or
+  `matchEdge.selector`) is skipped entirely when the gate is off —
+  every pre-existing rule shape (`matchEdge.crossDomain`, plain
+  `match.label`, ...) is evaluated exactly as before regardless,
+  pinned by `TestRunLabelScopedAccessGateOffIsByteIdentical`
+  (`internal/application/policy`) and
+  `TestPolicyTestLabelScopedGateOffIsByteIdentical` (`cmd/platformctl`,
+  the graphscoped-test shape). `evaluateEdgeSelector` reuses
+  `crossDomainEdges` (the SAME graph-derived edges `crossDomain`
+  evaluates), denying when the FROM endpoint's labels satisfy
+  `selector.from` AND the TO endpoint's labels satisfy `selector.to`;
+  the Decision message names both selectors and the edge key pair
+  (RuleID/Resource are the Decision's own fields).
+  The zero-trust pack gained `who-may-wear-clearance-label`
+  (`match.selector` + `assert`: denies any resource carrying a
+  `clearance` label outside namespace `trusted`) — the label-integrity
+  guardrail ADR 033's self-claim section calls for; catalog entry added
+  (`internal/domain/status/catalog.go`), completeness guard green
+  (`cmd/platformctl/policy_catalog_test.go`).
+  `cmd/platformctl/policy_labelscoped_test.go` is the Stage K exit
+  criterion 2 CI evidence: `TestPolicyTestLabelScopedSelfClaimAttackFails`
+  — a consumer that labels ITSELF `clearance: gold` (self-claiming
+  membership in a `matchEdge.selector` audience) still fails policy,
+  because `who-may-wear-clearance-label` denies the self-claimed label
+  independent of the edge rule (which the self-claim *does* fool,
+  proving the label-integrity guardrail is what actually closes the
+  loophole, not the edge selector alone) — and
+  `TestPolicyTestLabelScopedLegitimateConsumerPasses`/
+  `TestPolicyTestLabelScopedEdgeSelectorDeniesUnclearedConsumer` cover
+  both polarities via `platformctl policy test`. Gate
+  `LabelScopedAccess` (Alpha, disabled) registered in
+  `cmd/platformctl/main.go`; doc 04 §12 + this doc §8 gate rows added.
+  **Open items for K3-K5 (out of scope here, per the strict K1→K2→
+  {K3,K4}→K5 sequencing):** selector-scoped wide grants, mediation
+  label-derived attributes, and the decision audit trail are not yet
+  implemented — Stage K exit criteria 3-5 and the "guards all of it"
+  half of criterion 6 remain open.
 
 ### K3: Selector-scoped wide grants
 
@@ -4639,6 +4698,7 @@ Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
 | `DesignLints` | H1 | **enabled** (read-only reporting) | Beta once blueprints + examples are lint-clean for a release |
 | `PolicyEngine` | H3 | disabled | Beta after the zero-trust pack soaks in this repo's own CI |
 | `MediatedConnections` | H6 | disabled | Beta after the owner-scenario e2e soaks on both runtimes |
+| `LabelScopedAccess` | K2 | disabled | Beta once the composed H9-style scenario passes on both runtimes (ADR 033 decision 6) |
 | Phase 6.5 gates (`MySQLProvider`, `NessieProvider`, `OpenLineageProvider`, `ProxyProvider`) | — | enabled (Alpha) | promote to Beta at Stage A close (their hardening period ends with the ops-hardening stage) |
 
 ## 9. Mapping to doc 07's open items
