@@ -180,3 +180,67 @@ func TestDomainRuntimeUsesProviderDomainOfRecord(t *testing.T) {
 		t.Fatalf("token translated to %v; want the PROVIDER's domain network datascape-infra", nets)
 	}
 }
+
+// TestDomainRuntimeQualifyTargetAddress pins docs/planning/08 H9's
+// runtime.AddressQualifier realization — the domain-of-record FQDN fix for
+// a mediated Connection's bind-side target, which is handed to the
+// mediator's control-plane API directly and therefore never passes through
+// this decorator's normal EnsureContainer/EnsureNetwork translation:
+//
+//   - non-namespaced runtimes (docker/fake): ALWAYS a no-op — reachability
+//     there is network membership, which name qualification cannot
+//     substitute for;
+//   - kubernetes, same domain (or both default): no-op — a bare name
+//     resolves in-namespace, and the undeclared-domain byte-identical rule
+//     extends here;
+//   - kubernetes, different domains: host is qualified to the TARGET's
+//     domain-scoped namespace's cluster-DNS FQDN;
+//   - an unparseable hostport passes through unchanged, never an error.
+func TestDomainRuntimeQualifyTargetAddress(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	target := envWithDomain("Provider", "xd-pg", "default", "payments", nil)
+	caller := envWithDomain("Connection", "xd-conn", "default", "analytics", nil)
+
+	// Non-namespaced (fake stands in for docker): verbatim pass-through
+	// even across domains.
+	dDocker := newDomainRuntime(fakeruntime.New(), map[string]any{}, caller, caller, nil, false, false, nil, "fake", nil).(*domainRuntime)
+	if got, err := dDocker.QualifyTargetAddress(ctx, target, caller, "xd-pg:5432"); err != nil || got != "xd-pg:5432" {
+		t.Errorf("docker-shaped runtime: QualifyTargetAddress = (%q, %v), want verbatim pass-through", got, err)
+	}
+
+	// Kubernetes, cross-domain: qualified to the target's domain-scoped
+	// namespace FQDN.
+	dK8s := newDomainRuntime(fakeruntime.New(), map[string]any{}, caller, caller, nil, false, false, nil, "kubernetes", nil).(*domainRuntime)
+	if got, err := dK8s.QualifyTargetAddress(ctx, target, caller, "xd-pg:5432"); err != nil || got != "xd-pg.datascape-payments.svc.cluster.local:5432" {
+		t.Errorf("kubernetes cross-domain: QualifyTargetAddress = (%q, %v), want xd-pg.datascape-payments.svc.cluster.local:5432", got, err)
+	}
+
+	// Kubernetes, same domain: no-op.
+	sameDomain := envWithDomain("Provider", "xd-pg", "default", "analytics", nil)
+	if got, err := dK8s.QualifyTargetAddress(ctx, sameDomain, caller, "xd-pg:5432"); err != nil || got != "xd-pg:5432" {
+		t.Errorf("kubernetes same-domain: QualifyTargetAddress = (%q, %v), want verbatim pass-through", got, err)
+	}
+
+	// Kubernetes, both undeclared/default: byte-identical no-op.
+	defTarget := envWithDomain("Provider", "pg", "default", "", nil)
+	defCaller := envWithDomain("Connection", "conn", "default", "", nil)
+	if got, err := dK8s.QualifyTargetAddress(ctx, defTarget, defCaller, "pg:5432"); err != nil || got != "pg:5432" {
+		t.Errorf("kubernetes default-domain: QualifyTargetAddress = (%q, %v), want byte-identical pass-through", got, err)
+	}
+
+	// Unparseable hostport: unchanged, no error.
+	if got, err := dK8s.QualifyTargetAddress(ctx, target, caller, "not-a-hostport"); err != nil || got != "not-a-hostport" {
+		t.Errorf("unparseable hostport: QualifyTargetAddress = (%q, %v), want unchanged + nil error", got, err)
+	}
+
+	// The explicit-override pin (docs/planning/08 H5's configured-value-
+	// always-wins rule) SUPPRESSES qualification: a pinned network passes
+	// through verbatim in every domain (translate()'s rule), so on
+	// Kubernetes every domain shares the one pinned namespace — a bare
+	// name already resolves there, and "<pinned>-<domain>" never exists.
+	dPinned := newDomainRuntime(fakeruntime.New(), map[string]any{"network": "custom-net"}, caller, caller, nil, false, false, nil, "kubernetes", nil).(*domainRuntime)
+	if got, err := dPinned.QualifyTargetAddress(ctx, target, caller, "xd-pg:5432"); err != nil || got != "xd-pg:5432" {
+		t.Errorf("pinned network: QualifyTargetAddress = (%q, %v), want verbatim pass-through (every domain shares the pinned namespace)", got, err)
+	}
+}

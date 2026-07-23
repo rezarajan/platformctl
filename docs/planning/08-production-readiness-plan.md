@@ -3689,6 +3689,88 @@ behavior changed. `go test ./...` unfiltered: true-exit=0. gofmt/`go vet`
 - **Accept:** stage-criterion 3's box checked with this test as the
   evidence; both runtimes green.
 
+#### Done-note (2026-07-23): Docker leg green all 5 legs; K8s leg code-complete, blocked on an expired cluster token
+
+Shipped: `cmd/platformctl/testdata/crossdomain-mediated-scenario` +
+`crossdomain-mediated-k8s-scenario` (each with `policies/policy.yaml`
+declaring the exemptible `deny-payments-to-analytics`
+`matchEdge.crossDomain` rule), `TestCrossDomainMediatedPolicyEndToEnd`
+(Docker) and `TestOpenZitiCrossDomainPolicyOnKubernetesEndToEnd` (named
+for the CI scenarios-apps shard pattern; partition guard green), the
+`crossdomain-mediated` row in `scripts/test-impact.sh`
+(`TestIntegrationSuiteMapCoversEveryTest` green), all cleanup via
+`testkit.Janitor` (Docker: declared workloads/volumes/networks; K8s:
+destroy-then-janitor for the two domain namespaces).
+
+**Topology note (why the manifests look the way they do):** the Source
+(xd-src) shares domain `payments` with the REAL postgres backend
+(xd-pg); Connection/mesh/redpanda/debezium/EventStream are all
+`analytics`. This is the only shape that simultaneously (a) makes the
+Binding's sourceRef→targetRef edge genuinely cross-domain, (b) lets
+debezium reach both the mediated entrypoint and redpanda with no H5
+domain-hole (co-located), and (c) forces the mediator's router itself
+across the boundary to the dark backend. It yields TWO crossDomain
+decisions from the ONE rule (the Binding edge and xd-src's own
+connectionRef→xd-conn edge) — both carry the exemption annotation, and
+leg 1 asserts both denials by name. The Binding also must DECLARE
+`domain: analytics` explicitly: the ADR 022-addendum coherence check
+(realizing Provider's domain) refuses an undeclared-domain Binding whose
+realizing Provider declares one — found live, first run.
+
+**Live evidence (Docker, this host, 2026-07-23):** full 5-leg pass,
+26.73s (apply 25s), zero residue after (containers/networks/volumes
+swept clean by the janitor + leg-5 teardown). Leg 3's exact-set
+assertion verified against the real controller: exactly 1 service
+(`spiffe-datascape-default-analytics-connection-xd-conn`), 1
+`datascape-mediated` identity
+(`spiffe-datascape-default-payments-source-xd-src`), 1 Dial policy
+(`dial-<identity>-<service>`) whose identityRoles/serviceRoles are the
+exact `@id` refs — and leg 5 asserts all three collections empty after
+the manifest-driven teardown.
+
+**Three real defects found only by composing (the audit's thesis
+confirmed):** (1) the H6 K8s addendum's designed-but-unexercised
+cross-domain bind-target gap is now CLOSED, not worked around:
+`runtime.AddressQualifier` (new optional capability,
+`internal/ports/runtime/address.go`) is implemented ONLY by the engine's
+`domainRuntime` decorator — Docker/pinned-network/same-domain are
+no-ops; on Kubernetes a cross-domain bind target is qualified to the
+target's domain-namespace cluster-DNS FQDN
+(`<host>.<ns>.svc.cluster.local:<port>`). The openziti adapter consumes
+it via type-assertion with envelopes it already holds — zero domain
+symbols added to the adapter, `domain_decoupling_test.go`'s fence stays
+green; unit-pinned by `TestDomainRuntimeQualifyTargetAddress`
+(cross-domain, same-domain, default-default, pinned-override, Docker,
+unparseable-hostport cases). (2) H6's `listDialPolicies` filter
+(`filter=type=%22Dial%22`) is REJECTED by the pinned controller (HTTP
+400 INVALID_FILTER — `type` is a numeric enum internally), so
+`ObservedEdges` (mediator drift detection) had been silently broken
+since H6 for every Connection with an authorized edge; H9's leg-3
+exact-set assertion caught it live. Fixed: list unfiltered + filter
+client-side; regression-pinned by `TestListDialPoliciesFiltersClientSide`
+(seeds a Bind policy beside the Dial one). H10's rewrite of the same
+file (merged mid-task) did not touch this defect — verified against
+main before keeping the fix. (3) leg 5's manifest-driven teardown must
+remove the External Source too (its connectionRef must resolve in-set),
+and an External Source's delete is NFR-3-guarded — the teardown apply
+passes `--include-external --yes-i-understand-this-is-destructive`,
+which IS the ADR 021 amendment's "approved like any other destructive
+change", recorded in the test comments.
+
+**Kubernetes leg: code-complete, NOT live-verified.** The minted RBAC
+kubeconfig's token (`/tmp/claude-1000/platformctl-rbac/
+platformctl.kubeconfig`) expired mid-session — `kubectl auth can-i`
+returned yes minutes before the run and Unauthorized at run time; per
+the task's own rule the token was not re-minted by this agent. The
+K8s-specific mechanism (AddressQualifier) is unit-pinned as above, and
+the leg mirrors the Docker leg exactly otherwise. **Stage criterion 3's
+box therefore stays UNCHECKED** — the Accept bar demands both runtimes
+green; running `TestOpenZitiCrossDomainPolicyOnKubernetesEndToEnd`
+against a fresh token is the single remaining step, with the leg's
+first-run risk concentrated in the AddressQualifier path (everything
+else was proven live on Docker or is substrate-neutral by the H6 K8s
+addendum's own account).
+
 ### H10: Mediation hardening — controller CA pinning + enrollment JWT off Env
 
 - **Size:** S-M. **Depends:** H6 (merged). **Why:** the Stage H audit's

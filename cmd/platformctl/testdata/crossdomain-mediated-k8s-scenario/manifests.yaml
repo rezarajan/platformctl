@@ -1,0 +1,144 @@
+# H9 (docs/planning/08 §7.7, Stage H criterion 3 composed end-to-end) —
+# the KUBERNETES leg, mirroring testdata/crossdomain-mediated-scenario's
+# Docker topology exactly, with one substrate-specific difference: xd-mesh's
+# router has no configuration.targetNetworks here (Kubernetes Pods cannot
+# multi-home into a second namespace the way a Docker container joins a
+# second network) — instead, xd-mesh's own reconcile resolves conn.Target
+# ("xd-pg:5432") through the engine's runtime.AddressQualifier capability
+# (docs/planning/08 H9's fix for the domain-of-record FQDN gap the H6
+# Kubernetes addendum recorded as designed-but-unexercised): since xd-pg
+# (domain payments) and xd-conn (domain analytics) live in different
+# domain-scoped namespaces, the bind address is rewritten to
+# "xd-pg.datascape-payments.svc.cluster.local:5432" before being handed to
+# the router's terminator — a bare "xd-pg:5432" would only resolve inside
+# xd-pg's OWN namespace.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: xd-pg-super
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: xd-mesh-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: xd-pg
+  domain: payments
+spec:
+  type: postgres
+  runtime:
+    type: kubernetes
+  configuration:
+    version: "16"
+    superuserSecretRef: xd-pg-super
+  secretRefs: [xd-pg-super]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: xd-mesh
+  domain: analytics
+spec:
+  type: openziti
+  runtime:
+    type: kubernetes
+  secretRefs: [xd-mesh-admin]
+  configuration:
+    adminSecretRef: xd-mesh-admin
+    controllerPort: 12895
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: xd-conn
+  domain: analytics
+spec:
+  providerRef:
+    name: xd-mesh
+  scheme: tcp
+  port: 25795
+  target: "xd-pg:5432"
+  secretRef:
+    name: xd-pg-super
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: xd-rp
+  domain: analytics
+spec:
+  type: redpanda
+  runtime:
+    type: kubernetes
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: xd-dbz
+  domain: analytics
+spec:
+  type: debezium
+  runtime:
+    type: kubernetes
+  configuration:
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
+    bootstrapServers: xd-rp:29092
+  secretRefs: [xd-pg-super]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: xd-src
+  domain: payments
+  annotations:
+    policy.datascape.io/exempt: "deny-payments-to-analytics: mediated by xd-conn (openziti), ADR 022 Ring 2"
+spec:
+  engine: postgres
+  external: true
+  connectionRef:
+    name: xd-conn
+  postgres:
+    database: postgres
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: xd-events
+  domain: analytics
+spec:
+  providerRef:
+    name: xd-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: xd-cdc
+  domain: analytics
+  annotations:
+    policy.datascape.io/exempt: "deny-payments-to-analytics: mediated by xd-conn (openziti), ADR 022 Ring 2"
+spec:
+  mode: cdc
+  sourceRef:
+    name: xd-src
+  targetRef:
+    name: xd-events
+  providerRef:
+    name: xd-dbz
+  options:
+    tables: [orders]
+    snapshotMode: initial

@@ -1,0 +1,163 @@
+# H9 (docs/planning/08 §7.7, Stage H criterion 3 composed end-to-end) — a
+# cdc Binding whose Source chain and sink chain cross a policy-governed
+# domain boundary, legitimately mediated by an openziti Connection:
+#
+#   xd-src (domain payments, matching the REAL postgres backend xd-pg's own
+#   domain) --cdc Binding xd-cdc--> xd-events (domain analytics, matching
+#   its realizing redpanda Provider xd-rp)
+#
+# xd-mesh/xd-conn/xd-rp/xd-dbz all live in domain "analytics" — co-located
+# with each other so debezium reaches both the mediated entrypoint and
+# redpanda directly, with no reliance on the H5 per-Connection domain-hole
+# mechanism (which only opens a path for a resource that itself declares
+# connectionRef — here, only xd-src does, and xd-src runs no container of
+# its own). xd-mesh's router instead crosses INTO domain "payments" itself,
+# explicitly, via configuration.targetNetworks (docs/planning/08 H6's
+# established Docker precedent for reaching a dark backend) to dial
+# xd-pg:5432 — see testdata/crossdomain-mediated-k8s-scenario for the
+# domain-of-record FQDN mechanism (docs/planning/08 H9) that does the
+# equivalent job on Kubernetes, where per-container multi-network join
+# doesn't exist.
+#
+# This topology produces TWO distinct crossDomain edges over the SAME
+# (payments, analytics) domain pair — the Binding's own
+# sourceRef(xd-src)->targetRef(xd-events) edge, AND xd-src's own
+# connectionRef->xd-conn edge (xd-src must hold connectionRef per the
+# external-Source resource model, and must differ in domain from BOTH
+# xd-events and xd-conn for this topology to both trigger governance and
+# physically route — see the integration test's own doc comment for the
+# full argument) — both are denied by ONE policy rule and both need their
+# own policy.datascape.io/exempt annotation naming it.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: xd-pg-super
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: xd-mesh-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: xd-pg
+  domain: payments
+spec:
+  type: postgres
+  runtime:
+    type: docker
+  configuration:
+    version: "16"
+    superuserSecretRef: xd-pg-super
+  secretRefs: [xd-pg-super]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: xd-mesh
+  domain: analytics
+spec:
+  type: openziti
+  runtime:
+    type: docker
+  secretRefs: [xd-mesh-admin]
+  configuration:
+    adminSecretRef: xd-mesh-admin
+    controllerPort: 12895
+    targetNetworks: [datascape-payments]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: xd-conn
+  domain: analytics
+spec:
+  providerRef:
+    name: xd-mesh
+  scheme: tcp
+  port: 25795
+  target: "xd-pg:5432"
+  secretRef:
+    name: xd-pg-super
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: xd-rp
+  domain: analytics
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19295
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: xd-dbz
+  domain: analytics
+spec:
+  type: debezium
+  runtime:
+    type: docker
+  configuration:
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
+    connectPort: 18295
+    bootstrapServers: xd-rp:29092
+  secretRefs: [xd-pg-super]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: xd-src
+  domain: payments
+  annotations:
+    policy.datascape.io/exempt: "deny-payments-to-analytics: mediated by xd-conn (openziti), ADR 022 Ring 2"
+spec:
+  engine: postgres
+  external: true
+  connectionRef:
+    name: xd-conn
+  postgres:
+    database: postgres
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: xd-events
+  domain: analytics
+spec:
+  providerRef:
+    name: xd-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: xd-cdc
+  domain: analytics
+  annotations:
+    policy.datascape.io/exempt: "deny-payments-to-analytics: mediated by xd-conn (openziti), ADR 022 Ring 2"
+spec:
+  mode: cdc
+  sourceRef:
+    name: xd-src
+  targetRef:
+    name: xd-events
+  providerRef:
+    name: xd-dbz
+  options:
+    tables: [orders]
+    snapshotMode: initial

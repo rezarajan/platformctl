@@ -55,6 +55,38 @@ func compileMediatedConnection(res resource.Envelope, resources map[resource.Key
 	return graphaccess.MediatedConnection{}, false, nil
 }
 
+// resolveRawMediatedTarget resolves conn's spec.target host against the
+// SAME graph.Build resolution compileMediatedConnection's own graph.Build
+// call performs, WITHOUT graphaccess.CompileMediatedConnections' Provider-
+// kind exclusion (that exclusion governs identity-SUBJECT selection only —
+// reconcileConnection's toEnv comment above — a target resolving to a
+// managed Provider is deliberately NOT given its own identity, and instead
+// the Connection's own identity subject is used). The raw resolved
+// envelope, Provider included, is what QualifyTargetAddress needs to know
+// which domain conn.Target actually lives in (docs/planning/08 H9's
+// domain-of-record FQDN fix for the gap the H6 Kubernetes addendum recorded
+// as designed-but-unexercised: this adapter hands conn.Target directly to
+// the Ziti REST API, bypassing the engine's normal EnsureContainer/
+// EnsureNetwork translation path entirely). ok is false for a genuinely
+// external target (nothing in-set resolves the host) — the expected,
+// non-error shape graph.Build itself treats leniently.
+func resolveRawMediatedTarget(res resource.Envelope, resources map[resource.Key]resource.Envelope) (resource.Envelope, bool, error) {
+	envs := make([]resource.Envelope, 0, len(resources))
+	for _, e := range resources {
+		envs = append(envs, e)
+	}
+	g, err := graph.Build(envs)
+	if err != nil {
+		return resource.Envelope{}, false, fmt.Errorf("openziti: rebuild graph: %w", err)
+	}
+	tos := g.Edges[res.Key()]
+	if len(tos) == 0 {
+		return resource.Envelope{}, false, nil
+	}
+	e, ok := resources[tos[0]]
+	return e, ok, nil
+}
+
 func tunnelContainerName(res resource.Envelope) string { return naming.RuntimeObjectName(res) }
 
 // dialEnrollTokenPath is where the dial-side tunneler's one-time enrollment
@@ -151,7 +183,19 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 	if err != nil {
 		return st, fmt.Errorf("Connection %q: resolve router: %w", res.Metadata.Name, err)
 	}
-	if err := sess.client.upsertTransportTerminator(ctx, svcID, routerID, conn.Target); err != nil {
+	bindAddress := conn.Target
+	if rawTarget, ok, terr := resolveRawMediatedTarget(res, req.Resources); terr != nil {
+		return st, terr
+	} else if ok {
+		if q, qok := rt.(runtime.AddressQualifier); qok {
+			qualified, qerr := q.QualifyTargetAddress(ctx, rawTarget, res, conn.Target)
+			if qerr != nil {
+				return st, fmt.Errorf("Connection %q: qualify bind target %q: %w", res.Metadata.Name, conn.Target, qerr)
+			}
+			bindAddress = qualified
+		}
+	}
+	if err := sess.client.upsertTransportTerminator(ctx, svcID, routerID, bindAddress); err != nil {
 		return st, fmt.Errorf("Connection %q: ensure terminator: %w", res.Metadata.Name, err)
 	}
 

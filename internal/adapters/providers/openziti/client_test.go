@@ -217,7 +217,7 @@ func (f *fakeZitiController) handler() http.Handler {
 			var out []map[string]any
 			for id, rec := range f.policies {
 				if name == "" || rec["name"] == name {
-					out = append(out, map[string]any{"id": id, "name": rec["name"], "identityRoles": rec["identityRoles"], "serviceRoles": rec["serviceRoles"]})
+					out = append(out, map[string]any{"id": id, "name": rec["name"], "type": rec["type"], "identityRoles": rec["identityRoles"], "serviceRoles": rec["serviceRoles"]})
 				}
 			}
 			writeEnvelope(w, http.StatusOK, out)
@@ -431,6 +431,40 @@ func TestUpsertDialPolicyCreatesThenUpdatesInPlace(t *testing.T) {
 	}
 	if len(roles) != 2 {
 		t.Fatalf("identityRoles = %v, want 2 entries after update", roles)
+	}
+}
+
+// TestListDialPoliciesFiltersClientSide pins docs/planning/08 H9's live
+// finding: the controller's own filter query language rejects
+// `filter=type=%22Dial%22` (HTTP 400 INVALID_FILTER — "type" resolves to a
+// numeric enum internally, not a string-comparable field, in the pinned
+// controller version), so listDialPolicies must list unfiltered and
+// exclude non-Dial policies in Go. A fake server that ignored the filter
+// entirely (as an earlier, broken version of this fake implicitly did)
+// would not catch a regression back to server-side filtering, so this
+// fixture deliberately seeds a NON-Dial policy alongside a Dial one and
+// asserts only the Dial one comes back.
+func TestListDialPoliciesFiltersClientSide(t *testing.T) {
+	t.Parallel()
+	c, f := newTestClient(t)
+	ctx := context.Background()
+
+	if err := c.upsertDialPolicy(ctx, "dial-a-svc", "svc1", []string{"identA"}); err != nil {
+		t.Fatalf("create dial policy: %v", err)
+	}
+	f.mu.Lock()
+	f.policies[f.newID()] = map[string]any{"name": "bind-a-svc", "type": "Bind", "identityRoles": []any{"@identA"}, "serviceRoles": []any{"@svc1"}}
+	f.mu.Unlock()
+
+	got, err := c.listDialPolicies(ctx)
+	if err != nil {
+		t.Fatalf("listDialPolicies: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("listDialPolicies = %d entries, want exactly 1 (the Bind policy must be excluded): %+v", len(got), got)
+	}
+	if got[0].Name != "dial-a-svc" {
+		t.Errorf("listDialPolicies[0].Name = %q, want %q", got[0].Name, "dial-a-svc")
 	}
 }
 
