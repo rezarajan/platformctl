@@ -1,158 +1,96 @@
-# H6 (doc 08 §7.7) AS AMENDED BY ADR 027 — task progress
+# Fix: OpenZiti mediated-connection Kubernetes bind path — task progress
 
-Worktree: agent-abe0640719d3041f0. Branch: worktree-agent-abe0640719d3041f0.
-Started from main @ 7bc49d4 (`git merge main --no-edit` fast-forwarded from
-abbbd1b, pulling in ADR 026/027, I10+I11; H5 is unmerged — a sibling
-worktree — per the orchestrator's handoff; re-check before verification
-phase, build against namespaces if it still hasn't landed).
+Worktree: agent-a62b79fe9269f0337. Branch: worktree-agent-a62b79fe9269f0337.
+Started `git merge main --no-edit` (fast-forwarded abbbd1b -> d5045c1, pulling
+in the H6 K8s test file `cmd/platformctl/openziti_kubernetes_integration_test.go`
+and the rest of the H6/H8/H5 merge landed on main).
 
-## Reading done (in the order given)
+Goal: fix `TestOpenZitiMediatedConnectionOnKubernetesEndToEnd` — the last red
+suite — green twice live, Docker leg green once (regression), unfiltered
+`go test ./...` = 0, lint clean, additive Done-note, one squashed commit.
 
-- [x] docs/adr/027-enforcement-layering.md — Layer 1 (identity, THE
-      guarantee) vs Layer 2 (network, best-effort, honestly reported); the
-      claims table; H6 deliverable amendment (MediationProvider port,
-      SPIFFE identity, ADR 026 per-edge authz, dual-runtime proof).
-- [x] docs/adr/022-identity-aware-mediation.md — 3 rings (Ring0 authoring/
-      Ring1 network floor/Ring2 identity mediation); OpenZiti chosen over
-      Consul/mesh sidecar; identity URI `spiffe://datascape/<namespace>/
-      <kind>/<name>`; Lattice raw-TCP lesson (connection-establishment
-      identity, not per-query IAM); dark services; MediatedConnection =
-      the existing Connection realized by a mediator provider instead of a
-      plain forwarder (no new schema flag — providerRef selects the
-      mediator, exactly like ingress/proxy/wireguard today).
-- [x] docs/adr/026-graph-scoped-access.md — the reference graph (already
-      built by internal/domain/graph) IS the access-request set; H7
-      compiles per-edge network policy from it later; H6 only needs the
-      *mediated subset* (edges into a Connection realized by a
-      MediationProvider-capable Provider).
-- [x] docs/planning/08 §7.7 H6 + ADR-027 amendment note (verbatim spec).
-- [x] docs/adr/023-wireguard-tunnel.md — the provider-on-the-Connection-
-      seam precedent: one runtime object per Connection (never shared per
-      Provider), ContainerSpec.Sysctls precedent for additive runtime-port
-      fields, secret-in-file-mount-never-env/state discipline, pinned
-      image-by-digest discipline, TunnelProvider gate posture (Alpha,
-      disabled — "new capability surface" bar MediatedConnections inherits).
-- [x] internal/ports/runtime/runtime.go, internal/ports/reconciler/
-      reconciler.go (capability-interface cluster pattern — marker
-      interfaces embedding Provider, e.g. ConnectionCapableProvider/
-      BackupCapableProvider), internal/application/registry/registry.go
-      (RegisterProvider(type, ctor, gateName); haGuardRuntime's explicit-
-      delegation pattern for runtime capabilities obtained through the
-      registry — precedent for how MediationProvider capability must be
-      reachable through any wrapping).
-- [x] docs/planning/02 §4.1 (settledness/ScaledWait rules), §4.2 (Request
-      struct, capability marker interface catalog).
-- [x] docs/planning/06 §2.1 (task execution protocol), §10 (test-impact
-      economy).
-- [x] internal/domain/naming/naming.go (F4 authority — RuntimeObjectName;
-      this task ADDS a sibling identity-derivation function, doesn't
-      change this one).
-- [x] internal/domain/graph/graph.go — Edges is exactly the ADR 026 request
-      graph (from -> []to, deduped access to build).
-- [x] schemas/v1alpha1/connection.json, schemas/v1alpha1/fragments/
-      provider/wireguard.json + internal/application/manifest/fragment.go
-      (provider-config-fragment registration pattern), schemas/embed.go.
+## Reading done
 
-## Design decisions locked in before coding
+- [x] docs/adr/027, 022 (+ 2026-07-23 domain-of-record addendum), the H6 spec
+  + Done-note in docs/planning/08 §7.7, internal/adapters/providers/openziti
+  fully (openziti.go, instance.go, connection.go, client.go, identity.go),
+  internal/application/engine/domainruntime.go (H5 decorator — holes/
+  buildCrossDomainIngressPolicy mechanism), internal/adapters/runtime/
+  kubernetes/{network,convert,container}.go (B7 walls, Service creation
+  rules), the failing test itself.
 
-1. **Port location:** `internal/ports/mediation` (new package, mirrors
-   `internal/ports/runtime`'s standalone-port shape rather than being
-   folded into `reconciler.go`, because its methods are identity/policy
-   CRUD operations invoked by the engine directly — not part of the
-   Reconcile/Destroy/Probe request lifecycle). A capability *marker*
-   interface `MediationCapableProvider` lives in `reconciler.go` next to
-   `ConnectionCapableProvider` (same pattern) so the engine/compatibility
-   layer can type-assert a constructed `reconciler.Provider` the same way
-   it already does for every other capability.
-2. **Identity type:** `mediation.WorkloadIdentity{URI, Fingerprint string}`
-   — URI is the SPIFFE-aligned identity, Fingerprint is a public-key
-   fingerprint for audit/state display. No private key material ever
-   crosses this boundary (ADR 013 discipline) — adapter-internal only.
-3. **Edge type:** `mediation.Edge{From, To WorkloadIdentity; DialAllowed,
-   BindAllowed bool}` — the compiled per-edge authorization the engine
-   hands to `RealizeEdge`.
-4. **Naming:** `internal/domain/naming.WorkloadIdentityURI(env) string`
-   returns `spiffe://datascape/<namespace>/<kind>/<name>` (ADR 022's exact
-   form), deterministic, unit-tested, zero I/O.
-5. **Graph derivation:** `internal/application/graphaccess` (new package)
-   — `DeriveEdges(g *graph.Graph) []Edge` (reusable, H7's own future
-   consumer per the task prompt) + `MediatedSubset(edges, resources,
-   isMediationCapable func(providerType string) bool) []Edge` narrowing to
-   edges terminating in a Connection whose providerRef resolves to a
-   mediation-capable Provider.
-6. **Adapter:** `internal/adapters/providers/openziti` — pinned
-   controller+router images (A10 digest pinning), a minimal hand-rolled
-   REST client against Ziti's Edge Management API (no new SDK dependency,
-   matching this repo's "drive the tool directly" ethos), implements
-   `reconciler.Provider` + `ConnectionCapableProvider` (scheme `tcp`,
-   Connection-seam precedent) + `mediation.MediationProvider`.
-7. **Gate:** `MediatedConnections`, Alpha, disabled.
+## Root-cause verification (orchestrator's hypothesis checked, corrected)
 
-## Status
+- [x] **Hypothesis as given** (namespace-qualified terminator FQDN + ingress
+  hole for the bind side) — checked against the actual accept scenario
+  (`testdata/openziti-k8s-scenario`): every Provider pins the SAME
+  `runtime.network: datascape-zk8s`, i.e. one K8s namespace, zero domain
+  crossing. Live `kubectl exec ... getent hosts zk8s-pg` from inside the
+  router pod resolved correctly. **Hypothesis does not explain the observed
+  failure for this scenario** — recorded as corrected, not silently
+  discarded (full account in doc 08 H6's new addendum note, same commit).
+- [x] **Actual root cause #1**, found live (router pod logs): the dial-side
+  tunneler's SDK failed with `dial tcp: lookup zk8s-mesh-router ...: no such
+  host` / `no edge routers connected in time` — before any bind-side dial
+  was ever attempted. `instance.go`'s router `ContainerSpec` declared no
+  `Ports`, so Kubernetes never created its Service (`ensureOneService`
+  skips Service creation when `len(Ports)==0`) — no DNS record for
+  `ZITI_ROUTER_ADVERTISED_ADDRESS`. Docker never needed this (embedded DNS
+  resolves any container name regardless of published ports).
+- [x] **Actual root cause #2**, found live only after #1 was fixed and the
+  test progressed far enough to reach a second reconcile: router's and
+  dial-side tunneler's `ContainerSpec.Env` conditionally carried a one-time
+  enrollment JWT keyed to a LIVE, async fact (`isVerified` / identity
+  existence) re-queried fresh every reconcile — a `CLAUDE.md` idempotency
+  violation. `drift` immediately after `apply` recomputed a different spec,
+  forcing an unwanted Deployment rollout, restarting pods mid-test.
 
-- [x] Design locked (this file)
-- [x] internal/domain/naming: WorkloadIdentityURI + tests (upgraded at the
-      H5 merge to include a non-default metadata.domain segment)
-- [x] internal/ports/mediation: port + types
-- [x] reconciler.go: MediationCapableProvider marker (Mediation(ctx, req),
-      request-scoped per F5 — found live that a no-arg Mediation() cannot
-      reach a live controller)
-- [x] internal/application/graphaccess: DeriveEdges + MediatedSubset +
-      CompileMediatedConnections + tests
-- [x] internal/adapters/providers/openziti: adapter + unit tests
-      (httptest-based REST idempotency proofs + identity/config tests)
-- [x] registry.go/main.go wiring + gate registration (MediatedConnections,
-      Alpha, disabled)
-- [x] schema fragment (provider/openziti.json) + doc 03 §8.2.5 same-commit
-- [x] archtest: ziti import fence
-      (internal/archtest/mediation_layering_test.go)
-- [x] doc 04 §12 row, doc 08 H6 Done-note (claims-table language), doc
-      reference regen, explain-catalog (4 new reasons + catalog entries),
-      test-impact.sh row (`openziti` suite)
-- [x] CDC scenario proof — Docker: live-verified (see Done-note in doc 08
-      for the full account: 3 real bugs found+fixed live, positive proof,
-      both negative proofs — reachability and wrong-identity — all live).
-- [ ] CDC scenario proof — Kubernetes: NOT attempted (time budget) —
-      recorded as a deviation below, not silently skipped.
-- [x] gofmt/vet/build (both tag sets)/golangci-lint 0 issues
-- [x] go test ./... unfiltered, true-exit=0 (post H5/H8 merge too)
-- [ ] impact sweep --base main, flock-wrapped, green x2 both runtimes —
-      the `openziti` suite itself was run live (manually + via `go test
-      -tags integration`) and passed on Docker; the formal
-      flock-wrapped script invocation and a second back-to-back run, plus
-      any Kubernetes run, were not completed this session (deviation).
-- [x] final squashed commit
+## Fix shipped (all within internal/adapters/providers/openziti — zero edits
+outside the adapter; decoupling contract / archtests untouched)
 
-## Deviations (recorded as found, not silently worked around)
+- [x] `instance.go`: router `ContainerSpec.Ports` now declares
+  `{ContainerPort: ic.RouterPort, Audience: AudienceInternal}` (fix #1).
+- [x] `instance.go`: `waitEdgeRouterVerified` + a settle-and-reconverge
+  second `EnsureContainer` call (token stripped) once the router's real
+  enrollment completes, before Reconcile returns (fix #2, router side).
+- [x] `connection.go`: settle-and-reconverge second `EnsureContainer` call
+  (token stripped) for the dial-side tunneler, no wait needed —
+  `upsertIdentity`'s "already exists" branch is a synchronous idempotency
+  check (fix #2, dial-side).
+- [x] Docker leg: both fixes are inert there (`AudienceInternal` only
+  affects `ExposedPorts` metadata on Docker; the settle logic just adds one
+  extra idempotent round-trip) — verified live, not just reasoned.
 
-1. **Kubernetes not attempted.** H5 (domains) merged mid-task, consuming a
-   large conflict-resolution pass; remaining budget went to fixing and
-   live-verifying the Docker path (3 real bugs found only by running live)
-   rather than starting a second, unverified substrate. The port/adapter
-   design is substrate-agnostic by construction (only calls
-   runtime.ContainerRuntime's Ensure* methods) but this is unverified, not
-   proven, on Kubernetes.
-2. **Known live flake**, reproduced 3/3 runs: `platformctl drift` run
-   immediately after `apply` intermittently reports the external Source
-   `ExternalEndpointUnreachable` (engine.go's generic `probeTCPReachable`,
-   an unretried ~3.75s dial) even though the Binding's own connector is
-   genuinely RUNNING and a direct dial succeeds moments later — a fresh
-   Ziti circuit's first-connection latency occasionally exceeds that
-   budget. This task's own settle-probe (`waitMediatedServing`, ~30s
-   bounded retry) keeps the Connection/Binding's own Ready/drift clean;
-   the generic external-reachability probe (outside this task's file
-   fence) is the residual gap. Not root-caused further given the time
-   budget — full account in doc 08's H6 Done-note.
-3. **`upsertService` does not update `encryptionRequired` on an existing
-   service** (create-only idempotency for that one field) — found live
-   while iterating on the encryptionRequired=false fix; harmless for a
-   fresh apply (the value is set correctly at creation) but a manifest
-   that somehow already had a service created with the old default would
-   need a manual delete. Not exercised by the accept scenario; recorded,
-   not fixed, given time.
-4. **golangci-lint's pre-existing `engine.go:119 logf unused` finding**
-   (present in the branch this task started from, before any of this
-   task's own edits) resolved itself at the H5/H8 merge — main's own
-   commits since then evidently re-used or removed `logf`. Not this
-   task's fix; noted for completeness since an earlier progress commit
-   flagged it as a pre-existing, out-of-scope issue.
+## Verification (all live, this session)
+
+- [x] `gofmt -l .` — clean
+- [x] `go build ./...` — clean
+- [x] `go vet ./...` and `go vet -tags integration ./...` — clean
+- [x] `go test ./...` unfiltered — true-exit=0
+- [x] `golangci-lint run` (pinned v2.12.2, matches ci.yml) — 0 issues
+- [x] `TestOpenZitiMediatedConnectionOnKubernetesEndToEnd` — green TWICE,
+  live, back-to-back, each a fresh `-count=1` compile against the shared
+  minikube (minted minimal-RBAC kubeconfig, fresh token minted this
+  session): 77.34s and 76.41s. All three proofs passed both times
+  (apply→Ready, CDC RUNNING through the mediated Connection, wrong-identity
+  dial refused).
+- [x] `TestOpenZitiMediatedConnectionEndToEnd` (Docker leg, regression) —
+  green, 27.84s.
+- [x] Manual live confirmation that the churn (fix #2) is actually gone:
+  fresh apply + 3x repeated `drift` showed 0 pod restarts (pre-fix: 2/2
+  repro attempts showed a router+tunneler Deployment rollout on the very
+  first post-apply probe).
+
+## Docs
+
+- [x] Additive Done-note appended under H6's existing Done-note in
+  docs/planning/08 §7.7 (`#### Addendum (2026-07-23): Kubernetes bind-path
+  fixed`) — every existing line preserved verbatim, guard-hook-additive.
+
+## Commit
+
+- [ ] One final squashed commit:
+  `fix(openziti): Kubernetes bind path — FQDN terminator + compiled ingress
+  hole (H6 substrate parity)` (message text pinned by the task prompt; body
+  corrects the hypothesis and states the actual mechanism shipped, per
+  report).

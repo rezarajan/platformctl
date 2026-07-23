@@ -167,6 +167,28 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 			"ZITI_ROUTER_PORT":               fmt.Sprintf("%d", ic.RouterPort),
 			"ZITI_ROUTER_MODE":               "host",
 		},
+		// The router's own edge/link listener (both bound to ZITI_ROUTER_PORT,
+		// router.yml's "edge" and "link.listeners[transport]" bindings) must be
+		// declared, AudienceInternal — only other in-network containers/pods
+		// (the per-Connection dial-side tunneler, other routers) ever dial it,
+		// never this CLI process or an operator. Docker: a no-op on
+		// reachability (ExposedPorts metadata only, docs/planning/08 F2 — the
+		// Docker network already reaches every container port regardless of
+		// publish status, so the controller's ZITI_ROUTER_ADVERTISED_ADDRESS ==
+		// routerNm already resolved via Docker's embedded per-network DNS with
+		// or without this). Kubernetes: without a declared port, EnsureContainer
+		// skips creating this container's Service entirely
+		// (kubernetes/container.go's ensureOneService: "len(desired.Spec.Ports)
+		// == 0" -> no Service) — Kubernetes has no Docker-style "every
+		// container name is DNS-resolvable regardless of exposed ports"
+		// fallback, so ZITI_ROUTER_ADVERTISED_ADDRESS became a name nothing
+		// could resolve, and the dial-side tunneler's SDK failed control-plane
+		// connect with "no such host" before any circuit was ever attempted —
+		// found live (K8s only) diagnosing
+		// TestOpenZitiMediatedConnectionOnKubernetesEndToEnd's mid-handshake
+		// EOF: the dial-side tunneler's own "no edge routers connected in
+		// time" log, not a bind-side/target-reachability defect.
+		Ports:  []runtime.PortBinding{{ContainerPort: ic.RouterPort, Audience: runtime.AudienceInternal}},
 		Labels: labels,
 	}
 	if !verified {
@@ -177,6 +199,44 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 	}
 	if _, err := rt.EnsureContainer(ctx, routerSpec); err != nil {
 		return st, err
+	}
+
+	// Settle to the STABLE, post-enrollment spec within this SAME reconcile
+	// (docs/planning/02 §4.1's settle-before-Ready discipline — the same
+	// pattern waitControllerServing/connection.go's waitMediatedServing
+	// already apply in this package): ZITI_ENROLL_TOKEN above is a
+	// one-time bootstrap fact, and upsertEdgeRouter's "already exists"
+	// branch is a fresh REST read of the controller's live, async
+	// isVerified flag every single time it's called. Leaving the
+	// container's desired spec keyed to it would violate the CLAUDE.md
+	// EnsureContainer idempotency bar ("a second call with the same spec
+	// makes zero API calls") the moment the router finishes enrolling in
+	// the background: a LATER, completely unrelated probe/drift/status
+	// call recomputes routerSpec, now observes verified=true (no token),
+	// and forces an unwanted Kubernetes Deployment rollout / Docker
+	// container recreate — found live diagnosing
+	// TestOpenZitiMediatedConnectionOnKubernetesEndToEnd: a `drift` call
+	// moments after `apply` restarted the router (and, by the identical
+	// mechanism, connection.go's dial-side tunneler), and the test's own
+	// status assertion occasionally caught one mid-restart. Wait out the
+	// router's real enrollment handshake here and re-converge to the
+	// no-token spec before Reconcile returns Ready, so every later call
+	// computes the exact spec this one already settled to.
+	if !verified {
+		if err := waitEdgeRouterVerified(ctx, client, routerNm); err != nil {
+			return st, fmt.Errorf("Provider %q (type: openziti): edge-router %q did not verify: %w", res.Metadata.Name, routerNm, err)
+		}
+		stableSpec := routerSpec
+		stableEnv := make(map[string]string, len(routerSpec.Env)-1)
+		for k, v := range routerSpec.Env {
+			if k != "ZITI_ENROLL_TOKEN" {
+				stableEnv[k] = v
+			}
+		}
+		stableSpec.Env = stableEnv
+		if _, err := rt.EnsureContainer(ctx, stableSpec); err != nil {
+			return st, err
+		}
 	}
 
 	// The structural router-eligibility policies (client.go's
@@ -231,6 +291,36 @@ func waitControllerServing(ctx context.Context, rt runtime.ContainerRuntime, ctr
 	return runtime.WithReachable(ctx, rt, ctrlName, port, opts, func(ctx context.Context, addr string) error {
 		return newEdgeClient("https://" + addr).Version(ctx)
 	})
+}
+
+// waitEdgeRouterVerified bounded-polls the controller (already-authenticated
+// client, held across the whole wait — unlike waitControllerServing this
+// isn't dialing through a per-attempt tunnel, just re-issuing the same REST
+// call) until routerNm's edge-router entity reports isVerified: the router
+// container's own self-enrollment handshake completing in the background
+// after reconcileInstance's first EnsureContainer call created it carrying a
+// one-time enrollment token. See reconcileInstance's settle comment for why
+// this must complete, and the resulting spec re-converge to omit that token,
+// before Reconcile returns Ready.
+func waitEdgeRouterVerified(ctx context.Context, client *edgeClient, routerNm string) error {
+	deadline := time.Now().Add(runtime.ScaledWait(90 * time.Second))
+	for {
+		_, _, verified, err := client.upsertEdgeRouter(ctx, routerNm)
+		if err != nil {
+			return err
+		}
+		if verified {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("edge-router %q did not verify within the settle window", routerNm)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func (p *Provider) probeInstance(ctx context.Context, req reconciler.Request) (status.Status, error) {
