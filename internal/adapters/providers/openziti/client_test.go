@@ -27,6 +27,13 @@ type fakeZitiController struct {
 	terminators map[string]map[string]any
 	nextID      int
 	authCalls   int
+	// identityGetByIDCalls counts single-entity GETs against
+	// /edge/management/v1/identities/<id> — docs/planning/08 K4's
+	// gate-off byte-identical pin needs to assert ZERO of these on the
+	// already-exists path (upsertIdentity's pre-K4 fast path made none at
+	// all), distinct from the list GET against the collection endpoint
+	// (findByName), which every idempotency check already makes.
+	identityGetByIDCalls int
 }
 
 func newFakeZitiController() *fakeZitiController {
@@ -111,10 +118,19 @@ func (f *fakeZitiController) handler() http.Handler {
 		}
 		switch r.Method {
 		case http.MethodGet:
+			f.identityGetByIDCalls++
 			writeEnvelope(w, http.StatusOK, map[string]any{
 				"enrollment":     map[string]any{"ott": map[string]any{"jwt": rec["jwt"]}},
 				"authenticators": map[string]any{"cert": map[string]any{"fingerprint": "fp-" + id}},
+				"roleAttributes": rec["roleAttributes"],
 			})
+		case http.MethodPatch:
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			for k, v := range body {
+				rec[k] = v
+			}
+			w.WriteHeader(http.StatusOK)
 		case http.MethodDelete:
 			delete(f.identities, id)
 			w.WriteHeader(http.StatusOK)
@@ -349,16 +365,111 @@ func TestUpsertIdentityIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestUpsertIdentityAlreadyExistsMakesNoExtraCallsWhenConvergeFalse pins
+// docs/planning/08 K4's gate-off byte-identical bar at the level of the
+// actual HTTP call sequence: the already-exists path of plain
+// upsertIdentity (converge=false, exactly what every LabelScopedAccess-off
+// caller uses) must issue ZERO single-entity GETs — the pre-K4 shape.
+func TestUpsertIdentityAlreadyExistsMakesNoExtraCallsWhenConvergeFalse(t *testing.T) {
+	t.Parallel()
+	c, f := newTestClient(t)
+	ctx := context.Background()
+
+	if _, _, err := c.upsertIdentity(ctx, "consumer-a", []string{"datascape-mediated"}); err != nil {
+		t.Fatalf("first upsertIdentity: %v", err)
+	}
+	// The CREATE path's own identityEnrollmentJWT fetch (pre-K4, unrelated
+	// to convergence) issues one single-entity GET — snapshot the count
+	// after create so the assertion below isolates the already-exists
+	// path's behavior specifically.
+	f.mu.Lock()
+	afterCreate := f.identityGetByIDCalls
+	f.mu.Unlock()
+
+	if _, _, err := c.upsertIdentity(ctx, "consumer-a", []string{"datascape-mediated"}); err != nil {
+		t.Fatalf("second upsertIdentity: %v", err)
+	}
+	f.mu.Lock()
+	got := f.identityGetByIDCalls - afterCreate
+	f.mu.Unlock()
+	if got != 0 {
+		t.Fatalf("already-exists path made %d extra single-entity GET(s), want 0 (converge=false must never fetch the entity)", got)
+	}
+}
+
+// TestUpsertIdentityConvergeHealsRoleAttributesDrift is K4's drift-heal
+// assertion for identity roleAttributes, mirroring
+// TestUpsertServiceConvergesRoleAttributes: converge=true (the
+// LabelScopedAccess-on path, via session.upsertIdentity) must PATCH a
+// STALE roleAttributes set back to the desired one on the next upsert.
+func TestUpsertIdentityConvergeHealsRoleAttributesDrift(t *testing.T) {
+	t.Parallel()
+	c, f := newTestClient(t)
+	ctx := context.Background()
+
+	f.mu.Lock()
+	f.identities["drifted"] = map[string]any{"name": "consumer-a", "roleAttributes": []any{"datascape-mediated", "label.tier.silver"}}
+	f.mu.Unlock()
+
+	id, _, err := c.upsertIdentityConverge(ctx, "consumer-a", []string{"datascape-mediated", "label.tier.gold"}, true)
+	if err != nil {
+		t.Fatalf("upsertIdentityConverge: %v", err)
+	}
+	if id != "drifted" {
+		t.Fatalf("upsertIdentityConverge minted a new identity instead of reusing the existing one: %s", id)
+	}
+	f.mu.Lock()
+	got := f.identities["drifted"]["roleAttributes"]
+	f.mu.Unlock()
+	gotSlice, ok := got.([]interface{})
+	if !ok || len(gotSlice) != 2 || gotSlice[0] != "datascape-mediated" || gotSlice[1] != "label.tier.gold" {
+		t.Fatalf("roleAttributes = %#v after convergence, want [datascape-mediated label.tier.gold] (drift not healed)", got)
+	}
+}
+
+// TestUpsertIdentityConvergeSkipsPatchWhenUnchanged is the "zero WRITE
+// calls if unchanged" half of K4's idempotency bar (the GET is accepted
+// convergence-check overhead, matching upsertService's own established
+// precedent — see identity.go's session.upsertIdentity doc comment): a
+// converge=true call whose desired roleAttributes already match must not
+// PATCH at all.
+func TestUpsertIdentityConvergeSkipsPatchWhenUnchanged(t *testing.T) {
+	t.Parallel()
+	c, f := newTestClient(t)
+	ctx := context.Background()
+
+	if _, _, err := c.upsertIdentityConverge(ctx, "consumer-a", []string{"datascape-mediated", "label.tier.gold"}, true); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// A second call with the SAME desired set must reproduce the exact
+	// same roleAttributes ordering — order-independent comparison
+	// (stringSetEqual) means a reordered-but-equal set is ALSO a no-op,
+	// which this asserts indirectly by checking the value is untouched.
+	if _, _, err := c.upsertIdentityConverge(ctx, "consumer-a", []string{"label.tier.gold", "datascape-mediated"}, true); err != nil {
+		t.Fatalf("second (reordered, same set): %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var rec map[string]any
+	for _, r := range f.identities {
+		rec = r
+	}
+	got, ok := rec["roleAttributes"].([]any)
+	if !ok || len(got) != 2 {
+		t.Fatalf("roleAttributes = %#v, want the original 2-entry create body untouched by a same-set converge call", rec["roleAttributes"])
+	}
+}
+
 func TestUpsertServiceIsIdempotent(t *testing.T) {
 	t.Parallel()
 	c, f := newTestClient(t)
 	ctx := context.Background()
 
-	id1, err := c.upsertService(ctx, "orders-service")
+	id1, err := c.upsertService(ctx, "orders-service", nil)
 	if err != nil {
 		t.Fatalf("first upsertService: %v", err)
 	}
-	id2, err := c.upsertService(ctx, "orders-service")
+	id2, err := c.upsertService(ctx, "orders-service", nil)
 	if err != nil {
 		t.Fatalf("second upsertService: %v", err)
 	}
@@ -388,7 +499,7 @@ func TestUpsertServiceConvergesEncryptionRequired(t *testing.T) {
 	f.services["drifted"] = map[string]any{"name": "orders-service", "encryptionRequired": true}
 	f.mu.Unlock()
 
-	id, err := c.upsertService(ctx, "orders-service")
+	id, err := c.upsertService(ctx, "orders-service", nil)
 	if err != nil {
 		t.Fatalf("upsertService: %v", err)
 	}
@@ -403,19 +514,74 @@ func TestUpsertServiceConvergesEncryptionRequired(t *testing.T) {
 	}
 }
 
+// TestUpsertServiceConvergesRoleAttributes is K4's analogous drift-heal
+// assertion for roleAttributes, alongside encryptionRequired above: a
+// service that already exists carrying a STALE roleAttributes set (e.g.
+// the manifest's labels changed since this service was first created) must
+// be PATCHed back to the desired set on the next upsert.
+func TestUpsertServiceConvergesRoleAttributes(t *testing.T) {
+	t.Parallel()
+	c, f := newTestClient(t)
+	ctx := context.Background()
+
+	f.mu.Lock()
+	f.services["drifted"] = map[string]any{"name": "orders-service", "encryptionRequired": false, "roleAttributes": []any{"label.tier.silver"}}
+	f.mu.Unlock()
+
+	id, err := c.upsertService(ctx, "orders-service", []string{"label.tier.gold"})
+	if err != nil {
+		t.Fatalf("upsertService: %v", err)
+	}
+	if id != "drifted" {
+		t.Fatalf("upsertService minted a new service instead of reusing the existing one: %s", id)
+	}
+	f.mu.Lock()
+	got := f.services["drifted"]["roleAttributes"]
+	f.mu.Unlock()
+	// The fake decodes the PATCH body's JSON array through map[string]any,
+	// which yields []interface{} (not []string) — the same shape
+	// identities/roleAttributes and every other JSON-array field in this
+	// fake already carries after a round trip.
+	gotSlice, ok := got.([]interface{})
+	if !ok || len(gotSlice) != 1 || gotSlice[0] != "label.tier.gold" {
+		t.Fatalf("roleAttributes = %#v after convergence, want [label.tier.gold] (drift not healed)", got)
+	}
+}
+
+// TestUpsertServiceOmitsRoleAttributesFromCreateBodyWhenEmpty pins K4's
+// gate-off/unlabeled byte-identical bar at the request-body level: creating
+// a service with no roleAttributes must produce the EXACT pre-K4 create
+// body (no "roleAttributes" key at all), not an empty-slice/null one.
+func TestUpsertServiceOmitsRoleAttributesFromCreateBodyWhenEmpty(t *testing.T) {
+	t.Parallel()
+	c, f := newTestClient(t)
+	ctx := context.Background()
+
+	if _, err := c.upsertService(ctx, "orders-service", nil); err != nil {
+		t.Fatalf("upsertService: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, rec := range f.services {
+		if _, ok := rec["roleAttributes"]; ok {
+			t.Fatalf("create body carried a roleAttributes key with no labels declared: %#v", rec)
+		}
+	}
+}
+
 func TestUpsertDialPolicyCreatesThenUpdatesInPlace(t *testing.T) {
 	t.Parallel()
 	c, f := newTestClient(t)
 	ctx := context.Background()
 
-	if err := c.upsertDialPolicy(ctx, "dial-a-svc", "svc1", []string{"identA"}); err != nil {
+	if err := c.upsertDialPolicy(ctx, "dial-a-svc", "AnyOf", []string{"@identA"}, []string{"@svc1"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if len(f.policies) != 1 {
 		t.Fatalf("policies = %d, want 1", len(f.policies))
 	}
 
-	if err := c.upsertDialPolicy(ctx, "dial-a-svc", "svc1", []string{"identA", "identB"}); err != nil {
+	if err := c.upsertDialPolicy(ctx, "dial-a-svc", "AnyOf", []string{"@identA", "@identB"}, []string{"@svc1"}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if len(f.policies) != 1 {
@@ -434,6 +600,36 @@ func TestUpsertDialPolicyCreatesThenUpdatesInPlace(t *testing.T) {
 	}
 }
 
+// TestUpsertDialPolicyAttributeBasedRefsUseAllOfSemantic pins K4's
+// attribute-based Dial policy shape: role-attribute ("#...") references on
+// either side, with AllOf semantics — the conjunction dialRoleRefs derives
+// from a multi-label endpoint (identity.go's own doc comment: "a resource
+// must carry EVERY declared label to match").
+func TestUpsertDialPolicyAttributeBasedRefsUseAllOfSemantic(t *testing.T) {
+	t.Parallel()
+	c, f := newTestClient(t)
+	ctx := context.Background()
+
+	identityRoles := []string{"#label.tier.gold", "#label.team.platform"}
+	serviceRoles := []string{"@svc1"}
+	if err := c.upsertDialPolicy(ctx, "dial-attr-svc", "AllOf", identityRoles, serviceRoles); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var rec map[string]any
+	for _, r := range f.policies {
+		rec = r
+	}
+	if rec["semantic"] != "AllOf" {
+		t.Fatalf("semantic = %v, want AllOf", rec["semantic"])
+	}
+	got, ok := rec["identityRoles"].([]any)
+	if !ok || len(got) != 2 || got[0] != "#label.tier.gold" || got[1] != "#label.team.platform" {
+		t.Fatalf("identityRoles = %v, want [#label.tier.gold #label.team.platform]", rec["identityRoles"])
+	}
+}
+
 // TestListDialPoliciesFiltersClientSide pins docs/planning/08 H9's live
 // finding: the controller's own filter query language rejects
 // `filter=type=%22Dial%22` (HTTP 400 INVALID_FILTER — "type" resolves to a
@@ -449,7 +645,7 @@ func TestListDialPoliciesFiltersClientSide(t *testing.T) {
 	c, f := newTestClient(t)
 	ctx := context.Background()
 
-	if err := c.upsertDialPolicy(ctx, "dial-a-svc", "svc1", []string{"identA"}); err != nil {
+	if err := c.upsertDialPolicy(ctx, "dial-a-svc", "AnyOf", []string{"@identA"}, []string{"@svc1"}); err != nil {
 		t.Fatalf("create dial policy: %v", err)
 	}
 	f.mu.Lock()

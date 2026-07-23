@@ -47,6 +47,24 @@ import (
 type WorkloadIdentity struct {
 	URI         string
 	Fingerprint string
+	// Labels carries the node's (MintIdentity) or edge endpoint's
+	// (RealizeEdge/RevokeEdge's From/To) metadata.labels — docs/planning/08
+	// K4, docs/adr/033 decision 4: "the mediation port carries endpoint
+	// labels" so an adapter can additionally compile attribute-based
+	// authorization (identity role attributes, attribute-scoped
+	// service-policies) alongside the identity-exact authorization this
+	// port has always required, keeping the admission plane (ADR 033's
+	// matchEdge.selector policy) and the enforcement plane (this port)
+	// checking the SAME facts (ADR 027 Layer 1's "the receiving side
+	// refuses any peer not presenting the identity the graph authorizes" —
+	// now backed by the same label facts the graph's own selector rules
+	// evaluate). nil/empty (the common case: an endpoint with no labels,
+	// or every caller before K4) is not an error — every adapter method
+	// already handles a zero-value WorkloadIdentity, so this field is
+	// purely additive. Never used as identity material itself (it is not
+	// part of the SPIFFE-aligned subject or the fingerprint), only as an
+	// input an adapter may derive attributes from.
+	Labels map[string]string
 }
 
 // DialBind is which direction(s) of an edge an identity is authorized for
@@ -95,7 +113,11 @@ type MediationProvider interface {
 	// internal/domain/naming.WorkloadIdentityURI. Idempotent: a second
 	// call for the same node returns the same URI/Fingerprint and makes
 	// no additional control-plane writes once the identity already
-	// exists with the expected subject.
+	// exists with the expected subject and (docs/planning/08 K4) any
+	// label-derived attributes an adapter compiles from node.Metadata.
+	// Labels already converge. The returned WorkloadIdentity's Labels
+	// field carries node.Metadata.Labels straight through (see that
+	// field's own doc comment).
 	MintIdentity(ctx context.Context, node resource.Envelope) (WorkloadIdentity, error)
 
 	// RealizeEdge compiles and applies dial/bind authorization for one

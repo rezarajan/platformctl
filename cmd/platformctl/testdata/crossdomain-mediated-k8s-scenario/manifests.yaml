@@ -61,6 +61,11 @@ kind: Connection
 metadata:
   name: xd-conn
   domain: analytics
+  # docs/planning/08 K4: see the Docker scenario's own matching comment —
+  # the service/"To"-side label the shared assertMediatorStateExactly
+  # helper asserts (cmd/platformctl/crossdomain_mediated_integration_test.go).
+  labels:
+    team: platform
 spec:
   providerRef:
     name: xd-mesh
@@ -101,6 +106,11 @@ kind: Source
 metadata:
   name: xd-src
   domain: payments
+  # docs/planning/08 K4: see the Docker scenario's own matching comment —
+  # the consumer/"From"-side label the shared assertMediatorStateExactly
+  # helper asserts.
+  labels:
+    tier: gold
   annotations:
     policy.datascape.io/exempt: "deny-payments-to-analytics: mediated by xd-conn (openziti), ADR 022 Ring 2"
 spec:

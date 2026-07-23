@@ -182,7 +182,7 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 		}
 	}
 	toURI := naming.WorkloadIdentityURI(toEnv)
-	svcID, err := sess.client.upsertService(ctx, identityRoleAttribute(toURI))
+	svcID, err := sess.client.upsertService(ctx, identityRoleAttribute(toURI), serviceRoleAttributes(toEnv.Metadata.Labels, sess.labelScopedAccessEnabled))
 	if err != nil {
 		return st, fmt.Errorf("Connection %q: ensure Ziti service: %w", res.Metadata.Name, err)
 	}
@@ -244,7 +244,7 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 		}
 		edge := mediation.Edge{
 			From:       fromIdentity,
-			To:         mediation.WorkloadIdentity{URI: toURI},
+			To:         mediation.WorkloadIdentity{URI: toURI, Labels: toEnv.Metadata.Labels},
 			Authorized: mediation.DialBind{Dial: true},
 		}
 		if err := sess.RealizeEdge(ctx, edge); err != nil {

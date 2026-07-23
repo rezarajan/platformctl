@@ -78,6 +78,14 @@ kind: Connection
 metadata:
   name: xd-conn
   domain: analytics
+  # docs/planning/08 K4: the service/"To"-side label — the mediated
+  # Connection itself is the identity-SUBJECT the "To" side keys on here
+  # (graphaccess.CompileMediatedConnections excludes Provider-kind targets
+  # from MediatedConnection.Targets, so mc.Targets is empty for this
+  # scenario and connection.go's toEnv falls back to the Connection's own
+  # envelope, res — see that fallback's own doc comment).
+  labels:
+    team: platform
 spec:
   providerRef:
     name: xd-mesh
@@ -120,6 +128,14 @@ kind: Source
 metadata:
   name: xd-src
   domain: payments
+  # docs/planning/08 K4: this label is the consumer-side (identity/"From")
+  # input to the openziti adapter's attribute-based Dial-policy compilation
+  # — see the integration test's assertMediatorStateExactly for the
+  # LabelScopedAccess-on assertion this drives (identity roleAttributes +
+  # a "#label.tier.gold" role-attribute reference, AllOf semantics, in
+  # place of the exact "@id" reference an unlabeled consumer would get).
+  labels:
+    tier: gold
   annotations:
     policy.datascape.io/exempt: "deny-payments-to-analytics: mediated by xd-conn (openziti), ADR 022 Ring 2"
 spec:
