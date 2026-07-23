@@ -14,6 +14,9 @@ spec:
   type: redpanda
   runtime:
     type: docker
+    # J5 (docs/planning/08): bounded so schedulers place by request and
+    # container-aware JVMs size heap from the limit, not host memory.
+    resources: {memory: 1Gi, memoryReservation: 512Mi}
   configuration:
     kafkaPort: 19093
     # Redpanda's built-in Confluent-compatible schema registry, required by

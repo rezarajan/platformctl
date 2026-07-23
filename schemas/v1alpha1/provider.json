@@ -20,7 +20,7 @@
         "type": {
           "type": "string",
           "minLength": 1,
-          "description": "Provider implementation to construct. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections, scheme tcp), prometheus (managed monitoring stack, gate MonitoringStackProvider, docs/planning/08 C9), ingress (realizes managed Connections, scheme http \u2014 HTTP hostname routing; gate IngressProvider, docs/planning/08 C7, docs/adr/018) \u2014 plus noop/container for testing. Open-ended: unknown types fail at registry construction, not schema validation. Technology providers realize the provider-agnostic kinds; the model speaks Catalog/Connection, never a technology's name. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections), prometheus (managed monitoring stack, gate MonitoringStackProvider, docs/planning/08 C9), trino (compute-engine coordinator + workers, gate TrinoProvider, docs/planning/08 D10), grafana (managed Grafana provisioned with a Prometheus datasource + starter dashboard, gate MonitoringStackProvider, docs/planning/08 C9 completion) \u2014 plus noop/container for testing. jdbcsink (realizes Binding(mode: sink, targetRef: Source) \u2014 a JDBC database sink over Confluent's kafka-connect-jdbc, gate JDBCSinkProvider, docs/planning/08 D3) and s3source (realizes Binding(mode: ingest) \u2014 an S3 object-store source over Aiven's s3-source-connector, gate IngestProvider, docs/planning/08 D4) are the ADR 001/009 sink-into-Source and ingest capability seams made real; both Alpha/disabled by default. wireguard (realizes managed Connections, scheme tcp \u2014 a tunnel initiator dialing an externally-operated WireGuard peer; NET_ADMIN required; gate TunnelProvider, docs/planning/08 D5, docs/adr/023) takes required configuration.peerNetwork (the Docker network the peer's UDP endpoint is reachable on), configuration.peerPublicKey, configuration.peerEndpoint (host:port), configuration.address (this tunnel's own CIDR on the WireGuard point-to-point subnet), configuration.allowedIPs (the private subnet(s) routed through the tunnel), an optional configuration.keepalive (seconds, default 25), and configuration.privateKeySecretRef (a SecretReference key \"privateKey\", must also be listed in spec.secretRefs \u2014 file-mounted only, never env/state/inspect). A Connection realized by a wireguard Provider must set spec.target to an IP:port pair (not a hostname \u2014 iptables --to-destination does not resolve DNS names).",
+          "description": "Provider implementation to construct. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections, scheme tcp), prometheus (managed monitoring stack, gate MonitoringStackProvider, docs/planning/08 C9), ingress (realizes managed Connections, scheme http — HTTP hostname routing; gate IngressProvider, docs/planning/08 C7, docs/adr/018) — plus noop/container for testing. Open-ended: unknown types fail at registry construction, not schema validation. Technology providers realize the provider-agnostic kinds; the model speaks Catalog/Connection, never a technology's name. Shipped: redpanda, postgres, mysql, mariadb, debezium, s3, minio, s3sink, nessie (realizes Catalog engine nessie), openlineage (Marquez lineage backend), proxy (realizes managed Connections), prometheus (managed monitoring stack, gate MonitoringStackProvider, docs/planning/08 C9), trino (compute-engine coordinator + workers, gate TrinoProvider, docs/planning/08 D10), grafana (managed Grafana provisioned with a Prometheus datasource + starter dashboard, gate MonitoringStackProvider, docs/planning/08 C9 completion) — plus noop/container for testing. jdbcsink (realizes Binding(mode: sink, targetRef: Source) — a JDBC database sink over Confluent's kafka-connect-jdbc, gate JDBCSinkProvider, docs/planning/08 D3) and s3source (realizes Binding(mode: ingest) — an S3 object-store source over Aiven's s3-source-connector, gate IngestProvider, docs/planning/08 D4) are the ADR 001/009 sink-into-Source and ingest capability seams made real; both Alpha/disabled by default. wireguard (realizes managed Connections, scheme tcp — a tunnel initiator dialing an externally-operated WireGuard peer; NET_ADMIN required; gate TunnelProvider, docs/planning/08 D5, docs/adr/023) takes required configuration.peerNetwork (the Docker network the peer's UDP endpoint is reachable on), configuration.peerPublicKey, configuration.peerEndpoint (host:port), configuration.address (this tunnel's own CIDR on the WireGuard point-to-point subnet), configuration.allowedIPs (the private subnet(s) routed through the tunnel), an optional configuration.keepalive (seconds, default 25), and configuration.privateKeySecretRef (a SecretReference key \"privateKey\", must also be listed in spec.secretRefs — file-mounted only, never env/state/inspect). A Connection realized by a wireguard Provider must set spec.target to an IP:port pair (not a hostname — iptables --to-destination does not resolve DNS names).",
           "x-known-values": [
             "redpanda",
             "postgres",
@@ -65,13 +65,47 @@
             },
             "networkPolicy": {
               "type": "string",
-              "enum": ["none"],
+              "enum": [
+                "none"
+              ],
               "description": "kubernetes only; docker ignores it (a Docker network is always isolated). By default EnsureNetwork also provisions a default-deny + allow-same-namespace NetworkPolicy pair so the Namespace mapping isn't DNS-parity-only — without it, any pod anywhere in the cluster could reach a Service. Set to \"none\" to opt out (e.g. a CNI that doesn't enforce NetworkPolicy, or an operator with their own policy story); a stderr warning is printed when opted out."
             },
             "access": {
               "type": "string",
-              "enum": ["port-forward", "node-port", "load-balancer", "in-cluster"],
+              "enum": [
+                "port-forward",
+                "node-port",
+                "load-balancer",
+                "in-cluster"
+              ],
               "description": "kubernetes only; docker ignores it (a published host port is already reachable). Selects how platformctl itself, running outside the cluster, reaches this Provider's admin/control-plane ports (e.g. redpanda's Kafka admin API) to reconcile child resources like EventStream. Default (unset): port-forward, an ephemeral client-go tunnel opened per operation — zero cluster config but requires pods/portforward RBAC and a live apply process. node-port/load-balancer change the backing Service's type and use its externally-observed address — the same address `platformctl inventory` reports. in-cluster refuses CLI-side admin connections outright, naming the mode, for providers whose admin operations are expected to run from inside the cluster instead."
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Optional resource bounds applied to EVERY long-running container this Provider realizes (docs/planning/08 J5; docs/adr/029's sibling concern — unbounded workloads let JVMs size heaps from host memory and let the Kubernetes scheduler pack pods by count, the eviction-churn class CI exposed). Injected at the engine's runtime chokepoint, so providers need zero changes to honor it. kubernetes: limits/requests verbatim. docker: memory/cpu limits map to the daemon's cgroup bounds; cpuReservation is best-effort CPU shares. Short-lived job containers (backup/restore pipelines) are deliberately not bounded by this field.",
+              "properties": {
+                "cpu": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "CPU limit in cores (e.g. 0.5, 2). Unset = unlimited."
+                },
+                "cpuReservation": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "CPU request/reservation in cores. kubernetes: scheduler-visible request. docker: best-effort CPU shares."
+                },
+                "memory": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(Ki|Mi|Gi)$",
+                  "description": "Memory limit as an integer with a binary suffix (Ki|Mi|Gi), e.g. \"512Mi\", \"1Gi\". Container-aware JVMs size their default heap from this."
+                },
+                "memoryReservation": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(Ki|Mi|Gi)$",
+                  "description": "Memory request/reservation, same format. kubernetes: the scheduler places by THIS value — setting it is what prevents overpacking."
+                }
+              }
             }
           },
           "required": [
@@ -103,7 +137,9 @@
         },
         "access": {
           "type": "array",
-          "items": { "$ref": "meta.json#/$defs/accessGrant" },
+          "items": {
+            "$ref": "meta.json#/$defs/accessGrant"
+          },
           "description": "Explicit wide-grant declarations (docs/adr/026 §2, docs/planning/08 H7) widening this Provider's reachability beyond its own declared graph edges to every resource in a named namespace. Only takes effect under the GraphScopedAccess feature gate (Alpha, disabled by default); schema-valid but inert otherwise."
         }
       },
@@ -114,8 +150,21 @@
       "additionalProperties": false,
       "allOf": [
         {
-          "if": { "properties": { "external": { "const": true } }, "required": ["external"] },
-          "then": { "required": ["connectionRef"] }
+          "if": {
+            "properties": {
+              "external": {
+                "const": true
+              }
+            },
+            "required": [
+              "external"
+            ]
+          },
+          "then": {
+            "required": [
+              "connectionRef"
+            ]
+          }
         }
       ]
     }

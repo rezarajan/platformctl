@@ -726,3 +726,14 @@ static. Dimensions, each producing findings verified before fixing:
   claimed as S: each provider needs a fake-servable scoping judgment
   (the redpanda exemplar's own registry-disabled note is why E6 cut it
   to three).
+- 2026-07-23: J5 IMPLEMENTED (stability batch) — spec.runtime.resources
+  flows schema -> engine chokepoint -> every container, zero provider
+  changes (the decoupling rule holds: the whole feature is one
+  domainRuntime injection + one parse). Both K8s-shard examples fully
+  bounded; doc 03 + generated reference updated same commit. CI
+  scenarios shard split core/apps (1193s of 1200s budget was a time
+  bomb) with an archtest guard proving the two -run patterns PARTITION
+  the Kubernetes-named test set — losing CI coverage via a pattern gap
+  is now a build failure. J2's interrupted verification sweep is
+  superseded by one final sweep at this content-state (6 suites that
+  completed green before the interrupt re-run under it).

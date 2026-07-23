@@ -232,6 +232,14 @@ spec:
                                   # its externally-observed address (also what `platformctl inventory` reports).
                                   # in-cluster refuses CLI-side admin connections outright, naming the mode. docker
                                   # ignores this entirely — a published host port is already reachable.
+    resources:                   # optional (docs/planning/08 J5): bounds applied to EVERY long-running container this
+      cpu: 2                     # Provider realizes, injected at the engine's runtime chokepoint (zero provider-side
+      cpuReservation: 0.25       # code). cpu/cpuReservation in cores; memory/memoryReservation as "<int>(Ki|Mi|Gi)".
+      memory: 1Gi                # kubernetes: limits/requests verbatim — memoryReservation is what the scheduler
+      memoryReservation: 512Mi   # places by, so setting it is what prevents overpacking/eviction churn; container-
+                                  # aware JVMs size their default heap from the memory LIMIT. docker: memory/cpu map
+                                  # to cgroup bounds, cpuReservation is best-effort CPU shares. Short-lived job
+                                  # containers (backup/restore pipelines) are deliberately not bounded by this field.
   configuration:                 # provider-specific, schema keyed by `type`
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
   secretRefs: []                 # optional list of SecretReference names, resolved and passed to the provider

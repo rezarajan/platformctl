@@ -19,7 +19,11 @@ metadata:
       require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: minio
-  runtime: {type: docker}
+  runtime:
+    type: docker
+    # J5 (docs/planning/08): bounded so schedulers place by request and
+    # container-aware JVMs size heap from the limit, not host memory.
+    resources: {memory: 512Mi, memoryReservation: 256Mi}
   configuration: {port: 19010, rootSecretRef: lake-minio-root}
   secretRefs: [lake-minio-root]
 ---
@@ -39,7 +43,11 @@ metadata:
       require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: nessie
-  runtime: {type: docker}
+  runtime:
+    type: docker
+    # J5 (docs/planning/08): bounded so schedulers place by request and
+    # container-aware JVMs size heap from the limit, not host memory.
+    resources: {memory: 1Gi, memoryReservation: 512Mi}
   configuration: {port: 19121}
   secretRefs: [lake-minio-root]
 ---
@@ -56,7 +64,11 @@ metadata:
       require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: openlineage
-  runtime: {type: docker}
+  runtime:
+    type: docker
+    # J5 (docs/planning/08): bounded so schedulers place by request and
+    # container-aware JVMs size heap from the limit, not host memory.
+    resources: {memory: 1Gi, memoryReservation: 512Mi}
   configuration: {apiPort: 15100}
 ---
 apiVersion: datascape.io/v1alpha1
@@ -69,7 +81,11 @@ metadata:
       require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: postgres
-  runtime: {type: docker}
+  runtime:
+    type: docker
+    # J5 (docs/planning/08): bounded so schedulers place by request and
+    # container-aware JVMs size heap from the limit, not host memory.
+    resources: {memory: 512Mi, memoryReservation: 256Mi}
   configuration: {version: "16", port: 15434, superuserSecretRef: lake-pg-admin}
   secretRefs: [lake-pg-admin]
 ---
@@ -83,7 +99,11 @@ metadata:
       require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: mysql
-  runtime: {type: docker}
+  runtime:
+    type: docker
+    # J5 (docs/planning/08): bounded so schedulers place by request and
+    # container-aware JVMs size heap from the limit, not host memory.
+    resources: {memory: 512Mi, memoryReservation: 256Mi}
   configuration: {port: 13306, rootSecretRef: lake-mysql-root}
   secretRefs: [lake-mysql-root]
 ---
@@ -100,7 +120,11 @@ metadata:
       require-digest-pins: dev example uses the stock default forwarder image by tag
 spec:
   type: proxy
-  runtime: {type: docker}
+  runtime:
+    type: docker
+    # J5 (docs/planning/08): bounded so schedulers place by request and
+    # container-aware JVMs size heap from the limit, not host memory.
+    resources: {memory: 128Mi, memoryReservation: 64Mi}
 ---
 apiVersion: datascape.io/v1alpha1
 kind: Provider
@@ -112,7 +136,11 @@ metadata:
       require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: redpanda
-  runtime: {type: docker}
+  runtime:
+    type: docker
+    # J5 (docs/planning/08): bounded so schedulers place by request and
+    # container-aware JVMs size heap from the limit, not host memory.
+    resources: {memory: 1Gi, memoryReservation: 512Mi}
   configuration:
     kafkaPort: 19096
 ---
@@ -129,7 +157,11 @@ metadata:
       require-digest-pins: dev example uses the stock default image by tag
 spec:
   type: debezium
-  runtime: {type: docker}
+  runtime:
+    type: docker
+    # J5 (docs/planning/08): bounded so schedulers place by request and
+    # container-aware JVMs size heap from the limit, not host memory.
+    resources: {memory: 1536Mi, memoryReservation: 768Mi}
   configuration:
     connectPort: 18086
   secretRefs: [ext-orders-creds]

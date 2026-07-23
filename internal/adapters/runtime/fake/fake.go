@@ -67,6 +67,18 @@ func New() *Runtime {
 // provider's own reconciler-conformance exemplar test, in a different
 // package, needs to observe it through that interface (a package-external
 // importer cannot see a method defined in another package's _test.go file).
+// Spec returns the ContainerSpec the named container was last ensured
+// with — introspection for tests asserting what actually REACHED the
+// runtime through the engine's decorators (e.g. J5's injected resource
+// bounds), the same need that promoted Mutations() from test-only to
+// exported (docs/planning/08 E6).
+func (r *Runtime) Spec(name string) (runtime.ContainerSpec, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.containers[name]
+	return rec.spec, ok
+}
+
 func (r *Runtime) Mutations() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()

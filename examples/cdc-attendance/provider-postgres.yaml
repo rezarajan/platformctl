@@ -13,6 +13,9 @@ spec:
   type: postgres
   runtime:
     type: docker
+    # J5 (docs/planning/08): bounded so schedulers place by request and
+    # container-aware JVMs size heap from the limit, not host memory.
+    resources: {memory: 512Mi, memoryReservation: 256Mi}
   configuration:
     version: "16"
     port: 15432

@@ -187,7 +187,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [adapter, scenarios]
+        # scenarios split in two (2026-07-23): one shard ran 1193s of its
+        # 1200s go-test budget on a GREEN path — every new K8s test was a
+        # guaranteed future timeout. scenarios-core: infra-shaped suites
+        # (redpanda x3, connect DLQ, chaos, backup, validate). scenarios-apps:
+        # the example scenarios + mesh/policy suites (cdc example, lakehouse,
+        # ingress x2, ziti, domains, graphscoped).
+        shard: [adapter, scenarios-core, scenarios-apps]
     steps:
       - uses: actions/checkout@v4
 
@@ -251,13 +257,23 @@ jobs:
           # with Calico installed, non-enforcement is a hard failure.
           PLATFORMCTL_REQUIRE_NETPOL_ENFORCEMENT: "1"
         run: |
-          if [ "${{ matrix.shard }}" = "adapter" ]; then
-            go test -tags integration -timeout 1200s \
-              ./internal/adapters/runtime/kubernetes/... \
-              ./internal/adapters/secrets/kubernetes/...
-          else
-            go test -tags integration -timeout 1200s -run Kubernetes ./cmd/platformctl/...
-          fi
+          # The two scenario patterns must PARTITION `-run Kubernetes`:
+          # internal/archtest's CI-shard-partition guard fails if a
+          # Kubernetes-named test in cmd/platformctl matches neither or both.
+          case "${{ matrix.shard }}" in
+            adapter)
+              go test -tags integration -timeout 1200s \
+                ./internal/adapters/runtime/kubernetes/... \
+                ./internal/adapters/secrets/kubernetes/... ;;
+            scenarios-core)
+              go test -tags integration -timeout 1500s \
+                -run 'TestRedpanda.*Kubernetes|TestKubernetesConnect|TestKubernetesChaos|TestBackupRestoreKubernetes|TestValidate.*Kubernetes' \
+                ./cmd/platformctl/... ;;
+            scenarios-apps)
+              go test -tags integration -timeout 1500s \
+                -run 'ExampleOnKubernetes|TestIngress.*Kubernetes|TestOpenZiti.*Kubernetes|TestDomainSegmentationOnKubernetes|TestGraphScopedAccessOnKubernetes' \
+                ./cmd/platformctl/... ;;
+          esac
 
       # Observed, never assumed (docs/adr/027's own discipline applied to CI
       # forensics): the 2026-07-23 scenarios failure surfaced only as

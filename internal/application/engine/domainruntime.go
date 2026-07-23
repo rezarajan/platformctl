@@ -12,6 +12,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/rezarajan/platformctl/internal/application/graphaccess"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
@@ -51,10 +53,14 @@ type domainRuntime struct {
 	runtime.ContainerRuntime
 	// warn is the engine's diagnostics channel (docs/adr/031, Engine.warnf)
 	// — nil in tests wrapped via WrapDomainRuntimeForTest.
-	warn   func(format string, args ...any)
-	token  string
-	pinned bool
-	domain string
+	warn func(format string, args ...any)
+	// containerResources is spec.runtime.resources parsed once at
+	// construction — injected into every EnsureContainer spec that
+	// carries none (J5). Distinct from resources below (the byKey map).
+	containerResources *runtime.Resources
+	token              string
+	pinned             bool
+	domain             string
 	// holes are the additional domains (already normalized) some other
 	// resource in the manifest set reaches this Connection from via
 	// connectionRef — non-empty only when env.Kind == "Connection" AND
@@ -142,6 +148,7 @@ func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any,
 		domain:           resource.NormalizeDomain(provEnv.Metadata.Domain),
 		warn:             warn,
 	}
+	d.containerResources = parseRuntimeResources(runtimeConfig)
 	d.namespaced = runtimeType == provider.RuntimeTypeKubernetes
 	if graphScoped {
 		d.graphScoped = true
@@ -253,6 +260,15 @@ func (d *domainRuntime) EnsureVolume(ctx context.Context, spec runtime.VolumeSpe
 // targetNamespace — so the extra entries are harmless there and the real
 // K8s mechanism is EnsureNetwork's AllowFromNetworks above).
 func (d *domainRuntime) EnsureContainer(ctx context.Context, spec runtime.ContainerSpec) (runtime.ContainerState, error) {
+	// spec.runtime.resources (docs/planning/08 J5): resource bounds are
+	// declared config the ENGINE resolved, injected here at the one
+	// chokepoint every provider's EnsureContainer passes through — zero
+	// provider changes, the same rule as the domain-name translation
+	// below. A provider that someday sets its own Resources wins; today
+	// none do.
+	if spec.Resources == nil && d.containerResources != nil {
+		spec.Resources = d.containerResources
+	}
 	nets := d.translateAll(spec.Networks)
 	for _, holeNet := range d.holeNetworks() {
 		nets = appendUnique(nets, holeNet)
@@ -468,4 +484,53 @@ func (d *domainRuntime) NodeNameOf(ctx context.Context, name string) (string, er
 		return "", fmt.Errorf("runtime does not implement JobCapableRuntime")
 	}
 	return jc.NodeNameOf(ctx, name)
+}
+
+// parseRuntimeResources reads spec.runtime.resources (docs/planning/08 J5)
+// into the runtime port's Resources. Schema validation has already pinned
+// the shape (numbers in cores; memory as "<int>(Ki|Mi|Gi)"), so parsing is
+// permissive here: a missing or malformed block yields nil (no bounds),
+// never an error — bounds are an operator instruction, not a correctness
+// gate, and validate is where malformed specs are refused.
+func parseRuntimeResources(cfg map[string]any) *runtime.Resources {
+	raw, ok := cfg["resources"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	res := &runtime.Resources{}
+	if v, ok := raw["cpu"].(float64); ok {
+		res.CPULimit = v
+	}
+	if v, ok := raw["cpuReservation"].(float64); ok {
+		res.CPUReservation = v
+	}
+	if v, ok := raw["memory"].(string); ok {
+		res.MemoryLimitBytes = parseQuantityBytes(v)
+	}
+	if v, ok := raw["memoryReservation"].(string); ok {
+		res.MemoryReservationBytes = parseQuantityBytes(v)
+	}
+	if *res == (runtime.Resources{}) {
+		return nil
+	}
+	return res
+}
+
+// parseQuantityBytes parses "<int>(Ki|Mi|Gi)" (the schema's memory
+// quantity format) to bytes; 0 on any mismatch.
+func parseQuantityBytes(s string) int64 {
+	mult := int64(1)
+	switch {
+	case strings.HasSuffix(s, "Ki"):
+		mult, s = 1024, strings.TrimSuffix(s, "Ki")
+	case strings.HasSuffix(s, "Mi"):
+		mult, s = 1024*1024, strings.TrimSuffix(s, "Mi")
+	case strings.HasSuffix(s, "Gi"):
+		mult, s = 1024*1024*1024, strings.TrimSuffix(s, "Gi")
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n * mult
 }

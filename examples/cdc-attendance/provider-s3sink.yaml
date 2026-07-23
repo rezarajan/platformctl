@@ -16,6 +16,9 @@ spec:
   type: s3sink
   runtime:
     type: docker
+    # J5 (docs/planning/08): bounded so schedulers place by request and
+    # container-aware JVMs size heap from the limit, not host memory.
+    resources: {memory: 1536Mi, memoryReservation: 768Mi}
   configuration:
     image: datascape-s3sink-connect:local
     # The Debezium Connect worker (postgres-cdc) already holds 18083.

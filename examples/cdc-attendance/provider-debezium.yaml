@@ -14,6 +14,9 @@ spec:
   type: debezium
   runtime:
     type: docker
+    # J5 (docs/planning/08): bounded so schedulers place by request and
+    # container-aware JVMs size heap from the limit, not host memory.
+    resources: {memory: 1536Mi, memoryReservation: 768Mi}
   configuration:
     # The CDC Binding's options.format: avro needs Confluent's AvroConverter
     # in the worker image; the stock Debezium image ships Apicurio only
