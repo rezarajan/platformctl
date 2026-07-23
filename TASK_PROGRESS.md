@@ -31,14 +31,16 @@ introduces the specs this task implements.
 - [x] gate-off byte-identical pin test (graphscoped-test shape) — both
       internal/application/policy and cmd/platformctl levels
 - [x] doc 08 §7.10 K1/K2 Done-notes appended; stage exit criteria 1-2 checked off
-- [ ] WIP commit
+- [x] WIP commit (78f0c19)
 
 ## Verify
-- [ ] gofmt
-- [ ] go build ./...
-- [ ] go vet -tags integration ./...
-- [ ] go test ./... (full log, true-exit)
-- [ ] golangci-lint v2.12.2
+- [x] gofmt — clean
+- [x] go build ./... — clean
+- [x] go vet -tags integration ./... — clean
+- [x] go test ./... — true-exit=0 (one failure found+fixed along the way:
+      docs/reference/explain.md was stale after the new catalog entry;
+      regenerated via `go run ./cmd/platformctl docs build --out docs/reference`)
+- [x] golangci-lint v2.12.2 — 0 issues
 
 ## Open items for orchestrator
 - K3 (selector-scoped wide grants), K4 (mediation label-derived attributes),
