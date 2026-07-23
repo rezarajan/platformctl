@@ -220,3 +220,148 @@ identity only, never credentials.
   reproduction of the dbjob entrypoint bug this note's job-container design
   depends on (docs/planning/08 F6's ratchet: a live-found bug ships with a
   conformance reproduction in the same commit).
+
+## Addendum (I12, docs/planning/08 §7.8): harden vs. replace the dbjob pipeline
+
+**Status:** accepted, implemented.
+**Prompted by:** the "Known limitations" above and doc 11's build-vs-buy
+note both flagged the two-container FIFO pipeline's failure modes
+(producer dies mid-stream, consumer never starts, exit-file races) as
+protocol-by-convention — accepted for Alpha, but named a blocker for
+`BackupRestore` GA. This addendum records the harden-vs-replace decision
+doc 08 I12 requires before any code changes.
+
+### The question
+
+Before `BackupRestore` can graduate past Alpha: does the two-container
+FIFO pipeline get hardened in place (explicit per-side deadlines, a
+recorded checksum, partial-object cleanup, honest per-side failure
+reporting), or does the mechanism get replaced with one supervised job
+container running the dump/restore tool and the S3 upload/download in a
+single process tree?
+
+### Options considered
+
+1. **Harden the two-container FIFO pipeline in place (chosen).** Keep the
+   producer/consumer/FIFO shape `internal/adapters/providers/dbjob`
+   already has — it already carries real hardening from the C6 review
+   (peer-unstick on either side's failure, a bounded overall deadline,
+   log-tail diagnostics, unconditional container/volume cleanup via
+   `defer`) — and close the remaining gaps: per-side deadlines, a
+   producer-side streamed checksum recorded in the `Manifest` and verified
+   on restore, and explicit partial-object cleanup on any failure path.
+2. **Collapse to one supervised job container.** A single container image
+   with both the engine's dump/restore client (`pg_dump`/`psql`,
+   `mysqldump`/`mysql`/`mariadb-dump`/`mariadb`) and an S3-capable uploader
+   (`mc`) installed, running the whole backup/restore as one process tree
+   (e.g. `pg_dump ... | mc pipe ...` inside a single `sh -c`). Rejected —
+   see below.
+3. **Provider-native streaming replication** (`pg_basebackup`,
+   binlog shipping) — already rejected by ADR 007's original Option 2 for
+   the same reason (out of scope for the single-node managed-database
+   posture); re-confirmed out of scope here, not re-litigated.
+
+### Why hardening, not replacement
+
+The single-container option would remove the FIFO/exit-file protocol
+entirely, which is a real simplification — but at a cost this repo has
+already decided it won't pay elsewhere: **no upstream-published image
+bundles both a database client and `mc`** (or any other S3-compatible
+uploader). Getting one running container with both tools installed means
+either (a) this project builds and maintains its own image — a
+`Dockerfile`, a build pipeline, a registry to publish it to, and now a
+*fourth* pinned-digest artifact per engine (`postgres`+`mc`,
+`mysql`+`mc`/`mariadb`+`mc`) whose provenance is "we built it," not "a
+vendor we already trust published it" — or (b) hunting for a third-party
+combo image per engine, which trades one well-known vendor's supply chain
+(`postgres`, `mysql`/`mariadb`, `minio/mc` — the images already pinned by
+digest today) for an unknown maintainer's, doubling the image surface
+that A10's digest-refresh workflow has to track without doubling
+confidence in what's inside. ADR 003's own boundary ("disproportionate for
+one JSON file plus a lock") and A10's pinning discipline (`docs/planning/08`
+A10: every release-tested image carries a digest resolved from its
+upstream registry, refreshed by a scheduled job) both weigh against
+introducing a self-built or third-party-bundled image class for a
+protocol-simplification gain that hardening captures anyway: every
+concrete failure mode this task must close (producer dies mid-stream,
+consumer never starts, corrupt/absent exit file, no partial object left
+behind) is a property of the **transport's error handling**, not of the
+two-container shape itself — a single supervised container still needs an
+explicit checksum, an explicit partial-object cleanup step, and an
+explicit exit-status check; it would not get those for free just by
+merging two containers into one. The two-container design's actual
+downside (two containers to orchestrate, a FIFO instead of an in-process
+pipe) is a fixed, already-paid complexity cost, not a growing one — while
+the combo-image option's image-provenance cost recurs on every image
+refresh, forever.
+
+**Rejected option's reasoning, recorded:** Option 2 is not wrong in the
+abstract — a supervised single process tree is simpler to reason about,
+and if this project ever needs multi-engine combo images for another
+reason, the calculus could change. It is rejected *now* because the
+reliability gaps I12 must close are transport-level, not shape-level, and
+hardening closes them without opening a new pinned-image-provenance
+liability this repo has consistently avoided elsewhere (ADR 003, A10).
+
+### What "hardened" means, concretely
+
+- **Per-side deadlines.** `dbjob.PipelineSpec` gains `ProducerTimeout`/
+  `ConsumerTimeout` (both default to `Timeout` when zero); `waitPipeline`
+  tracks each side's own deadline independently and returns a named,
+  side-attributed timeout error (not one generic "job did not finish")
+  the moment either side alone blows its own budget, force-removing the
+  other side to unstick its blocked FIFO end — the same peer-unstick
+  pattern the existing non-zero-exit branches already use.
+- **Streamed checksum.** The producer side's script (whichever role that
+  is — `pg_dump`/`mysqldump` for `Backup`, `mc cat` for `Restore`, since
+  both directions push bytes through the same FIFO) now tees its stdout
+  through two additional FIFOs read by backgrounded `sha256sum`/`wc -c`
+  processes (GNU coreutils — confirmed present in the pinned `mc` image
+  and every pinned database image), so the checksum/byte-count is computed
+  from the *exact bytes that crossed the pipe*, without landing the whole
+  payload as a file anywhere and without process substitution (a plain
+  `cmd; echo $? > file | tee fifo1 fifo2 > pipe` shape, portable to any
+  POSIX `sh`). `backup.Manifest` gains `Checksum` (`sha256:<hex>`) and
+  `Bytes` (int64). A `Backup` call persists this `Manifest` as a sidecar
+  object (`<key>.manifest.json`, next to the dump) via
+  `dbjob.PersistManifest` — the durable, out-of-band record a *separate*
+  `restore` CLI invocation (possibly a different machine, a different day)
+  reads back via `dbjob.ReadManifest` to learn the expected
+  checksum/byte-count before trusting what it downloads. This is the
+  "how Manifest is persisted" shape this ADR documents: not `state` (per
+  the Secrets handling section above, `state` never carries a `Location`,
+  and a `Manifest`'s own shape was already deliberately kept out of it),
+  but a plain JSON object living beside the backup it describes, in the
+  same bucket, the same way the backup itself does.
+- **Partial-object cleanup on any failure.** `dbjob.PipelineSpec` gains an
+  optional `Cleanup *Side` — a best-effort one-shot container
+  (`dbjob.RunOneShot`) `RunPipeline` runs whenever the main pipeline fails,
+  *after* force-removing both the producer and consumer containers first
+  (closing the race where a not-yet-killed consumer could still complete
+  an in-flight multipart upload after cleanup already ran and found
+  nothing to delete). `postgres`/`mysql`'s `Backup` wire this to
+  `mc rm --force` against the exact destination key — idempotent whether
+  or not a truncated object actually landed. Cleanup failure is folded
+  into the returned error as additional context, never silently
+  swallowed, and never promoted to hide the pipeline's own root-cause
+  error.
+- **Both-sides-exit verification, honest per-side errors.** Already
+  present pre-I12 (peer-unstick, log-tail diagnostics) and unchanged in
+  shape; the per-side-deadline and cleanup work above extends it rather
+  than replacing it.
+
+### Known limitation this addendum adds
+
+- **(d) Restore's integrity check is necessarily post-hoc.** Because the
+  restore tool (`psql`/`mysql`/`mariadb`) consumes the FIFO stream
+  concurrently with the checksum being computed from the same bytes, a
+  checksum mismatch can only be detected *after* the corrupted/truncated
+  data has already been applied to the database — there is no way to
+  gate a streaming write on a digest that isn't known until the stream
+  ends. `Restore` still refuses with a named error
+  (`restore integrity check failed: ...`) the moment a mismatch is
+  detected, but this is a **strong detection guarantee, not a prevention
+  guarantee**: an operator seeing this error must treat the target's data
+  as no longer trustworthy and re-restore from a known-good backup, not
+  assume the refusal rolled anything back. Recorded as a limitation, not
+  silently glossed over, matching (a)-(c) above.

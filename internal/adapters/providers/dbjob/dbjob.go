@@ -21,6 +21,8 @@
 // keeps the byte stream inside the runtime's own network the whole time,
 // with mc's multipart upload naturally back-pressuring pg_dump/mysqldump
 // through the pipe's kernel buffer — no unbounded buffering anywhere.
+// docs/adr/007-backup-restore.md's I12 addendum records why this shape was
+// hardened rather than replaced with a single supervised container.
 //
 // Both sides report success by writing their shell exit code to a sentinel
 // file on the same shared volume (workDir + "/producer-exit" /
@@ -32,6 +34,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,18 +48,51 @@ const (
 	WorkDir  = "/work"
 	PipePath = WorkDir + "/pipe"
 
+	// hashFifo/sizeFifo are two extra FIFOs on the same shared volume the
+	// producer side's script tees its stdout through (alongside the main
+	// PipePath) so a checksum and byte count of the exact bytes crossing
+	// the pipe can be computed without landing the payload as a file
+	// anywhere and without shell process substitution (docs/adr/
+	// 007-backup-restore.md's I12 addendum) — plain POSIX `tee` fan-out,
+	// portable to any `sh` that has it.
+	hashFifo = PipePath + ".hash"
+	sizeFifo = PipePath + ".size"
+
 	// DefaultTimeout bounds how long RunPipeline waits for both containers
 	// to finish before giving up — generous, since a large dump over a slow
-	// destination can legitimately run long; callers may override per call.
+	// destination can legitimately run long; callers may override per call,
+	// per side (PipelineSpec.ProducerTimeout/ConsumerTimeout).
 	DefaultTimeout = 30 * time.Minute
 	pollInterval   = 500 * time.Millisecond
+
+	// cleanupTimeout/manifestTimeout bound the small, self-contained
+	// RunOneShot housekeeping steps around a pipeline run (partial-object
+	// cleanup, manifest sidecar read/write) — these move at most a few KB
+	// and never need DefaultTimeout's budget.
+	cleanupTimeout  = 5 * time.Minute
+	manifestTimeout = 5 * time.Minute
+
+	// manifestSuffix names the JSON sidecar object PersistManifest writes
+	// next to a backup's dump object, and ReadManifest reads back — the
+	// durable, out-of-band integrity record docs/adr/007-backup-restore.md's
+	// I12 addendum documents in full.
+	manifestSuffix    = ".manifest.json"
+	manifestMountPath = "/mcmanifest/manifest.json"
+	manifestReadPath  = "/tmp/manifest.json"
+
+	// oneShotExitFile is RunOneShot's exit-code sentinel — a one-shot job
+	// has no shared volume of its own (it isn't a two-sided pipe), so this
+	// rides the container's own writable filesystem instead of WorkDir.
+	oneShotExitFile = "/tmp/dbjob-oneshot-exit"
 
 	// MCImage is the pinned mc (MinIO Client) image used as the S3-side of
 	// every postgres/mysql backup/restore job — the same "streams to/from
 	// any S3-compatible endpoint" tool the object-store ecosystem already
 	// standardizes on, so no bespoke S3 client needs building into a shell
 	// script. Digest resolved from registry.hub.docker.com for
-	// minio/mc:RELEASE.2025-04-16T18-13-26Z (2025-04-22 push).
+	// minio/mc:RELEASE.2025-04-16T18-13-26Z (2025-04-22 push). Confirmed to
+	// ship GNU coreutils (sha256sum/wc/tee/mkfifo), which the producer-side
+	// checksum script and RunOneShot's helpers both rely on.
 	MCImage = "minio/mc:RELEASE.2025-04-16T18-13-26Z@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3"
 
 	// MCConfigDir/MCConfigPath is where a generated mc alias config (see
@@ -98,6 +134,16 @@ func MCConfig(loc backup.Location) ([]byte, error) {
 	return b, nil
 }
 
+// networksFor returns loc's extra network-join list for a job container —
+// nil when loc is externally routable (a raw URL Location) and needs no
+// extra join.
+func networksFor(loc backup.Location) []string {
+	if loc.Network == "" {
+		return nil
+	}
+	return []string{loc.Network}
+}
+
 // Side is one half (producer or consumer) of a streaming pipeline.
 type Side struct {
 	Image    string
@@ -114,7 +160,11 @@ type Side struct {
 // PipelineSpec describes one streaming job. Producer writes to the FIFO,
 // Consumer reads from it: a backup wires the database's own dump tool as
 // Producer and mc as Consumer; a restore wires mc as Producer and the
-// database's own restore tool as Consumer.
+// database's own restore tool as Consumer — so the checksum RunPipeline
+// always computes producer-side lands on whichever role is pushing bytes
+// into the pipe (the freshly dumped content for Backup, the just-downloaded
+// object for Restore), matching what docs/adr/007-backup-restore.md's I12
+// addendum calls "computed producer-side" for both directions.
 type PipelineSpec struct {
 	// JobName must be unique per invocation (callers append a timestamp or
 	// similar) — it names the ephemeral volume and both containers.
@@ -122,39 +172,95 @@ type PipelineSpec struct {
 	Labels   map[string]string
 	Producer Side
 	Consumer Side
-	// Timeout bounds the whole run; 0 = DefaultTimeout.
+	// Timeout bounds each side by default; 0 = DefaultTimeout.
 	Timeout time.Duration
+	// ProducerTimeout/ConsumerTimeout override Timeout for one side only
+	// when nonzero — e.g. distinguishing "the whole transfer may
+	// legitimately run long" from "this side must at least be moving
+	// within its own budget," and naming which side blew its deadline
+	// instead of one generic "job did not finish" (docs/adr/
+	// 007-backup-restore.md's I12 addendum).
+	ProducerTimeout time.Duration
+	ConsumerTimeout time.Duration
+	// Cleanup, if set, runs as a best-effort one-shot container
+	// (RunOneShot) after any pipeline failure — never on success — once
+	// both the producer and consumer containers have been forcibly
+	// removed. A backup wires this to "mc rm --force <key>" so a producer
+	// killed mid-stream (whose consumer may have already completed an
+	// upload of the truncated bytes it received before the FIFO's write
+	// end closed) never leaves a partial object behind. Cleanup's own
+	// failure is folded into the returned error as additional context,
+	// never promoted to hide the pipeline's own root-cause error.
+	Cleanup *Side
+}
+
+// Result is what a successful RunPipeline call learns about the bytes that
+// crossed the pipe: their sha256 digest (bare hex, no "sha256:" prefix —
+// callers building a backup.Manifest.Checksum add that) and count, computed
+// producer-side without ever landing the payload as a whole file in this
+// process or on disk.
+type Result struct {
+	SHA256 string
+	Bytes  int64
 }
 
 // RunPipeline creates an ephemeral shared volume, starts Producer and
 // Consumer, waits for both to finish, verifies both exited zero, and always
 // removes the containers and volume before returning — on success or
 // failure alike, so a failed backup never leaks runtime objects for `gc` to
-// find later.
-func RunPipeline(ctx context.Context, rt runtime.ContainerRuntime, spec PipelineSpec) error {
-	timeout := spec.Timeout
-	if timeout <= 0 {
-		timeout = DefaultTimeout
+// find later. On failure, both containers are forcibly removed before
+// spec.Cleanup (if set) runs, and the returned error names which side
+// failed and why.
+func RunPipeline(ctx context.Context, rt runtime.ContainerRuntime, spec PipelineSpec) (Result, error) {
+	producerTimeout := spec.ProducerTimeout
+	if producerTimeout <= 0 {
+		producerTimeout = spec.Timeout
+	}
+	if producerTimeout <= 0 {
+		producerTimeout = DefaultTimeout
+	}
+	consumerTimeout := spec.ConsumerTimeout
+	if consumerTimeout <= 0 {
+		consumerTimeout = spec.Timeout
+	}
+	if consumerTimeout <= 0 {
+		consumerTimeout = DefaultTimeout
 	}
 	volName := spec.JobName + "-work"
 	producerName := spec.JobName + "-producer"
 	consumerName := spec.JobName + "-consumer"
 
 	if err := rt.EnsureVolume(ctx, runtime.VolumeSpec{Name: volName, Labels: spec.Labels}); err != nil {
-		return fmt.Errorf("job %q: ensure work volume: %w", spec.JobName, err)
+		return Result{}, fmt.Errorf("job %q: ensure work volume: %w", spec.JobName, err)
 	}
 	defer func() { _ = rt.RemoveVolume(context.WithoutCancel(ctx), volName) }()
 	defer func() { _ = rt.Remove(context.WithoutCancel(ctx), producerName) }()
 	defer func() { _ = rt.Remove(context.WithoutCancel(ctx), consumerName) }()
 
 	if _, err := rt.EnsureContainer(ctx, sideSpec(producerName, volName, spec.Labels, spec.Producer, redirectTo)); err != nil {
-		return fmt.Errorf("job %q: start producer: %w", spec.JobName, err)
+		return Result{}, fmt.Errorf("job %q: start producer: %w", spec.JobName, err)
 	}
 	if _, err := rt.EnsureContainer(ctx, sideSpec(consumerName, volName, spec.Labels, spec.Consumer, redirectFrom)); err != nil {
-		return fmt.Errorf("job %q: start consumer: %w", spec.JobName, err)
+		return Result{}, fmt.Errorf("job %q: start consumer: %w", spec.JobName, err)
 	}
 
-	return waitPipeline(ctx, rt, spec.JobName, producerName, consumerName, timeout)
+	result, err := waitPipeline(ctx, rt, spec.JobName, producerName, consumerName, producerTimeout, consumerTimeout)
+	if err == nil {
+		return result, nil
+	}
+
+	// Force-remove both sides now — before any Cleanup step — closing the
+	// race where a not-yet-killed consumer could still complete an
+	// in-flight multipart upload after Cleanup already ran and found
+	// nothing to delete (docs/adr/007-backup-restore.md's I12 addendum).
+	_ = rt.Remove(context.WithoutCancel(ctx), producerName)
+	_ = rt.Remove(context.WithoutCancel(ctx), consumerName)
+	if spec.Cleanup != nil {
+		if _, cerr := RunOneShot(ctx, rt, spec.JobName+"-cleanup", spec.Labels, *spec.Cleanup, cleanupTimeout, ""); cerr != nil {
+			err = fmt.Errorf("%w (partial-object cleanup after failure also failed: %s)", err, cerr)
+		}
+	}
+	return Result{}, err
 }
 
 const (
@@ -172,17 +278,22 @@ type sideOutcome struct {
 }
 
 // waitPipeline polls both sides and returns the moment either one is known
-// to have failed — rather than always waiting for both, up to timeout, the
-// way a pair of independent goroutines blocked on WaitGroup.Wait would
-// (docs/planning/08 C6 review finding 4): an instantly-exiting side (e.g.
-// the K1 entrypoint bug) otherwise leaves its peer blocked on the FIFO,
-// which nothing but the read/write end closing (or the container being
-// removed) can unstick, for the rest of DefaultTimeout. The moment a failure
-// is known, this best-effort-removes the still-running peer so its blocked
-// read/write unblocks (as an error) instead of idling out the clock, and
-// returns promptly with a log tail from both sides.
-func waitPipeline(ctx context.Context, rt runtime.ContainerRuntime, jobName, producerName, consumerName string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+// to have failed — rather than always waiting for both, up to a shared
+// timeout, the way a pair of independent goroutines blocked on
+// WaitGroup.Wait would (docs/planning/08 C6 review finding 4): an
+// instantly-exiting side (e.g. the K1 entrypoint bug) otherwise leaves its
+// peer blocked on the FIFO, which nothing but the read/write end closing
+// (or the container being removed) can unstick, for the rest of the
+// timeout. producerDeadline/consumerDeadline are tracked independently
+// (docs/adr/007-backup-restore.md's I12 addendum) so a side that never
+// even gets moving is named specifically, rather than reported as one
+// generic "job did not finish" once the slower side's own legitimate
+// budget also happens to run out. The moment a failure is known,
+// RunPipeline force-removes both sides so a blocked peer unblocks (as an
+// error) instead of idling out its own clock.
+func waitPipeline(ctx context.Context, rt runtime.ContainerRuntime, jobName, producerName, consumerName string, producerTimeout, consumerTimeout time.Duration) (Result, error) {
+	producerDeadline := time.Now().Add(producerTimeout)
+	consumerDeadline := time.Now().Add(consumerTimeout)
 	var producer, consumer sideOutcome
 	for {
 		if !producer.done {
@@ -192,31 +303,59 @@ func waitPipeline(ctx context.Context, rt runtime.ContainerRuntime, jobName, pro
 			consumer = pollSide(ctx, rt, consumerName, "consumer-exit")
 		}
 		if producer.err != nil {
-			return fmt.Errorf("job %q: producer: %w", jobName, producer.err)
+			return Result{}, fmt.Errorf("job %q: producer: %w", jobName, producer.err)
 		}
 		if consumer.err != nil {
-			return fmt.Errorf("job %q: consumer: %w", jobName, consumer.err)
+			return Result{}, fmt.Errorf("job %q: consumer: %w", jobName, consumer.err)
 		}
 		if producer.done && producer.code != "0" {
-			_ = rt.Remove(context.WithoutCancel(ctx), consumerName) // unstick the peer's blocked FIFO end
-			return fmt.Errorf("job %q: producer failed (exit=%q)%s", jobName, producer.code, diagnostics(ctx, rt, producerName, consumerName))
+			return Result{}, fmt.Errorf("job %q: producer failed (exit=%q)%s", jobName, producer.code, diagnostics(ctx, rt, producerName, consumerName))
 		}
 		if consumer.done && consumer.code != "0" {
-			_ = rt.Remove(context.WithoutCancel(ctx), producerName)
-			return fmt.Errorf("job %q: consumer failed (exit=%q)%s", jobName, consumer.code, diagnostics(ctx, rt, producerName, consumerName))
+			return Result{}, fmt.Errorf("job %q: consumer failed (exit=%q)%s", jobName, consumer.code, diagnostics(ctx, rt, producerName, consumerName))
 		}
 		if producer.done && consumer.done {
-			return nil // both exited zero
+			result, err := readResult(ctx, rt, jobName, producerName)
+			if err != nil {
+				return Result{}, err
+			}
+			return result, nil
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("job %q: did not finish within %s%s", jobName, timeout, diagnostics(ctx, rt, producerName, consumerName))
+		now := time.Now()
+		if !producer.done && now.After(producerDeadline) {
+			return Result{}, fmt.Errorf("job %q: producer did not finish within %s%s", jobName, producerTimeout, diagnostics(ctx, rt, producerName, consumerName))
+		}
+		if !consumer.done && now.After(consumerDeadline) {
+			return Result{}, fmt.Errorf("job %q: consumer did not finish within %s%s", jobName, consumerTimeout, diagnostics(ctx, rt, producerName, consumerName))
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return Result{}, ctx.Err()
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+// readResult reads back the producer-side checksum/byte-count sentinel
+// files sideSpec's hashing script writes, once both sides have exited zero.
+func readResult(ctx context.Context, rt runtime.ContainerRuntime, jobName, producerName string) (Result, error) {
+	sumData, err := rt.ReadFile(ctx, producerName, WorkDir+"/producer-checksum")
+	if err != nil {
+		return Result{}, fmt.Errorf("job %q: read producer checksum: %w", jobName, err)
+	}
+	bytesData, err := rt.ReadFile(ctx, producerName, WorkDir+"/producer-bytes")
+	if err != nil {
+		return Result{}, fmt.Errorf("job %q: read producer byte count: %w", jobName, err)
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(string(bytesData)), 10, 64)
+	if err != nil {
+		return Result{}, fmt.Errorf("job %q: parse producer byte count %q: %w", jobName, bytesData, err)
+	}
+	sum := strings.TrimSpace(string(sumData))
+	if sum == "" {
+		return Result{}, fmt.Errorf("job %q: producer checksum file is empty", jobName)
+	}
+	return Result{SHA256: sum, Bytes: n}, nil
 }
 
 // pollSide inspects one side once: not-yet-done (still running), done with
@@ -239,16 +378,35 @@ func pollSide(ctx context.Context, rt runtime.ContainerRuntime, name, exitFile s
 	return sideOutcome{done: true, code: code}
 }
 
+// sideSpec builds one side's ContainerSpec. The producer side (toPipe)
+// tees its stdout through two extra FIFOs (hashFifo/sizeFifo) so a
+// checksum and byte count of the exact bytes crossing PipePath are
+// computed by backgrounded GNU coreutils processes — no process
+// substitution, no landing the payload as a file (docs/adr/
+// 007-backup-restore.md's I12 addendum). cmd's own exit status is captured
+// inside a subshell BEFORE tee (the pipeline's last stage) can obscure it:
+// `( cmd; echo $? > cmdrc ) | tee ...` — the subshell always finishes
+// (including writing cmdrc) before the whole pipeline construct returns,
+// regardless of tee's own exit status.
 func sideSpec(name, volName string, labels map[string]string, side Side, toPipe bool) runtime.ContainerSpec {
-	redirect := "> " + PipePath
-	if !toPipe {
-		redirect = "< " + PipePath
-	}
-	exitFile := WorkDir + "/consumer-exit"
+	var script string
 	if toPipe {
-		exitFile = WorkDir + "/producer-exit"
+		cmdrc := WorkDir + "/producer-cmdrc"
+		script = fmt.Sprintf(
+			"mkfifo %s 2>/dev/null; mkfifo %s %s 2>/dev/null; "+
+				"sha256sum < %s | cut -d' ' -f1 > %s/producer-checksum & "+
+				"wc -c < %s | tr -d ' ' > %s/producer-bytes & "+
+				"( %s; echo $? > %s ) | tee %s %s > %s; "+
+				"wait; cp %s %s/producer-exit",
+			PipePath, hashFifo, sizeFifo,
+			hashFifo, WorkDir,
+			sizeFifo, WorkDir,
+			side.ShellCmd, cmdrc, hashFifo, sizeFifo, PipePath,
+			cmdrc, WorkDir,
+		)
+	} else {
+		script = fmt.Sprintf("mkfifo %s 2>/dev/null; (%s) < %s; echo $? > %s/consumer-exit", PipePath, side.ShellCmd, PipePath, WorkDir)
 	}
-	script := fmt.Sprintf("mkfifo %s 2>/dev/null; (%s) %s; echo $? > %s", PipePath, side.ShellCmd, redirect, exitFile)
 	return runtime.ContainerSpec{
 		Name:  name,
 		Image: side.Image,
@@ -287,4 +445,156 @@ func diagnostics(ctx context.Context, rt runtime.ContainerRuntime, producerName,
 	pLogs, _ := rt.Logs(ctx, producerName, 40)
 	cLogs, _ := rt.Logs(ctx, consumerName, 40)
 	return fmt.Sprintf("\nproducer logs:\n%s\nconsumer logs:\n%s", pLogs, cLogs)
+}
+
+// RunOneShot runs a single short-lived container to completion — no FIFO,
+// no shared volume, just Side's own Files/Env/Networks — and returns once
+// it has stopped, translating a nonzero exit code, a container that
+// vanished, or a timeout into a named error. Used for the small,
+// self-contained housekeeping steps around a RunPipeline call:
+// PersistManifest/ReadManifest (the integrity-manifest sidecar), and
+// RunPipeline's own Cleanup wiring (best-effort partial-object removal
+// after a failure). If resultPath is non-empty, its content is read back
+// (before the container is removed) and returned on success.
+func RunOneShot(ctx context.Context, rt runtime.ContainerRuntime, name string, labels map[string]string, side Side, timeout time.Duration, resultPath string) ([]byte, error) {
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	script := fmt.Sprintf("(%s); echo $? > %s", side.ShellCmd, oneShotExitFile)
+	spec := runtime.ContainerSpec{
+		Name:       name,
+		Image:      side.Image,
+		Entrypoint: []string{"sh", "-c"},
+		Cmd:        []string{script},
+		Env:        side.Env,
+		Files:      side.Files,
+		Networks:   side.Networks,
+		Labels:     labels,
+	}
+	defer func() { _ = rt.Remove(context.WithoutCancel(ctx), name) }()
+	if _, err := rt.EnsureContainer(ctx, spec); err != nil {
+		return nil, fmt.Errorf("job %q: start: %w", name, err)
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		st, found, err := rt.Inspect(ctx, name)
+		switch {
+		case err != nil:
+			return nil, fmt.Errorf("job %q: inspect: %w", name, err)
+		case !found:
+			return nil, fmt.Errorf("job %q: container disappeared before completing", name)
+		case !st.Running:
+			data, err := rt.ReadFile(ctx, name, oneShotExitFile)
+			if err != nil {
+				return nil, fmt.Errorf("job %q: read exit code: %w", name, err)
+			}
+			code := strings.TrimSpace(string(data))
+			if code != "0" {
+				return nil, fmt.Errorf("job %q: failed (exit=%q)%s", name, code, diagnostics(ctx, rt, name, name))
+			}
+			if resultPath == "" {
+				return nil, nil
+			}
+			out, err := rt.ReadFile(ctx, name, resultPath)
+			if err != nil {
+				return nil, fmt.Errorf("job %q: read result %q: %w", name, resultPath, err)
+			}
+			return out, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("job %q: did not finish within %s", name, timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// PersistManifest uploads manifest as the JSON sidecar object
+// "<key><manifestSuffix>" next to the backup object it describes — the
+// durable, out-of-band integrity record a later, separate `restore`
+// invocation reads back via ReadManifest before trusting anything it
+// downloads (docs/adr/007-backup-restore.md's I12 addendum). loc must
+// already carry resolved credentials, exactly like every other Location
+// use; key is the exact object key the backup landed at.
+func PersistManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName string, labels map[string]string, loc backup.Location, key string, manifest backup.Manifest) error {
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("job %q: encode manifest sidecar: %w", jobName, err)
+	}
+	mcConfig, err := MCConfig(loc)
+	if err != nil {
+		return err
+	}
+	side := Side{
+		Image:    MCImage,
+		Networks: networksFor(loc),
+		Env:      map[string]string{"MC_CONFIG_DIR": MCConfigDir},
+		Files: []runtime.FileMount{
+			{Path: MCConfigPath, Content: mcConfig, Mode: 0o600},
+			{Path: manifestMountPath, Content: data, Mode: 0o600},
+		},
+		ShellCmd: fmt.Sprintf("mc pipe %s/%s/%s < %s", MCAlias, loc.Bucket, key+manifestSuffix, manifestMountPath),
+	}
+	if _, err := RunOneShot(ctx, rt, jobName+"-manifest-write", labels, side, manifestTimeout, ""); err != nil {
+		return fmt.Errorf("persist backup integrity manifest for %q: %w", key, err)
+	}
+	return nil
+}
+
+// ReadManifest downloads and parses key's manifest sidecar
+// ("<key><manifestSuffix>"), for Restore to verify a freshly downloaded
+// object against before trusting it. A missing or unreadable sidecar is a
+// named error, not a silently skipped check — a backup made before this
+// hardening landed cannot be integrity-verified, and Restore refuses it
+// outright (docs/adr/007-backup-restore.md's I12 addendum, Known
+// limitation (d)).
+func ReadManifest(ctx context.Context, rt runtime.ContainerRuntime, jobName string, labels map[string]string, loc backup.Location, key string) (backup.Manifest, error) {
+	mcConfig, err := MCConfig(loc)
+	if err != nil {
+		return backup.Manifest{}, err
+	}
+	side := Side{
+		Image:    MCImage,
+		Networks: networksFor(loc),
+		Env:      map[string]string{"MC_CONFIG_DIR": MCConfigDir},
+		Files:    []runtime.FileMount{{Path: MCConfigPath, Content: mcConfig, Mode: 0o600}},
+		ShellCmd: fmt.Sprintf("mc cat %s/%s/%s > %s", MCAlias, loc.Bucket, key+manifestSuffix, manifestReadPath),
+	}
+	out, err := RunOneShot(ctx, rt, jobName+"-manifest-read", labels, side, manifestTimeout, manifestReadPath)
+	if err != nil {
+		return backup.Manifest{}, fmt.Errorf("read backup integrity manifest for %q: %w (this object may predate I12's integrity hardening, or the backup did not complete successfully)", key, err)
+	}
+	var manifest backup.Manifest
+	if err := json.Unmarshal(out, &manifest); err != nil {
+		return backup.Manifest{}, fmt.Errorf("parse backup integrity manifest for %q: %w", key, err)
+	}
+	return manifest, nil
+}
+
+// VerifyIntegrity compares a Restore pipeline's actual Result (the
+// downloaded bytes' checksum/count, computed producer-side by the same
+// RunPipeline call that streamed them into the database) against the
+// backup's recorded Manifest, and returns a clean, named error on any
+// mismatch — postgres/mysql's Restore call this immediately after
+// RunPipeline succeeds.
+//
+// As docs/adr/007-backup-restore.md's I12 addendum records (Known
+// limitation (d)), this check is necessarily post-hoc: the restore tool
+// consumes the same FIFO bytes concurrently with the checksum being
+// computed, so a mismatch is only known after the corrupted/truncated data
+// has already been applied. The error names this: a caller must treat the
+// target's data as untrustworthy and re-restore from a known-good backup,
+// not assume the refusal rolled anything back.
+func VerifyIntegrity(resourceName, bucket, key string, want backup.Manifest, got Result) error {
+	wantSum := strings.TrimPrefix(want.Checksum, "sha256:")
+	if wantSum == "" {
+		return fmt.Errorf("%q: backup manifest for %s/%s has no recorded checksum — cannot verify integrity", resourceName, bucket, key)
+	}
+	if got.SHA256 != wantSum || got.Bytes != want.Bytes {
+		return fmt.Errorf("%q: restore integrity check failed: downloaded sha256:%s (%d bytes) does not match backup manifest sha256:%s (%d bytes) for %s/%s — the object may be corrupted or truncated; treat the target's data as untrustworthy and re-restore from a known-good backup, not as rolled back", resourceName, got.SHA256, got.Bytes, wantSum, want.Bytes, bucket, key)
+	}
+	return nil
 }

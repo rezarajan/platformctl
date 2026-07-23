@@ -3241,6 +3241,37 @@ Connect-worker HA (workers>1) remains I7's gap.
   mid-stream, kill consumer pre-start, corrupt exit file) each ending in
   a clean, named error and no partial object left behind — plus the
   existing backup suite green on both engines.
+- **Done (2026-07-23):** decided HARDEN over replace via the ADR 007
+  addendum (docs/adr/007-backup-restore.md "Addendum (I12)"): the failure
+  modes are transport-error-handling properties, not shape properties,
+  and a combo dump-tool+mc image would add a self-built/third-party
+  pinned-image provenance class this repo avoids (ADR 003 boundary, A10
+  discipline). Landed: per-side deadlines (PipelineSpec.
+  ProducerTimeout/ConsumerTimeout, side-named timeout errors); a
+  producer-side streamed sha256+byte-count (tee through two extra FIFOs,
+  GNU coreutils — no process substitution, payload never lands as a
+  file) recorded as backup.Manifest.Checksum/Bytes, persisted as a
+  `<key>.manifest.json` sidecar object (dbjob.PersistManifest) and
+  verified by Restore (dbjob.ReadManifest + VerifyIntegrity — a missing
+  sidecar or mismatched digest refuses with a named error; verification
+  is post-hoc by construction, recorded as ADR 007 Known limitation (d));
+  partial-object cleanup on any pipeline failure (PipelineSpec.Cleanup →
+  `mc rm --force` via dbjob.RunOneShot, run only after both sides are
+  force-removed, closing the in-flight-upload race). Fault-injection
+  tests (cmd/platformctl/backup_integration_test.go, all matched by the
+  backup suite's `TestBackupRestore` run pattern): producer killed
+  mid-stream (4.98s), consumer rejects its command instantly — the
+  C6/K1 class (6.34s, error surfaced in 3.2s, not the deadline), exit
+  file corrupt and absent after a REAL upload (subtests, 1.70s/1.57s —
+  proves Cleanup removes an already-uploaded object once the exit
+  protocol is untrustworthy); every one ends in a named error and an
+  empty-bucket-listing assertion. Two first-draft injections were
+  themselves dishonest and caught live (mc treats an unknown alias as a
+  local path and exits 0; the kernel ignores SIGKILL to PID 1 from its
+  own namespace) — replaced with the honest forms above. Backup suite
+  green on both engines at pass 1 (94.9s, round-trips + mid-stream);
+  final green-twice timings: see /tmp/claude-1000/i12-evidence.log,
+  transcribed at the merge gate.
 
 ## 8. New feature gates introduced by this plan
 
