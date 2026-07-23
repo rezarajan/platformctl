@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -135,6 +136,29 @@ func CATrustFileMounts(cfg provider.Provider, secrets map[string]map[string]stri
 // resolved into the providerkit seam, now TLS-aware (docs/planning/08 I2).
 // tlsPosture == nil dials plaintext, byte-for-byte the pre-I2 behavior.
 func VerifyDatabaseConnection(ctx context.Context, engine, host string, port int, dbName, user, pass string, tlsPosture *DatabaseTLS) error {
+	// Bounded transient retry (doc 02 §4.1, found live at the 2026-07-23
+	// gate): a single-shot preflight through freshly-built infrastructure
+	// (a mediated entrypoint's first Ziti circuit, a just-started
+	// forwarder) races setup latency — "unexpected EOF" mid-handshake is
+	// transport, not a verdict. Transport-class failures retry within the
+	// window; auth/TLS verdicts (wrong password, certificate rejection)
+	// return immediately — retrying a real refusal would only delay the
+	// honest error (and hammer a lockout counter).
+	deadline := time.Now().Add(runtime.ScaledWait(20 * time.Second))
+	for {
+		err := verifyDatabaseConnectionOnce(ctx, engine, host, port, dbName, user, pass, tlsPosture)
+		if err == nil || !isTransientConnError(err) || time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func verifyDatabaseConnectionOnce(ctx context.Context, engine, host string, port int, dbName, user, pass string, tlsPosture *DatabaseTLS) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	switch engine {
@@ -145,6 +169,30 @@ func VerifyDatabaseConnection(ctx context.Context, engine, host string, port int
 	default:
 		return nil
 	}
+}
+
+// isTransientConnError classifies transport-layer failures (retriable
+// within VerifyDatabaseConnection's window) apart from server verdicts
+// (auth failures, TLS rejections — immediate). String matching is the
+// honest option here: the drivers wrap syscall errors inconsistently.
+func isTransientConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	for _, marker := range []string{
+		"unexpected EOF",
+		"connection refused",
+		"connection reset",
+		"broken pipe",
+		"i/o timeout",
+		"no such host",
+	} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func verifyPostgresConnection(ctx context.Context, host string, port int, dbName, user, pass string, tlsPosture *DatabaseTLS) error {

@@ -298,7 +298,14 @@ func proveWrongIdentityRefused(t *testing.T, rt runtime.ContainerRuntime, ctx co
 
 	serviceName := zitiServiceRoleAttribute("spiffe://datascape/default/source/ziti-orders-db")
 
-	mustRunZ(t, "docker", "network", "connect", zitiPlatformNetwork, "mesh-ctrl") // no-op if already attached; ensures reachability from a fresh container's perspective is unambiguous
+	// Tolerate an already-attached controller: docker's connect is NOT a
+	// no-op on an existing endpoint (it errors "endpoint ... already
+	// exists" — found live at the 2026-07-23 gate when residue from a
+	// prior failed run survived), and either state is fine for this
+	// proof: the canary only needs the controller reachable.
+	if out, err := exec.Command("docker", "network", "connect", zitiPlatformNetwork, "mesh-ctrl").CombinedOutput(); err != nil && !strings.Contains(string(out), "already exists") {
+		t.Fatalf("docker network connect %s mesh-ctrl: %v\n%s", zitiPlatformNetwork, err, out)
+	}
 
 	canaryPort := 25899
 	mustRunZ(t, "docker", "run", "-d", "--name", "ziti-canary",
