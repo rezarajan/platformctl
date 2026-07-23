@@ -2824,6 +2824,70 @@ architecture correction, `internal/adapters/providers/placeholder`'s new
   the consumers' vantage); wide-grant path proves reach-all-B only
   when declared and policy-permitted; gate-off byte-identical pin.
 - **Gate:** `GraphScopedAccess` (Alpha, disabled).
+- **Amended (ADR 026 addendum, 2026-07-23):** the Docker realization
+  MUST allocate deterministic /28 subnets from a dedicated supernet —
+  the "order tens" bound was Docker default-pool exhaustion, not a real
+  limit; with explicit subnets the envelope is thousands of edges.
+  Determinism test required (same edge → same subnet).
+
+### I13: Verify-then-promote restore — corruption never touches the target (ADR 007 addendum 2)
+
+- **Size:** M. **Depends:** I12 (merged). **Why:** I12's integrity
+  check is detection-after-replay: a corrupted stream partially applied
+  to the TARGET database before the checksum verdict. No-compromise
+  bar: damage must never reach the target.
+- **Do:** ADR 007 addendum 2 first, then: restore streams into a
+  SCRATCH database (postgres: `CREATE DATABASE <name>_restore_<ts>`;
+  mysql: schema equivalent) while the checksum accumulates; only on
+  verification success does an atomic promote occur (postgres: in one
+  session — rename target aside, rename scratch in, drop old after;
+  mysql: RENAME TABLE batch inside the scratch→target swap, the
+  documented atomic mechanism); on ANY failure the scratch is dropped
+  and the target is untouched (named error). Disk headroom check
+  before starting (2x dump size on the instance volume) with an honest
+  refusal. Fault-injection: corrupt mid-stream → target byte-identical
+  to before (proven by checksumming the target pre/post).
+- **Accept:** fault suite green; happy-path round-trip green both
+  engines; the backup suite's existing green is the floor.
+- **Gate:** rides `BackupRestore`.
+
+### I14: Grafana admin credential rotation — the recorded limitation solved
+
+- **Size:** S. **Depends:** none. **Why:** C9 recorded "rotation after
+  first apply is a documented Grafana limitation" — but Grafana ships
+  the mechanism: `grafana-cli admin reset-admin-password` (exec, no
+  old password needed) and the admin API. A recorded limitation with a
+  vendor-provided fix is a task, not a fact.
+- **Do:** on rotation detection (the existing credential-rotation seam,
+  providerkit), exec `grafana-cli admin reset-admin-password <new>` in
+  the container (runtime exec — the dbjob/probe exec precedent), then
+  re-probe login with the new credential before Ready (settledness).
+  Drift: a failed login with the declared credential is
+  CredentialDrift, healed by the same path.
+- **Accept:** e2e: rotate the SecretReference, re-apply, Grafana
+  answers with the new credential (and refuses the old); unit for the
+  exec construction.
+- **Gate:** rides `MonitoringStackProvider`.
+
+### I15: Backup/restore on Kubernetes — dbjob's Jobs realization (ADR 007 scope completion)
+
+- **Size:** M-L. **Depends:** I12, I13. **Why:** ADR 007 scoped the
+  pipeline Docker-only "by design" — acceptable for Alpha, but
+  BackupRestore cannot GA claiming runtime parity while one runtime
+  has zero coverage. No-compromise: same guarantees on both runtimes.
+- **Do:** realize dbjob's producer/consumer (+ cleanup one-shot) as
+  Kubernetes Jobs sharing an emptyDir for the FIFO (same-pod
+  two-container Job — the FIFO becomes a shared volume path, the
+  protocol unchanged), scheduled in the provider's domain namespace;
+  ReadFile/exec paths already exist on the runtime port. Integrity/
+  fault semantics identical to Docker (the I12/I13 suites parameterize
+  over runtime — extend, don't fork). RBAC additions (jobs
+  create/watch) → role.yaml + preflight + README same-commit.
+- **Accept:** the full I12+I13 fault suite green on Kubernetes under
+  the minted minimal-RBAC kubeconfig; backup suite row scope gains the
+  K8s adapter dir.
+- **Gate:** rides `BackupRestore` (its GA now additionally requires
+  this).
 
 ## 7.8 Stage I — Production-review remediations (doc 11, 2026-07 owner review)
 

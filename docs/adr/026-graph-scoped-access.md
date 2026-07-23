@@ -93,3 +93,17 @@ Doc 11 (decoupling verification — the chokepoint this compiles
 through), ADR 022 (rings), H5 (domains, the decorator), B7 (K8s
 default-deny), ADR 015 (the connectivity plane the probes ride), I1
 (transit networks — the per-edge pattern's precedent).
+
+## Addendum (2026-07-23, no-compromise review): the Docker network-count bound is removable
+
+The original §3 accepted "order tens per daemon" as the Docker
+per-edge-network envelope. That bound is not Linux's — it is Docker's
+DEFAULT address-pool exhaustion (large default subnets). H7's compiler
+therefore allocates each edge network a deterministic small subnet
+(/28: 16 addresses — an edge has exactly two endpoints plus
+infrastructure) from a dedicated supernet (e.g. one /16 → 4096 edge
+networks), passed explicitly at network creation. The scale envelope
+becomes thousands of edges per daemon; the honest remaining bounds
+(Linux bridge count, fd limits) sit far above any single-daemon
+platform. H7's spec is updated to require this allocation scheme +
+a determinism test (same edge → same subnet across runs).

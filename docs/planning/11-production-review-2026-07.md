@@ -588,3 +588,16 @@ static. Dimensions, each producing findings verified before fixing:
   refused at validate (coherence check; H5's own fixture was caught
   incoherent and corrected — providers now carry the domains). Pinned
   at decorator and validate levels; full unit true-exit=0.
+- 2026-07-23: NO-COMPROMISE REVIEW continued — every remaining
+  "accepted with reasons" converted to a real solution: ADR 026
+  amendment kills the Docker per-edge scale bound (deterministic /28
+  subnets from a supernet → thousands of edges; the "tens" was default
+  address-pool exhaustion, not a real limit; H7 spec updated). I13
+  verify-then-promote restore (scratch-db + atomic swap — corruption
+  never touches the target; I12's detection-after-replay was a
+  compromise). I14 Grafana rotation SOLVED via grafana-cli
+  reset-admin-password over runtime exec (the "documented limitation"
+  had a vendor mechanism all along). I15 backup on Kubernetes (same-pod
+  Jobs sharing the FIFO via emptyDir; BackupRestore GA now requires
+  runtime parity). Remaining environmental step: minikube→Calico
+  recreation queued behind the running wave-4 gate sweep.
