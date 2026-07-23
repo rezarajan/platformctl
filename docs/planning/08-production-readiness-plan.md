@@ -1868,6 +1868,24 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
   `internal/application/blueprint` template exercised by
   `cmd/platformctl/init_test.go`) still validates green, unedited.
 
+### J1: Fast-tier restructure — the ≤1-minute local loop (ADR 028)
+
+- **Size:** M. **Depends:** none; E6 delivers the provider middle tier.
+- **Do:** (1) `just test` = fast tier only: audit every non-integration
+  test for `t.Parallel()` eligibility and apply it; anything requiring
+  Docker/K8s/time moves behind the integration tag (audit for
+  stragglers). (2) A budget guard in CI: parse `go test -json` for the
+  fast tier, fail on any test >60s or tier-total over budget; the guard
+  itself is a fast test. (3) `just test-deep [suites…]` wraps the
+  impact script (bare — it self-serializes); `just test` documented as
+  the TDD default in README + docs/onboarding/developers.md. (4)
+  Technology-fake honesty rule (ADR 028 §2) documented in the E6 guide.
+- **Accept:** wall-clock `just test` ≤60s on the dev machine (measured,
+  recorded); budget guard proven both directions (green now; red when a
+  deliberate 61s sleep test is added in a scratch branch); no
+  integration-tagged test runs in the fast tier.
+- **Gate:** none (dev-loop infrastructure).
+
 ### E6: Provider author contract — guide, conformance suite, exemplars
 
 - **Size:** L. **Depends:** E5 (fragments are part of the contract); F5

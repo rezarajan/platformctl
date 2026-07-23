@@ -53,6 +53,7 @@ pattern of recording a redirected first cut).
 | [025](025-cloud-iam-database-auth.md) | Cloud IAM database auth: out of scope, composable via auth proxies | accepted | 2026-07-22 |
 | [026](026-graph-scoped-access.md) | Graph-scoped access: least privilege compiled from declared references | accepted (H7) | the reference graph IS the access-request set; wide grants explicit + policy-visible; per-edge NetworkPolicies (K8s) / per-edge networks (Docker); zero provider edits via the H5 decorator |
 | [027](027-enforcement-layering.md) | Enforcement layering: identity authoritative, network best-effort | accepted | never trust the network; MediationProvider port (OpenZiti = first adapter, not the architecture); Layer-2 enforcement observed, never assumed; claims table governs zero-trust language |
+| [028](028-test-tiering.md) | Test tiering: fast local signal, deep explicit, CI as arbiter | accepted | ≤1-min local loop, budget-guarded; provider conformance suite (E6) is the fast-tier middle; CI green is the verdict, local green is the signal |
 
 "Retroactive" ADRs (008–014) record decisions made in the planning package
 (docs 00–06) before this convention existed — written 2026-07-21 so the
