@@ -7,18 +7,22 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	godriver "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/dbjob"
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	"github.com/rezarajan/platformctl/internal/domain/backup"
+	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
 // TestBackupRestorePostgresRoundTrip and its mysql/s3 siblings cover
@@ -355,4 +359,298 @@ func getTestObject(t *testing.T, ctx context.Context, cl *minio.Client, bucket, 
 		t.Fatalf("read object %s/%s: %v", bucket, key, err)
 	}
 	return buf.String()
+}
+
+// --- I12 fault-injection tests (docs/planning/08 §7.8 I12; docs/adr/
+// 007-backup-restore.md's addendum) ---
+//
+// These drive internal/adapters/providers/dbjob.RunPipeline directly
+// (rather than the full backup/restore CLI verbs) against a live bkp-minio
+// destination — the durable-store half of setupBackupScenario, applied
+// alone since no database tier is needed to exercise the pipeline's own
+// failure handling. Each test injects one of the three failure modes doc
+// 08 I12 names (producer dies mid-stream, consumer never starts,
+// corrupt/absent exit file) and asserts two things: RunPipeline returns a
+// clean, named error (never a hang, never a panic), and the destination
+// bucket is left with no partial object — verified by listing, not by
+// trusting the error message alone.
+
+// faultMinioAddr/faultNetwork/faultBucket are setupFaultInjectionStore's
+// fixed coordinates — testdata/backup-restore-scenario/store-only's
+// bkp-minio Provider (same fixture setupBackupScenario's store half uses).
+const (
+	faultMinioAddr = "127.0.0.1:19732" // host-published port (store.yaml's minio.configuration.port)
+	faultNetwork   = "datascape-bkp"
+	faultBucket    = "bkp-store"
+)
+
+// setupFaultInjectionStore applies just the durable backup store (bkp-minio
+// + its Datasets), returning the shared Docker runtime and a backup.Location
+// resolved the same way Engine.resolveDatasetLocation would (internal DNS
+// name + published F4 port 9000 — internal/adapters/providers/s3/s3.go's
+// apiPort — since these tests drive dbjob directly, not through the engine).
+func setupFaultInjectionStore(t *testing.T) (rt *dockerruntime.Runtime, loc backup.Location) {
+	t.Helper()
+	t.Setenv("DATASCAPE_SECRET_BKP_MINIO_ROOT_USERNAME", "bkpminio")
+	t.Setenv("DATASCAPE_SECRET_BKP_MINIO_ROOT_PASSWORD", "bkp-minio-pw")
+
+	rtc, err := dockerruntime.New(nil)
+	if err != nil {
+		t.Fatalf("connect to Docker: %v", err)
+	}
+	ctx := context.Background()
+	cleanup := func() {
+		_ = rtc.Remove(ctx, "bkp-minio")
+		_ = rtc.RemoveVolume(ctx, "bkp-minio-data")
+		_ = rtc.RemoveNetwork(ctx, faultNetwork)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	stateFile := filepath.Join(t.TempDir(), "store-state.json")
+	storeOnly := "testdata/backup-restore-scenario/store-only"
+	if out, err, code := run(t, "apply", storeOnly, "--state-file", stateFile, "--auto-approve"); err != nil || code != 0 {
+		t.Fatalf("store apply failed (code %d): %v\n%s", code, err, out)
+	}
+
+	return rtc, backup.Location{
+		Endpoint:  "http://bkp-minio:9000",
+		Bucket:    faultBucket,
+		Prefix:    "dumps",
+		Network:   faultNetwork,
+		AccessKey: "bkpminio",
+		SecretKey: "bkp-minio-pw",
+	}
+}
+
+// listFaultObjects lists every object under prefix in bucket — the
+// "no partial object left behind" half of each fault-injection assertion.
+func listFaultObjects(t *testing.T, bucket, prefix string) []string {
+	t.Helper()
+	cl := newMinioTestClient(t, faultMinioAddr, "bkpminio", "bkp-minio-pw")
+	ctx := context.Background()
+	var keys []string
+	for obj := range cl.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if obj.Err != nil {
+			t.Fatalf("list objects under %s/%s: %v", bucket, prefix, obj.Err)
+		}
+		keys = append(keys, obj.Key)
+	}
+	return keys
+}
+
+// mcSideFor builds a dbjob.Side speaking mc against loc — shared by every
+// fault-injection test that needs a working consumer/cleanup side (only the
+// "consumer never starts" test deliberately omits the mc config, to make
+// the consumer fail immediately).
+func mcSideFor(t *testing.T, loc backup.Location) dbjob.Side {
+	t.Helper()
+	mcConfig, err := dbjob.MCConfig(loc)
+	if err != nil {
+		t.Fatalf("mc config: %v", err)
+	}
+	return dbjob.Side{
+		Image:    dbjob.MCImage,
+		Networks: []string{loc.Network},
+		Env:      map[string]string{"MC_CONFIG_DIR": dbjob.MCConfigDir},
+		Files:    []runtime.FileMount{{Path: dbjob.MCConfigPath, Content: mcConfig, Mode: 0o600}},
+	}
+}
+
+// TestBackupRestoreFaultProducerKilledMidStream covers I12's first
+// fault-injection mode: the producer is killed out from under a live
+// transfer. RunPipeline must return a clean, producer-named error, and
+// PipelineSpec.Cleanup ("mc rm --force", wired the same way postgres/mysql's
+// Backup wires it) must leave no partial object in the bucket — even though
+// the consumer may have already completed an upload of the truncated bytes
+// it received before the FIFO's write end closed when the producer died.
+func TestBackupRestoreFaultProducerKilledMidStream(t *testing.T) {
+	rt, loc := setupFaultInjectionStore(t)
+	jobName := "bkp-fault-mid-" + time.Now().UTC().Format("20060102T150405Z")
+	key := "dumps/" + jobName + ".bin"
+	mcSide := mcSideFor(t, loc)
+
+	spec := dbjob.PipelineSpec{
+		JobName: jobName,
+		Producer: dbjob.Side{
+			Image:    dbjob.MCImage,
+			Networks: []string{loc.Network},
+			// Streams ~6.5MB over ~5s (100 x 64KB chunks, 50ms apart) —
+			// long enough for the goroutine below to kill it mid-flight.
+			ShellCmd: "i=0; while [ $i -lt 100 ]; do dd if=/dev/zero bs=65536 count=1 2>/dev/null; i=$((i+1)); sleep 0.05; done",
+		},
+		Consumer: func() dbjob.Side {
+			s := mcSide
+			s.ShellCmd = fmt.Sprintf("mc pipe %s/%s/%s", dbjob.MCAlias, loc.Bucket, key)
+			return s
+		}(),
+		Cleanup: func() *dbjob.Side {
+			s := mcSide
+			s.ShellCmd = fmt.Sprintf("mc rm --force %s/%s/%s", dbjob.MCAlias, loc.Bucket, key)
+			return &s
+		}(),
+		Timeout: 60 * time.Second,
+	}
+
+	go func() {
+		time.Sleep(750 * time.Millisecond)
+		_ = rt.Remove(context.Background(), jobName+"-producer")
+	}()
+
+	_, err := dbjob.RunPipeline(context.Background(), rt, spec)
+	if err == nil {
+		t.Fatal("expected RunPipeline to fail when the producer is killed mid-stream")
+	}
+	if !strings.Contains(err.Error(), "producer") {
+		t.Fatalf("expected a producer-named error, got: %v", err)
+	}
+	t.Logf("clean named error: %v", err)
+
+	if objs := listFaultObjects(t, loc.Bucket, key); len(objs) != 0 {
+		t.Fatalf("partial object left behind after producer killed mid-stream: %v", objs)
+	}
+}
+
+// TestBackupRestoreFaultConsumerNeverStarts covers I12's second
+// fault-injection mode: the consumer's tool rejects its command outright
+// and exits before ever consuming a byte — the exact failure class of the
+// C6/K1 entrypoint bug (mc ran "mc sh -c ..." as an unknown subcommand and
+// exited immediately), reproduced here with a genuinely unknown mc
+// subcommand. Without the pipeline's peer-unstick logic, the producer
+// would otherwise block on its FIFO write for the rest of the timeout.
+// RunPipeline must return a clean, consumer-named error promptly (not wait
+// out the deadline), and no object may exist at the target key.
+//
+// (An earlier version of this test used an unregistered mc alias — but mc
+// treats an unknown alias as a local filesystem path and exits 0, so the
+// injection silently succeeded. Found live in this suite's first run.)
+func TestBackupRestoreFaultConsumerNeverStarts(t *testing.T) {
+	rt, loc := setupFaultInjectionStore(t)
+	jobName := "bkp-fault-noconsumer-" + time.Now().UTC().Format("20060102T150405Z")
+	key := "dumps/" + jobName + ".bin"
+	mcSide := mcSideFor(t, loc)
+
+	spec := dbjob.PipelineSpec{
+		JobName: jobName,
+		Producer: dbjob.Side{
+			Image:    dbjob.MCImage,
+			Networks: []string{loc.Network},
+			ShellCmd: "echo hello",
+		},
+		Consumer: func() dbjob.Side {
+			s := mcSide
+			s.ShellCmd = "mc this-subcommand-does-not-exist"
+			return s
+		}(),
+		Cleanup: func() *dbjob.Side {
+			s := mcSide
+			s.ShellCmd = fmt.Sprintf("mc rm --force %s/%s/%s", dbjob.MCAlias, loc.Bucket, key)
+			return &s
+		}(),
+		Timeout: 30 * time.Second,
+	}
+
+	start := time.Now()
+	_, err := dbjob.RunPipeline(context.Background(), rt, spec)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected RunPipeline to fail when the consumer never starts")
+	}
+	if !strings.Contains(err.Error(), "consumer") {
+		t.Fatalf("expected a consumer-named error, got: %v", err)
+	}
+	if elapsed > 20*time.Second {
+		t.Fatalf("RunPipeline took %s to detect a consumer that failed immediately — peer-unstick should make this fast, not approach the timeout", elapsed)
+	}
+	t.Logf("clean named error in %s: %v", elapsed, err)
+
+	if objs := listFaultObjects(t, loc.Bucket, key); len(objs) != 0 {
+		t.Fatalf("partial object left behind when consumer never started: %v", objs)
+	}
+}
+
+// TestBackupRestoreFaultExitFileProtocolBroken covers I12's third
+// fault-injection mode, in both variants: the consumer's exit-file
+// sentinel is written CORRUPT (garbage instead of an exit code) or never
+// written at all — in both cases AFTER the consumer really did upload the
+// object, which is the dangerous half of the exit-file-race class: the
+// data landed, but the protocol that proves it can no longer be trusted.
+// RunPipeline must return a clean, consumer-named error (never treat an
+// unverifiable side as success), and Cleanup must remove the
+// already-uploaded object so an unverifiable backup never lingers looking
+// like a good one — verified by listing the bucket.
+//
+// Injection: the ShellCmd deliberately breaks out of dbjob's consumer
+// wrapper (`(CMD) < pipe; echo $? > consumer-exit`) with an unbalanced
+// `)` — the injected text closes the wrapper's subshell itself, performs
+// the upload, tampers with (or skips) the exit file, and `exit 0`s the
+// wrapper early so its honest exit-file write never runs. This is
+// intentionally coupled to sideSpec's wrapper shape: if that shape
+// changes, this breaks loudly and the injection must be re-derived. A
+// producer-side `kill -9 1` was tried first and is impossible: the kernel
+// ignores SIGKILL sent to PID 1 from inside its own PID namespace, so
+// that injection silently succeeded (found live in this suite's first
+// run).
+func TestBackupRestoreFaultExitFileProtocolBroken(t *testing.T) {
+	rt, loc := setupFaultInjectionStore(t)
+	mcSide := mcSideFor(t, loc)
+
+	cases := []struct {
+		name string
+		// tamper is the shell fragment run (inside the broken-out wrapper)
+		// after the upload completes, in place of the wrapper's honest
+		// "echo $? > consumer-exit".
+		tamper string
+	}{
+		{name: "corrupt", tamper: "echo CORRUPT > /work/consumer-exit"},
+		{name: "absent", tamper: ":"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			jobName := "bkp-fault-exitfile-" + tc.name + "-" + time.Now().UTC().Format("20060102T150405Z")
+			key := "dumps/" + jobName + ".bin"
+
+			spec := dbjob.PipelineSpec{
+				JobName: jobName,
+				Producer: dbjob.Side{
+					Image:    dbjob.MCImage,
+					Networks: []string{loc.Network},
+					ShellCmd: "echo hello",
+				},
+				Consumer: func() dbjob.Side {
+					s := mcSide
+					s.ShellCmd = fmt.Sprintf(
+						"mc pipe %s/%s/%s) < %s; %s; exit 0; (true",
+						dbjob.MCAlias, loc.Bucket, key, dbjob.PipePath, tc.tamper,
+					)
+					return s
+				}(),
+				Cleanup: func() *dbjob.Side {
+					s := mcSide
+					s.ShellCmd = fmt.Sprintf("mc rm --force %s/%s/%s", dbjob.MCAlias, loc.Bucket, key)
+					return &s
+				}(),
+				Timeout: 30 * time.Second,
+			}
+
+			_, err := dbjob.RunPipeline(context.Background(), rt, spec)
+			if err == nil {
+				t.Fatalf("expected RunPipeline to fail when the consumer's exit file is %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), "consumer") {
+				t.Fatalf("expected a consumer-named error, got: %v", err)
+			}
+			if tc.name == "corrupt" && !strings.Contains(err.Error(), "CORRUPT") {
+				t.Fatalf("expected the corrupt exit-file content to be named in the error, got: %v", err)
+			}
+			t.Logf("clean named error: %v", err)
+
+			// The consumer genuinely uploaded before the protocol broke —
+			// Cleanup must have removed it: an unverifiable backup must
+			// not linger looking like a good one.
+			if objs := listFaultObjects(t, loc.Bucket, key); len(objs) != 0 {
+				t.Fatalf("unverifiable object left behind after %s exit file: %v", tc.name, objs)
+			}
+		})
+	}
 }

@@ -114,4 +114,14 @@ type Manifest struct {
 	Destination Ref       `json:"destination" yaml:"destination"`
 	StartedAt   time.Time `json:"startedAt" yaml:"startedAt"`
 	CompletedAt time.Time `json:"completedAt" yaml:"completedAt"`
+	// Checksum is "sha256:<hex>" of the exact bytes streamed through the
+	// dbjob pipeline (docs/planning/08 I12; docs/adr/007-backup-restore.md
+	// addendum) — computed producer-side (whichever role that is: the
+	// database's dump tool for Backup, mc for Restore), never by reading
+	// the whole payload back into this process. Restore verifies a
+	// downloaded object's checksum against this field before trusting it.
+	Checksum string `json:"checksum" yaml:"checksum"`
+	// Bytes is the byte count of the same stream Checksum was computed
+	// over.
+	Bytes int64 `json:"bytes" yaml:"bytes"`
 }

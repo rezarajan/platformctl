@@ -106,24 +106,40 @@ func (p *Provider) Backup(ctx context.Context, req reconciler.Request, dest back
 	if dest.Network != "" {
 		consumerNetworks = []string{dest.Network}
 	}
+	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Source", req.Resource.Metadata.Name, jobName)
+	mcSide := dbjob.Side{
+		Image:    dbjob.MCImage,
+		Networks: consumerNetworks,
+		Env:      map[string]string{"MC_CONFIG_DIR": dbjob.MCConfigDir},
+		Files:    []runtime.FileMount{{Path: dbjob.MCConfigPath, Content: mcConfig, Mode: 0o600}},
+	}
 
 	spec := dbjob.PipelineSpec{
 		JobName:  jobName,
-		Labels:   runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Source", req.Resource.Metadata.Name, jobName),
+		Labels:   labels,
 		Producer: dbSide(dumpTool(cfg), cfg, prof.Image, dbHost, rootPass, dbName),
-		Consumer: dbjob.Side{
-			Image:    dbjob.MCImage,
-			Networks: consumerNetworks,
-			Env:      map[string]string{"MC_CONFIG_DIR": dbjob.MCConfigDir},
-			Files:    []runtime.FileMount{{Path: dbjob.MCConfigPath, Content: mcConfig, Mode: 0o600}},
-			ShellCmd: fmt.Sprintf("mc pipe %s/%s/%s", dbjob.MCAlias, dest.Bucket, objectKey),
-		},
+		Consumer: func() dbjob.Side {
+			s := mcSide
+			s.ShellCmd = fmt.Sprintf("mc pipe %s/%s/%s", dbjob.MCAlias, dest.Bucket, objectKey)
+			return s
+		}(),
+		// Cleanup: mc rm --force is idempotent whether or not a producer
+		// killed mid-stream left the consumer having completed an upload
+		// of the truncated bytes it received — any failure of this
+		// pipeline never leaves a partial object behind (docs/adr/
+		// 007-backup-restore.md's I12 addendum).
+		Cleanup: func() *dbjob.Side {
+			s := mcSide
+			s.ShellCmd = fmt.Sprintf("mc rm --force %s/%s/%s", dbjob.MCAlias, dest.Bucket, objectKey)
+			return &s
+		}(),
 	}
-	if err := dbjob.RunPipeline(ctx, req.Runtime, spec); err != nil {
+	result, err := dbjob.RunPipeline(ctx, req.Runtime, spec)
+	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("Source %q: %s backup: %w", req.Resource.Metadata.Name, cfg.Type, err)
 	}
 
-	return backup.Manifest{
+	manifest := backup.Manifest{
 		Kind:         req.Resource.Kind,
 		Name:         req.Resource.Metadata.Name,
 		Namespace:    req.Resource.Metadata.Namespace,
@@ -132,7 +148,13 @@ func (p *Provider) Backup(ctx context.Context, req reconciler.Request, dest back
 		Destination:  backup.RefOf(dest, objectKey),
 		StartedAt:    started,
 		CompletedAt:  time.Now().UTC(),
-	}, nil
+		Checksum:     "sha256:" + result.SHA256,
+		Bytes:        result.Bytes,
+	}
+	if err := dbjob.PersistManifest(ctx, req.Runtime, jobName, labels, dest, objectKey, manifest); err != nil {
+		return backup.Manifest{}, fmt.Errorf("Source %q: %s backup: dump uploaded but its integrity manifest was not: %w", req.Resource.Metadata.Name, cfg.Type, err)
+	}
+	return manifest, nil
 }
 
 // Restore implements reconciler.BackupCapableProvider: streams src back
@@ -180,10 +202,19 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 	if src.Network != "" {
 		producerNetworks = []string{src.Network}
 	}
+	labels := runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Source", req.Resource.Metadata.Name, jobName)
+
+	// Fetch the backup's integrity manifest before streaming anything back —
+	// a missing sidecar refuses outright rather than silently skipping
+	// verification (docs/adr/007-backup-restore.md's I12 addendum).
+	wantManifest, err := dbjob.ReadManifest(ctx, req.Runtime, jobName, labels, src, objectKey)
+	if err != nil {
+		return fmt.Errorf("Source %q: %s restore: %w", req.Resource.Metadata.Name, cfg.Type, err)
+	}
 
 	spec := dbjob.PipelineSpec{
 		JobName: jobName,
-		Labels:  runtime.ManagedLabels(req.Provider.Metadata.Namespace, "Source", req.Resource.Metadata.Name, jobName),
+		Labels:  labels,
 		Producer: dbjob.Side{
 			Image:    dbjob.MCImage,
 			Networks: producerNetworks,
@@ -193,8 +224,9 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 		},
 		Consumer: dbSide(restoreTool(cfg), cfg, prof.Image, dbHost, rootPass, dbName),
 	}
-	if err := dbjob.RunPipeline(ctx, req.Runtime, spec); err != nil {
+	result, err := dbjob.RunPipeline(ctx, req.Runtime, spec)
+	if err != nil {
 		return fmt.Errorf("Source %q: %s restore: %w", req.Resource.Metadata.Name, cfg.Type, err)
 	}
-	return nil
+	return dbjob.VerifyIntegrity(req.Resource.Metadata.Name, src.Bucket, objectKey, wantManifest, result)
 }
