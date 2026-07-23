@@ -121,6 +121,11 @@ func isolationReasonToken(state string) string {
 	}
 }
 
+// printIsolationNotes writes to STDERR always: stdout is the
+// machine-parsed surface (status tables, -o json documents — the output
+// contract), and the 2026-07-23 gate found three integration tests
+// misreading a stdout isolation WARNING as a resource row. Diagnostics
+// and warnings are stderr's job, exactly like the engine's slog stream.
 // printIsolationNotes renders observeIsolation's result as human-readable
 // lines (docs/planning/08 H8: "status/preflight report `network isolation:
 // enforced | not-enforced | unknown(<reason>)`") — a WARNING, never an

@@ -611,7 +611,7 @@ func newApplyCmd(a *app) *cobra.Command {
 			// printed before the confirmation prompt below, so a
 			// not-enforced WARNING is visible before the user approves,
 			// never a hard failure (Layer 1 remains the guarantee).
-			printIsolationNotes(humanWriter(cmd, a.output), a.observeIsolation(cmd.Context(), envelopes))
+			printIsolationNotes(cmd.ErrOrStderr(), a.observeIsolation(cmd.Context(), envelopes))
 			secretHashes, err := eng.SecretHashes(cmd.Context(), envelopes)
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitValidation, err)
@@ -851,7 +851,7 @@ func newDriftCmd(a *app) *cobra.Command {
 			// consistent with what it already does. Table-mode only, the
 			// same footnote convention status's own explain nudge uses.
 			if !isStructured(a.output) {
-				printIsolationNotes(cmd.OutOrStdout(), a.observeIsolation(cmd.Context(), envelopes))
+				printIsolationNotes(cmd.ErrOrStderr(), a.observeIsolation(cmd.Context(), envelopes))
 			}
 			if drifted > 0 {
 				if !isStructured(a.output) {
@@ -1027,7 +1027,7 @@ func newInventoryCmd(a *app) *cobra.Command {
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "no service endpoints recorded — apply the platform first")
 				printSelfSignedCANotes(cmd.OutOrStdout(), cas)
-				printIsolationNotes(cmd.OutOrStdout(), a.observeIsolation(cmd.Context(), envelopes))
+				printIsolationNotes(cmd.ErrOrStderr(), a.observeIsolation(cmd.Context(), envelopes))
 				return nil
 			}
 			if isStructured(a.output) {
@@ -1040,7 +1040,7 @@ func newInventoryCmd(a *app) *cobra.Command {
 			// The Layer-2 honesty probe (docs/adr/027, docs/planning/08
 			// H8): "inventory includes it" — same live-connectivity/
 			// table-mode-only reasoning as status above.
-			printIsolationNotes(cmd.OutOrStdout(), a.observeIsolation(cmd.Context(), envelopes))
+			printIsolationNotes(cmd.ErrOrStderr(), a.observeIsolation(cmd.Context(), envelopes))
 			return nil
 		},
 	}
@@ -1156,7 +1156,7 @@ func newStatusCmd(a *app) *cobra.Command {
 			// named accept bar ("status shows it"). Table-mode only, the
 			// same footnote convention as the explain nudge below.
 			if !isStructured(a.output) {
-				printIsolationNotes(cmd.OutOrStdout(), a.observeIsolation(cmd.Context(), envelopes))
+				printIsolationNotes(cmd.ErrOrStderr(), a.observeIsolation(cmd.Context(), envelopes))
 			}
 			// Footnote (docs/planning/08 E4): only in table mode, so -o
 			// json|yaml stays exactly one document, and only when a
