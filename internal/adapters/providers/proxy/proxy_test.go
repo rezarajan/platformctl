@@ -9,6 +9,7 @@ import (
 	"time"
 
 	fakeruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/fake"
+	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
@@ -48,6 +49,27 @@ func connectionEnvelope(name, providerRef string, port int, target string) resou
 			"providerRef": map[string]any{"name": providerRef},
 			"port":        port,
 			"target":      target,
+		},
+	}
+}
+
+// viaProviderEnvelope builds a tunnel-capable Provider envelope carrying
+// spec.configuration.peerNetwork — the graph-resolved manifest fact
+// reconcileConnection now reads straight off req.Resources for a via'd
+// Connection's TransitNetwork (docs/planning/08 I9; TunnelFacts's
+// TransitNetwork half was never a published fact — see
+// reconcileConnection's own doc comment). Type is irrelevant to proxy's own
+// via-resolution logic, which only reads Configuration; it mirrors
+// wireguard_test.go's tunnelProviderEnvelope shape for consistency, not
+// because proxy asserts the type.
+func viaProviderEnvelope(name, peerNetwork string) resource.Envelope {
+	return resource.Envelope{
+		GroupVersionKind: resource.GroupVersionKind{Kind: "Provider"},
+		Metadata:         resource.Metadata{Name: name},
+		Spec: map[string]any{
+			"type":          "wireguard",
+			"runtime":       map[string]any{"type": "docker"},
+			"configuration": map[string]any{"peerNetwork": peerNetwork},
 		},
 	}
 }
@@ -179,25 +201,37 @@ func TestReconcileConnectionSucceedsWhenUpstreamAnswers(t *testing.T) {
 }
 
 // TestReconcileConnectionViaFailsHonestlyWithoutTunnelFacts is docs/planning/08
-// I1's honest-failure bar: a Connection declaring spec.via must never
-// silently realize as a plain, untunneled forwarder just because the
-// engine hasn't published TunnelFacts yet (e.g. the tunnel Provider hasn't
-// reconciled this apply) — graph.Build's via -> Provider edge means this
-// should not arise in practice, but reconcile must still refuse rather than
-// guess if it somehow does.
+// I1's honest-failure bar (renamed reference only — I9 migrated the
+// underlying field, the behavior is unchanged): a Connection declaring
+// spec.via must never silently realize as a plain, untunneled forwarder
+// just because the tunnel Provider hasn't published its dial fact yet
+// (e.g. it hasn't reconciled this apply) — graph.Build's via -> Provider
+// edge means this should not arise in practice, but reconcile must still
+// refuse rather than guess if it somehow does. The via Provider itself
+// DOES resolve in req.Resources here (graph.Build guarantees that much);
+// only its published endpoint fact (req.Facts) is missing — Facts is set
+// to an empty StaticFacts, the same "not published yet" shape
+// engine.factsSnapshot(nil st) produces for Import.
 func TestReconcileConnectionViaFailsHonestlyWithoutTunnelFacts(t *testing.T) {
 	ctx := context.Background()
 	rt := fakeruntime.New()
 	p := New()
 
 	provEnv := providerEnvelope("edge")
+	viaEnv := viaProviderEnvelope("vpc-tunnel", "datascape-vpc-transit")
 	connEnv := connectionEnvelope("private-db", "edge", 58234, "10.8.0.10:5432")
 	connEnv.Spec["via"] = map[string]any{"name": "vpc-tunnel"}
 
-	req := reconciler.Request{Resource: connEnv, Provider: provEnv, Runtime: rt}
+	req := reconciler.Request{
+		Resource:  connEnv,
+		Provider:  provEnv,
+		Runtime:   rt,
+		Resources: map[resource.Key]resource.Envelope{viaEnv.Key(): viaEnv},
+		Facts:     reconciler.StaticFacts{},
+	}
 	_, err := p.Reconcile(ctx, req)
 	if err == nil {
-		t.Fatal("expected Reconcile to fail honestly when spec.via is set but TunnelFacts is nil")
+		t.Fatal("expected Reconcile to fail honestly when spec.via is set but the tunnel's fact is not yet published")
 	}
 	if !strings.Contains(err.Error(), "vpc-tunnel") || !strings.Contains(err.Error(), "not yet published") {
 		t.Errorf("error = %q, want it to name the via Provider and say facts are not yet published", err.Error())
@@ -236,21 +270,25 @@ func TestReconcileConnectionViaJoinsTransitNetworkAndDialsTunnel(t *testing.T) {
 	p := New()
 
 	provEnv := providerEnvelope("edge")
+	viaEnv := viaProviderEnvelope("vpc-tunnel", "datascape-vpc-transit")
 	connEnv := connectionEnvelope("private-db", "edge", port, "10.8.0.10:5432")
 	connEnv.Spec["via"] = map[string]any{"name": "vpc-tunnel"}
 
 	req := reconciler.Request{
-		Resource: connEnv,
-		Provider: provEnv,
-		Runtime:  rt,
-		TunnelFacts: &reconciler.TunnelFacts{
-			TransitNetwork: "datascape-vpc-transit",
-			// The fake runtime never actually dials a socat Cmd — the
-			// settle check dials ctr.HostAddr(conn.Port) directly (the
-			// same trick TestReconcileConnectionSucceedsWhenUpstreamAnswers
-			// above uses), so this value only needs to be a plausible
-			// "host:port" string, never actually dialed by this test.
-			Internal: "wg-private-db-via-tunnel:5432",
+		Resource:  connEnv,
+		Provider:  provEnv,
+		Runtime:   rt,
+		Resources: map[resource.Key]resource.Envelope{viaEnv.Key(): viaEnv},
+		Facts: reconciler.StaticFacts{
+			viaEnv.Key(): {{
+				Name: connection.ViaFactName(connEnv.Metadata.Namespace, connEnv.Metadata.Name),
+				// The fake runtime never actually dials a socat Cmd — the
+				// settle check dials ctr.HostAddr(conn.Port) directly (the
+				// same trick TestReconcileConnectionSucceedsWhenUpstreamAnswers
+				// above uses), so this value only needs to be a plausible
+				// "host:port" string, never actually dialed by this test.
+				Internal: "wg-private-db-via-tunnel:5432",
+			}},
 		},
 	}
 	st, err := p.Reconcile(ctx, req)
@@ -258,7 +296,7 @@ func TestReconcileConnectionViaJoinsTransitNetworkAndDialsTunnel(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if !st.IsReady() {
-		t.Error("expected Ready for a via'd Connection whose TunnelFacts are populated and upstream answers")
+		t.Error("expected Ready for a via'd Connection whose tunnel fact is published and upstream answers")
 	}
 
 	name := "private-db"

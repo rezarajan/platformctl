@@ -3159,6 +3159,71 @@ Connect-worker HA (workers>1) remains I7's gap.
   narrowest) proving the wrapper path; archtest forbids NEW bespoke
   fact fields on Request (list frozen).
 - **Gate:** none (internal port evolution; Request stays addition-only).
+- **Done (2026-07-22):** `internal/ports/reconciler.Request` gained
+  `Facts Facts` — `Endpoint(providerKey resource.Key, factName string)
+  (endpoint.Endpoint, bool)` plus `ByName(factName string)
+  []PublishedFact` (`PublishedFact{Owner resource.Key, Endpoint
+  endpoint.Endpoint}`) — engine-backed by a new `StaticFacts` map type
+  (`internal/ports/reconciler`, doubling as the test double every
+  provider/adapter test now uses in place of a hand-built bespoke-field
+  literal). `internal/application/engine`'s new `factsSnapshot(st
+  *state.State) reconciler.StaticFacts` takes one `e.stateMu` lock per
+  request-build (previously each of `resolveCatalogFacts`/
+  `resolvePrometheusURL`/`resolveMetricsTargets`/
+  `resolveSchemaRegistryURL`/`resolveTunnelFacts` locked separately) and
+  every one of those five resolve* functions was rewritten as a thin
+  wrapper reading from that same snapshot via `facts.Endpoint`/
+  `facts.ByName` — outputs byte-identical, proven by the unchanged
+  engine/provider unit and golden tests running green with no test-file
+  edits for those five. `KafkaBootstrapServers` was deliberately left
+  out of the migration (graph-resolved manifest fact, not a *published*
+  one — outside Facts's ADR 015 scope; documented on the field itself).
+  `TunnelFacts` was migrated fully end-to-end and deleted (no wrapper
+  kept — it shipped days before this task with no external consumers):
+  `internal/adapters/providers/proxy`'s `reconcileConnection` now
+  resolves TransitNetwork directly off `req.Resources` (the via
+  Provider's own static `configuration.peerNetwork`) and Internal via
+  `req.Facts.Endpoint(viaProviderKey, connection.ViaFactName(ns,
+  name))`; `engine.resolveTunnelFacts`/`publishedEndpointFact` (the
+  latter now fully subsumed by `factsSnapshot`) were deleted.
+  `internal/adapters/providers/proxy/proxy_test.go`'s two via-path tests
+  were rewritten to construct `Resources`/`Facts` instead of a
+  `TunnelFacts` literal (the only test-file changes this task made
+  beyond the new archtest) — both green, one exercising the honest
+  "not yet published" failure (Facts empty, Resources populated — the
+  via Provider itself always resolves per graph.Build's edge; only its
+  fact can be missing) and one the full dial-through-tunnel path.
+  `internal/archtest/request_facts_frozen_test.go`
+  (`TestReconcilerRequestFieldsFrozen`) reflects over
+  `reconciler.Request`'s fields and fails on anything beyond the frozen
+  set (the six structural fields + `Facts` + the six surviving bespoke
+  fields), each with a one-line reason in the test's own map — this is
+  the accretion-proof mechanism the Accept bar asked for. Doc 02 §4.2
+  gained an additive "Cross-provider facts" note (before §4.3) with the
+  interface shape, the two design rules (read-only/never-blocks,
+  ordering-stays-in-the-graph), and the migration-status summary —
+  written as source material for E6's provider guide per this task's
+  brief. `docs/domain/connection/connection.go`'s `ViaFactName` and
+  `internal/domain/graph/graph.go`'s `via` edge comment, and
+  `internal/adapters/providers/wireguard/wireguard_test.go`'s one
+  comment, were updated to point at `Request.Facts` instead of the
+  deleted field (comments only — wireguard never consumed the field
+  itself; it only publishes the fact `proxy` reads). Verified: gofmt
+  clean; `go vet ./...` clean (plain and `-tags integration`); `go
+  build ./...` clean (plain and `-tags integration`); `golangci-lint
+  run` (v2.12.2, pinned) 0 issues; unfiltered `go test ./...` exit 0
+  (every package, including the rewritten `proxy`/`wireguard`/
+  `archtest`/`engine` suites). `test-impact.sh --print --base main`
+  selected 22 suites (`Request`/`reconciler` is `SHARED_CORE` for most
+  of them, plus `proxy`/`wireguard`'s own scope entries for the
+  TunnelFacts migration specifically) — broad selection expected per
+  this task's brief; the full sweep was launched
+  (`bash scripts/test-impact.sh --base main`, minted minimal-RBAC
+  kubeconfig re-minted first, its prior token having expired) under the
+  shared flock and is queued/running; see `i9-live-runs.log` at the
+  worktree root — timings to be transcribed here once green (the
+  `wireguard` suite is in this run set, live-proving the TunnelFacts
+  migration end-to-end per this task's gate).
 
 ### I10: Fragment-completeness sweep as a unit test (final-gate blind spot, doc 11)
 

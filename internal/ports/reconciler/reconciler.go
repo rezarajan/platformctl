@@ -4,6 +4,7 @@ package reconciler
 
 import (
 	"context"
+	"sort"
 
 	"github.com/rezarajan/platformctl/internal/domain/backup"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
@@ -55,6 +56,21 @@ type Request struct {
 	// keyed by resource.Key — used to resolve related resources (a
 	// Binding's sourceRef/targetRef, a Source's connectionRef, ...).
 	Resources map[resource.Key]resource.Envelope
+	// Facts is the generic, read-only query surface over every published
+	// endpoint fact in state, engine-backed and populated for every
+	// Request regardless of Resource.Kind (docs/planning/08 I9) — see the
+	// Facts interface's own doc comment for the full pattern and an
+	// example. It supersedes the one-bespoke-field-per-need pattern the
+	// fields below established: SchemaRegistryURL/MetricsTargets/
+	// CatalogFacts/PrometheusURL/WarehouseFacts are now deprecated thin
+	// wrappers over exactly this query (see each field's own doc comment);
+	// TunnelFacts, the narrowest and newest of them, was migrated and
+	// deleted outright rather than kept as a wrapper — it shipped days
+	// before I9 with no external consumers to preserve compatibility for.
+	// A new cross-provider published-fact need must be consumed through
+	// Facts directly; internal/archtest freezes the field list below so a
+	// new bespoke field cannot be added without a documented decision.
+	Facts Facts
 	// SchemaRegistryURL is the resolved schema registry endpoint for a
 	// Binding declaring a schema-carrying spec.options.format (avro,
 	// protobuf) — docs/planning/08 D1. The engine resolves it from the
@@ -66,6 +82,11 @@ type Request struct {
 	// the same way every other cross-provider address is resolved. Empty
 	// when options.format is unset/"json", or the upstream Provider has
 	// not published the endpoint yet in this state (not yet reconciled).
+	//
+	// Deprecated: this is now a thin wrapper over
+	// Facts.Endpoint(esProvEnv.Key(), "schema-registry") — a new consumer
+	// should read Facts directly (docs/planning/08 I9). Retained
+	// byte-identical; not removed by this task.
 	SchemaRegistryURL string
 	// KafkaBootstrapServers is the resolved in-network Kafka address a
 	// Connect-worker Provider (debezium, s3sink) should join, when
@@ -84,6 +105,11 @@ type Request struct {
 	// zero or more than one distinct address would result (ambiguous —
 	// the provider must then require an explicit value, same as before
 	// this field existed).
+	//
+	// Deliberately NOT a Facts wrapper (docs/planning/08 I9): Facts only
+	// covers published state (ADR 015); this is a graph-resolved manifest
+	// fact by design (see above) and stays a bespoke field for that reason
+	// — it is not part of the accretion I9 addresses.
 	KafkaBootstrapServers string
 	// MetricsTargets is every currently-published Prometheus-compatible
 	// "metrics" endpoint fact in state (docs/planning/08 C9) — the
@@ -94,6 +120,11 @@ type Request struct {
 	// only when Resource.Kind == "Provider" (mirroring SchemaRegistryURL's
 	// Binding-only scoping above) — empty for every other provider, which
 	// simply never reads it.
+	//
+	// Deprecated: this is now a thin wrapper over Facts.ByName("metrics")
+	// filtered to the requesting env's own namespace — a new consumer
+	// should read Facts directly (docs/planning/08 I9). Retained
+	// byte-identical; not removed by this task.
 	MetricsTargets []MetricsTarget
 	// CatalogFacts resolves Provider(type: trino).spec.configuration.
 	// catalogRef (+ the optional warehouseProviderRef disambiguator) into
@@ -110,6 +141,12 @@ type Request struct {
 	// configuration.catalogRef is unset, Resource.Kind != "Provider", or the
 	// referenced Catalog/warehouse Provider has not published its endpoint
 	// yet in this state.
+	//
+	// Deprecated: this is now a thin wrapper assembled from two
+	// Facts.Endpoint lookups ("iceberg-rest" on the referenced Catalog,
+	// "s3" on the resolved warehouse Provider) — a new consumer should
+	// read Facts directly (docs/planning/08 I9). Retained byte-identical;
+	// not removed by this task.
 	CatalogFacts *CatalogFacts
 	// PrometheusURL is the resolved prometheus Provider's own published
 	// "prometheus" endpoint fact's in-network address (docs/planning/08 C9
@@ -123,6 +160,11 @@ type Request struct {
 	// ref, or the referenced/inferred Provider has not yet published its
 	// endpoint), Resource.Kind != "Provider", or the request is not for a
 	// provider that reads it.
+	//
+	// Deprecated: this is now a thin wrapper over
+	// Facts.Endpoint(promEnv.Key(), "prometheus") — a new consumer should
+	// read Facts directly (docs/planning/08 I9). Retained byte-identical;
+	// not removed by this task.
 	PrometheusURL string
 	// WarehouseFacts resolves Catalog.spec.warehouseRef (docs/planning/08
 	// D8) into the facts a catalog-realizing provider needs to configure its
@@ -143,44 +185,32 @@ type Request struct {
 	// valid warehouseRef reconciles within the same apply — unlike
 	// CatalogFacts's optional warehouseProviderRef case, which has no such
 	// graph edge and can genuinely need a second apply.
+	//
+	// Deprecated: this is now a thin wrapper over Facts.Endpoint on the
+	// referenced Dataset's realizing Provider's "s3" fact, plus the
+	// Dataset's own static Bucket/Prefix read directly off req.Resources —
+	// a new consumer should read Facts directly (docs/planning/08 I9).
+	// Retained byte-identical; not removed by this task.
 	WarehouseFacts *WarehouseFacts
-	// TunnelFacts resolves a managed Connection's spec.via (docs/adr/023,
-	// closed by docs/planning/08 I1) into what its realizing provider
-	// (proxy today) needs to route its own forwarder's egress through the
-	// named tunnel Provider. TransitNetwork is read directly from the
-	// tunnel Provider's own static spec.configuration.peerNetwork — a
-	// manifest fact needing no reconcile to have happened (mirroring
-	// KafkaBootstrapServers's graph-resolved-fact discipline above, not
-	// CatalogFacts's published-state one, since this value cannot change
-	// between manifest load and reconcile). Internal is the tunnel
-	// Provider's own per-Connection published endpoint fact (ADR 015: the
-	// tunnel Provider's reconcile writes it, this field never constructs
-	// it) — the in-network "host:port" of the tunnel-side container the
-	// forwarder dials THROUGH to reach spec.target; the fact name is
-	// connection.ViaFactName(namespace, name), the same convention both
-	// the engine (reading) and the tunnel provider (writing) use so
-	// neither has to be told the other's key by hand. Populated only for a
-	// managed Connection-kind Resource declaring spec.via; nil when via is
-	// unset, Resource.Kind != "Connection", the named Provider does not
-	// resolve, or the tunnel leg has not yet published its endpoint fact —
-	// a provider reading this field must treat nil as "not ready yet",
-	// never construct a substitute. graph.Build's via -> Provider edge
-	// means this is, in practice, always non-nil by the time a via'd
-	// Connection reconciles within the same apply, mirroring
-	// WarehouseFacts's ordering guarantee.
-	TunnelFacts *TunnelFacts
-}
-
-// TunnelFacts is Request.TunnelFacts's payload — see its doc comment.
-type TunnelFacts struct {
-	// TransitNetwork is the tunnel Provider's own transit network name
-	// (its spec.configuration.peerNetwork) — the network a via-consuming
-	// forwarder must additionally join to reach Internal below.
-	TransitNetwork string
-	// Internal is the tunnel-side container's own in-network "host:port"
-	// address on TransitNetwork — dial THIS, not spec.target directly, to
-	// route through the tunnel.
-	Internal string
+	// TunnelFacts previously resolved a managed Connection's spec.via
+	// (docs/adr/023, closed by docs/planning/08 I1) into what its
+	// realizing provider (proxy) needed to route its own forwarder's
+	// egress through the named tunnel Provider.
+	//
+	// Deleted (docs/planning/08 I9): TunnelFacts was the newest and
+	// narrowest of the bespoke fact fields — it shipped days before I9
+	// with no external consumers to preserve compatibility for, so rather
+	// than freeze it as a deprecated wrapper forever, it was migrated
+	// fully: the tunnel Provider's transit network is read directly off
+	// req.Resources (it was always a graph-resolved manifest fact, never
+	// a Facts-style published one — see KafkaBootstrapServers's own note
+	// on that distinction), and the tunnel-side dial address is now
+	// req.Facts.Endpoint(viaProviderKey, connection.ViaFactName(ns,
+	// name)) — see internal/adapters/providers/proxy's
+	// reconcileConnection for the exact call site. Removing the field
+	// outright (rather than keeping an unused wrapper) is the pattern any
+	// future field with no external consumers should follow; a field with
+	// real consumers stays a wrapper (see the five above).
 }
 
 // CatalogFacts is Request.CatalogFacts's payload — see its doc comment.
@@ -227,6 +257,142 @@ type WarehouseFacts struct {
 type MetricsTarget struct {
 	JobName  string
 	Endpoint endpoint.Endpoint
+}
+
+// Facts is Request.Facts's read-only query surface over every provider-
+// published endpoint fact in state (docs/planning/08 I9). It is the
+// generic form of the pattern SchemaRegistryURL/MetricsTargets/
+// CatalogFacts/PrometheusURL/WarehouseFacts each hard-coded once per
+// cross-provider need: a provider that publishes an endpoint.Endpoint in
+// its own status.providerState (see endpoint.List) makes it visible to
+// every OTHER provider's Request through this query — without either side
+// changing when a third-party provider (Phase 8) wants to consume or
+// publish a new named fact. Adding a new cross-provider need is now "read
+// Facts with a new factName," never "patch the engine, the port, and every
+// caller."
+//
+// Facts is engine-backed and populated once, at request-build time
+// (resolveRequest), from a snapshot of state taken under the engine's own
+// lock — every method call reads that fixed snapshot, never live,
+// concurrently-mutating state (internal/application/engine's
+// factsSnapshot). Two consequences follow directly:
+//
+//   - A call never blocks and never triggers a reconcile. A fact that
+//     hasn't been published yet by the time this Request was built simply
+//     isn't there — Endpoint's ok return is false, ByName's slice omits
+//     it. "Not published yet" is reported honestly; Facts never waits for
+//     it to appear.
+//   - Ordering guarantees (which resource must reconcile before which)
+//     stay exactly where they already lived: the manifest graph
+//     (internal/domain/graph.Build's via/warehouseRef/catalogRef edges).
+//     Facts is not a scheduling primitive and must never become one — a
+//     provider needing "X before Y" declares a ref field that graph.Build
+//     turns into an edge, the same way WarehouseFacts/TunnelFacts's own
+//     doc history already relied on before this query existed.
+//
+// Two lookup shapes cover every consumer this repo has today:
+//
+//  1. Endpoint — one named fact on a resource whose resource.Key you
+//     already hold (from a ref field resolved against Request.Resources):
+//     the warehouse-backing S3/MinIO Provider's "s3" fact, a Catalog's
+//     "iceberg-rest" fact, a via'd tunnel Provider's per-Connection fact
+//     (connection.ViaFactName). This is what
+//     SchemaRegistryURL/CatalogFacts/PrometheusURL/WarehouseFacts, and the
+//     now-deleted TunnelFacts, each resolved by hand.
+//  2. ByName — every currently-published fact anywhere in state carrying a
+//     given name, when the consumer doesn't know or care which resource
+//     published it (a prometheus Provider scraping every "metrics" fact in
+//     its namespace). This is what MetricsTargets resolved by hand.
+//
+// Example — a hypothetical third-party provider whose Reconcile needs to
+// dial a warehouse Provider's "s3" fact, resolved from its own Provider
+// resource's configuration.warehouseProviderRef the same way
+// resolveCatalogFacts's auto-infer path does:
+//
+//	ref := resource.RefFromSpec(cfg.Configuration, "warehouseProviderRef")
+//	warehouseKey := ref.Key(req.Resource.Metadata.Namespace, "Provider")
+//	ep, ok := req.Facts.Endpoint(warehouseKey, "s3")
+//	if !ok {
+//	    // Honest, not a guess: the graph should already order this
+//	    // Provider after its warehouseProviderRef target (or the manifest
+//	    // author should add that ordering) — surface the wait, never
+//	    // construct ep.Internal from convention (docs/adr/015).
+//	    return status.Status{}, fmt.Errorf("warehouse Provider %q has not published its \"s3\" endpoint yet — re-apply once it reconciles", warehouseKey.Name)
+//	}
+//	dial(ep.Internal) // e.g. "minio:9000" — never a loopback literal (docs/planning/08 F1)
+//
+// A provider consuming Facts must treat every miss (ok == false, or a name
+// absent from ByName's result) the same way every existing bespoke field's
+// own doc comment already instructs: "not published yet," never a
+// substitute the provider constructs itself.
+type Facts interface {
+	// Endpoint returns providerKey's own published endpoint fact named
+	// factName. ok is false when providerKey has published nothing under
+	// that name in this Request's snapshot — including when providerKey
+	// itself does not exist in state at all; the two cases are
+	// indistinguishable by design; the same ambiguity every existing
+	// bespoke field already carried (nil/empty meant "not there yet" for
+	// any reason).
+	Endpoint(providerKey resource.Key, factName string) (endpoint.Endpoint, bool)
+	// ByName enumerates every published fact named factName across every
+	// resource in this Request's snapshot, sorted by owning resource.Key
+	// (Namespace, then Kind, then Name) for deterministic output —
+	// scrape-config/property-file generation needs stable ordering run to
+	// run. Empty (nil) when nothing has published factName yet.
+	ByName(factName string) []PublishedFact
+}
+
+// PublishedFact is one Facts.ByName result: Owner is the resource.Key of
+// the resource whose reconcile published Endpoint — Owner.Name is the
+// stable per-fact identity a consumer like the former MetricsTargets's
+// JobName needs (the owning Provider's own name, never re-derived from the
+// endpoint's address).
+type PublishedFact struct {
+	Owner    resource.Key
+	Endpoint endpoint.Endpoint
+}
+
+// StaticFacts is the simplest Facts implementation: an immutable map
+// snapshot from a resource.Key to every endpoint fact that resource has
+// published, keyed exactly the shape internal/application/engine's
+// factsSnapshot builds once per Request (a nil/empty map answers every
+// query with "not published"). It doubles as the natural test double for
+// any provider/adapter test exercising Request.Facts without a real engine
+// or state store — construct one as a literal
+// (reconciler.StaticFacts{key: {ep1, ep2}}), the same test-double pattern
+// CLAUDE.md documents for the fake runtime/localfile state adapters.
+type StaticFacts map[resource.Key][]endpoint.Endpoint
+
+// Endpoint implements Facts.
+func (f StaticFacts) Endpoint(providerKey resource.Key, factName string) (endpoint.Endpoint, bool) {
+	for _, ep := range f[providerKey] {
+		if ep.Name == factName && ep.Internal != "" {
+			return ep, true
+		}
+	}
+	return endpoint.Endpoint{}, false
+}
+
+// ByName implements Facts.
+func (f StaticFacts) ByName(factName string) []PublishedFact {
+	var out []PublishedFact
+	for key, eps := range f {
+		for _, ep := range eps {
+			if ep.Name == factName && ep.Internal != "" {
+				out = append(out, PublishedFact{Owner: key, Endpoint: ep})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Owner.Namespace != out[j].Owner.Namespace {
+			return out[i].Owner.Namespace < out[j].Owner.Namespace
+		}
+		if out[i].Owner.Kind != out[j].Owner.Kind {
+			return out[i].Owner.Kind < out[j].Owner.Kind
+		}
+		return out[i].Owner.Name < out[j].Owner.Name
+	})
+	return out
 }
 
 type Provider interface {

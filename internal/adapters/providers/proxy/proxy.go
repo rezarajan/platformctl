@@ -28,6 +28,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
+	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
@@ -107,6 +108,17 @@ func (p *Provider) reconcileInstance(ctx context.Context, req reconciler.Request
 // "does a session held open through the forwarder's listen port stay open,"
 // which is equally true whether the forwarder's own upstream is spec.target
 // directly or a tunnel's forwarder standing in for it.
+//
+// The via resolution below reads req.Resources/req.Facts directly rather
+// than a bespoke Request.TunnelFacts field (docs/planning/08 I9 migrated
+// and deleted it — the newest, narrowest bespoke fact field, with no
+// external consumers to preserve compatibility for): TransitNetwork is a
+// graph-resolved manifest fact (the via Provider's own static
+// configuration.peerNetwork, read straight off req.Resources — it cannot
+// change between manifest load and reconcile, so no engine-side
+// pre-resolution is needed), while Internal is a genuine published fact,
+// read via req.Facts.Endpoint exactly the way any other cross-provider
+// consumer now would.
 func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Request) (status.Status, error) {
 	res, rt := req.Resource, req.Runtime
 	st := status.Status{}
@@ -128,15 +140,28 @@ func (p *Provider) reconcileConnection(ctx context.Context, req reconciler.Reque
 	dialTarget := conn.Target
 	var transitNetwork string
 	if conn.Via != nil {
-		if req.TunnelFacts == nil {
+		viaRef := resource.RefFromSpec(res.Spec, "via")
+		viaEnv, ok := req.Resources[viaRef.Key(res.Metadata.Namespace, "Provider")]
+		if !ok {
+			return st, fmt.Errorf("Connection %q: spec.via names Provider %q, which does not resolve to a Provider in namespace %q", res.Metadata.Name, *conn.Via, viaRef.NamespaceOr(res.Metadata.Namespace))
+		}
+		viaProv, err := provider.FromEnvelope(viaEnv)
+		if err != nil {
+			return st, err
+		}
+		transitNetwork, _ = viaProv.Configuration["peerNetwork"].(string)
+		if transitNetwork == "" {
+			return st, fmt.Errorf("Connection %q: via Provider %q declares no configuration.peerNetwork", res.Metadata.Name, *conn.Via)
+		}
+		ep, ok := req.Facts.Endpoint(viaEnv.Key(), connection.ViaFactName(res.Metadata.Namespace, res.Metadata.Name))
+		if !ok {
 			return st, fmt.Errorf("Connection %q: spec.via names Provider %q, whose tunnel is not yet published — re-apply once it reconciles", res.Metadata.Name, *conn.Via)
 		}
-		transitNetwork = req.TunnelFacts.TransitNetwork
 		if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: transitNetwork, Labels: providerLabels}); err != nil {
 			return st, err
 		}
 		networks = append(networks, transitNetwork)
-		dialTarget = req.TunnelFacts.Internal
+		dialTarget = ep.Internal
 	}
 	connLabels := runtime.ManagedLabels(res.Metadata.Namespace, res.Kind, name, name)
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{

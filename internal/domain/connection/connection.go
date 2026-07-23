@@ -268,11 +268,13 @@ func (c Connection) ExternalAddress() (string, bool) {
 
 // ViaFactName is the published-endpoint-fact name a tunnel Provider uses
 // (in its own Provider-kind status) to publish the per-Connection dial
-// address a via-consuming provider (docs/planning/08 I1) reads back as
-// reconciler.Request.TunnelFacts.Internal — a single shared convention so
-// the publishing side (the tunnel Provider) and the reading side (the
-// engine, resolving TunnelFacts for the via'd Connection's own reconcile)
-// never have to be told the other's key by hand (docs/adr/015).
+// address a via-consuming provider (docs/planning/08 I1) reads back via
+// reconciler.Request.Facts.Endpoint (docs/planning/08 I9 — originally a
+// bespoke reconciler.Request.TunnelFacts.Internal field, migrated to the
+// generic query and deleted) — a single shared convention so the
+// publishing side (the tunnel Provider) and the reading side (the
+// via-consuming provider's own reconcile) never have to be told the
+// other's key by hand (docs/adr/015).
 func ViaFactName(namespace, name string) string {
 	return "via:" + resource.NormalizeNamespace(namespace) + "/" + name
 }

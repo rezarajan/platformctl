@@ -1325,20 +1325,59 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 	if err != nil {
 		return nil, reconciler.Request{}, err
 	}
+	// facts is the single state snapshot every published-fact lookup below
+	// reads from (docs/planning/08 I9) — taken once, under one lock
+	// acquisition, rather than each resolve* function separately locking
+	// e.stateMu per lookup as before. It is also exposed directly as
+	// Request.Facts, the generic query surface: the five *Facts/*URL
+	// fields below are now thin wrappers assembled from exactly the same
+	// snapshot a third-party provider's own req.Facts call would read.
+	facts := e.factsSnapshot(st)
 	return prov, reconciler.Request{
 		Resource:              env,
 		Runtime:               rt,
 		Provider:              provEnv,
 		Secrets:               secrets,
 		Resources:             byKey,
-		SchemaRegistryURL:     e.resolveSchemaRegistryURL(env, byKey, st),
+		Facts:                 facts,
+		SchemaRegistryURL:     e.resolveSchemaRegistryURL(env, byKey, facts),
 		KafkaBootstrapServers: e.resolveKafkaBootstrapServers(provEnv, p, byKey),
-		MetricsTargets:        e.resolveMetricsTargets(env, st),
-		CatalogFacts:          e.resolveCatalogFacts(env, p, byKey, st),
-		PrometheusURL:         e.resolvePrometheusURL(env, p, byKey, st),
-		WarehouseFacts:        e.resolveWarehouseFacts(env, byKey, st),
-		TunnelFacts:           e.resolveTunnelFacts(env, byKey, st),
+		MetricsTargets:        e.resolveMetricsTargets(env, facts),
+		CatalogFacts:          e.resolveCatalogFacts(env, p, byKey, facts),
+		PrometheusURL:         e.resolvePrometheusURL(env, p, byKey, facts),
+		WarehouseFacts:        e.resolveWarehouseFacts(env, byKey, facts),
 	}, nil
+}
+
+// factsSnapshot builds reconciler.StaticFacts (docs/planning/08 I9) from
+// st.Resources — every provider's currently-published endpoint list,
+// copied once under e.stateMu rather than read live per lookup. This is
+// the "snapshot-at-request-build semantics" Request.Facts's doc comment
+// promises: a resource reconciling concurrently after this snapshot is
+// taken (ParallelReconciliation) cannot change what this Request's
+// provider sees, the same determinism every pre-existing *Facts field
+// already had by virtue of being resolved once, eagerly, in resolveRequest.
+// nil st (e.g. Import, which loads no state) yields a nil StaticFacts,
+// which every read treats as "nothing published" — the same "nil/empty
+// state behaves like not-yet-published" convention resolveSchemaRegistryURL
+// documented before this task.
+func (e *Engine) factsSnapshot(st *state.State) reconciler.StaticFacts {
+	if st == nil {
+		return nil
+	}
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	snap := make(reconciler.StaticFacts, len(st.Resources))
+	for key, rs := range st.Resources {
+		eps := endpoint.FromState(rs.Provider[endpoint.Key])
+		if len(eps) == 0 {
+			continue
+		}
+		cp := make([]endpoint.Endpoint, len(eps))
+		copy(cp, eps)
+		snap[key] = cp
+	}
+	return snap
 }
 
 // resolvePrometheusURL resolves a grafana Provider's datasource-provisioning
@@ -1347,9 +1386,11 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 // published-facts-only discipline (ADR 015). Mirrors resolveCatalogFacts's
 // warehouseProviderRef inference: an explicit configuration.prometheusRef
 // wins; otherwise the sole prometheus-typed Provider in the namespace,
-// left unresolved ("") when 0 or more than 1 candidate exists.
-func (e *Engine) resolvePrometheusURL(env resource.Envelope, p provider.Provider, byKey map[resource.Key]resource.Envelope, st *state.State) string {
-	if st == nil || env.Kind != "Provider" {
+// left unresolved ("") when 0 or more than 1 candidate exists. Now a thin
+// wrapper over facts.Endpoint (docs/planning/08 I9) — see
+// reconciler.Request.PrometheusURL's own doc comment.
+func (e *Engine) resolvePrometheusURL(env resource.Envelope, p provider.Provider, byKey map[resource.Key]resource.Envelope, facts reconciler.StaticFacts) string {
+	if facts == nil || env.Kind != "Provider" {
 		return ""
 	}
 	var promEnv resource.Envelope
@@ -1380,18 +1421,11 @@ func (e *Engine) resolvePrometheusURL(env resource.Envelope, p provider.Provider
 		return ""
 	}
 
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
-	rs, ok := st.Resources[promEnv.Key()]
+	ep, ok := facts.Endpoint(promEnv.Key(), "prometheus")
 	if !ok {
 		return ""
 	}
-	for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
-		if ep.Name == "prometheus" && ep.Internal != "" {
-			return ep.Internal
-		}
-	}
-	return ""
+	return ep.Internal
 }
 
 // resolveCatalogFacts resolves Provider(type: trino).spec.configuration.
@@ -1403,9 +1437,11 @@ func (e *Engine) resolvePrometheusURL(env resource.Envelope, p provider.Provider
 // Provider-kind env declaring configuration.catalogRef; nil whenever the
 // referenced Catalog, or the resolved warehouse-backing S3/MinIO Provider,
 // has not yet published its endpoint in st — a provider reading this field
-// must treat nil as "not ready yet", never construct a substitute.
-func (e *Engine) resolveCatalogFacts(env resource.Envelope, p provider.Provider, byKey map[resource.Key]resource.Envelope, st *state.State) *reconciler.CatalogFacts {
-	if st == nil || env.Kind != "Provider" {
+// must treat nil as "not ready yet", never construct a substitute. Now a
+// thin wrapper assembled from facts.Endpoint lookups (docs/planning/08
+// I9) — see reconciler.Request.CatalogFacts's own doc comment.
+func (e *Engine) resolveCatalogFacts(env resource.Envelope, p provider.Provider, byKey map[resource.Key]resource.Envelope, facts reconciler.StaticFacts) *reconciler.CatalogFacts {
+	if facts == nil || env.Kind != "Provider" {
 		return nil
 	}
 	catalogRef := resource.RefFromSpec(p.Configuration, "catalogRef")
@@ -1417,10 +1453,11 @@ func (e *Engine) resolveCatalogFacts(env resource.Envelope, p provider.Provider,
 		return nil
 	}
 
-	restInternal := e.publishedEndpointFact(catEnv.Key(), "iceberg-rest", st)
-	if restInternal == "" {
+	restEp, ok := facts.Endpoint(catEnv.Key(), "iceberg-rest")
+	if !ok {
 		return nil
 	}
+	restInternal := restEp.Internal
 
 	// Resolve the warehouse-backing S3/MinIO Provider, in this order
 	// (docs/planning/08 D8's recorded resolution order):
@@ -1438,7 +1475,7 @@ func (e *Engine) resolveCatalogFacts(env resource.Envelope, p provider.Provider,
 	if whRef := resource.RefFromSpec(catEnv.Spec, "warehouseRef"); whRef.Name != "" {
 		if dsEnv, ok := byKey[whRef.Key(catEnv.Metadata.Namespace, "Dataset")]; ok {
 			if ds, err := dataset.FromEnvelope(dsEnv); err == nil {
-				if s3Internal, s3SecretRef, ok := e.resolveDatasetS3Facts(ds, dsEnv, byKey, st); ok {
+				if s3Internal, s3SecretRef, ok := e.resolveDatasetS3Facts(ds, dsEnv, byKey, facts); ok {
 					return &reconciler.CatalogFacts{RestInternal: restInternal, S3Internal: s3Internal, S3SecretRef: s3SecretRef}
 				}
 			}
@@ -1474,7 +1511,7 @@ func (e *Engine) resolveCatalogFacts(env resource.Envelope, p provider.Provider,
 		return nil
 	}
 
-	s3Internal, s3SecretRef, ok := e.resolveProviderS3Fact(s3Env, st)
+	s3Internal, s3SecretRef, ok := e.resolveProviderS3Fact(s3Env, facts)
 	if !ok {
 		return nil
 	}
@@ -1498,9 +1535,11 @@ func (e *Engine) resolveCatalogFacts(env resource.Envelope, p provider.Provider,
 // substitute. graph.Build's warehouseRef -> Dataset edge (plus the Dataset's
 // own pre-existing providerRef edge) means this is, in practice, always
 // non-nil by the time a Catalog with a valid warehouseRef reconciles within
-// the same apply.
-func (e *Engine) resolveWarehouseFacts(env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) *reconciler.WarehouseFacts {
-	if st == nil || env.Kind != "Catalog" {
+// the same apply. Now a thin wrapper over facts.Endpoint via
+// resolveDatasetS3Facts (docs/planning/08 I9) — see
+// reconciler.Request.WarehouseFacts's own doc comment.
+func (e *Engine) resolveWarehouseFacts(env resource.Envelope, byKey map[resource.Key]resource.Envelope, facts reconciler.StaticFacts) *reconciler.WarehouseFacts {
+	if facts == nil || env.Kind != "Catalog" {
 		return nil
 	}
 	whRef := resource.RefFromSpec(env.Spec, "warehouseRef")
@@ -1515,7 +1554,7 @@ func (e *Engine) resolveWarehouseFacts(env resource.Envelope, byKey map[resource
 	if err != nil {
 		return nil
 	}
-	s3Internal, s3SecretRef, ok := e.resolveDatasetS3Facts(ds, dsEnv, byKey, st)
+	s3Internal, s3SecretRef, ok := e.resolveDatasetS3Facts(ds, dsEnv, byKey, facts)
 	if !ok {
 		return nil
 	}
@@ -1527,55 +1566,21 @@ func (e *Engine) resolveWarehouseFacts(env resource.Envelope, byKey map[resource
 	}
 }
 
-// resolveTunnelFacts resolves a managed Connection's spec.via
-// (docs/planning/08 I1, closing docs/adr/023's Scope deviation) into
-// reconciler.TunnelFacts — see that type's doc comment for the exact shape.
-// TransitNetwork is read directly off the named Provider's own static
-// spec.configuration.peerNetwork (no state read needed — it cannot change
-// between manifest load and reconcile, the same reasoning
-// resolveKafkaBootstrapServers's graph-resolved fact relies on). Internal
-// is the tunnel Provider's own published per-Connection endpoint fact
-// (connection.ViaFactName), read via publishedEndpointFact exactly like
-// resolveProviderS3Fact reads a Dataset's "s3" fact above — the tunnel
-// provider's own reconcile (wireguard's reconcileViaTunnels) is what writes
-// it; this function only ever reads. Populated only for a managed
-// Connection-kind Resource declaring spec.via; nil otherwise, or when the
-// named Provider does not resolve or has not yet published the fact —
-// graph.Build's via -> Provider edge means the latter case does not arise
-// within the same apply.
-func (e *Engine) resolveTunnelFacts(env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) *reconciler.TunnelFacts {
-	if st == nil || env.Kind != "Connection" {
-		return nil
-	}
-	c, err := connection.FromEnvelope(env)
-	if err != nil || c.External || c.Via == nil {
-		return nil
-	}
-	viaRef := resource.RefFromSpec(env.Spec, "via")
-	viaEnv, ok := byKey[viaRef.Key(env.Metadata.Namespace, "Provider")]
-	if !ok {
-		return nil
-	}
-	viaProv, err := provider.FromEnvelope(viaEnv)
-	if err != nil {
-		return nil
-	}
-	transitNetwork, _ := viaProv.Configuration["peerNetwork"].(string)
-	if transitNetwork == "" {
-		return nil
-	}
-	internal := e.publishedEndpointFact(viaEnv.Key(), connection.ViaFactName(env.Metadata.Namespace, env.Metadata.Name), st)
-	if internal == "" {
-		return nil
-	}
-	return &reconciler.TunnelFacts{TransitNetwork: transitNetwork, Internal: internal}
-}
+// resolveTunnelFacts is deleted (docs/planning/08 I9): TunnelFacts was
+// migrated fully rather than kept as a wrapper — see
+// reconciler.Request.TunnelFacts's own (now-removed) doc comment for the
+// rationale. The equivalent resolution now happens inside the consuming
+// provider itself: TransitNetwork is read directly off req.Resources (the
+// tunnel Provider's own static spec.configuration.peerNetwork, a
+// graph-resolved manifest fact needing no engine involvement), and Internal
+// is req.Facts.Endpoint(viaProviderKey, connection.ViaFactName(ns, name)) —
+// see internal/adapters/providers/proxy's reconcileConnection.
 
 // resolveDatasetS3Facts resolves a Dataset's own realizing Provider's
 // published "s3" endpoint fact plus its credential SecretReference *name* —
 // the shared tail end of resolveWarehouseFacts above and resolveCatalogFacts's
 // warehouseRef-chain preference (docs/planning/08 D8).
-func (e *Engine) resolveDatasetS3Facts(ds dataset.Dataset, dsEnv resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) (s3Internal, s3SecretRef string, ok bool) {
+func (e *Engine) resolveDatasetS3Facts(ds dataset.Dataset, dsEnv resource.Envelope, byKey map[resource.Key]resource.Envelope, facts reconciler.StaticFacts) (s3Internal, s3SecretRef string, ok bool) {
 	if ds.ProviderRef == "" {
 		return "", "", false
 	}
@@ -1583,19 +1588,21 @@ func (e *Engine) resolveDatasetS3Facts(ds dataset.Dataset, dsEnv resource.Envelo
 	if !found {
 		return "", "", false
 	}
-	return e.resolveProviderS3Fact(s3Env, st)
+	return e.resolveProviderS3Fact(s3Env, facts)
 }
 
 // resolveProviderS3Fact reads an S3/MinIO-typed Provider's published "s3"
 // endpoint fact plus its credential SecretReference *name* (its own
 // configuration.rootSecretRef, or the first entry of its spec.secretRefs) —
-// the state-reading tail shared by resolveCatalogFacts's warehouseProviderRef/
-// auto-infer path and resolveDatasetS3Facts above.
-func (e *Engine) resolveProviderS3Fact(s3Env resource.Envelope, st *state.State) (s3Internal, s3SecretRef string, ok bool) {
-	s3Internal = e.publishedEndpointFact(s3Env.Key(), "s3", st)
-	if s3Internal == "" {
+// the shared tail end resolveCatalogFacts's warehouseProviderRef/auto-infer
+// path and resolveDatasetS3Facts above both use. Now a thin wrapper over
+// facts.Endpoint (docs/planning/08 I9).
+func (e *Engine) resolveProviderS3Fact(s3Env resource.Envelope, facts reconciler.StaticFacts) (s3Internal, s3SecretRef string, ok bool) {
+	s3Ep, epOK := facts.Endpoint(s3Env.Key(), "s3")
+	if !epOK {
 		return "", "", false
 	}
+	s3Internal = s3Ep.Internal
 	if s3p, err := provider.FromEnvelope(s3Env); err == nil {
 		s3SecretRef, _ = s3p.Configuration["rootSecretRef"].(string)
 		if s3SecretRef == "" && len(s3p.SecretRefs) > 0 {
@@ -1603,25 +1610,6 @@ func (e *Engine) resolveProviderS3Fact(s3Env resource.Envelope, st *state.State)
 		}
 	}
 	return s3Internal, s3SecretRef, true
-}
-
-// publishedEndpointFact reads a single named endpoint fact's Internal
-// address from key's published state — the shared, lock-guarded primitive
-// resolveCatalogFacts/resolveWarehouseFacts's fact lookups build on (ADR
-// 015: published facts, never constructed).
-func (e *Engine) publishedEndpointFact(key resource.Key, name string, st *state.State) string {
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
-	rs, ok := st.Resources[key]
-	if !ok {
-		return ""
-	}
-	for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
-		if ep.Name == name && ep.Internal != "" {
-			return ep.Internal
-		}
-	}
-	return ""
 }
 
 // resolveKafkaBootstrapServers mirrors resolveSchemaRegistryURL's seam
@@ -1650,29 +1638,24 @@ func (e *Engine) resolveKafkaBootstrapServers(provEnv resource.Envelope, p provi
 // provider itself (ADR 015), the same published-fact-only discipline
 // resolveSchemaRegistryURL/resolveLineageEndpoint already follow. Populated
 // only for a Provider-kind Resource (the only kind the prometheus provider
-// reconciles); nil for anything else, including Import (nil st), which
-// resolveSchemaRegistryURL treats the same way. st.Resources is shared,
-// mutated-in-place engine state — the same lock discipline as every other
-// access in this file.
-func (e *Engine) resolveMetricsTargets(env resource.Envelope, st *state.State) []reconciler.MetricsTarget {
-	if st == nil || env.Kind != "Provider" {
+// reconciles); nil for anything else, including Import (nil facts), which
+// resolveSchemaRegistryURL treats the same way. Now a thin wrapper over
+// facts.ByName("metrics"), filtered to env's own namespace and re-shaped
+// into MetricsTarget (docs/planning/08 I9) — facts.ByName already sorts by
+// (Namespace, Kind, Name), which reduces to sorting by JobName alone once
+// filtered to one namespace and one Kind, so ordering is unchanged.
+func (e *Engine) resolveMetricsTargets(env resource.Envelope, facts reconciler.StaticFacts) []reconciler.MetricsTarget {
+	if facts == nil || env.Kind != "Provider" {
 		return nil
 	}
 	ns := resource.NormalizeNamespace(env.Metadata.Namespace)
-	e.stateMu.Lock()
-	defer e.stateMu.Unlock()
 	var out []reconciler.MetricsTarget
-	for key, rs := range st.Resources {
-		if key.Kind != "Provider" || key.Namespace != ns {
+	for _, f := range facts.ByName("metrics") {
+		if f.Owner.Kind != "Provider" || f.Owner.Namespace != ns {
 			continue
 		}
-		for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
-			if ep.Name == "metrics" && ep.Internal != "" {
-				out = append(out, reconciler.MetricsTarget{JobName: key.Name, Endpoint: ep})
-			}
-		}
+		out = append(out, reconciler.MetricsTarget{JobName: f.Owner.Name, Endpoint: f.Endpoint})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].JobName < out[j].JobName })
 	return out
 }
 
@@ -1686,10 +1669,12 @@ func (e *Engine) resolveMetricsTargets(env resource.Envelope, st *state.State) [
 // s3sink wires Avro key/value converters for parquet's schema-carrying
 // requirement even when the Binding itself declares no options.format).
 // Returns "" when neither condition holds, it isn't a Binding, or the
-// upstream Provider hasn't published the endpoint yet in st (nil st — e.g.
-// Import, which loads no state — behaves the same as "not yet published").
-func (e *Engine) resolveSchemaRegistryURL(env resource.Envelope, byKey map[resource.Key]resource.Envelope, st *state.State) string {
-	if st == nil || env.Kind != "Binding" {
+// upstream Provider hasn't published the endpoint yet in st (nil facts —
+// e.g. Import, which loads no state — behaves the same as "not yet
+// published"). Now a thin wrapper over facts.Endpoint (docs/planning/08
+// I9) — see reconciler.Request.SchemaRegistryURL's own doc comment.
+func (e *Engine) resolveSchemaRegistryURL(env resource.Envelope, byKey map[resource.Key]resource.Envelope, facts reconciler.StaticFacts) string {
+	if facts == nil || env.Kind != "Binding" {
 		return ""
 	}
 	b, err := binding.FromEnvelope(env)
@@ -1727,22 +1712,11 @@ func (e *Engine) resolveSchemaRegistryURL(env resource.Envelope, byKey map[resou
 	if !ok {
 		return ""
 	}
-	// st.Resources is shared, mutated-in-place engine state (docs/planning/08
-	// D1): under ParallelReconciliation, another goroutine may be writing a
-	// sibling resource's entry concurrently, so this read takes the same
-	// lock every other st.Resources access in this file does.
-	e.stateMu.Lock()
-	rs, ok := st.Resources[esProvEnv.Key()]
-	e.stateMu.Unlock()
+	ep, ok := facts.Endpoint(esProvEnv.Key(), "schema-registry")
 	if !ok {
 		return ""
 	}
-	for _, ep := range endpoint.FromState(rs.Provider[endpoint.Key]) {
-		if ep.Name == "schema-registry" && ep.Internal != "" {
-			return ep.Internal
-		}
-	}
-	return ""
+	return ep.Internal
 }
 
 func (e *Engine) resolveLineageEndpoint(ctx context.Context, observer resource.ObserverRef, defaultNamespace string, byKey map[resource.Key]resource.Envelope, st *state.State) (lineage.LineageEndpoint, error) {

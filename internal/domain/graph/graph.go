@@ -21,8 +21,9 @@ import (
 // configRefFields-style nested-ref introspection is needed for it. via
 // (Connection -> the tunnel-capable Provider it chains through,
 // docs/planning/08 I1) is the same shape: the tunnel Provider must publish
-// its per-Connection endpoint fact (reconciler.Request.TunnelFacts)
-// before the via'd Connection's own reconcile can resolve it, exactly the
+// its per-Connection endpoint fact (reconciler.Request.Facts, docs/planning/08
+// I9 — originally the bespoke reconciler.Request.TunnelFacts field, deleted
+// once migrated) before the via'd Connection's own reconcile can resolve it, exactly the
 // ordering warehouseRef -> Dataset already guarantees for WarehouseFacts.
 var refFields = []string{"providerRef", "sourceRef", "targetRef", "connectionRef", "secretRef", "warehouseRef", "via"}
 
