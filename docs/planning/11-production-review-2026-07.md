@@ -635,3 +635,18 @@ static. Dimensions, each producing findings verified before fixing:
   I15 RBAC (jobs.batch verbs applied to the shared cluster), then ONE
   merged-state sweep; then the board is the owner's (push, minikube
   Calico recreation, KubernetesRuntime GA call, v1.3.0).
+- 2026-07-23: I15 LIVE EVIDENCE CLOSED — the K8s backup round-trip
+  passes on the shared cluster (42s). The exercise vindicated the
+  no-compromise rule five times over: each rerun peeled a masked layer
+  (engine guard → RFC 1123 names → invisible one-shot results → the
+  sentinel-exit masking that turned a failed pg_dump into a "successful"
+  0-byte backup with a matching empty checksum → world-readable pgpass
+  breaking libpq). The 0-byte case is the standout: every layer reported
+  success while the backup was garbage — exactly the class of silent
+  corruption the owner's "conclusive evidence" bar exists to catch.
+  Also fixed en route: dbjob's dispatch now follows the documented
+  RuntimeType rule (the wrapper-completeness guard had made the old
+  type-assertion dispatch always-true through wrappers, which would have
+  sent Docker pipelines down the Job path), and FileMount.Mode is now
+  honored by BOTH K8s Secret-mount paths (Deployment + Job). Remaining:
+  the final merged-state sweep.
