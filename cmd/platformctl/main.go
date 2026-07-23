@@ -81,7 +81,6 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// Phase 5 (v1.0.0): the seven phase-1..4 gates graduate to GA.
 	gates.Register("CoreReconciler", featuregate.GA, true)
 	gates.Register("DockerRuntime", featuregate.GA, true)
-	gates.Register("ContainerProvider", featuregate.Alpha, false) // doc 04 §12: Phase 0 / Alpha / disabled — test-only placeholder; retirement tracked in 08 E7
 	gates.Register("RedpandaProvider", featuregate.GA, true)
 	gates.Register("PostgresProvider", featuregate.GA, true)
 	gates.Register("DebeziumCDCProvider", featuregate.GA, true)
@@ -204,7 +203,17 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
-	reg.RegisterProvider("container", func() reconciler.Provider { return placeholder.New() }, "ContainerProvider")
+	// "container" (the Phase 1 "prove the runtime" placeholder) is
+	// registered ungated, exactly like "noop": the `ContainerProvider`
+	// feature gate was retired (docs/planning/08 E7, doc 04 §12) once
+	// evidence showed it is genuinely load-bearing for integration tests
+	// (docker_integration_test.go, domains_integration_test.go,
+	// domains_kubernetes_integration_test.go — H5's segmentation scenario)
+	// and never advertised as a manifest-authoring surface for real
+	// pipelines — a feature gate exists to stage user-facing maturity, not
+	// to gate a test fixture from itself. See docs/history/checkpoint.md
+	// item 4.
+	reg.RegisterProvider("container", func() reconciler.Provider { return placeholder.New() }, "")
 	reg.RegisterProvider("redpanda", func() reconciler.Provider { return redpanda.New() }, "RedpandaProvider")
 	reg.RegisterProvider("postgres", func() reconciler.Provider { return postgres.New() }, "PostgresProvider")
 	reg.RegisterProvider("debezium", func() reconciler.Provider { return debezium.New() }, "DebeziumCDCProvider")

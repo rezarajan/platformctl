@@ -300,7 +300,14 @@ Adding a provider with required configuration? Implement
 3b. **mariadb is registered but untested**: it shares the mysql adapter
    (image + binlog flags differ); no integration test applies a
    `type: mariadb` Provider yet.
-4. `ContainerProvider` test-only gate could be retired.
+4. `ContainerProvider` test-only gate could be retired. **Closed
+   2026-07-23 (08 E7):** evidence (`grep 'type: container'` across
+   `cmd/platformctl/testdata`) showed the placeholder provider is
+   genuinely load-bearing for `docker-acceptance` and `domains`
+   (H5's Kubernetes segmentation scenario) — so the *gate* was retired
+   (registered ungated in `cmd/platformctl/main.go`, like `noop`) while
+   the *provider* stays as a test fixture. `docs/planning/04` §12's gate
+   table row is removed accordingly.
 5. **Tunnel provider** for VPC reach: the `Connection` kind is the seam
    (design note 002 addendum); a wireguard-typed provider chains a managed
    Connection's egress — additive, no schema change.

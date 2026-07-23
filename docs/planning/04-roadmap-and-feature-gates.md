@@ -406,7 +406,6 @@ GA. Phase 7 closes with Stage B's exit criteria held (docs/planning/08 §4).
 | `NessieProvider` | Phase 6.5 | Beta (since 08 Stage A close) | enabled | GA after real-use soak |
 | `OpenLineageProvider` | Phase 6.5 | Beta (since 08 Stage A close) | enabled | GA after real-use soak |
 | `ProxyProvider` | Phase 6.5 | Beta (since 08 Stage A close) | enabled | GA after real-use soak |
-| `ContainerProvider` | Phase 0 | Alpha | disabled | none — test-only placeholder provider; retirement tracked in 08 E7 |
 | `KubernetesSecretBackend` | 08 Stage B (B4) | Beta (08 Stage B/B9) | enabled | GA with KubernetesRuntime |
 | `HighAvailability` | 08 Stage C (C1) | Alpha | disabled | Beta after C2/C3 soak (guards Replicas > 1; validate-time enforcement arrives with C2 per docs/adr/004) |
 | `SchemaRegistrySupport` | 08 Stage D (D1) | Beta (since D2, 2026-07-21) | enabled | graduated per the recorded intent when D2 landed |
@@ -422,6 +421,21 @@ GA. Phase 7 closes with Stage B's exit criteria held (docs/planning/08 §4).
 | `ExternalDatabaseTLS` | 08 Stage I (I2) | Alpha | enabled | Beta after real-use soak; enabled-by-default because it's a purely additive opt-in field (`Connection.spec.tls.mode` on an external Connection) — absent, every consumer's plaintext dial is byte-for-byte unchanged, so there is no new attack surface to soak disabled — docs/adr/025-cloud-iam-database-auth.md |
 | `PolicyEngine` | 08 Stage H (H3) | Alpha | disabled | Beta after the zero-trust pack soaks in this repo's own CI (docs/adr/021-policy-engine-zero-trust.md) — unlike `DesignLints`, disabled means a full no-op (no directory read, no evaluation), and an enabled deny blocks validate/plan/apply/destroy, so this defaults off |
 | `MediatedConnections` | 08 Stage H (H6) | Alpha | disabled | Beta after the owner-scenario dual-runtime accept suite soaks — docs/adr/022 (Ring 2), docs/adr/027 (Layer 1, the authoritative zero-trust plane). A new provider running its own control plane (a pinned OpenZiti controller + router) and minting cryptographic identity is a meaningfully different risk profile from the Phase 6.5 enabled-Alpha precedent, matching `TunnelProvider`'s posture |
+
+**`ContainerProvider` retired (2026-07-23, 08 E7):** the row above is
+removed, not marked disabled — the gate itself no longer exists in
+`main.go`. Evidence review (`grep 'type: container'` across
+`cmd/platformctl/testdata`) found the placeholder provider genuinely
+load-bearing for three integration suites (`docker-acceptance`,
+`domains` — H5's Kubernetes segmentation scenario in particular), so
+per the retirement decision the *gate* is retired while the *provider*
+stays: `container` now registers ungated, exactly like `noop`
+(`cmd/platformctl/main.go`'s `defaultWiring`). It was never a
+manifest-authoring surface for real pipelines, so there is no user-
+facing maturity signal to stage — a feature gate exists to stage that
+signal, not to gate a test fixture from itself. See
+`docs/history/checkpoint.md` item 4 and `docs/adr/014-feature-gate-
+strategy.md`.
 
 Gates planned by the production-readiness backlog (`HighAvailability`,
 `IngressProvider`, `TLSTermination`, `MonitoringStackProvider`,
@@ -440,6 +454,43 @@ Table semantics (clarified 2026-07-20): the Stage and Default columns state the
 precedent by updating in place at B9); "Stage at introduction" survives in the
 Introduced column's phase reference. This table and `main.go`'s
 `gates.Register` calls must agree — that is the sync the review checks.
+
+### 12.1 Support-level commitments (added 2026-07-23, 08 E7)
+
+Doc 07 §3.3 flagged that the maturity table above states a stage but never
+spelled out what each stage *commits to*. This is the one authoritative
+statement; README's Provider maturity table (and any other doc) should
+point here rather than restate it:
+
+- **Alpha** — the shape (schema fields, CLI surface, gate name) may change
+  between minor releases without a deprecation window; a gate defaults
+  **disabled** unless its row explicitly records a reasoned exception
+  (e.g. `DesignLints`, `ExternalDatabaseTLS` — each row states why).
+  Enabled-Alpha is reserved for a declared hardening period with a named
+  graduation trigger (Phase 6.5's precedent), never the default posture
+  for a brand-new capability surface. Test coverage: exercised by at
+  least one integration suite (docker and/or Kubernetes leg) or, absent
+  that, unit/contract coverage against the fake runtime — a gate with
+  zero automated coverage anywhere is a gap, not an accepted state.
+  Behavior with the gate off is byte-for-byte unchanged for any manifest
+  that doesn't opt in (docs/adr/014's behavioral contract) — this holds
+  regardless of stage.
+- **Beta** — the shape is stable (schema fields and CLI surface do not
+  change without a deprecation window); behavior may still change as real
+  use surfaces edge cases. Defaults **enabled**. Test coverage: a
+  dedicated integration suite exists and runs in CI on every affecting
+  change (the impact map in `scripts/test-impact.sh`), not just at
+  merge time.
+- **GA** — stable; both shape and behavior changes follow a deprecation
+  window. Defaults enabled, no opt-out gate (the gate itself may still
+  exist for historical/documentation reasons but is no longer meaningful
+  to disable). Test coverage: integration suite plus inclusion in the
+  acceptance-scenario / example set (docs/planning/05 §6-class coverage).
+
+A gate's row in the master table above is the per-gate instantiation of
+this contract — read the row's own Graduation-target column for *when*
+the next transition triggers, and this section for *what each stage
+means* once there.
 
 ## 13. Versioning & release strategy
 

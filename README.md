@@ -126,7 +126,7 @@ flowchart TB
     subgraph ADP["internal/adapters"]
         direction LR
         RUN["runtime: docker · kubernetes<br/>+ shared probe pkg"]
-        PROV["providers: redpanda · postgres · mysql · debezium · s3 ·<br/>s3sink · jdbcsink · s3source · nessie · trino · openlineage ·<br/>prometheus · grafana · proxy · ingress · wireguard (+ providerkit)"]
+        PROV["providers: redpanda · postgres · mysql · debezium · s3 ·<br/>s3sink · jdbcsink · s3source · nessie · trino · openlineage ·<br/>prometheus · grafana · proxy · ingress · wireguard · openziti (+ providerkit)"]
         STA["state: localfile · s3 (leased)"]
         SEC["secrets: env · file · kubernetes · vault"]
     end
@@ -191,9 +191,13 @@ role-neutral.
 
 ### Provider maturity
 
+What each stage commits to (API stability, default-on/off, test-coverage bar) is defined once,
+authoritatively, in [docs/planning/04 §12.1](docs/planning/04-roadmap-and-feature-gates.md#121-support-level-commitments-added-2026-07-23-08-e7)
+— this table is just the current roster per stage.
+
 | GA | Beta | Alpha (gated, off by default unless noted) |
 |---|---|---|
-| redpanda, postgres, debezium, s3/minio, s3sink, mysql/mariadb | Kubernetes runtime | trino, prometheus, grafana, ingress, jdbcsink, s3source, wireguard, nessie/openlineage (lakehouse pair), backup/restore, policy engine; design lints (on) |
+| redpanda, postgres, debezium, s3/minio, s3sink | Kubernetes runtime, mysql/mariadb, nessie, openlineage, proxy | trino, prometheus, grafana, ingress, jdbcsink, s3source, wireguard, openziti, backup/restore, policy engine; design lints (on) |
 
 ### Writing your own provider
 

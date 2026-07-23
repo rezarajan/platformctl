@@ -35,8 +35,11 @@ signal of maturity.
 
 - `main` stays releasable; risky work is opt-in, not branch-isolated.
 - Cost: gate hygiene is real work — introduction row, graduation
-  execution, retirement (the test-only `ContainerProvider` retirement is
-  tracked in E7).
+  execution, retirement (the test-only `ContainerProvider` gate was
+  retired in E7, 2026-07-23: registered ungated like `noop` once evidence
+  showed it load-bearing for integration tests rather than a user-facing
+  maturity surface — the gate is gone, the placeholder provider stays as
+  a test fixture; docs/planning/04 §12's retirement note has the evidence).
 - A gate name is API: users script `--feature-gates=Name=...`; renames are
   breaking.
 

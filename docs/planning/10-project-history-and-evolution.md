@@ -386,6 +386,142 @@ applied to doc 01). ADR 025 scoped cloud IAM database auth out
 (composable today via the clouds' own auth proxies; doc 03 §8.2.4 is
 the worked walkthrough).
 
+### 5.y The production review saga (2026-07-22 → 2026-07-23) — waves 2-4, ADR 026/027/028, and the no-compromise pass
+
+Doc 11's production review (opened 2026-07-22, goal: real production
+scenarios, async/state-machine correctness, GA-bar honesty) ran as a
+sequence of agent waves gated by the same merge discipline as the earlier
+stages, but compressed into roughly a day and a half of wall-clock time
+because each wave's findings immediately re-sequenced the next.
+
+**Wave 2** merged I1 (`spec.via` consumption, blast-minimized tunnel
+egress), I2 (outbound database TLS), H3 (the typed-rule policy engine,
+ADR 021), and I6 (the unconditional-GA gaps `KubernetesRuntime` needed).
+The owner decision that followed: `KubernetesRuntime` does not GA until
+high availability is feature-complete — I7 became the gate.
+
+**Wave 3** closed I7 (the GA blocker), landed E5 (schema fragments) and
+H4 (the zero-trust policy pack, one-rule-per-fact per owner direction),
+and a hygiene pass. The orchestrator then ran a systems pass directly
+(not agent-delegated) fixing seven root-cause issues found by exercising
+the whole system together rather than one suite at a time — hostport
+collisions between concurrently-run suites, S3 state-lease renewal plus
+a dead-holder test seam, a minimum-view cluster settle race, transient
+probe-retry hardening, I8's forward re-resolve, Connect's 10s rebalance
+delay, and an ingress fragment's `httpsPort` — and rewrote the README for
+the platform's then-current state. Every suite was green at that
+content-state; a GA-caveat sweep (owner: "no GA without conclusive
+evidence") then closed two more items live: Kubernetes NetworkPolicy
+enforcement was PROVEN, not assumed — the CI `kind` cluster had been
+running the default `kindnet` CNI, which never enforces `NetworkPolicy`
+at all, so every isolation test had been silently skipping its
+enforcement assertion; switching CI to Calico plus a live
+cross-namespace negative-probe test
+(`TestNetworkPolicyEnforcementIsLive`) closed the gap, and
+`ContainerSpec.Sysctls` on Kubernetes changed from a silent drop to a
+named refusal (doc 07's loud-refusal clause, finally implemented).
+
+**The ADR 027 pivot.** Mid-review, the owner posed a design challenge
+directly: network-layer enforcement authenticates *location*, not
+*workload*, and its guarantee varies by fabric (a non-enforcing CNI, a
+Docker network's topology-as-ACL, a future cloud security group) — so
+any zero-trust claim resting on it is not a guarantee at all. **ADR 027
+(enforcement layering)** is the answer: two explicit layers with
+different contracts. Layer 1 — identity-attested, mutually-authenticated
+edges, realized by a `MediationProvider` port (ADR 022 Ring 2 promoted
+from "a mesh feature" to THE authoritative guarantee; OpenZiti is the
+first adapter, never the architecture) — is the only configuration
+allowed to say "zero-trust," and it is substrate-independent by
+construction (identical on Docker, Kubernetes, and any future
+Terraform-provisioned infrastructure, because enforcement travels with
+the workload). Layer 2 — the platform's compiled network objects
+(Docker networks, Kubernetes `NetworkPolicy`, future security groups) —
+is demoted to best-effort defense-in-depth, *observed, never assumed*:
+`status`/`preflight`/`validate` report exactly what a live probe found
+(`enforced` / `NOT ENFORCED by this cluster's CNI` / `unknown`), because
+an unverifiable claim is treated as false. ADR 027's claims table is now
+the only phrasing this repo's docs are allowed to use. The same review
+pass also produced **ADR 026** (graph-scoped access — least privilege at
+resource granularity, compiled from the declared reference graph itself,
+so a wide grant becomes an explicit, policy-visible declaration instead
+of an implicit side effect of sharing a network) and sequenced its H7
+realization.
+
+**Wave 4** implemented the ADR 027 pivot: H8 (the Layer 2 honesty probe
+— capability, `status`/`preflight` surfacing, `validate` warnings) and
+H6-as-amended (the `MediationProvider` port plus the OpenZiti adapter,
+SPIFFE-aligned workload identity minted from the naming authority,
+per-edge authorization compiled from the ADR 026 graph, an anti-coupling
+archtest ensuring nothing outside the `openziti` package imports it by
+name) merged together with I9-I12 (evidence-backed completions of
+earlier-deferred items) and **H5** (domains and cross-domain policy, ADR
+022 Rings 0–1: `metadata.domain`, Ring 0 validate-time cross-domain
+policy denial, Ring 1 per-domain network segmentation realized entirely
+in the engine's per-request runtime decorator so that — per an
+owner-directed mid-task architecture correction — zero code under
+`internal/adapters/providers` becomes domain-aware). Stage I closed
+completely (I1–I12).
+
+**The no-compromise pass (2026-07-23).** The owner's standing rule for
+the review — "recorded deviations are debts, not resolutions" — drove a
+final pass converting every "accepted with reasons" into a real fix
+rather than a documented limitation: H5's domain-of-record deviation (the
+decorator had keyed network naming on the *dependent* resource's declared
+domain rather than the *realizing Provider's* — a cross-domain-broker
+EventStream would have dialed the wrong network) became a coherence
+check at validate time (ADR 022 addendum: runtime addressing follows the
+provider's domain; the dependent's own declared domain governs
+graph/policy edges only); ADR 026's Docker per-edge scale bound was
+recomputed and killed (deterministic `/28` subnets from a supernet
+support thousands of edges — the earlier "tens" ceiling was a default
+address-pool exhaustion artifact, not a structural limit); I13 replaced
+restore's detect-after-replay posture with verify-then-promote (a scratch
+database plus an atomic swap, so corruption never touches the live
+target); I14 solved Grafana admin-credential rotation via
+`grafana-cli reset-admin-password` over the runtime's own exec
+capability, closing what had been recorded as a vendor limitation; I15
+brought backup/restore to Kubernetes (same-pod Jobs sharing a FIFO via
+`emptyDir`), making runtime parity a `BackupRestore` GA requirement. A
+`TestGeneratedReferenceInSync`-style discipline surfaced one latent
+safety bug along the way: `manifest.envelopeFrom`'s metadata decoder had
+never wired `metadata.protect` through from the real manifest loader — the
+NFR-3 protect refusal had been inert for every real manifest since it
+shipped, invisible because engine-level tests constructed `Envelope`
+values directly rather than through the loader; fixed and pinned through
+the real loader path.
+
+**ADR 028 (test tiering, accepted 2026-07-23)** closed the review's own
+process debt: local development had settled into 20-minute sweeps
+followed by 20-minute CI runs, with a recurring pass-local/fail-CI
+pattern traced to environment-timing divergence (warm local caches and
+idle daemons hide races that CI's cold runners expose). The decision:
+three tiers — a fast tier (`just test`, unit + contract-against-fakes,
+`t.Parallel()` throughout, budget-guarded at ≤60s/test) as the only thing
+a developer waits for; a deep tier (`just test-deep`, the existing
+impact-mapped integration suites) for pre-push confidence; CI as the
+arbiter (the full stress matrix, Calico-enforced Kubernetes, race
+detector, on every PR). E6 (the provider-author contract) is re-scoped as
+the fast tier's missing middle — a reconciler conformance suite against
+fakes, in milliseconds, so providers stop leaning on e2e for their basic
+lifecycle evidence — and a new task J1 owns the mechanical restructure
+(parallelism audit, the CI budget guard, the `just test`/`test-deep`
+split documented for developers).
+
+**E7** (this task) closed the review's remaining documentation debt:
+retiring the test-only `ContainerProvider` gate (kept the placeholder
+provider as a test fixture once evidence showed it load-bearing for the
+Docker and Kubernetes segmentation suites — H5's own accept scenario),
+writing the one-paragraph-per-stage support-level commitment doc 04
+lacked, sweeping for stale zero-trust language against ADR 027's claims
+table, and this catch-up section. It also surfaced, but deliberately did
+not fix (out of its own scope), a regression in H5's own Docker/Kubernetes
+segmentation test fixtures: the ADR 022 addendum coherence check above
+was never actually applied to `cmd/platformctl/testdata/domains-scenario`
+despite a same-day review-log entry claiming it had been — both
+segmentation integration tests fail at validate time on current `main`.
+Recorded in doc 08's H5 section as a tracked follow-up, not silently
+absorbed into this narrative as settled.
+
 ## 7. Where knowledge lives
 
 | You want... | Read |
