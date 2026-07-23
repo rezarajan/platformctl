@@ -122,3 +122,60 @@ func TestBuildExternalIngressPolicy(t *testing.T) {
 		}
 	})
 }
+
+// TestBuildCrossDomainIngressPolicy pins docs/adr/022 Ring 1's Kubernetes
+// mapping (docs/planning/08 H5): an allowed cross-domain path opens the
+// home namespace's default-deny wall to specific other namespaces by name,
+// nothing else — the Kubernetes side of "exactly the holes the mediated
+// entrypoint needs" (a Pod lives in exactly one Namespace, unlike a Docker
+// container's multi-network attach, so this NetworkPolicy is the mechanism
+// instead).
+func TestBuildCrossDomainIngressPolicy(t *testing.T) {
+	t.Run("nil when no domain is allowed in", func(t *testing.T) {
+		if p := buildCrossDomainIngressPolicy("analytics", nil, nil); p != nil {
+			t.Errorf("expected nil policy for an empty allow-list, got %+v", p)
+		}
+	})
+
+	t.Run("admits exactly the named namespaces", func(t *testing.T) {
+		p := buildCrossDomainIngressPolicy("datascape-analytics", map[string]string{"io.datascape.kind": "connection"}, []string{"datascape-payments"})
+		if p == nil {
+			t.Fatal("expected a policy, got nil")
+		}
+		if got, want := p.Name, crossDomainIngressPolicyName; got != want {
+			t.Errorf("name = %q, want %q", got, want)
+		}
+		if got := p.Namespace; got != "datascape-analytics" {
+			t.Errorf("namespace = %q, want %q", got, "datascape-analytics")
+		}
+		if got := p.Spec.PolicyTypes; len(got) != 1 || got[0] != networkingv1.PolicyTypeIngress {
+			t.Errorf("policyTypes = %v, want [Ingress]", got)
+		}
+		if got := len(p.Spec.Ingress); got != 1 {
+			t.Fatalf("ingress rules = %d, want 1", got)
+		}
+		peers := p.Spec.Ingress[0].From
+		if len(peers) != 1 {
+			t.Fatalf("peers = %d, want 1", len(peers))
+		}
+		if peers[0].NamespaceSelector == nil {
+			t.Fatal("expected a namespaceSelector peer")
+		}
+		if got := peers[0].NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]; got != "datascape-payments" {
+			t.Errorf("namespaceSelector match = %q, want %q", got, "datascape-payments")
+		}
+		if got := p.Labels[runtimeport.LabelManagedBy]; got != runtimeport.ManagedByValue {
+			t.Errorf("missing ownership label: %q = %q", runtimeport.LabelManagedBy, got)
+		}
+	})
+
+	t.Run("multiple allowed namespaces each get their own peer", func(t *testing.T) {
+		p := buildCrossDomainIngressPolicy("datascape-analytics", nil, []string{"datascape-payments", "datascape-billing"})
+		if p == nil {
+			t.Fatal("expected a policy, got nil")
+		}
+		if got := len(p.Spec.Ingress[0].From); got != 2 {
+			t.Fatalf("peers = %d, want 2", got)
+		}
+	})
+}

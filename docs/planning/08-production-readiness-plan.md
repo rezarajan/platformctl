@@ -2560,6 +2560,137 @@ addendum) and protect-data recorded as the known dev-example baseline.
 - **Gate:** rides `PolicyEngine` (domains without policies are inert
   labels; no separate gate).
 
+**Done note (2026-07-23):** implemented on both runtimes.
+`metadata.domain` (schemas/v1alpha1/meta.json, resource.Metadata.Domain,
+`resource.NormalizeDomain`, decoded by `manifest.envelopeFrom`, doc 03 §2
+additive entry). Policy vocabulary gains `matchEdge.crossDomain: {from,
+to}` (`internal/domain/policy` + `schemas/policy/v1alpha1/policy.json`),
+evaluated in `internal/application/policy` over graph-derived cross-domain
+edges (a Binding's sourceRef domain -> targetRef domain; a connectionRef
+consumer's own domain -> the Connection it references) — Ring 0's deny
+names both domains and the edge, proven by
+`TestRunCrossDomainDeniesBindingAcrossDomains` (unit) and
+`TestPolicyCrossDomainDeniesCDCBindingAtValidate` (the owner scenario,
+through the real CLI `validate` path).
+
+Ring 1 (segmentation) is entirely engine-side, per an owner-directed
+mid-task architecture correction: **zero code under
+`internal/adapters/providers` computes or reads a domain-scoped network
+name.** Every provider keeps calling its own `network(cfg)`/
+`providerkit.Network(cfg)` exactly as before this task (byte-for-byte —
+`providerkit`, `proxy`, and `internal/domain/provider` are unchanged from
+before H5). The translation lives in ONE place:
+`internal/application/engine/domainruntime.go`'s `domainRuntime`, a
+decorating `runtime.ContainerRuntime` `Engine.resolveRequest` wraps around
+per `reconciler.Request`. It translates a network name to
+`naming.NetworkName(name, domain)` (`internal/domain/naming` — the F4
+naming authority) only when the name EXACTLY matches the resolved
+`spec.runtime.network` token for that call *and* no explicit override was
+configured (an explicit override passes through **verbatim in every
+domain** — the same configured-value-always-wins precedent
+`hostport.Resolve` already sets for ports); anything else — an I1 transit
+network name, or any other string a provider computed for its own purpose
+— passes through untouched by construction, with no signal from the
+provider needed. `domain` is `env.Metadata.Domain` — the resource actually
+being reconciled, not necessarily its realizing Provider — so a managed
+Connection's home network is its OWN declared domain (ADR 022's "every
+kind" field) with no `proxy` package changes at all: the decorator sees
+`env.Kind == "Connection"` and computes "holes" (the domains of every other
+resource in the manifest set that reaches this Connection via
+`connectionRef`) from the full resource set, then attaches those domains'
+networks via `EnsureNetwork`'s new `AllowFromNetworks` field (Kubernetes: a
+`datascape-allow-cross-domain` NetworkPolicy opening the home namespace's
+B7 default-deny wall to exactly the consumer namespaces) and extra
+`EnsureContainer` network attachments (Docker: real multi-network join).
+`engine.go`'s own pre-existing duplicated `"datascape"` literal
+(`inNetworkConsumers`) folds into the same `networkToken`/
+`naming.NetworkName` call rather than staying a second copy.
+`internal/archtest/domain_decoupling_test.go` pins the decoupling
+mechanically (scans every provider file for `naming.NetworkName(`,
+`.Metadata.Domain`, `resource.NormalizeDomain(`/`resource.DefaultDomain`,
+with its own positive/negative fixture tests so the check can't bit-rot).
+One narrow, argued exception to the zero-provider-diff bar:
+`internal/adapters/providers/placeholder` (the Phase-1 "prove the runtime"
+test provider) gained optional `spec.configuration.ports` support, never
+published to the host — orthogonal to domain/network-naming (contains no
+domain-aware code; confirmed by the archtest above) and needed only
+because Kubernetes creates no Service for a container declaring zero
+ports, which the segmentation integration scenario's Kubernetes leg needs
+to dial a target at all.
+
+**Activation semantics:** Ring 0 (validate-time deny) fires only when
+`PolicyEngine` is enabled *and* a loaded policy actually declares a
+`matchEdge.crossDomain` rule matching the edge — an unenforced domain
+label changes nothing, matching the Gate line above. Ring 1 (segmentation)
+is **independent of policy** — it activates purely from domain
+declaration: any resource declaring a non-default `metadata.domain` gets
+its own network/namespace; this diverges from a literal reading of "domains
+without policies are inert labels" for Ring 1 specifically, chosen because
+(a) segmentation is computed per-resource at reconcile time from
+`Request.Resource`/`Request.Resources` alone — there is no policy-decision
+value threaded into `reconciler.Request`, and adding one would be new,
+unrelated plumbing; and (b) the ADR's own Ring 1 sentence — "so an
+*undeclared* cross-domain path physically fails rather than succeeding
+silently" — reads as a fail-safe default that should hold even before an
+operator has written any policy, not something gated behind one. The hard
+constraint that *is* satisfied unconditionally: an undeclared-domain (or
+all-`default`) manifest set is a byte-identical no-op — pinned at the
+translation root (`TestNetworkNameDefaultDomainIsByteIdenticalNoOp`,
+`internal/domain/naming`), at the decorator itself
+(`TestDomainRuntimeUndeclaredDomainIsByteIdenticalNoOp`,
+`internal/application/engine`), and end-to-end
+(`TestReconcileConnectionUndeclaredDomainNetworksUnchanged`,
+`internal/adapters/providers/proxy` — this one predates and survives the
+mid-task architecture correction unchanged, since it asserts the
+*provider's own* passthrough behavior, which per the correction was always
+supposed to be byte-for-byte identical to pre-H5).
+
+**Both-runtime segmentation timings (live, this cluster,
+2026-07-23):** Docker (`TestDomainSegmentationEndToEnd`) — full pass,
+~7.4s: same-domain dial succeeds, cross-domain dial fails in both
+directions with no allowed path declared, the allowed path (a Connection
+consumed cross-domain via `connectionRef`) is reachable from both its home
+and the consumer's domain. Kubernetes
+(`TestDomainSegmentationOnKubernetesEndToEnd`) — ~58-97s depending on CNI
+convergence polling; the `datascape-allow-cross-domain` NetworkPolicy
+object and its create/update/delete convergence are unit-tested directly
+against a fake clientset
+(`TestBuildCrossDomainIngressPolicy`,
+`TestEnsureNetworkCrossDomainIngressConverges`,
+`internal/adapters/runtime/kubernetes`); the *enforcement* leg of the
+integration test itself SKIPs with a loud, explicit message on the
+minted-RBAC minikube cluster used for this task, because that cluster's
+CNI does not enforce NetworkPolicy at all (confirmed live: an undeclared
+cross-domain dial, addressed by its correct namespace-qualified name,
+succeeded) — the identical, already-documented environment caveat
+`internal/adapters/runtime/kubernetes/networkpolicy_integration_test.go`
+carries for B7 ("minikube's default driver doesn't ship [an enforcing
+CNI]... a separate, heavier environment decision"). This is an environment
+limitation, not a Ring 1 regression; on a policy-enforcing cluster
+(kind+Calico or equivalent) the same test proves the full negative/positive
+reachability contract, as it did during interactive debugging of the
+mechanism itself (manually verified: cross-domain dial without a declared
+path failed at the network layer once addressed correctly, before this
+cluster's non-enforcement was identified as the reason the automated
+assertion couldn't rely on it).
+
+**Deviations / known gaps:** (1) Ring 1's domain-of-record for a
+non-Connection, non-Provider dependent kind (Source, EventStream, Dataset,
+Catalog, Binding) that happens to call `ProbeReachable`/network-touching
+runtime methods directly is that resource's own declared domain, which is
+correct for Provider self-instances and Connections but is untested for
+these other kinds specifically, since none of the shipped providers'
+non-Provider, non-Connection reconcile paths call network-name-accepting
+runtime methods today (they operate via `EnsureReachable`/container name,
+or via already-published facts) — flagged for whoever adds one that does.
+(2) A domain-scoped network name (`"<base>-<domain>"`) is not
+length-truncated against Kubernetes' 63-character namespace-name limit;
+long base names combined with a long domain could theoretically exceed it
+(both `metadata.name`-style fields independently cap at 63). (3) Per the
+architecture correction, `internal/adapters/providers/placeholder`'s new
+`ports` field is the one file with a diff under
+`internal/adapters/providers` — see above.
+
 ### H6: Mediated connections — OpenZiti mesh provider (ADR 022 Ring 2)
 
 - **Size:** L (ADR 022 is the design). **Depends:** H5.

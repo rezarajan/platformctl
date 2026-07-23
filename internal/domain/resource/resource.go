@@ -12,6 +12,13 @@ import (
 
 const DefaultNamespace = "default"
 
+// DefaultDomain is metadata.domain's default value (docs/adr/022 Ring 0/1):
+// a resource that never declares a domain lives in this one, implicit
+// domain — the exact state every manifest set was already in before
+// domains existed, which is what keeps an undeclared-domain manifest set a
+// byte-identical no-op (docs/planning/08 H5).
+const DefaultDomain = "default"
+
 var dnsLabelPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 type GroupVersionKind struct {
@@ -33,6 +40,10 @@ type Metadata struct {
 	// Protect refuses any plan/apply/destroy action that would delete this
 	// resource. See docs/planning/03-resource-model-reference.md §2.
 	Protect bool `json:"protect,omitempty"`
+	// Domain is the resource's governance/segmentation domain (docs/adr/022,
+	// docs/planning/08 H5) — additive, defaults to DefaultDomain when unset.
+	// See docs/planning/03-resource-model-reference.md §2.
+	Domain string `json:"domain,omitempty"`
 }
 
 // Envelope is the parsed, validated form of any manifest before it's cast to
@@ -85,6 +96,14 @@ func NormalizeNamespace(namespace string) string {
 		return DefaultNamespace
 	}
 	return namespace
+}
+
+// NormalizeDomain mirrors NormalizeNamespace for metadata.domain (docs/adr/022).
+func NormalizeDomain(domain string) string {
+	if domain == "" {
+		return DefaultDomain
+	}
+	return domain
 }
 
 func ValidateDNSLabel(field, value string) error {
@@ -182,6 +201,9 @@ func (e Envelope) Validate() error {
 		return fmt.Errorf("%s %q: %w", e.Kind, e.Metadata.Name, err)
 	}
 	if err := ValidateDNSLabel("metadata.namespace", NormalizeNamespace(e.Metadata.Namespace)); err != nil {
+		return fmt.Errorf("%s %q: %w", e.Kind, e.Metadata.Name, err)
+	}
+	if err := ValidateDNSLabel("metadata.domain", NormalizeDomain(e.Metadata.Domain)); err != nil {
 		return fmt.Errorf("%s %q: %w", e.Kind, e.Metadata.Name, err)
 	}
 	for _, obs := range e.Metadata.Observers {

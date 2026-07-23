@@ -30,6 +30,7 @@ metadata:
   observers:       # optional, any data-plane Kind may declare this
     - name: local-marquez   # a Provider this resource's own provider may forward a LineageEndpoint to
   protect: false   # optional, default false — see below
+  domain: default  # optional, DNS-label; defaults to "default" — see below
 spec:
   ...              # kind-specific, see below
 status:            # populated by Datascape, never hand-authored
@@ -51,6 +52,21 @@ deleted). There is no separate opt-out flag — the only way to delete a protect
 first apply a manifest for it with `protect` removed. This applies engine-wide, not per-provider;
 data-bearing kinds (Dataset, Source, Catalog) are the primary intended use, but the field is
 available on every Kind.
+
+`metadata.domain` (docs/adr/022-identity-aware-mediation.md, 08 H5) is an additive, optional
+DNS-label field on every Kind, defaulting to `default` when omitted. It names the resource's
+governance/segmentation domain: the policy vocabulary's `matchEdge.crossDomain: {from, to}`
+selector (docs/adr/021, docs/domain/policy) evaluates over graph *edges* derived from it — a
+`Binding`'s `sourceRef` domain → `targetRef` domain, and a `connectionRef` consumer's own domain →
+the `Connection` it references — and denies at `validate` (Ring 0) when a rule matches, naming
+both domains and the edge. Declaring two or more distinct domains on `Provider`-realized resources
+additionally compiles Ring 1 network segmentation at apply time: Docker gets one network per
+domain instead of the single shared network (`<network>-<domain>`, identity default omitted), and
+Kubernetes inherits it for free since a network name already **is** the namespace name (docs/planning/08
+B7); a managed `Connection` realizing an allowed cross-domain path joins exactly its own domain's
+network plus each distinct consumer domain's network — nothing else. A manifest set that never
+declares a non-`default` domain produces byte-identical runtime objects to before this field
+existed — segmentation is opt-in per domain, never retroactive.
 
 `metadata.annotations["lint.datascape.io/waive"]` (docs/adr/020-design-lints.md, 08 H1) waives one
 or more `platformctl lint` findings against this resource: `"DL010: <reason>"`, one entry per line

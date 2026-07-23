@@ -140,6 +140,30 @@ func TestValidateRequiresExactlyOneSelectorShape(t *testing.T) {
 	}
 }
 
+func TestRuleKindMatchEdge(t *testing.T) {
+	rule := Rule{ID: "cross-domain", Effect: Deny, MatchEdge: &EdgeMatch{CrossDomain: &CrossDomainSelector{From: "payments", To: "analytics"}}}
+	if got := rule.Kind(); got != RuleKindEdge {
+		t.Fatalf("Kind() = %v, want RuleKindEdge", got)
+	}
+	if err := Validate([]Policy{validPolicy("p", rule)}); err != nil {
+		t.Fatalf("expected a well-formed matchEdge rule to validate, got %v", err)
+	}
+}
+
+func TestValidateMatchEdgeRequiresFromAndTo(t *testing.T) {
+	cases := []Rule{
+		{ID: "no-from", Effect: Deny, MatchEdge: &EdgeMatch{CrossDomain: &CrossDomainSelector{To: "analytics"}}},
+		{ID: "no-to", Effect: Deny, MatchEdge: &EdgeMatch{CrossDomain: &CrossDomainSelector{From: "payments"}}},
+	}
+	for _, r := range cases {
+		t.Run(r.ID, func(t *testing.T) {
+			if err := Validate([]Policy{validPolicy(r.ID, r)}); err == nil {
+				t.Fatalf("rule %s: expected a from/to-required validation error", r.ID)
+			}
+		})
+	}
+}
+
 func TestValidateAssertOperatorExclusivity(t *testing.T) {
 	rule := Rule{
 		ID:     "multi-op",

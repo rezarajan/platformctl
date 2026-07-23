@@ -64,12 +64,36 @@ func (p *Provider) Reconcile(ctx context.Context, req reconciler.Request) (statu
 		}
 	}
 
+	// spec.configuration.ports (optional, docs/planning/08 H5's cross-runtime
+	// segmentation test): container-internal ports this instance actually
+	// listens on. Never published to the host (AudienceInternal) — this
+	// provider exists to "prove the runtime path in isolation," and on
+	// Kubernetes a container with zero declared ports gets no Service at all
+	// (internal/adapters/runtime/kubernetes's ensureOneService skips Service
+	// creation when a spec has no ports), so a placeholder instance other
+	// resources need to dial in-network must declare one. Omitted (the
+	// default) keeps every existing manifest byte-for-byte unchanged — this
+	// is orthogonal to domain/network-naming (docs/adr/022 Ring 1 lives
+	// entirely in internal/application/engine's decorator, never here).
+	var ports []runtime.PortBinding
+	if rawPorts, ok := cfg.Configuration["ports"].([]any); ok {
+		for _, pv := range rawPorts {
+			switch v := pv.(type) {
+			case int:
+				ports = append(ports, runtime.PortBinding{ContainerPort: v, Audience: runtime.AudienceInternal})
+			case float64:
+				ports = append(ports, runtime.PortBinding{ContainerPort: int(v), Audience: runtime.AudienceInternal})
+			}
+		}
+	}
+
 	ctrState, err := rt.EnsureContainer(ctx, runtime.ContainerSpec{
 		Name:     ctrName,
 		Image:    image,
 		Cmd:      cmd,
 		Networks: []string{netName},
 		Volumes:  []runtime.VolumeMount{{VolumeName: volName, MountPath: "/data"}},
+		Ports:    ports,
 		Labels:   labels,
 	})
 	if err != nil {

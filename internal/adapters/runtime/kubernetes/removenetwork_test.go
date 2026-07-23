@@ -75,6 +75,55 @@ func TestRemoveNetworkDeletesEmptyNamespace(t *testing.T) {
 	}
 }
 
+// TestEnsureNetworkCrossDomainIngressConverges is docs/adr/022 Ring 1's
+// Kubernetes end-to-end (docs/planning/08 H5): EnsureNetwork with
+// AllowFromNetworks creates the cross-domain NetworkPolicy alongside the
+// ordinary B7 pair, updates it when the allow-list changes, and removes it
+// again once no domain is allowed in — the same create/converge/delete
+// lifecycle every other managed object in this adapter gets.
+func TestEnsureNetworkCrossDomainIngressConverges(t *testing.T) {
+	const ns = "datascape-analytics"
+	clientset := fake.NewSimpleClientset()
+	r := &Runtime{clientset: clientset}
+	ctx := context.Background()
+	labels := map[string]string{runtimeport.LabelManagedBy: runtimeport.ManagedByValue}
+
+	if err := r.EnsureNetwork(ctx, runtimeport.NetworkSpec{Name: ns, Labels: labels, AllowFromNetworks: []string{"datascape-payments"}}); err != nil {
+		t.Fatalf("EnsureNetwork (create): %v", err)
+	}
+	policy, err := clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, crossDomainIngressPolicyName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("cross-domain ingress policy was not created: %v", err)
+	}
+	if got := len(policy.Spec.Ingress[0].From); got != 1 {
+		t.Fatalf("peers = %d, want 1", got)
+	}
+
+	if err := r.EnsureNetwork(ctx, runtimeport.NetworkSpec{Name: ns, Labels: labels, AllowFromNetworks: []string{"datascape-payments", "datascape-billing"}}); err != nil {
+		t.Fatalf("EnsureNetwork (update): %v", err)
+	}
+	policy, err = clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, crossDomainIngressPolicyName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("cross-domain ingress policy missing after update: %v", err)
+	}
+	if got := len(policy.Spec.Ingress[0].From); got != 2 {
+		t.Fatalf("peers after update = %d, want 2", got)
+	}
+
+	if err := r.EnsureNetwork(ctx, runtimeport.NetworkSpec{Name: ns, Labels: labels}); err != nil {
+		t.Fatalf("EnsureNetwork (no allow-list): %v", err)
+	}
+	if _, err := clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, crossDomainIngressPolicyName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("cross-domain ingress policy should be removed once no domain is allowed in (err=%v)", err)
+	}
+	// The ordinary B7 pair must still be present regardless.
+	for _, name := range []string{denyAllIngressPolicyName, allowSameNamespacePolicyName} {
+		if _, err := clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, name, metav1.GetOptions{}); err != nil {
+			t.Errorf("expected %q to still exist: %v", name, err)
+		}
+	}
+}
+
 // TestRemoveNetworkRefusesUnmanagedNamespace keeps the pre-existing ownership
 // guard intact: a namespace lacking the managed-by label is never touched,
 // regardless of whether it is empty.

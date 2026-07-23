@@ -17,6 +17,12 @@
       "maxLength": 63,
       "description": "DNS-label namespace. Defaults to default when omitted."
     },
+    "domain": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "maxLength": 63,
+      "description": "DNS-label governance/segmentation domain (docs/adr/022). Defaults to \"default\" when omitted. Declaring domains and a policy.datascape.io crossDomain rule enables Ring 0 validate-time cross-domain denial and Ring 1 per-domain network segmentation; undeclared/all-default domains are a byte-identical no-op."
+    },
     "labels": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Free-form." },
     "annotations": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Free-form." },
     "observers": {

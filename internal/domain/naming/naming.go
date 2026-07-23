@@ -32,3 +32,23 @@ import "github.com/rezarajan/platformctl/internal/domain/resource"
 func RuntimeObjectName(env resource.Envelope) string {
 	return env.Metadata.Name
 }
+
+// NetworkName derives a domain-scoped runtime network name from a base
+// network name (spec.runtime.network's configured-or-default value, e.g.
+// "datascape") and a resource's metadata.domain (docs/adr/022 Ring 1,
+// docs/planning/08 H5). The default domain is a no-op — NetworkName returns
+// base unchanged — so a manifest set that never declares a non-default
+// domain produces byte-identical network names to before domains existed;
+// every other domain gets its own network, "<base>-<domain>".
+//
+// On Kubernetes a network name already IS the namespace name (docs/planning/08
+// B7, internal/adapters/runtime/kubernetes's EnsureNetwork/targetNamespace),
+// so this one function gives Ring 1 both runtimes for free: a per-domain
+// Docker network and a per-domain Kubernetes namespace are the same string.
+func NetworkName(base, domain string) string {
+	d := resource.NormalizeDomain(domain)
+	if d == resource.DefaultDomain {
+		return base
+	}
+	return base + "-" + d
+}

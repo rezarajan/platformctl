@@ -179,6 +179,8 @@ func envelopeFrom(raw map[string]any) (resource.Envelope, error) {
 	e.Metadata.Name, _ = meta["name"].(string)
 	e.Metadata.Namespace, _ = meta["namespace"].(string)
 	e.Metadata.Namespace = resource.NormalizeNamespace(e.Metadata.Namespace)
+	domain, _ := meta["domain"].(string)
+	e.Metadata.Domain = resource.NormalizeDomain(domain)
 	e.Metadata.Labels = stringMap(meta["labels"])
 	e.Metadata.Annotations = stringMap(meta["annotations"])
 	if observers, ok := meta["observers"].([]any); ok {

@@ -22,7 +22,7 @@
           "minItems": 1,
           "items": {
             "type": "object",
-            "description": "Exactly one of (match+assert), matchFinding, or matchPlan must be set — a Go-level invariant (internal/domain/policy.Validate), not expressible as a plain JSON Schema oneOf without duplicating every property branch.",
+            "description": "Exactly one of (match+assert), matchFinding, matchPlan, or matchEdge must be set — a Go-level invariant (internal/domain/policy.Validate), not expressible as a plain JSON Schema oneOf without duplicating every property branch.",
             "properties": {
               "id": { "type": "string", "minLength": 1, "description": "Globally unique across every loaded policy — the explain-catalog key and the exemption-annotation key." },
               "match": {
@@ -72,6 +72,24 @@
                   "kind": { "type": "string", "description": "Empty/absent matches every kind." }
                 },
                 "required": ["action"],
+                "additionalProperties": false
+              },
+              "matchEdge": {
+                "type": "object",
+                "description": "Selects graph edges rather than resources (docs/adr/022 Ring 0). crossDomain is the only edge shape this vocabulary defines.",
+                "properties": {
+                  "crossDomain": {
+                    "type": "object",
+                    "description": "Matches a domain-to-domain data-flow edge: a Binding's sourceRef domain -> targetRef domain, or a connectionRef consumer's own domain -> the Connection it references.",
+                    "properties": {
+                      "from": { "type": "string", "minLength": 1, "description": "The edge's source metadata.domain, matched exactly." },
+                      "to": { "type": "string", "minLength": 1, "description": "The edge's target metadata.domain, matched exactly." }
+                    },
+                    "required": ["from", "to"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["crossDomain"],
                 "additionalProperties": false
               },
               "effect": { "type": "string", "enum": ["deny", "warn"] },

@@ -1,0 +1,84 @@
+# docs/planning/08 H5 / docs/adr/022 Ring 1 segmentation scenario: two
+# domains (alpha, beta), no policy declared (segmentation is a network-floor
+# property of domain declaration itself — see H5's Done-note for the
+# activation semantics). alpha-app/alpha-app2 share domain "alpha" (same
+# network); beta-app is domain "beta" with no path to alpha at all (the
+# negative proof); beta-consumer is domain "beta" but reaches alpha ONLY
+# through the "bridge" Connection (the allowed-path proof). Host ports are
+# deliberately non-default (Connection 25990) to avoid collisions with other
+# suites.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: domains-it-alpha-app
+  domain: alpha
+spec:
+  type: container
+  runtime:
+    type: kubernetes
+  configuration:
+    image: alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e
+    cmd: ["-u", "tcp-listen:8080,fork,reuseaddr", "open:/dev/null"]
+    ports: [8080]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: domains-it-alpha-app2
+  domain: alpha
+spec:
+  type: container
+  runtime:
+    type: kubernetes
+  configuration:
+    image: alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e
+    cmd: ["-u", "tcp-listen:8080,fork,reuseaddr", "open:/dev/null"]
+    ports: [8080]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: domains-it-beta-app
+  domain: beta
+spec:
+  type: container
+  runtime:
+    type: kubernetes
+  configuration:
+    image: alpine:3.20
+    cmd: ["sleep", "600"]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: domains-it-beta-consumer
+  domain: beta
+spec:
+  type: container
+  runtime:
+    type: kubernetes
+  configuration:
+    image: alpine:3.20
+    cmd: ["sleep", "600"]
+  connectionRef:
+    name: domains-it-bridge
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: domains-it-edge
+spec:
+  type: proxy
+  runtime:
+    type: kubernetes
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: domains-it-bridge
+  domain: alpha
+spec:
+  providerRef:
+    name: domains-it-edge
+  port: 25990
+  target: "domains-it-alpha-app:8080"
