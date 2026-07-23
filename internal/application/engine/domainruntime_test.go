@@ -244,3 +244,40 @@ func TestDomainRuntimeQualifyTargetAddress(t *testing.T) {
 		t.Errorf("pinned network: QualifyTargetAddress = (%q, %v), want verbatim pass-through (every domain shares the pinned namespace)", got, err)
 	}
 }
+
+// TestDomainRuntimeLabelScopedAccessEnabledIsRawGateRegardlessOfGraphScoped
+// pins docs/planning/08 K4's own reason for a SEPARATE labelScopedGate
+// field: runtime.LabelScopedAccessQuery must report the LabelScopedAccess
+// gate's true value even when GraphScopedAccess is off — unlike the
+// existing labelScopedAccessEnabled field (K3), which is deliberately
+// zero-valued whenever graphScoped is false because it feeds ONLY the H7
+// grant-realization path.
+func TestDomainRuntimeLabelScopedAccessEnabledIsRawGateRegardlessOfGraphScoped(t *testing.T) {
+	t.Parallel()
+	env := envWithDomain("Provider", "pg", "default", "", nil)
+
+	cases := []struct {
+		name        string
+		graphScoped bool
+		labelScoped bool
+		want        bool
+	}{
+		{"both off", false, false, false},
+		{"label on, graph off (K4's own case: rides the gate independently)", false, true, true},
+		{"both on", true, true, true},
+		{"graph on, label off", true, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d := newDomainRuntime(fakeruntime.New(), map[string]any{}, env, env, nil, tc.graphScoped, tc.labelScoped, nil, "fake", nil).(*domainRuntime)
+			q, ok := runtime.ContainerRuntime(d).(runtime.LabelScopedAccessQuery)
+			if !ok {
+				t.Fatal("domainRuntime does not implement runtime.LabelScopedAccessQuery")
+			}
+			if got := q.LabelScopedAccessEnabled(); got != tc.want {
+				t.Errorf("LabelScopedAccessEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

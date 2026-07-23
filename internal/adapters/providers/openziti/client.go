@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"time"
 
 	"go.mozilla.org/pkcs7"
@@ -256,9 +257,33 @@ func (c *edgeClient) findByName(ctx context.Context, collection, name string) (s
 // call for the same name makes no additional control-plane WRITE, but the
 // caller can no longer obtain a fresh enrollment token from it).
 func (c *edgeClient) upsertIdentity(ctx context.Context, name string, roleAttributes []string) (id string, enrollmentJWT string, err error) {
-	if existingID, ok, ferr := c.findByName(ctx, "identities", name); ferr != nil {
+	return c.upsertIdentityConverge(ctx, name, roleAttributes, false)
+}
+
+// upsertIdentityConverge is upsertIdentity with one additional
+// docs/planning/08 K4 behavior: when converge is true and the identity
+// already exists, its roleAttributes are read back and PATCHed to match
+// the desired set if they've drifted (e.g. a manifest's labels changed
+// since this identity was first minted) — the same "detected and healed"
+// contract upsertService's encryptionRequired convergence below already
+// holds. converge is deliberately a caller-supplied flag, not always-on:
+// identity.go's session.upsertIdentity only sets it when the
+// LabelScopedAccess gate is enabled, so the gate-off already-exists path
+// makes EXACTLY the same call this function always has —
+// findByName-then-return, zero extra reads — preserving docs/planning/08
+// K4's gate-off byte-identical pin at the level of the actual HTTP call
+// sequence, not merely the outcome.
+func (c *edgeClient) upsertIdentityConverge(ctx context.Context, name string, roleAttributes []string, converge bool) (id string, enrollmentJWT string, err error) {
+	existingID, ok, ferr := c.findByName(ctx, "identities", name)
+	if ferr != nil {
 		return "", "", ferr
-	} else if ok {
+	}
+	if ok {
+		if converge {
+			if err := c.convergeIdentityRoleAttributes(ctx, existingID, roleAttributes); err != nil {
+				return "", "", err
+			}
+		}
 		return existingID, "", nil
 	}
 	body := map[string]any{
@@ -277,6 +302,48 @@ func (c *edgeClient) upsertIdentity(ctx context.Context, name string, roleAttrib
 		return "", "", err
 	}
 	return created.ID, jwt, nil
+}
+
+// convergeIdentityRoleAttributes reads id's current roleAttributes and
+// PATCHes them to desired only if they differ (order-independent
+// comparison — Ziti does not guarantee the stored order matches request
+// order, and this adapter's own callers already sort deterministically,
+// so an order-only difference would otherwise cause a pointless PATCH on
+// every reconcile, violating the "zero API calls if unchanged" idempotency
+// bar).
+func (c *edgeClient) convergeIdentityRoleAttributes(ctx context.Context, id string, desired []string) error {
+	var out struct {
+		RoleAttributes []string `json:"roleAttributes"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/edge/management/v1/identities/"+id, nil, &out); err != nil {
+		return err
+	}
+	if stringSetEqual(out.RoleAttributes, desired) {
+		return nil
+	}
+	patch := map[string]any{"roleAttributes": desired}
+	return c.do(ctx, http.MethodPatch, "/edge/management/v1/identities/"+id, patch, nil)
+}
+
+// stringSetEqual reports whether a and b contain the same strings,
+// ignoring order and without mutating either input (both are copied
+// before sorting) — docs/planning/08 K4's shared order-independent
+// comparison for roleAttributes convergence (identities and services
+// alike).
+func stringSetEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sa := append([]string(nil), a...)
+	sb := append([]string(nil), b...)
+	sort.Strings(sa)
+	sort.Strings(sb)
+	for i := range sa {
+		if sa[i] != sb[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *edgeClient) identityEnrollmentJWT(ctx context.Context, id string) (string, error) {
@@ -440,7 +507,24 @@ func (c *edgeClient) upsertNamedPolicy(ctx context.Context, collection, name str
 // as-is — the same "drift is healed, not merely detected" contract every
 // other Ensure* in this adapter holds (docs/planning/08 H6 accept: "drift
 // on out-of-band Ziti policy edits detected and healed").
-func (c *edgeClient) upsertService(ctx context.Context, name string) (id string, err error) {
+//
+// roleAttributes (docs/planning/08 K4) is the service's label-derived
+// attribute set — nil/empty for every pre-K4 caller and every gate-off/
+// unlabeled K4 caller (identity.go's serviceRoleAttributes), in which case
+// the "roleAttributes" key is omitted from the CREATE body entirely
+// (byte-identical to the pre-K4 request) and left untouched on convergence
+// only when the existing entity ALSO carries none — this task's gate-off
+// byte-identical pin. When non-empty, it converges the SAME way
+// encryptionRequired already does, piggybacking on the SAME existing GET
+// this method already performs on the already-exists path (zero additional
+// HTTP calls beyond what upsertService has always made — see
+// convergeIdentityRoleAttributes's sibling doc comment for why identity's
+// OWN convergence needed a separate opt-in instead: identity's
+// already-exists path made ZERO calls before K4, so adding one
+// unconditionally would NOT have been byte-identical there; service's
+// already-exists path already made one, so extending its response/patch
+// shape is free).
+func (c *edgeClient) upsertService(ctx context.Context, name string, roleAttributes []string) (id string, err error) {
 	const desiredEncryption = false
 	existingID, ok, ferr := c.findByName(ctx, "services", name)
 	if ferr != nil {
@@ -448,20 +532,30 @@ func (c *edgeClient) upsertService(ctx context.Context, name string) (id string,
 	}
 	if ok {
 		var out struct {
-			EncryptionRequired bool `json:"encryptionRequired"`
+			EncryptionRequired bool     `json:"encryptionRequired"`
+			RoleAttributes     []string `json:"roleAttributes"`
 		}
 		if err := c.do(ctx, http.MethodGet, "/edge/management/v1/services/"+existingID, nil, &out); err != nil {
 			return "", err
 		}
+		patch := map[string]any{}
 		if out.EncryptionRequired != desiredEncryption {
-			patch := map[string]any{"encryptionRequired": desiredEncryption}
+			patch["encryptionRequired"] = desiredEncryption
+		}
+		if !stringSetEqual(out.RoleAttributes, roleAttributes) {
+			patch["roleAttributes"] = roleAttributes
+		}
+		if len(patch) > 0 {
 			if err := c.do(ctx, http.MethodPatch, "/edge/management/v1/services/"+existingID, patch, nil); err != nil {
-				return "", fmt.Errorf("openziti: converge service %q encryptionRequired: %w", name, err)
+				return "", fmt.Errorf("openziti: converge service %q: %w", name, err)
 			}
 		}
 		return existingID, nil
 	}
 	body := map[string]any{"name": name, "encryptionRequired": desiredEncryption}
+	if len(roleAttributes) > 0 {
+		body["roleAttributes"] = roleAttributes
+	}
 	var created entityRef
 	if err := c.do(ctx, http.MethodPost, "/edge/management/v1/services", body, &created); err != nil {
 		return "", err
@@ -529,22 +623,25 @@ func (c *edgeClient) deleteTerminatorsForService(ctx context.Context, serviceID 
 	return nil
 }
 
-// upsertDialPolicy ensures a Dial service-policy exists scoping exactly
-// identityIDs to serviceID (direct @id references, not role-attribute
-// groups — the ADR 026 per-EDGE, not per-group, authorization this task
-// requires). Idempotent by name; re-applying a changed identityIDs set
-// updates the policy's identityRoles in place.
-func (c *edgeClient) upsertDialPolicy(ctx context.Context, name, serviceID string, identityIDs []string) error {
-	roles := make([]string, len(identityIDs))
-	for i, id := range identityIDs {
-		roles[i] = "@" + id
-	}
+// upsertDialPolicy ensures a Dial service-policy exists scoping
+// identityRoles to serviceRoles under semantic. Pre-K4, every caller
+// passed exact "@<id>" direct references (the ADR 026 per-EDGE, not
+// per-group, authorization this adapter requires) with semantic "AnyOf" —
+// docs/planning/08 K4 (identity.go's dialRoleRefs) additionally lets a
+// caller pass label-derived "#<attr>" role-attribute references with
+// semantic "AllOf" when an endpoint carries labels and the
+// LabelScopedAccess gate is on, so this function itself stays a
+// mechanical pass-through: the caller decides refs vs. semantic, this
+// function just upserts the policy body idempotently by name.
+// Idempotent by name; re-applying a changed identityRoles/serviceRoles/
+// semantic set updates the policy in place.
+func (c *edgeClient) upsertDialPolicy(ctx context.Context, name, semantic string, identityRoles, serviceRoles []string) error {
 	body := map[string]any{
 		"name":          name,
 		"type":          "Dial",
-		"semantic":      "AnyOf",
-		"identityRoles": roles,
-		"serviceRoles":  []string{"@" + serviceID},
+		"semantic":      semantic,
+		"identityRoles": identityRoles,
+		"serviceRoles":  serviceRoles,
 	}
 	existingID, ok, err := c.findByName(ctx, "service-policies", name)
 	if err != nil {

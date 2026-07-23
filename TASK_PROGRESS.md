@@ -1,114 +1,94 @@
-# H9 progress
+# K4 progress
 
-Task: docs/planning/08-production-readiness-plan.md §7.7 H9 — Stage H
-criterion 3 composed end-to-end (cross-domain deny/exempt/mediate/withdraw).
+Task: docs/planning/08-production-readiness-plan.md §7.10 K4 — Label-derived
+attributes through the mediation port (ADR 033 decision 4).
 
 ## Setup
-- Worktree was branched from an older `main` (7072b2d) that predates the
-  H9 spec itself, ADR 021's severing amendment, testkit.Janitor (ADR 029),
-  and the CI shard-partition guard. Fast-forward merged to current `main`
-  (234cabe) before starting — worktree had zero unique commits, so this was
-  a clean `git merge --ff-only main`. Verified `go build ./...` clean after.
+- Worktree fast-forward merged to main (0456b72e39231d61237588c16d598b9719048ec0)
+  cleanly — zero conflicts, worktree had zero unique commits ahead of that
+  point.
 
-## Design decisions (see final commit message for the full rationale)
-- Scenario topology: Source domain "payments" (matches the real postgres
-  backend Provider's domain), Connection/mesh/debezium/redpanda/EventStream
-  all domain "analytics". This is the ONLY topology that satisfies all of:
-  (a) the Binding-level crossDomain edge (Source vs EventStream domain) is
-  genuinely cross-domain, (b) Debezium — the single container bridging
-  both chains — needs no domain-hole to reach either the mediated
-  Connection or redpanda (co-located with both), (c) the router genuinely
-  crosses a domain boundary to dial the dark postgres backend, exercising
-  the H6 K8s addendum's recorded FQDN gap live.
-- This topology produces TWO crossDomain decisions from ONE policy rule
-  (Binding sourceRef->targetRef edge, AND the Source's own connectionRef->
-  Connection edge — both (payments,analytics)) — unavoidable given Source
-  must hold connectionRef (Source resource model) and must differ in
-  domain from both EventStream (for edge a) and Connection (forced by the
-  network-reachability constraint above). Both get exemption annotations.
-- Live K8s bug found and fixed (as anticipated by the task brief):
-  `conn.Target` bypassed domain translation entirely (H6 K8s addendum's
-  recorded gap). Fixed via a NEW optional runtime.AddressQualifier
-  capability (internal/ports/runtime/address.go), implemented only by
-  engine's domainRuntime decorator (internal/application/engine/
-  domainruntime.go's QualifyTargetAddress) — Docker no-op, Kubernetes
-  qualifies conn.Target's host to `<host>.<domain-namespace>.svc.cluster.
-  local` when the resolved target's domain differs from the Connection's.
-  openziti/connection.go calls it via type-assertion only (no
-  .Metadata.Domain/naming.NetworkName/resource.NormalizeDomain reference
-  in the openziti package — domain_decoupling_test.go's regex fence stays
-  clean, confirmed green). Added `resolveRawMediatedTarget` (unfiltered
-  graph.Build edge lookup, since graphaccess.CompileMediatedConnections
-  deliberately excludes Provider-kind targets from MediatedConnection.
-  Targets for identity-subject purposes — a DIFFERENT concern from "what
-  domain does conn.Target's host live in").
+## Design decisions
+- Port: `mediation.WorkloadIdentity` gains `Labels map[string]string`
+  (`internal/ports/mediation/mediation.go`) — carries an endpoint's
+  metadata.labels through MintIdentity's return value and RealizeEdge/
+  RevokeEdge's Edge.From/Edge.To. Purely additive; nil/empty is the
+  pre-K4 common case.
+- Gate delivery mechanism: `req.Runtime` is the only channel available to
+  an adapter for an engine-resolved per-request fact like a feature gate's
+  state (`reconciler.Request`'s field list is frozen by
+  internal/archtest/request_facts_frozen_test.go) — mirrors H9's
+  AddressQualifier exactly. New optional capability
+  `runtime.LabelScopedAccessQuery` (`internal/ports/runtime/labelscope.go`),
+  implemented ONLY by `internal/application/engine`'s domainRuntime
+  decorator (new `labelScopedGate` field, set UNCONDITIONALLY —
+  deliberately distinct from the existing `labelScopedAccessEnabled` field,
+  which is zero-valued whenever GraphScopedAccess is off and feeds only the
+  K3 grant-realization path; K4's attribute derivation rides the SAME gate
+  INDEPENDENTLY of GraphScopedAccess per ADR 033's own addendum). Not added
+  to archtest's `optionalCapabilities` list — that list only forces
+  forwarding for capabilities a REAL runtime adapter implements; like
+  AddressQualifier, this one is engine-only.
+- Encoding (openziti adapter, `identity.go`): `label.<key>.<value>`, each
+  segment sanitized through the SAME charset filter `identityRoleAttribute`
+  already applies to a SPIFFE URI (factored out as
+  `sanitizeRoleAttributeSegment`) — disjoint by construction from every
+  existing identity/service-name attribute (those never contain ".").
+  `labelRoleAttributes` sorts by key for determinism.
+- Dial-policy semantics: `dialRoleRefs` returns `#<attr>` role-attribute
+  references (Ziti's role-attribute selector) with `AllOf` semantics when
+  an endpoint carries labels and the gate is on — mirroring K2's
+  matchLabels-is-a-conjunction semantics, so admission and enforcement
+  check the SAME fact the SAME way (ADR 027 Layer 1). Unlabeled endpoints
+  (or gate off) keep the exact `@<id>` reference with `AnyOf` — byte-
+  identical to pre-K4. A single shared `semantic` value on the policy body
+  is sufficient because AllOf degrades to an exact match on a singleton
+  list, so mixing one attribute-based side with one exact-id side under
+  "AllOf" is safe.
+- Idempotency / gate-off byte-identical pin:
+  - Identity: `session.upsertIdentity` dispatches to
+    `client.upsertIdentityConverge(..., converge=true)` only when the gate
+    is on; converge=false (gate off) reproduces the EXACT pre-K4 call
+    sequence on the already-exists path (findByName, return — zero extra
+    GETs, pinned by `TestUpsertIdentityAlreadyExistsMakesNoExtraCallsWhenConvergeFalse`).
+  - Service: `upsertService` already performed a GET+maybe-PATCH dance for
+    `encryptionRequired` pre-K4 — roleAttributes convergence piggybacks on
+    the SAME existing GET/PATCH (zero additional HTTP calls in any case);
+    the create body omits the `roleAttributes` key entirely when empty
+    (pinned by `TestUpsertServiceOmitsRoleAttributesFromCreateBodyWhenEmpty`).
+  - Both convergence paths use order-independent comparison
+    (`stringSetEqual`) so re-deriving the same label set never fires a
+    spurious PATCH.
+- Scope: only Dial policies are compiled (RealizeEdge already never
+  realized Bind — connection.go's router-hosted terminator handles bind
+  differently); "Dial/Bind" in the task brief is read as referring to the
+  DialBind struct generically, not a new Bind-policy mechanism.
+  ObservedEdges' decode stays lossy for attribute-based multi-ref policies
+  (documented, not fixed — outside K4's own accept bar).
 
 ## Status
-- [x] Read all required docs/ADRs/precedent files.
-- [x] Fast-forwarded worktree to current main.
-- [x] AddressQualifier port + domainRuntime impl + openziti adapter fix.
-  Build clean, archtest clean (domain_decoupling, wrapper_completeness,
-  mediation_layering, request_facts_frozen), full `go test ./...` green.
-- [x] testdata/crossdomain-mediated-scenario (Docker) + policies/policy.yaml
-- [x] testdata/crossdomain-mediated-k8s-scenario (Kubernetes) + policies/
-- [x] cmd/platformctl/crossdomain_mediated_integration_test.go (Docker, 5 legs)
-- [x] cmd/platformctl/crossdomain_mediated_kubernetes_integration_test.go
-      (TestOpenZitiCrossDomainPolicyOnKubernetesEndToEnd — CI shard name
-      match confirmed via TestCIScenarioShardsPartitionKubernetesTests)
-- [x] scripts/test-impact.sh suite row (`crossdomain-mediated`) +
-      TestIntegrationSuiteMapCoversEveryTest green
-- [x] gofmt/vet(both tag sets)/build all clean; full `go test ./...` green
-- [x] Live Docker run (flock-wrapped): PASS 26.73s, all 5 legs, zero
-      residue (scratchpad/docker_leg4.log). Two earlier live-found fixes:
-      Binding domain coherence; leg-5 NFR-3 double flags for the External
-      Source's removal.
-- [x] Live K8s run attempted: BLOCKED — minted kubeconfig token expired
-      mid-session (kubectl auth can-i: yes minutes earlier, Unauthorized
-      at run time). Per brief: recorded, token NOT re-minted, K8s leg
-      code-complete/unverified. Compensating unit coverage added:
-      TestDomainRuntimeQualifyTargetAddress (also fixed a pinned-network
-      inconsistency it exposed: pinned => qualification no-op).
-- [x] golangci-lint v2.12.2: 0 issues (merged tree, final).
-- [x] doc 08 H9 Done-note appended (additive; criterion-3 box left
-      UNCHECKED — Accept demands both runtimes green).
-- [x] Final commit
-
-## Coordinator correction (2026-07-23, mid-task)
-- Merged main again (now at e993a07): H10 (CA pinning via EST/PKCS7,
-  InsecureSkipVerify removed except the documented TOFU bootstrap fetch;
-  enrollment JWTs moved Env->FileMount with waitTunnelEnrolled) and K1/K2
-  (label grammar + selector policy vocabulary). Merge was CLEAN — no
-  conflicts; verified my AddressQualifier fix (connection.go) and my
-  listDialPolicies client-side-filter fix (client.go) both survived
-  coherently on top of H10's rewrites.
-- Re-examined my client fix against H10: main's H10 client.go STILL
-  carries the broken `filter=type=%22Dial%22` query (confirmed via
-  `git show main:...`), so my fix is a genuinely different defect
-  (drift-detection/ObservedEdges broken since H6), NOT a duplicate of
-  H10 — kept, applied cleanly by the merge itself.
-- GPG signing is unavailable in this session (pinentry timeout/killed,
-  reproduced twice). WIP + merge commits made with `-c
-  commit.gpgsign=false` (one-off flag, no config change). Final commit
-  will follow the brief's GPG protocol (attempt signed; else leave
-  staged + COMMIT_MSG.txt).
-
-## Live Docker findings so far (pre-merge, recorded in 4b5eec9)
-1. Binding metadata.domain must match realizing Provider's domain
-   (ADR 022 addendum coherence check) — fixed in both testdata files.
-2. listDialPolicies filter defect (above).
-3. Manual live apply of the Docker scenario succeeded end-to-end
-   (10/10 Ready, ~24s); Ziti state manually verified EXACT: 1 service
-   (spiffe-datascape-default-analytics-connection-xd-conn), 1
-   datascape-mediated identity
-   (spiffe-datascape-default-payments-source-xd-src), 1 Dial policy
-   (dial-<identity>-<service>) with exact @id role refs. Manually
-   destroyed cleanly afterward (9 destroyed, external Source no-op'd).
-
-## Names/ports used (avoid colliding with other suites)
-- Resources: xd-pg, xd-mesh (ctrl/router), xd-conn, xd-rp, xd-dbz, xd-src,
-  xd-events, xd-cdc. Docker host ports: controller 12895, connection port
-  25795, redpanda kafka 19295, debezium connect 18295.
-- Docker leg postgres volume "xd-pg-data", redpanda volume "xd-rp-data"
-  (providerkit.EnsureInstance's "<name>-data" convention) — if the live
-  run reports Janitor residue on these, the actual name differs and needs
-  correcting from what EnsureInstance/postgres.go/redpanda.go actually do.
+- [x] Read all required docs/ADRs/precedent files (CLAUDE.md, ADR 033,
+      doc 08 §7.10 K1-K4, H9's Done-note, ADR 027, mediation port,
+      graphaccess.CompileMediatedConnections, openziti client/connection).
+- [x] Port change: `mediation.WorkloadIdentity.Labels`.
+- [x] Runtime capability: `runtime.LabelScopedAccessQuery` +
+      `domainRuntime.LabelScopedAccessEnabled()`.
+- [x] openziti adapter: label→attribute encoding, gate-aware
+      identity/service roleAttributes convergence, attribute-based Dial
+      policies, connection.go/identity.go wiring.
+- [x] Unit tests: identity_test.go (encoding, gate on/off, dialRoleRefs),
+      client_test.go (convergence heal + skip-when-unchanged for both
+      identities and services, gate-off byte-identical call-count pin,
+      attribute-based policy semantic), domainruntime_test.go (raw gate
+      forwarding regardless of GraphScopedAccess).
+- [x] `gofmt` clean, `go build ./...` clean, `go vet` (both tag sets)
+      clean, unfiltered `go test ./...` true-exit=0
+      (scratchpad/k4-gotest-full.log).
+- [ ] golangci-lint v2.12.2.
+- [ ] Extend crossdomain_mediated_integration_test.go's exact-set
+      assertion to cover attributes (labels on scenario endpoints +
+      identities' roleAttributes + policy semantics via management API).
+- [ ] Live Docker: openziti suite + crossdomain-mediated leg (flock-wrapped).
+- [ ] Live K8s legs (KUBECONFIG token permitting) or record plainly if not.
+- [ ] doc 08 K4 Done-note (additive).
+- [ ] Final commit.

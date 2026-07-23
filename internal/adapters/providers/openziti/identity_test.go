@@ -31,6 +31,139 @@ func TestIdentityRoleAttributeDistinctForDistinctURIs(t *testing.T) {
 	}
 }
 
+func TestLabelRoleAttributeEncoding(t *testing.T) {
+	t.Parallel()
+	got := labelRoleAttribute("tier", "gold")
+	want := "label.tier.gold"
+	if got != want {
+		t.Errorf("labelRoleAttribute(tier, gold) = %q, want %q", got, want)
+	}
+}
+
+func TestLabelRoleAttributeSanitizesKeyAndValue(t *testing.T) {
+	t.Parallel()
+	// A prefixed label key ("example.com/tier") and a value containing
+	// underscores/dots both sanitize through the same charset filter
+	// identityRoleAttribute uses, never leaking a stray "." from the
+	// sanitized segments themselves that could be confused with the
+	// "label.<key>.<value>" joiner.
+	got := labelRoleAttribute("example.com/tier", "a_b.c")
+	want := "label.example-com-tier.a-b-c"
+	if got != want {
+		t.Errorf("labelRoleAttribute = %q, want %q", got, want)
+	}
+}
+
+func TestLabelRoleAttributeIsDeterministic(t *testing.T) {
+	t.Parallel()
+	first := labelRoleAttribute("tier", "gold")
+	for i := 0; i < 5; i++ {
+		if got := labelRoleAttribute("tier", "gold"); got != first {
+			t.Fatalf("not deterministic: call %d = %q, first = %q", i, got, first)
+		}
+	}
+}
+
+func TestLabelRoleAttributesSortedByKey(t *testing.T) {
+	t.Parallel()
+	got := labelRoleAttributes(map[string]string{"team": "platform", "tier": "gold"})
+	want := []string{"label.team.platform", "label.tier.gold"}
+	if len(got) != len(want) {
+		t.Fatalf("labelRoleAttributes = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("labelRoleAttributes[%d] = %q, want %q (must be sorted by key for determinism)", i, got[i], want[i])
+		}
+	}
+}
+
+func TestLabelRoleAttributesNilForEmptyLabels(t *testing.T) {
+	t.Parallel()
+	if got := labelRoleAttributes(nil); got != nil {
+		t.Errorf("labelRoleAttributes(nil) = %v, want nil", got)
+	}
+	if got := labelRoleAttributes(map[string]string{}); got != nil {
+		t.Errorf("labelRoleAttributes(empty) = %v, want nil", got)
+	}
+}
+
+func TestIdentityMintRoleAttributesGateOff(t *testing.T) {
+	t.Parallel()
+	got := identityMintRoleAttributes(map[string]string{"tier": "gold"}, false)
+	want := []string{"datascape-mediated"}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("identityMintRoleAttributes(gate off) = %v, want %v (byte-identical to pre-K4)", got, want)
+	}
+}
+
+func TestIdentityMintRoleAttributesGateOnAppendsLabelAttributes(t *testing.T) {
+	t.Parallel()
+	got := identityMintRoleAttributes(map[string]string{"tier": "gold"}, true)
+	want := []string{"datascape-mediated", "label.tier.gold"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("identityMintRoleAttributes(gate on) = %v, want %v", got, want)
+	}
+}
+
+func TestIdentityMintRoleAttributesGateOnUnlabeledIsByteIdentical(t *testing.T) {
+	t.Parallel()
+	got := identityMintRoleAttributes(nil, true)
+	want := []string{"datascape-mediated"}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("identityMintRoleAttributes(gate on, unlabeled) = %v, want %v (unlabeled stays byte-identical even with the gate on)", got, want)
+	}
+}
+
+func TestServiceRoleAttributesGateOffIsNil(t *testing.T) {
+	t.Parallel()
+	if got := serviceRoleAttributes(map[string]string{"tier": "gold"}, false); got != nil {
+		t.Errorf("serviceRoleAttributes(gate off) = %v, want nil", got)
+	}
+}
+
+func TestServiceRoleAttributesGateOnDerivesFromLabels(t *testing.T) {
+	t.Parallel()
+	got := serviceRoleAttributes(map[string]string{"tier": "gold"}, true)
+	if len(got) != 1 || got[0] != "label.tier.gold" {
+		t.Fatalf("serviceRoleAttributes(gate on) = %v, want [label.tier.gold]", got)
+	}
+}
+
+func TestDialRoleRefsGateOffReturnsExactIDRef(t *testing.T) {
+	t.Parallel()
+	refs, allOf := dialRoleRefs(map[string]string{"tier": "gold"}, "ident123", false)
+	if allOf {
+		t.Error("allOf = true, want false when the gate is off")
+	}
+	if len(refs) != 1 || refs[0] != "@ident123" {
+		t.Fatalf("refs = %v, want [@ident123] (gate off: exact @id, byte-identical to pre-K4)", refs)
+	}
+}
+
+func TestDialRoleRefsUnlabeledIsExactIDRefEvenWithGateOn(t *testing.T) {
+	t.Parallel()
+	refs, allOf := dialRoleRefs(nil, "ident123", true)
+	if allOf {
+		t.Error("allOf = true, want false for an unlabeled endpoint")
+	}
+	if len(refs) != 1 || refs[0] != "@ident123" {
+		t.Fatalf("refs = %v, want [@ident123] (unlabeled endpoint: exact @id even with the gate on)", refs)
+	}
+}
+
+func TestDialRoleRefsLabeledUsesAttributeRefsWithAllOf(t *testing.T) {
+	t.Parallel()
+	refs, allOf := dialRoleRefs(map[string]string{"team": "platform", "tier": "gold"}, "ident123", true)
+	if !allOf {
+		t.Error("allOf = false, want true for a labeled endpoint (matches K2's matchLabels conjunction)")
+	}
+	want := []string{"#label.team.platform", "#label.tier.gold"}
+	if len(refs) != len(want) || refs[0] != want[0] || refs[1] != want[1] {
+		t.Fatalf("refs = %v, want %v", refs, want)
+	}
+}
+
 func TestParseInstanceConfigDefaults(t *testing.T) {
 	t.Parallel()
 	ic := parseInstanceConfig(configOf(nil))

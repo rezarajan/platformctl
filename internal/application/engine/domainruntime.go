@@ -92,6 +92,18 @@ type domainRuntime struct {
 	// has no effect at all unless graphScoped is also true — selector
 	// grants ride the SAME H7 realization, no independent mechanism.
 	labelScopedAccessEnabled bool
+	// labelScopedGate is the RAW docs/adr/033 LabelScopedAccess gate value
+	// this decorator was constructed with, stored UNCONDITIONALLY (unlike
+	// labelScopedAccessEnabled above, which is deliberately zero-valued
+	// whenever graphScoped is false — it feeds ONLY the H7 grant-
+	// realization path, which itself is only reachable under
+	// GraphScopedAccess). docs/planning/08 K4's mediation attribute
+	// derivation is a SEPARATE, independent consumer of the SAME gate
+	// (ADR 033's own "rides the SAME gate ... independently of
+	// GraphScopedAccess"), reached via LabelScopedAccessEnabled()
+	// (runtime.LabelScopedAccessQuery) — it must see the gate's true state
+	// even when GraphScopedAccess is off.
+	labelScopedGate bool
 	// namespaced is true for runtimes where a network IS a pre-existing
 	// namespace boundary a workload cannot leave (set from p.RuntimeType
 	// == "kubernetes" — see newDomainRuntime's doc comment for why a
@@ -164,6 +176,7 @@ func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any,
 	}
 	d.containerResources = parseRuntimeResources(runtimeConfig)
 	d.namespaced = runtimeType == provider.RuntimeTypeKubernetes
+	d.labelScopedGate = labelScopedAccessEnabled
 	if graphScoped {
 		d.graphScoped = true
 		d.labelScopedAccessEnabled = labelScopedAccessEnabled
@@ -462,6 +475,15 @@ func (d *domainRuntime) QualifyTargetAddress(ctx context.Context, target, caller
 	}
 	ns := naming.NetworkName(d.token, targetDomain)
 	return host + "." + ns + ".svc.cluster.local:" + port, nil
+}
+
+// LabelScopedAccessEnabled implements runtime.LabelScopedAccessQuery
+// (docs/planning/08 K4): reports the RAW LabelScopedAccess gate value this
+// decorator was constructed with, regardless of GraphScopedAccess — see
+// labelScopedGate's own field doc for why this is a distinct field from
+// labelScopedAccessEnabled above rather than a reuse of it.
+func (d *domainRuntime) LabelScopedAccessEnabled() bool {
+	return d.labelScopedGate
 }
 
 func (d *domainRuntime) ObserveIsolationEnforcement(ctx context.Context) (runtime.IsolationStatus, error) {
