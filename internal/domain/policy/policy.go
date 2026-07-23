@@ -78,19 +78,34 @@ func (s *StringList) UnmarshalJSON(data []byte) error {
 }
 
 // Match selects which resources a Match+Assert rule applies to — kind/
-// label/name selectors only (ADR 021 §2: "+ optional label/name
-// selectors"). There is deliberately no spec-field selector here: Match
-// answers "which resources"; Assert answers "what must hold" — conflating
-// the two would reopen the closed vocabulary mid-task.
+// label/name selectors, plus the docs/adr/033 (Stage K2) full label
+// Selector below (ADR 021 §2: "+ optional label/name selectors"). There is
+// deliberately no spec-field selector here: Match answers "which
+// resources"; Assert answers "what must hold" — conflating the two would
+// reopen the closed vocabulary mid-task.
 type Match struct {
 	Kind  StringList        `json:"kind,omitempty"`
 	Label map[string]string `json:"label,omitempty"`
 	Name  string            `json:"name,omitempty"`
+	// Selector is the docs/adr/033 (Stage K2) Kubernetes-style label
+	// selector — matchLabels/matchExpressions over metadata.labels — the
+	// "matchResource gains the same selector form" decision: label
+	// integrity is itself policy-governed (e.g. "deny any resource
+	// carrying clearance: * outside namespace trusted"). A distinct,
+	// richer mechanism from the plain equality-only Label map above (kept
+	// for backward compatibility); both may be set, and both must be
+	// satisfied. Evaluation gated behind the LabelScopedAccess feature
+	// gate (internal/application/policy) — gate-off never evaluates it.
+	Selector *Selector `json:"selector,omitempty"`
 }
 
 // Selects reports whether e is governed by this Match (nil Match selects
 // everything — never constructed by the decoder, since Assert-bearing
-// rules always require match, but kept total for callers/tests).
+// rules always require match, but kept total for callers/tests). Selector
+// matching is included unconditionally here — internal/application/policy
+// is responsible for never invoking Selects on a Selector-bearing Match
+// when the LabelScopedAccess gate is disabled (this package has no
+// knowledge of feature gates; that's an application-layer concern).
 func (m *Match) Selects(e resource.Envelope) bool {
 	if m == nil {
 		return true
@@ -106,7 +121,174 @@ func (m *Match) Selects(e resource.Envelope) bool {
 			return false
 		}
 	}
+	if m.Selector != nil && !m.Selector.Selects(e.Metadata.Labels) {
+		return false
+	}
 	return true
+}
+
+// SelectorOperator is one of the four closed docs/adr/033 (Stage K2)
+// matchExpressions operators — mirroring the Kubernetes LabelSelector
+// vocabulary exactly (metav1.LabelSelectorOperator), since that's the
+// grammar operators are already familiar with and ADR 033 decision 1
+// names explicitly ("Kubernetes-style label selectors").
+type SelectorOperator string
+
+const (
+	SelectorIn           SelectorOperator = "In"
+	SelectorNotIn        SelectorOperator = "NotIn"
+	SelectorExists       SelectorOperator = "Exists"
+	SelectorDoesNotExist SelectorOperator = "DoesNotExist"
+)
+
+// Valid reports whether o is one of the four closed SelectorOperator values.
+func (o SelectorOperator) Valid() bool {
+	switch o {
+	case SelectorIn, SelectorNotIn, SelectorExists, SelectorDoesNotExist:
+		return true
+	}
+	return false
+}
+
+// SelectorRequirement is one matchExpressions entry — a key plus an
+// operator plus (for In/NotIn) a value set, the same shape as Kubernetes'
+// own LabelSelectorRequirement.
+type SelectorRequirement struct {
+	Key      string           `json:"key"`
+	Operator SelectorOperator `json:"operator"`
+	Values   []string         `json:"values,omitempty"`
+}
+
+// Satisfied reports whether labels satisfies this requirement, following
+// Kubernetes' own labels.Requirement.Matches semantics exactly: In requires
+// the key present with a value in Values; NotIn matches when the key is
+// absent OR present with a value not in Values (the key is not required to
+// exist — this is what lets a matchExpressions entry express a negative
+// audience condition, e.g. "consumer lacks clearance: gold"); Exists/
+// DoesNotExist only inspect key presence.
+func (r SelectorRequirement) Satisfied(labels map[string]string) bool {
+	value, present := labels[r.Key]
+	switch r.Operator {
+	case SelectorIn:
+		return present && containsStr(r.Values, value)
+	case SelectorNotIn:
+		return !present || !containsStr(r.Values, value)
+	case SelectorExists:
+		return present
+	case SelectorDoesNotExist:
+		return !present
+	default:
+		return false
+	}
+}
+
+// validate checks r's own shape: key required, operator one of the four
+// closed values, In/NotIn require at least one value, Exists/DoesNotExist
+// require none (mirroring Kubernetes' own LabelSelectorRequirement
+// validation).
+func (r SelectorRequirement) validate() error {
+	if r.Key == "" {
+		return fmt.Errorf("matchExpressions entry: key is required")
+	}
+	if !r.Operator.Valid() {
+		return fmt.Errorf("matchExpressions entry %q: operator must be one of In/NotIn/Exists/DoesNotExist, got %q", r.Key, r.Operator)
+	}
+	switch r.Operator {
+	case SelectorIn, SelectorNotIn:
+		if len(r.Values) == 0 {
+			return fmt.Errorf("matchExpressions entry %q: operator %q requires at least one value", r.Key, r.Operator)
+		}
+	case SelectorExists, SelectorDoesNotExist:
+		if len(r.Values) > 0 {
+			return fmt.Errorf("matchExpressions entry %q: operator %q must not set values", r.Key, r.Operator)
+		}
+	}
+	return nil
+}
+
+// Selector is a docs/adr/033 (Stage K2) Kubernetes-style label selector:
+// matchLabels (equality, ANDed) plus matchExpressions (In/NotIn/Exists/
+// DoesNotExist, ANDed with each other and with matchLabels) — the exact
+// vocabulary ADR 033 decision 1 names, reused identically for both
+// matchEdge.selector's From/To and match.selector (matchResource).
+type Selector struct {
+	MatchLabels      map[string]string     `json:"matchLabels,omitempty"`
+	MatchExpressions []SelectorRequirement `json:"matchExpressions,omitempty"`
+}
+
+// Selects reports whether labels satisfies every matchLabels equality and
+// every matchExpressions requirement (AND across both, and across every
+// entry within each) — a nil Selector never occurs mid-evaluation (callers
+// only invoke Selects on a non-nil Selector) but is kept total, matching
+// every other pure predicate in this file.
+func (s *Selector) Selects(labels map[string]string) bool {
+	if s == nil {
+		return true
+	}
+	for k, v := range s.MatchLabels {
+		if labels[k] != v {
+			return false
+		}
+	}
+	for _, req := range s.MatchExpressions {
+		if !req.Satisfied(labels) {
+			return false
+		}
+	}
+	return true
+}
+
+// String renders s deterministically (matchLabels keys sorted; matchExpressions
+// in declared order) — the evaluator's Decision.Message must name a firing
+// selector (docs/planning/08 K2 accept: "deny output names ... both
+// selectors"), and a nondeterministic map-iteration rendering would make
+// that message flaky.
+func (s *Selector) String() string {
+	if s == nil {
+		return "{}"
+	}
+	var parts []string
+	if len(s.MatchLabels) > 0 {
+		keys := make([]string, 0, len(s.MatchLabels))
+		for k := range s.MatchLabels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		pairs := make([]string, 0, len(keys))
+		for _, k := range keys {
+			pairs = append(pairs, fmt.Sprintf("%s=%s", k, s.MatchLabels[k]))
+		}
+		parts = append(parts, fmt.Sprintf("matchLabels{%s}", strings.Join(pairs, ",")))
+	}
+	for _, req := range s.MatchExpressions {
+		if len(req.Values) > 0 {
+			parts = append(parts, fmt.Sprintf("%s %s [%s]", req.Key, req.Operator, strings.Join(req.Values, ",")))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s %s", req.Key, req.Operator))
+		}
+	}
+	return strings.Join(parts, " AND ")
+}
+
+// validate checks s's own shape: every matchExpressions entry validates,
+// and at least one of matchLabels/matchExpressions is set (an empty
+// Selector selects everything, which is never a useful rule and is almost
+// certainly an authoring mistake — Validate below rejects it, mirroring
+// Assert.operatorCount's "must set exactly one" spirit of catching
+// vacuous rules at load time rather than silently matching the world).
+func (s *Selector) validate() error {
+	if s == nil {
+		return fmt.Errorf("selector is required")
+	}
+	if len(s.MatchLabels) == 0 && len(s.MatchExpressions) == 0 {
+		return fmt.Errorf("selector must set matchLabels and/or matchExpressions")
+	}
+	for _, req := range s.MatchExpressions {
+		if err := req.validate(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Assert is the condition Match's selected resources must satisfy — exactly
@@ -277,10 +459,27 @@ type CrossDomainSelector struct {
 // EdgeMatch selects graph edges rather than resources or findings — a
 // distinct match shape from Match (resource selectors) because an edge's
 // identity is the pair of resources it connects, not one resource's own
-// fields (docs/adr/022 Ring 0). crossDomain is the only edge shape this
-// closed vocabulary defines.
+// fields (docs/adr/022 Ring 0). crossDomain is the compartment-granularity
+// shape (domain-to-domain); selector is the docs/adr/033 (Stage K2)
+// label-granularity generalization — exactly one of the two is set.
 type EdgeMatch struct {
 	CrossDomain *CrossDomainSelector `json:"crossDomain,omitempty"`
+	// Selector matches an edge by label selectors on each endpoint
+	// (docs/adr/033 decision 1: "crossDomain becomes one special case of a
+	// general edge-matching vocabulary") — evaluated over the SAME
+	// graph-derived edges crossDomain already uses (internal/application/
+	// policy's crossDomainEdges). Gated behind the LabelScopedAccess
+	// feature gate.
+	Selector *EdgeSelector `json:"selector,omitempty"`
+}
+
+// EdgeSelector is matchEdge.selector's {from, to} pair (docs/adr/033
+// decision 1) — both required, mirroring CrossDomainSelector's own
+// From/To-both-required shape: an edge matches when the FROM endpoint's
+// labels satisfy From AND the TO endpoint's labels satisfy To.
+type EdgeSelector struct {
+	From *Selector `json:"from"`
+	To   *Selector `json:"to"`
 }
 
 // GrantMatch selects docs/adr/026 §2 spec.access wide-grant declarations
@@ -335,7 +534,7 @@ func (r Rule) Kind() RuleKind {
 		return RuleKindFinding
 	case r.MatchPlan != nil && r.Match == nil && r.Assert == nil && r.MatchFinding == nil && r.MatchEdge == nil && r.MatchGrant == nil:
 		return RuleKindPlan
-	case r.MatchEdge != nil && r.MatchEdge.CrossDomain != nil && r.Match == nil && r.Assert == nil && r.MatchFinding == nil && r.MatchPlan == nil && r.MatchGrant == nil:
+	case r.MatchEdge != nil && (r.MatchEdge.CrossDomain != nil) != (r.MatchEdge.Selector != nil) && r.Match == nil && r.Assert == nil && r.MatchFinding == nil && r.MatchPlan == nil && r.MatchGrant == nil:
 		return RuleKindEdge
 	case r.MatchGrant != nil && r.Match == nil && r.Assert == nil && r.MatchFinding == nil && r.MatchPlan == nil && r.MatchEdge == nil:
 		return RuleKindGrant
@@ -426,6 +625,11 @@ func Validate(policies []Policy) error {
 						return fmt.Errorf("rule %q: assert.matches %q: %w", r.ID, r.Assert.Matches, err)
 					}
 				}
+				if r.Match.Selector != nil {
+					if err := r.Match.Selector.validate(); err != nil {
+						return fmt.Errorf("rule %q: match.selector: %w", r.ID, err)
+					}
+				}
 			case RuleKindFinding:
 				if r.MatchFinding.Code == "" {
 					return fmt.Errorf("rule %q: matchFinding.code is required", r.ID)
@@ -435,8 +639,20 @@ func Validate(policies []Policy) error {
 					return fmt.Errorf("rule %q: matchPlan.action is required", r.ID)
 				}
 			case RuleKindEdge:
-				if r.MatchEdge.CrossDomain.From == "" || r.MatchEdge.CrossDomain.To == "" {
-					return fmt.Errorf("rule %q: matchEdge.crossDomain.from and matchEdge.crossDomain.to are required", r.ID)
+				if r.MatchEdge.CrossDomain != nil {
+					if r.MatchEdge.CrossDomain.From == "" || r.MatchEdge.CrossDomain.To == "" {
+						return fmt.Errorf("rule %q: matchEdge.crossDomain.from and matchEdge.crossDomain.to are required", r.ID)
+					}
+				} else {
+					if r.MatchEdge.Selector.From == nil || r.MatchEdge.Selector.To == nil {
+						return fmt.Errorf("rule %q: matchEdge.selector.from and matchEdge.selector.to are required", r.ID)
+					}
+					if err := r.MatchEdge.Selector.From.validate(); err != nil {
+						return fmt.Errorf("rule %q: matchEdge.selector.from: %w", r.ID, err)
+					}
+					if err := r.MatchEdge.Selector.To.validate(); err != nil {
+						return fmt.Errorf("rule %q: matchEdge.selector.to: %w", r.ID, err)
+					}
 				}
 			case RuleKindGrant:
 				if r.MatchGrant.Namespace == "" {

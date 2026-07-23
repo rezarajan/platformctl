@@ -211,6 +211,15 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// repo's own CI").
 	gates.Register("PolicyEngine", featuregate.Alpha, false)
 
+	// docs/planning/08 Stage K (K2), docs/adr/033: the policy vocabulary's
+	// label-selector generalization (matchEdge.selector, match.selector) —
+	// gives governance the same resolution the runtime already has (ADR
+	// 026/H7). Defaults off until the composed H9-style scenario passes on
+	// both runtimes (ADR 033 decision 6); gate-off is byte-identical for
+	// every pre-existing policy rule shape (internal/application/policy.Run's
+	// own doc comment).
+	gates.Register("LabelScopedAccess", featuregate.Alpha, false)
+
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
 	// "container" (the Phase 1 "prove the runtime" placeholder) is

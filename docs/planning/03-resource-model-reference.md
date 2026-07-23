@@ -1964,3 +1964,40 @@ absent-passes posture means an unset field has opted out of nothing.
 manifest set without the rest of `validate`. Gated by `PolicyEngine`
 (Alpha, disabled by default — docs/planning/04-roadmap-and-feature-gates.md
 §12).
+
+### 13.1 Label selectors — `matchEdge.selector` and `match.selector` (docs/planning/08 K2, docs/adr/033)
+
+`crossDomain` and `matchGrant`'s bare `namespace` are compartment-granularity
+selectors; docs/adr/033 (Stage K2) adds a Kubernetes-style label selector —
+`matchLabels`/`matchExpressions`, evaluated against `metadata.labels` (§2,
+grammar validated at `validate` per K1 above) — giving the policy vocabulary
+the same resolution the reference graph already has (docs/adr/026, §12
+above). The shape is identical wherever it appears:
+
+```yaml
+selector:
+  matchLabels: {tier: gold}              # equality, ANDed
+  matchExpressions:                      # ANDed with matchLabels and each other
+    - {key: clearance, operator: Exists}          # In | NotIn | Exists | DoesNotExist
+    - {key: clearance, operator: In, values: [gold, platinum]}
+```
+
+`matchEdge.selector: {from, to}` is `matchEdge`'s second closed shape
+alongside `crossDomain` (exactly one of the two is set): an edge matches
+when the FROM endpoint's `metadata.labels` satisfy `from` AND the TO
+endpoint's `metadata.labels` satisfy `to`, evaluated over the identical
+graph-derived edges `crossDomain` uses (a `Binding`'s `sourceRef` ->
+`targetRef`, or a `connectionRef` consumer -> the `Connection` it
+references). `match.selector` is an additional, optional field alongside
+`match`'s existing `kind`/`label`/`name` selectors (composable with them,
+and with the plain equality-only `label` map) — the "matchResource gains
+the same selector form" decision, meant for label-integrity rules (e.g.
+"deny any resource carrying `clearance: *` outside namespace `trusted`" —
+see the shipped zero-trust pack's `who-may-wear-clearance-label` rule for
+a worked example, and docs/adr/033's "self-claim pitfall" section for why
+this rule exists independently of any selector-based audience rule
+elsewhere). Both forms are evaluated only when the `LabelScopedAccess`
+feature gate (Alpha, disabled by default) is enabled; gate-off, a rule
+using either form is skipped entirely — never evaluated, never a partial
+match — so every pre-existing policy rule shape is byte-identical to
+before this section existed.

@@ -4,6 +4,29 @@
   "title": "Policy",
   "description": "docs/adr/021-policy-engine-zero-trust.md: a typed governance rule set, loaded from a separate channel (--policies / .datascape/policies/), never from the governed manifest set. Deliberately NOT under apiVersion datascape.io/v1alpha1 and NOT registered in schemas.KindFiles (ADR 021 §1) — Policy is a distinct input, not a resource kind.",
   "type": "object",
+  "$defs": {
+    "selector": {
+      "type": "object",
+      "description": "docs/adr/033 (Stage K2): a Kubernetes-style label selector over metadata.labels — matchLabels (equality, ANDed) plus matchExpressions (In/NotIn/Exists/DoesNotExist, ANDed with matchLabels and with each other). At least one of matchLabels/matchExpressions must be set (internal/domain/policy.Selector.validate) — an empty selector matches everything, which is never a useful rule.",
+      "properties": {
+        "matchLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "matchExpressions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": { "type": "string", "minLength": 1 },
+              "operator": { "type": "string", "enum": ["In", "NotIn", "Exists", "DoesNotExist"] },
+              "values": { "type": "array", "items": { "type": "string" }, "description": "Required (non-empty) for In/NotIn; must be absent/empty for Exists/DoesNotExist." }
+            },
+            "required": ["key", "operator"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
   "properties": {
     "apiVersion": { "const": "policy.datascape.io/v1alpha1" },
     "kind": { "const": "Policy" },
@@ -37,7 +60,8 @@
                     ]
                   },
                   "label": { "type": "object", "additionalProperties": { "type": "string" } },
-                  "name": { "type": "string" }
+                  "name": { "type": "string" },
+                  "selector": { "$ref": "#/$defs/selector", "description": "docs/adr/033 (Stage K2): the richer Kubernetes-style label selector — \"matchResource gains the same selector form\", for label-integrity rules (e.g. \"deny any resource carrying clearance: * outside namespace trusted\"). Distinct from, and composable with, the plain equality-only label map above. Gated behind the LabelScopedAccess feature gate." }
                 },
                 "additionalProperties": false
               },
@@ -76,7 +100,7 @@
               },
               "matchEdge": {
                 "type": "object",
-                "description": "Selects graph edges rather than resources (docs/adr/022 Ring 0). crossDomain is the only edge shape this vocabulary defines.",
+                "description": "Selects graph edges rather than resources (docs/adr/022 Ring 0). Exactly one of crossDomain (compartment granularity) or selector (docs/adr/033 Stage K2, label granularity) is set — internal/domain/policy.Rule.Kind() enforces this.",
                 "properties": {
                   "crossDomain": {
                     "type": "object",
@@ -87,9 +111,18 @@
                     },
                     "required": ["from", "to"],
                     "additionalProperties": false
+                  },
+                  "selector": {
+                    "type": "object",
+                    "description": "docs/adr/033 decision 1: \"crossDomain becomes one special case of a general edge-matching vocabulary\" — matches an edge by Kubernetes-style label selectors on each endpoint's metadata.labels, evaluated over the SAME graph-derived edges crossDomain already uses. An edge matches when the FROM endpoint's labels satisfy from AND the TO endpoint's labels satisfy to. Gated behind the LabelScopedAccess feature gate.",
+                    "properties": {
+                      "from": { "$ref": "#/$defs/selector" },
+                      "to": { "$ref": "#/$defs/selector" }
+                    },
+                    "required": ["from", "to"],
+                    "additionalProperties": false
                   }
                 },
-                "required": ["crossDomain"],
                 "additionalProperties": false
               },
               "matchGrant": {
