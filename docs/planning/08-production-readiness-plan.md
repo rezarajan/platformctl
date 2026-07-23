@@ -3123,6 +3123,18 @@ Connect-worker HA (workers>1) remains I7's gap.
   is the point). Keep it pure-Go (yaml walk), no Docker.
 - **Accept:** test green on main; deleting httpsPort from the ingress
   fragment makes it fail naming the field and the file.
+- **Done (2026-07-22):** `manifest.FragmentCheck` (exported wrapper over
+  fragment.go's existing compiled schemas — no reimplementation, no drift
+  risk) + `internal/archtest/fragment_completeness_test.go`
+  (`TestFragmentCompletenessSweep`), walking
+  cmd/platformctl/testdata/** (excl. negative-corpus), examples/**, and
+  internal/application/blueprint/templates/**, grouping Binding
+  providerRef resolution per directory (the same manifest-set boundary
+  `manifest.Load` uses). Proven both directions: green at the current
+  state; deleting `httpsPort` from
+  schemas/v1alpha1/fragments/provider/ingress.json fails naming
+  `cmd/platformctl/testdata/ingress-tls-scenario/manifests.yaml` and the
+  `httpsPort` field, then reverts clean.
 
 ### I11: log/slog behind the engine's logging seam (NFR-4 made literal)
 
@@ -3139,6 +3151,23 @@ Connect-worker HA (workers>1) remains I7's gap.
 - **Accept:** `--log-format json` emits one parseable event per action
   covering NFR-4's fields (asserted in a cmd-level test); default output
   byte-compatible with today's (output-contract harness green).
+- **Done (2026-07-22):** `Engine.Log func(format,args)` replaced with
+  `Engine.Logger *slog.Logger`; `logf` re-implemented on it, plus a new
+  `logAction` helper carrying `resource`/`action`/`outcome`/`duration`
+  slog attrs at all 15 reconciliation-action call sites (Apply's
+  processEntry: skip/fail/drift/ok; Destroy: fail/skip/ok, now also
+  timed per entry). cmd: `--log-format text|json` persistent flag
+  (`cmd/platformctl/logging.go`'s `textLineHandler` renders exactly the
+  pre-slog prose byte-for-byte for the text default; `json` uses slog's
+  standard `JSONHandler`); `(*app).newEngine` now takes an `io.Writer`
+  (`cmd.ErrOrStderr()`) instead of hardcoding `os.Stderr`, so both the
+  live CLI and tests observe the same stream. Proven by
+  `cmd/platformctl/logging_test.go`
+  (`TestLogFormatJSONEmitsStructuredEventsPerAction`,
+  `TestLogFormatTextIsByteCompatible`) against `destroy` (the one
+  command whose `Engine.Logger` stays wired — `apply` nils it once its
+  Reporter owns stderr). Doc 01 NFR-12 and the README's global-flags
+  list record the literal claim. Reporter interface untouched.
 
 ### I12: dbjob pipeline hardening (precondition for BackupRestore GA)
 

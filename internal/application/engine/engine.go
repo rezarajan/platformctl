@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"sort"
 	"strings"
@@ -64,9 +65,18 @@ type Engine struct {
 	// level (resources in the same level share no dependency relationship).
 	// Values <= 1 mean fully sequential. Gated by ParallelReconciliation.
 	Parallelism int
-	// Log receives one line per reconciliation action; nil disables. Used by
-	// Destroy and for one-off messages.
-	Log func(format string, args ...any)
+	// Logger receives one structured event per reconciliation action; nil
+	// disables (docs/planning/08 I11, NFR-4). Used by Destroy and for
+	// one-off messages — Apply nils this out once a Reporter is set, since
+	// the Reporter already owns the CLI's ordered stderr display and a
+	// second seam would duplicate it. The cmd layer wires this from
+	// --log-format (json|text): text (default) renders exactly the prose
+	// logf always produced, byte-for-byte; json additionally carries each
+	// event's resource/action/outcome/duration as attrs (see
+	// cmd/platformctl/logging.go's textLineHandler doc comment for why text
+	// mode drops attrs on the floor rather than rendering slog's default
+	// key=value shape).
+	Logger *slog.Logger
 	// Reporter receives structured apply progress events (start/done/skip)
 	// for a rich, ordered, countable CLI display. nil disables.
 	Reporter Reporter
@@ -102,10 +112,33 @@ func (e *Engine) report(fn func(Reporter)) {
 	}
 }
 
+// logf renders one prose log line through the slog seam with no structured
+// attrs — for the rare message that isn't itself one reconciliation action
+// (see logAction for those). format/args render identically to the pre-I11
+// fmt.Fprintf-based Log seam.
 func (e *Engine) logf(format string, args ...any) {
-	if e.Log != nil {
-		e.Log(format, args...)
+	if e.Logger == nil {
+		return
 	}
+	e.Logger.Info(fmt.Sprintf(format, args...))
+}
+
+// logAction emits one structured reconciliation-action event (docs/planning/
+// 08 I11, NFR-4: "every reconciliation action is logged as a structured
+// event: resource, action, outcome, duration"). format/args render the exact
+// prose message logf always produced — text mode's handler renders only
+// that message (byte-compatible with pre-I11 output); json mode's handler
+// additionally serializes the four attrs below alongside it.
+func (e *Engine) logAction(key resource.Key, action, outcome string, dur time.Duration, format string, args ...any) {
+	if e.Logger == nil {
+		return
+	}
+	e.Logger.LogAttrs(context.Background(), slog.LevelInfo, fmt.Sprintf(format, args...),
+		slog.String("resource", key.String()),
+		slog.String("action", action),
+		slog.String("outcome", outcome),
+		slog.Duration("duration", dur),
+	)
 }
 
 // Apply executes a plan. State is persisted after each resource, not only at
@@ -158,7 +191,7 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 			mu.Lock()
 			res.Skipped = append(res.Skipped, key)
 			mu.Unlock()
-			e.logf("skip %s: a dependency failed", key)
+			e.logAction(key, string(entry.Action), "skip", 0, "skip %s: a dependency failed", key)
 			e.report(func(r Reporter) { r.StepSkipped(key, "a dependency failed") })
 			return
 		}
@@ -168,7 +201,7 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 			mu.Lock()
 			res.Failed[key] = err
 			mu.Unlock()
-			e.logf("fail %s (%s): %v", key, entry.Action, err)
+			e.logAction(key, string(entry.Action), "fail", 0, "fail %s (%s): %v", key, entry.Action, err)
 			e.report(func(r Reporter) { r.StepSkipped(key, err.Error()) })
 			return
 		}
@@ -177,7 +210,7 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 			mu.Lock()
 			res.Failed[key] = err
 			mu.Unlock()
-			e.logf("fail %s (%s): %v", key, entry.Action, err)
+			e.logAction(key, string(entry.Action), "fail", 0, "fail %s (%s): %v", key, entry.Action, err)
 			e.report(func(r Reporter) { r.StepSkipped(key, err.Error()) })
 			return
 		}
@@ -186,7 +219,7 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 			mu.Lock()
 			res.Failed[key] = err
 			mu.Unlock()
-			e.logf("fail %s (%s): %v", key, entry.Action, err)
+			e.logAction(key, string(entry.Action), "fail", 0, "fail %s (%s): %v", key, entry.Action, err)
 			e.report(func(r Reporter) { r.StepSkipped(key, err.Error()) })
 			return
 		}
@@ -208,7 +241,7 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 				return
 			}
 			if c, ok := probed.Condition(status.DriftDetected); ok {
-				e.logf("drift %s (%s); healing", key, c.Reason)
+				e.logAction(key, string(entry.Action), "drift", 0, "drift %s (%s); healing", key, c.Reason)
 				reason := c.Reason
 				e.report(func(r Reporter) { r.StepHealing(key, reason) })
 			}
@@ -231,7 +264,7 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 				blocked[dep] = true
 			}
 			mu.Unlock()
-			e.logf("fail %s (%s) after %s: %v", key, entry.Action, dur, err)
+			e.logAction(key, string(entry.Action), "fail", dur, "fail %s (%s) after %s: %v", key, entry.Action, dur, err)
 			rerr := err
 			e.report(func(r Reporter) { r.StepFinished(n, total, key, string(entry.Action), dur, rerr) })
 			return
@@ -239,7 +272,7 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 		mu.Lock()
 		res.Succeeded = append(res.Succeeded, key)
 		mu.Unlock()
-		e.logf("ok   %s (%s) in %s", key, entry.Action, dur)
+		e.logAction(key, string(entry.Action), "ok", dur, "ok   %s (%s) in %s", key, entry.Action, dur)
 		e.report(func(r Reporter) { r.StepFinished(n, total, key, string(entry.Action), dur, nil) })
 	}
 
@@ -1148,10 +1181,11 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 		if entry.Action != plan.ActionDelete && entry.Action != plan.ActionRefused {
 			continue
 		}
+		start := time.Now()
 		if entry.Action == plan.ActionRefused {
 			err := errors.New(entry.Reason)
 			res.Failed[entry.Key] = err
-			e.logf("fail destroy %s: %v", entry.Key, err)
+			e.logAction(entry.Key, string(entry.Action), "fail", time.Since(start).Round(time.Millisecond), "fail destroy %s: %v", entry.Key, err)
 			block(entry.Key)
 			continue
 		}
@@ -1161,7 +1195,7 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 		}
 		if blocked[entry.Key] {
 			res.Skipped = append(res.Skipped, entry.Key)
-			e.logf("skip destroy %s: a resource depending on it failed to destroy", entry.Key)
+			e.logAction(entry.Key, string(entry.Action), "skip", time.Since(start).Round(time.Millisecond), "skip destroy %s: a resource depending on it failed to destroy", entry.Key)
 			continue
 		}
 		// NFR-3, engine-enforced (not per-provider convention): External
@@ -1174,7 +1208,7 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 			if !e.AllowDestructive {
 				err := fmt.Errorf("%s is External: destroying it requires both --include-external and --yes-i-understand-this-is-destructive", entry.Key)
 				res.Failed[entry.Key] = err
-				e.logf("fail destroy %s: %v", entry.Key, err)
+				e.logAction(entry.Key, string(entry.Action), "fail", time.Since(start).Round(time.Millisecond), "fail destroy %s: %v", entry.Key, err)
 				block(entry.Key)
 				continue
 			}
@@ -1185,7 +1219,7 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 					return res, err
 				}
 				res.Succeeded = append(res.Succeeded, entry.Key)
-				e.logf("ok   destroy %s (external: removed from state only)", entry.Key)
+				e.logAction(entry.Key, string(entry.Action), "ok", time.Since(start).Round(time.Millisecond), "ok   destroy %s (external: removed from state only)", entry.Key)
 				continue
 			}
 		}
@@ -1194,19 +1228,19 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 				return res, err
 			}
 			res.Succeeded = append(res.Succeeded, entry.Key)
-			e.logf("ok   destroy %s", entry.Key)
+			e.logAction(entry.Key, string(entry.Action), "ok", time.Since(start).Round(time.Millisecond), "ok   destroy %s", entry.Key)
 			continue
 		}
 		prov, req, err := e.resolveRequest(ctx, env, byKey, &st)
 		if err != nil {
 			res.Failed[entry.Key] = err
-			e.logf("fail destroy %s: %v", entry.Key, err)
+			e.logAction(entry.Key, string(entry.Action), "fail", time.Since(start).Round(time.Millisecond), "fail destroy %s: %v", entry.Key, err)
 			block(entry.Key)
 			continue
 		}
 		if err := prov.Destroy(ctx, req); err != nil {
 			res.Failed[entry.Key] = err
-			e.logf("fail destroy %s: %v", entry.Key, err)
+			e.logAction(entry.Key, string(entry.Action), "fail", time.Since(start).Round(time.Millisecond), "fail destroy %s: %v", entry.Key, err)
 			block(entry.Key)
 			continue
 		}
@@ -1215,7 +1249,7 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 			return res, err
 		}
 		res.Succeeded = append(res.Succeeded, entry.Key)
-		e.logf("ok   destroy %s", entry.Key)
+		e.logAction(entry.Key, string(entry.Action), "ok", time.Since(start).Round(time.Millisecond), "ok   destroy %s", entry.Key)
 	}
 
 	if len(res.Failed) > 0 {

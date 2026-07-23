@@ -43,7 +43,12 @@ type app struct {
 	featureGates string
 	output       string
 	envFile      string
-	wire         wiringFunc
+	// logFormat is --log-format (docs/planning/08 I11, NFR-4): "text"
+	// (default, byte-compatible with the pre-slog prose stderr log) or
+	// "json" (one structured event per reconciliation action). Validated in
+	// init(); consumed by newEngine via newEngineLogger.
+	logFormat string
+	wire      wiringFunc
 
 	// policies is --policies: an explicit directory of Policy documents
 	// (docs/adr/021-policy-engine-zero-trust.md §1's "separate channel").
@@ -68,6 +73,9 @@ type app struct {
 }
 
 func (a *app) init() error {
+	if a.logFormat != "text" && a.logFormat != "json" {
+		return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf("--log-format: must be \"text\" or \"json\", got %q", a.logFormat))
+	}
 	a.gates = featuregate.NewRegistry()
 	a.reg = a.wire(a.gates)
 	if a.envFile != "" {
@@ -136,6 +144,7 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 	root.PersistentFlags().StringVar(&a.stateSecretRef, "state-secret-ref", "", "s3 backend: env-backend SecretReference name providing accessKey/secretKey (DATASCAPE_SECRET_<NAME>_{ACCESSKEY,SECRETKEY})")
 	root.PersistentFlags().BoolVar(&a.stateInsecure, "state-insecure", false, "s3 backend: use plain HTTP instead of TLS (local MinIO testing)")
 	root.PersistentFlags().DurationVar(&a.stateLockTTL, "state-lock-ttl", 0, "s3 backend: lock lease TTL (default 15m — must outlast the longest apply/destroy run)")
+	root.PersistentFlags().StringVar(&a.logFormat, "log-format", "text", "reconciliation log format: text|json (docs/planning/08 I11) — text (default) is byte-compatible with the historical prose stderr log; json emits one structured event per action (resource, action, outcome, duration, per NFR-4)")
 
 	root.AddCommand(
 		newInitCmd(a),
@@ -426,7 +435,12 @@ func (a *app) loadAndValidate(path string) ([]resource.Envelope, *graph.Graph, e
 	return envelopes, g, nil
 }
 
-func (a *app) newEngine() (*engine.Engine, error) {
+// newEngine wires an Engine's cross-cutting seams (state/secrets/clock/
+// logger). stderr is the destination for the structured log seam
+// (docs/planning/08 I11) — callers pass cmd.ErrOrStderr(), not os.Stderr
+// directly, so tests can capture it the same way they already capture
+// cobra's own stderr stream.
+func (a *app) newEngine(stderr io.Writer) (*engine.Engine, error) {
 	secrets := secretrouter.New().
 		Register(secret.BackendEnv, envsecrets.New()).
 		Register(secret.BackendFile, filesecrets.New())
@@ -445,9 +459,7 @@ func (a *app) newEngine() (*engine.Engine, error) {
 		StateStore:  store,
 		SecretStore: secrets,
 		Clock:       clock.Real{},
-		Log: func(format string, args ...any) {
-			fmt.Fprintf(os.Stderr, format+"\n", args...)
-		},
+		Logger:      newEngineLogger(stderr, a.logFormat),
 	}, nil
 }
 
@@ -575,7 +587,7 @@ func newApplyCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			eng, err := a.newEngine()
+			eng, err := a.newEngine(cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -652,7 +664,7 @@ func newApplyCmd(a *app) *cobra.Command {
 			eng.AllowImportedDeletes = includeImportedDeletes
 			// Stream ordered, countable progress to stderr; the reporter owns
 			// per-step output, so silence the raw log to avoid duplicate lines.
-			eng.Log = nil
+			eng.Logger = nil
 			eng.Reporter = cliutil.NewProgressReporter(cmd.ErrOrStderr(), isTTY(cmd.ErrOrStderr()))
 			result, err := eng.Apply(cmd.Context(), p, envelopes, g)
 			if err != nil {
@@ -689,7 +701,7 @@ func newDestroyCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			eng, err := a.newEngine()
+			eng, err := a.newEngine(cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -774,7 +786,7 @@ func newDriftCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			eng, err := a.newEngine()
+			eng, err := a.newEngine(cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -864,7 +876,7 @@ func newImportCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			eng, err := a.newEngine()
+			eng, err := a.newEngine(cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}

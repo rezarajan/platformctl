@@ -154,6 +154,7 @@ a later add-on.
 | NFR-9 (Recoverability) | State is written atomically (temp file + rename, or transactional store); a crash mid-apply never corrupts state into an unreadable file. |
 | NFR-10 (Mechanism correctness without a real backend) | The `observers`/`LineageAware` path must be fully testable — and tested — using a fake `LineageAware` provider, so its correctness does not depend on a real lineage backend being implemented first. |
 | NFR-11 (Settledness) | A resource reported `Ready` answers its declared protocol at that moment, and a probe run immediately after `apply` reports no drift. Wait loops poll an observable condition under an overall deadline (with an honest timeout error naming the last observed state); fixed-duration sleeps that assume completion are forbidden — correctness must not depend on machine speed. (Added by the 2026-07 production review, doc 08 I3; the redpanda settle fix `93fbf14` is the motivating instance.) |
+| NFR-12 (NFR-4 made literal) | NFR-4's "structured event" is not a metaphor: `--log-format json` emits one `encoding/json`-parseable `log/slog` event per reconciliation action, carrying `resource`/`action`/`outcome`/`duration` as attributes (plus the same prose `--log-format text`, the default, renders byte-for-byte unchanged). (Added by the 2026-07 production review, doc 08 I11.) |
 
 **Scale envelope (2026-07 note):** NFR-8's budget is stated for the
 10-resource acceptance scenario only. Behavior at 100s of resources

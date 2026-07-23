@@ -35,7 +35,7 @@ func newBackupCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			eng, err := a.newEngine()
+			eng, err := a.newEngine(cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
@@ -103,7 +103,7 @@ func newRestoreCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			eng, err := a.newEngine()
+			eng, err := a.newEngine(cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
