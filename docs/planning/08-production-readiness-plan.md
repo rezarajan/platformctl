@@ -3540,6 +3540,19 @@ behavior changed. `go test ./...` unfiltered: true-exit=0. gofmt/`go vet`
   backup-Job/restore-Job round trip and the full I12+I13 fault-suite
   parameterization-over-runtime this task's Accept criterion names are
   the remaining live-evidence work, not open design or code questions.
+- **Open item CLOSED (2026-07-23, merge gate):** the RBAC was applied to
+  the shared cluster and `TestBackupRestoreKubernetesPostgresRoundTrip`
+  now passes live (42s) — after five root-caused fixes the branch could
+  not have found without cluster access: the engine docker-only guard
+  lifted (ADR 007 amendment), dispatch moved from type assertion to
+  RuntimeType (the wrapper-completeness consequence), lowercase job-name
+  timestamps (RFC 1123), one-shot results copied into the shared
+  emptyDir for ReadJobFile, sentinel exit files read as the pipeline
+  verdict (a failed pg_dump had masqueraded as a successful 0-byte
+  backup), and FileMount.Mode honored in both K8s Secret-mount paths
+  (world-readable pgpass broke libpq auth). Full manual round trip also
+  verified: backup 2072 bytes, DROP TABLE, restore via scratch-db plus
+  atomic promote, rows back.
 
 ## 7.8 Stage I — Production-review remediations (doc 11, 2026-07 owner review)
 
