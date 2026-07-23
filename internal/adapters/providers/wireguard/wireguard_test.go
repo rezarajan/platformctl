@@ -111,8 +111,9 @@ func TestReconcileConnectionFailsHonestlyWhenUpstreamNeverAnswers(t *testing.T) 
 // would collide with the forwarder proxy realizes for the same
 // Connection), attached ONLY to the transit network, and its dial address
 // published as an endpoint fact named connection.ViaFactName(ns, name) —
-// the exact fact the engine resolves into Request.TunnelFacts for the
-// via'd Connection's own (proxy) reconcile.
+// the exact fact the via'd Connection's own (proxy) reconcile reads back
+// via Request.Facts.Endpoint (docs/planning/08 I9; originally
+// Request.TunnelFacts, a bespoke field migrated and deleted).
 func TestReconcileInstanceCreatesViaTunnelForChainedConnection(t *testing.T) {
 	shrinkTunnelSettle(t)
 

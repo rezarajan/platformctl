@@ -462,6 +462,58 @@ A `Runtime` is injected into `Reconcile`/`Destroy`/`Probe` based on the referenc
 resource's `spec.runtime.type` — this is how a Redpanda provider can run on Docker today and on
 Kubernetes later without the Redpanda provider package changing at all.
 
+**Cross-provider facts (docs/planning/08 I9, additive to the contract above):** `Request` also
+carries `Facts Facts` — a generic, read-only, engine-backed query over every provider-published
+`endpoint.Endpoint` fact in state, snapshotted once at request-build time. It exists because the
+shape sketched above under-documents a real accretion pattern: every cross-provider need
+(schema-registry URL, a trino catalog's warehouse S3 endpoint, a via'd tunnel's dial address, a
+prometheus scrape-target list, ...) had been landing as its own bespoke `Request` field, each one
+patching the engine, the port, and every doc in lockstep — a wall a third-party (Phase 8) provider
+author cannot climb without modifying core.
+
+```go
+// Facts is the generic form: any provider, including a future third-party
+// one, reads a published fact by (owning resource.Key, fact name) or
+// enumerates every fact sharing a name — never by patching this port.
+type Facts interface {
+    // Endpoint returns providerKey's own published fact named factName.
+    // ok is false when it hasn't been published yet in this Request's
+    // snapshot — never blocks, never triggers a reconcile.
+    Endpoint(providerKey resource.Key, factName string) (endpoint.Endpoint, bool)
+    // ByName enumerates every published fact named factName across the
+    // whole snapshot, sorted by owning resource.Key for determinism.
+    ByName(factName string) []PublishedFact
+}
+
+type PublishedFact struct {
+    Owner    resource.Key
+    Endpoint endpoint.Endpoint
+}
+```
+
+Two rules make this safe rather than a second, informal way to reintroduce the old accretion:
+
+1. **Facts is read-only and never a scheduling primitive.** A miss means "not published yet,"
+   reported honestly — it is never worth waiting on. Ordering (which resource must reconcile
+   before which) stays exactly where it already lived: `graph.Build`'s ref-field edges
+   (`via`, `warehouseRef`, `catalogRef`, ...). A provider needing "X before Y" declares a ref
+   field; it does not poll `Facts`.
+2. **A new cross-provider need is consumed through `Facts` directly** — never a new bespoke
+   `Request` field. `internal/archtest`'s `TestReconcilerRequestFieldsFrozen` enforces this
+   mechanically: the field list on `Request` is frozen, and a PR adding a field beyond it fails
+   the build until the addition is a documented decision (updating that test's own allowlist with
+   a reason), not a silent drift.
+
+The seven pre-existing bespoke fields (`SchemaRegistryURL`, `KafkaBootstrapServers`,
+`MetricsTargets`, `CatalogFacts`, `PrometheusURL`, `WarehouseFacts`, and the now-deleted
+`TunnelFacts`) are the motivating cases `Facts` generalizes — see each field's own doc comment in
+`internal/ports/reconciler/reconciler.go` for its specific migration status: five stay as
+deprecated, byte-identical wrappers (their removal is future, separately-scoped work);
+`KafkaBootstrapServers` stays a bespoke field on purpose (it is graph-resolved, not a *published*
+fact — outside `Facts`'s ADR 015 scope by design); `TunnelFacts`, shipped days before I9 with no
+external consumers, was migrated end-to-end and deleted rather than kept as an unused wrapper —
+see `internal/adapters/providers/proxy`'s `reconcileConnection` for the resulting call site.
+
 ### 4.3 StateStore port
 
 ```go
