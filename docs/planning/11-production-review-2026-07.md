@@ -507,3 +507,16 @@ static. Dimensions, each producing findings verified before fixing:
   zero-trust progression is now: namespace walls → domain walls →
   graph-scoped reachability → identity-attested edges (H6), all from
   one graph.
+- 2026-07-22: LATENT SAFETY BUG (found by H5's Ring-0 work, fixed by
+  orchestrator immediately): manifest.envelopeFrom's field-by-field
+  metadata decoder NEVER decoded metadata.protect — the NFR-3 protect
+  refusal was inert for every real manifest since the feature shipped,
+  while engine-level tests stayed green by constructing Envelopes
+  directly (the loader was the untested seam). Fixed + pinned through
+  the REAL loader (TestLoadDecodesMetadataProtect). Consistency note:
+  this also explains H4's observation that no shipped example sets
+  protect — nobody could have noticed it not working. H5 report also
+  notes: K8s NetworkPolicy enforcement is SKIP-only on both the local
+  minikube and CI kind clusters (default CNIs don't enforce) — B7's
+  known caveat; follow-up recorded: put a policy-enforcing CNI (Calico)
+  on the CI kind cluster to make B7/H5/H7 enforcement live-proven.

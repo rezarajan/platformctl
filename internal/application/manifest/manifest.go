@@ -181,6 +181,13 @@ func envelopeFrom(raw map[string]any) (resource.Envelope, error) {
 	e.Metadata.Namespace = resource.NormalizeNamespace(e.Metadata.Namespace)
 	e.Metadata.Labels = stringMap(meta["labels"])
 	e.Metadata.Annotations = stringMap(meta["annotations"])
+	// Decoded explicitly like every sibling field: this copy-field-by-field
+	// decoder silently DROPPED metadata.protect from its introduction until
+	// the 2026-07 production review (doc 11) — engine-level protect tests
+	// stayed green because they construct Envelopes directly, bypassing
+	// this loader, so the NFR-3 safety refusal never fired for a real
+	// manifest. Found while H5 hit the identical gap for metadata.domain.
+	e.Metadata.Protect, _ = meta["protect"].(bool)
 	if observers, ok := meta["observers"].([]any); ok {
 		for _, o := range observers {
 			if om, ok := o.(map[string]any); ok {
