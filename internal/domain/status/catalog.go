@@ -959,6 +959,21 @@ var Catalog = []CatalogEntry{
 		},
 	},
 
+	// --- Shared credential rotation (docs/planning/08 I14) -------------------------
+	{
+		Token: ReasonCredentialDrift, Area: "credential-rotation", Kind: "reason",
+		Meaning: "The declared SecretReference credential no longer authenticates against the live service — either the SecretReference's resolved value changed and the live credential has not yet been rotated to match, or the live credential was changed out-of-band.",
+		Causes: []string{
+			"The SecretReference's backing value was rotated (e.g. a new password) and `platformctl apply` has not run since.",
+			"The credential was changed directly against the service, bypassing platformctl.",
+			"A rotation attempt itself failed partway (see the resource's own logs for the underlying rotation error).",
+		},
+		Remedies: []string{
+			"platformctl apply <path> to rotate the live credential to match the declared SecretReference.",
+			"Verify the SecretReference resolves to the value you expect (`platformctl explain SecretUnresolvable` if resolution itself is failing).",
+		},
+	},
+
 	// --- grafana (managed monitoring stack; docs/planning/08 C9 completion) --------
 	{
 		Token: ReasonDatasourceUnhealthy, Area: "grafana", Kind: "reason",

@@ -323,6 +323,15 @@ const (
 	ReasonExporterUnhealthy = "ExporterUnhealthy"
 )
 
+// --- Shared credential rotation (docs/planning/08 I14) ---------------------
+// A provider whose Probe checks live login against a declared
+// SecretReference (grafana's admin credential today; postgres/mysql's own
+// ensureSuperuser/ensureRootPassword rotation predates this reason and
+// self-heals during Reconcile without a distinct Probe-drift reason of its
+// own) reports this when the declared credential itself fails to
+// authenticate — distinct from a generic instance/service-health failure.
+const ReasonCredentialDrift = "CredentialDrift"
+
 // --- grafana (managed monitoring stack; docs/planning/08 C9 completion) ----
 // The container itself reuses ReasonInstanceHealthy/Unhealthy above (the
 // shared single-container-instance shape). These are grafana-specific probe

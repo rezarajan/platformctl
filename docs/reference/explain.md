@@ -1201,6 +1201,23 @@ Remedies:
 - docker logs <instance>-exporter for the exporter's own failure detail.
 - platformctl apply <path> to recreate the exporter and re-provision its monitoring role.
 
+## credential-rotation
+
+### `CredentialDrift` (reason)
+
+The declared SecretReference credential no longer authenticates against the live service — either the SecretReference's resolved value changed and the live credential has not yet been rotated to match, or the live credential was changed out-of-band.
+
+Likely causes:
+
+- The SecretReference's backing value was rotated (e.g. a new password) and `platformctl apply` has not run since.
+- The credential was changed directly against the service, bypassing platformctl.
+- A rotation attempt itself failed partway (see the resource's own logs for the underlying rotation error).
+
+Remedies:
+
+- platformctl apply <path> to rotate the live credential to match the declared SecretReference.
+- Verify the SecretReference resolves to the value you expect (`platformctl explain SecretUnresolvable` if resolution itself is failing).
+
 ## grafana
 
 ### `DatasourceUnhealthy` (reason)

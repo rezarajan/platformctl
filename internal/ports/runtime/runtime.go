@@ -527,6 +527,38 @@ type ContainerRuntime interface {
 	ProbeReachable(ctx context.Context, network, target string) error
 }
 
+// ExecCapableRuntime is an optional ContainerRuntime capability (the same
+// type-assert-an-optional-capability pattern as IngressCapableRuntime below,
+// "a provider type-asserts a runtime") for running a command inside an
+// already-running managed container and capturing its result —  the
+// mechanism a provider reaches for when an operation has no HTTP/API
+// equivalent, only a CLI shipped in the image (docs/planning/08 I14:
+// grafana-cli admin reset-admin-password resets Grafana's live admin
+// credential with no old password required, the vendor-provided fix for the
+// C9 "rotation after first apply is a documented Grafana limitation" note).
+// Never a general-purpose remote-shell escape hatch — providers use it only
+// for a specific, named, non-interactive command.
+//
+// Implemented by the Docker adapter today. Not implemented by the
+// Kubernetes or fake adapters: no provider needs a Kubernetes exec path yet
+// (grafana's own e2e/unit coverage, docs/planning/08 I14, is Docker-only —
+// the managed monitoring stack has no Kubernetes-specific path at all), and
+// the fake adapter never executes anything (mirrors RunsContainerCommands()
+// reporting false). A caller type-asserts req.Runtime against this
+// interface and, when the assertion fails, must report an honest error
+// naming the missing capability rather than silently skipping the
+// operation — never imports a concrete adapter package (the
+// domain/ports/adapters layering invariant).
+type ExecCapableRuntime interface {
+	// ExecInContainer runs cmd inside the named container and returns its
+	// captured stdout/stderr and exit code. A non-nil error means the exec
+	// itself could not be attempted (container not found, transport
+	// failure) — as opposed to the command running and exiting non-zero,
+	// reported via a nonzero exitCode with a nil error, so a caller can
+	// distinguish "couldn't ask" from "asked, got told no."
+	ExecInContainer(ctx context.Context, name string, cmd []string) (stdout, stderr string, exitCode int, err error)
+}
+
 // MemberSetRuntime is an optional ContainerRuntime capability (the same
 // type-assert-an-optional-capability pattern as IngressCapableRuntime below)
 // answering docs/adr/004's I7 addendum (docs/planning/08 §7.8): for a

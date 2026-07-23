@@ -277,3 +277,13 @@ func joinKeys[V any](m map[string]V) string {
 func WrapForTest(rt runtime.ContainerRuntime) runtime.ContainerRuntime {
 	return &haGuardRuntime{ContainerRuntime: rt}
 }
+
+// ExecInContainer delegates the optional ExecCapableRuntime capability
+// (docs/planning/08 I14) — required by the wrapper-completeness archtest.
+func (g *haGuardRuntime) ExecInContainer(ctx context.Context, name string, cmd []string) (string, string, int, error) {
+	ec, ok := g.ContainerRuntime.(runtime.ExecCapableRuntime)
+	if !ok {
+		return "", "", 0, fmt.Errorf("runtime does not implement ExecCapableRuntime")
+	}
+	return ec.ExecInContainer(ctx, name, cmd)
+}

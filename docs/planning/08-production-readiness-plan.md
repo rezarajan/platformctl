@@ -1187,6 +1187,13 @@ at merge e69f1b4.)
   `internal/application/engine/engine_test.go`'s
   `TestResolvePrometheusURL*`); `go test ./...`/`gofmt`/`go vet` all
   green.
+  **Solved by I14** (docs/planning/08 §7.8, below): the "Deviation,
+  recorded not solved" note above — a `SecretReference` value changed
+  after the first apply not rotating into a live Grafana container — no
+  longer holds. Grafana ships a vendor-provided fix for exactly this
+  (`grafana-cli admin reset-admin-password`, container exec, no old
+  password needed); I14's Do/Accept below has the mechanism, and I14's own
+  Done note has the verification evidence.
 
 ### C10: In-network reachability probes
 
@@ -3413,6 +3420,50 @@ behavior changed. `go test ./...` unfiltered: true-exit=0. gofmt/`go vet`
   answers with the new credential (and refuses the old); unit for the
   exec construction.
 - **Gate:** rides `MonitoringStackProvider`.
+- **Done (2026-07-23):** Added `runtime.ExecCapableRuntime` (optional
+  `ContainerRuntime` capability, `internal/ports/runtime/runtime.go`,
+  Docker-only today — the same "provider type-asserts a runtime" pattern
+  as `IngressCapableRuntime`) and its Docker implementation
+  `Runtime.ExecInContainer` (`internal/adapters/runtime/docker/docker.go`,
+  generalizing the existing `execTCPDial` exec-and-poll-`ContainerExecInspect`
+  shape to also capture demuxed stdout/stderr via `ContainerExecAttach` +
+  `stdcopy`). `internal/adapters/providers/grafana/grafana.go`:
+  `liveAdminCredential` reads the previously-mounted admin user/password off
+  the running container before `EnsureInstance` recreates it (the same
+  precedent as postgres's `liveSuperuser`/mysql's `liveRootPassword`,
+  docs/planning/08 G1); `adminCredentialChanged` is the rotation-detection
+  branch; `ensureAdminCredential` runs `providerkit.CredentialRotation`
+  with an HTTP-login `PingDesired`/`PingPrevious` (`GET /api/org`, verified
+  live to 401 on a bad credential) and a `Rotate` callback that execs
+  `resetAdminPasswordCmd` (`grafana-cli admin reset-admin-password <new>`,
+  confirmed live against the pinned image: exit 0, "Admin password changed
+  successfully", no old password needed, and the container's own
+  `GF_SECURITY_ADMIN_PASSWORD=*********` log line confirms the value is
+  masked, not leaked) — `CredentialRotation`'s own final wait re-probes
+  login with the new credential before returning, satisfying the
+  settledness bar. `Probe` now checks login (`loginOK`) before the
+  datasource/dashboard checks and reports the new `CredentialDrift` reason
+  (`internal/domain/status/reasons.go` + `catalog.go`, new
+  `credential-rotation` area; `docs/reference/explain.md` regenerated via
+  `platformctl docs build`) on a failed login with the declared credential,
+  instead of the previously-conflated `DatasourceUnhealthy`. A runtime
+  that doesn't implement `ExecCapableRuntime` (Kubernetes, fake) fails the
+  rotation attempt with an honest named error rather than silently
+  skipping it — grafana has no Kubernetes-specific path at all (confirmed:
+  no `grafana` Kubernetes adapter code, no Kubernetes monitoring e2e
+  scenario exists), so this is Docker-only by construction, not an
+  oversight. Unit: `TestResetAdminPasswordCmdArgs` (exact argv),
+  `TestAdminCredentialChanged` (table-driven rotation-detection branches),
+  `TestLiveAdminCredentialFreshInstance`. e2e: extended
+  `TestMonitoringStackCompletionEndToEnd`
+  (`cmd/platformctl/monitoring_completion_integration_test.go`) with a
+  rotation step mirroring `lakehouse_integration_test.go`'s own
+  mysql/postgres rotation proof — rotates
+  `DATASCAPE_SECRET_MON_GRAFANA_ADMIN_PASSWORD`, re-applies, asserts the
+  new password logs in (`GET /api/org` 200) and the old one is refused;
+  green twice against real Docker (~43s/run), containers/network cleaned
+  between and after. `go build`/`gofmt`/`go vet` (both tag sets)/
+  `golangci-lint run` clean; unfiltered `go test ./...` exit 0.
 
 ### I15: Backup/restore on Kubernetes — dbjob's Jobs realization (ADR 007 scope completion)
 

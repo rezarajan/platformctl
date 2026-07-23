@@ -794,6 +794,50 @@ func (r *Runtime) execTCPDial(ctx context.Context, containerID, host, port strin
 	}
 }
 
+// ExecInContainer implements runtime.ExecCapableRuntime: runs cmd inside the
+// named container via the Docker Engine exec API and returns its captured,
+// demuxed stdout/stderr and exit code. Unlike execTCPDial above (which only
+// needs a yes/no exit code), this attaches to the exec's output stream so a
+// caller can report a failing command's own diagnostic text — never any
+// caller's secret material, since cmd's argv is never echoed back into the
+// returned error here; only the command's own stdout/stderr is (docs/adr/013
+// fingerprints-only discipline is the caller's responsibility: this method
+// is a transport, it does not know which of cmd's arguments, if any, are
+// secret).
+func (r *Runtime) ExecInContainer(ctx context.Context, name string, cmd []string) (stdout, stderr string, exitCode int, err error) {
+	created, err := r.cli.ContainerExecCreate(ctx, name, container.ExecOptions{
+		Cmd:          cmd,
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return "", "", 0, fmt.Errorf("create exec in container %q: %w", name, err)
+	}
+	attach, err := r.cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	if err != nil {
+		return "", "", 0, fmt.Errorf("attach exec in container %q: %w", name, err)
+	}
+	defer attach.Close()
+	var outBuf, errBuf bytes.Buffer
+	if _, cerr := stdcopy.StdCopy(&outBuf, &errBuf, attach.Reader); cerr != nil && cerr != io.EOF {
+		return "", "", 0, fmt.Errorf("read exec output in container %q: %w", name, cerr)
+	}
+	for {
+		inspect, ierr := r.cli.ContainerExecInspect(ctx, created.ID)
+		if ierr != nil {
+			return outBuf.String(), errBuf.String(), 0, fmt.Errorf("inspect exec in container %q: %w", name, ierr)
+		}
+		if !inspect.Running {
+			return outBuf.String(), errBuf.String(), inspect.ExitCode, nil
+		}
+		select {
+		case <-ctx.Done():
+			return outBuf.String(), errBuf.String(), 0, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
 // transientProbe runs the pinned probe image on network, dials host:port
 // from inside it, and always removes the container before returning —
 // docker run's exit code is the answer.

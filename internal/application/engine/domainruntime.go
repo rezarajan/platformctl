@@ -394,3 +394,13 @@ func (d *domainRuntime) ObserveIsolationEnforcement(ctx context.Context) (runtim
 func WrapDomainRuntimeForTest(rt runtime.ContainerRuntime) runtime.ContainerRuntime {
 	return &domainRuntime{ContainerRuntime: rt, token: "datascape", domain: "default"}
 }
+
+// ExecInContainer delegates the optional ExecCapableRuntime capability
+// (docs/planning/08 I14) — required by the wrapper-completeness archtest.
+func (d *domainRuntime) ExecInContainer(ctx context.Context, name string, cmd []string) (string, string, int, error) {
+	ec, ok := d.ContainerRuntime.(runtime.ExecCapableRuntime)
+	if !ok {
+		return "", "", 0, fmt.Errorf("runtime does not implement ExecCapableRuntime")
+	}
+	return ec.ExecInContainer(ctx, name, cmd)
+}

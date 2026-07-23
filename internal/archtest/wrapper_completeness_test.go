@@ -20,8 +20,7 @@ var optionalCapabilities = []reflect.Type{
 	reflect.TypeOf((*runtimeport.MemberSetRuntime)(nil)).Elem(),
 	reflect.TypeOf((*runtimeport.IngressCapableRuntime)(nil)).Elem(),
 	reflect.TypeOf((*runtimeport.IsolationObserver)(nil)).Elem(),
-	// ExecCapableRuntime joins this list at I14's merge (it introduces the
-	// interface); its gate must also add the delegations to BOTH wrappers.
+	reflect.TypeOf((*runtimeport.ExecCapableRuntime)(nil)).Elem(),
 }
 
 // TestRuntimeWrappersForwardEveryOptionalCapability closes the ADR 018
