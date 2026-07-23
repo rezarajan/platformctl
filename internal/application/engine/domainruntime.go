@@ -82,6 +82,15 @@ type domainRuntime struct {
 	// disabled, which is what makes every method below byte-identical to
 	// pre-H7 behavior (the gate-off pin).
 	graphScoped bool
+	// labelScopedAccessEnabled is the docs/adr/033 (K3) LabelScopedAccess
+	// gate state, read once at construction and passed straight through to
+	// graphaccess.MembershipEdges/IngressPeers below — it decides ONLY
+	// whether a selector-bearing spec.access grant's audience is honored
+	// (gate on) or INERT (gate off, ADR 033's K3 note: never wider than
+	// declared intent). It does not affect a bare namespace-wide grant, and
+	// has no effect at all unless graphScoped is also true — selector
+	// grants ride the SAME H7 realization, no independent mechanism.
+	labelScopedAccessEnabled bool
 	// namespaced is true for runtimes where a network IS a pre-existing
 	// namespace boundary a workload cannot leave (set from p.RuntimeType
 	// == "kubernetes" — see newDomainRuntime's doc comment for why a
@@ -139,7 +148,11 @@ type domainRuntime struct {
 // asserting against it through the registry-obtained rt this function
 // always receives would see "Kubernetes" for every runtime, Docker
 // included. The plain type string sidesteps that gotcha entirely.
-func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any, provEnv, env resource.Envelope, byKey map[resource.Key]resource.Envelope, graphScoped bool, edges []graphaccess.Edge, runtimeType string, warn func(format string, args ...any)) runtime.ContainerRuntime {
+// labelScopedAccessEnabled is the docs/adr/033 (K3) LabelScopedAccess gate's
+// current state, resolved once per resolveRequest by the caller exactly
+// like graphScoped — see the labelScopedAccessEnabled field doc for what it
+// controls (selector-bearing spec.access grants only).
+func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any, provEnv, env resource.Envelope, byKey map[resource.Key]resource.Envelope, graphScoped bool, labelScopedAccessEnabled bool, edges []graphaccess.Edge, runtimeType string, warn func(format string, args ...any)) runtime.ContainerRuntime {
 	token, pinned := networkToken(runtimeConfig)
 	d := &domainRuntime{
 		ContainerRuntime: rt,
@@ -152,10 +165,11 @@ func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any,
 	d.namespaced = runtimeType == provider.RuntimeTypeKubernetes
 	if graphScoped {
 		d.graphScoped = true
+		d.labelScopedAccessEnabled = labelScopedAccessEnabled
 		d.self = provEnv.Key()
 		d.resources = byKey
-		d.peers = graphaccess.MembershipEdges(edges, d.self, byKey)
-		d.ingressPeers = graphaccess.IngressPeers(edges, d.self, byKey)
+		d.peers = graphaccess.MembershipEdges(edges, d.self, byKey, labelScopedAccessEnabled)
+		d.ingressPeers = graphaccess.IngressPeers(edges, d.self, byKey, labelScopedAccessEnabled)
 	} else if env.Kind == "Connection" {
 		d.holes = consumerDomainHoles(env, byKey)
 	}

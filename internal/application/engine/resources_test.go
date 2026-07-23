@@ -30,7 +30,7 @@ func TestDomainRuntimeInjectsDeclaredResources(t *testing.T) {
 			"memoryReservation": "256Mi",
 		},
 	}
-	d := newDomainRuntime(rt, cfg, env, env, nil, false, nil, "fake", nil)
+	d := newDomainRuntime(rt, cfg, env, env, nil, false, false, nil, "fake", nil)
 	if _, err := d.EnsureContainer(context.Background(), runtime.ContainerSpec{Name: "w", Image: "img"}); err != nil {
 		t.Fatalf("EnsureContainer: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestDomainRuntimeInjectsDeclaredResources(t *testing.T) {
 	}
 
 	// No resources declared -> nothing injected.
-	d2 := newDomainRuntime(rt, map[string]any{"type": "fake"}, env, env, nil, false, nil, "fake", nil)
+	d2 := newDomainRuntime(rt, map[string]any{"type": "fake"}, env, env, nil, false, false, nil, "fake", nil)
 	if _, err := d2.EnsureContainer(context.Background(), runtime.ContainerSpec{Name: "w3", Image: "img"}); err != nil {
 		t.Fatalf("EnsureContainer(w3): %v", err)
 	}

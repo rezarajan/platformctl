@@ -57,16 +57,41 @@
     },
     "accessGrant": {
       "type": "object",
-      "description": "docs/adr/026 §2 wide grant: under the GraphScopedAccess gate (docs/planning/08 H7), a resource reaches exactly the endpoints its declared references imply UNLESS it also declares spec.access entries — an explicit, reviewable, policy-visible opt-in to reach every OTHER resource in the named namespace, not just the ones it references. Absent (the default) is the minimal edge set; a wide grant is never implicit. A policy.datascape.io matchGrant rule can deny or otherwise govern a declared grant at validate time.",
+      "description": "docs/adr/026 §2 wide grant: under the GraphScopedAccess gate (docs/planning/08 H7), a resource reaches exactly the endpoints its declared references imply UNLESS it also declares spec.access entries — an explicit, reviewable, policy-visible opt-in to reach every OTHER resource in the named namespace, not just the ones it references. Absent (the default) is the minimal edge set; a wide grant is never implicit. A policy.datascape.io matchGrant rule can deny or otherwise govern a declared grant at validate time. docs/adr/033 decision 3 (docs/planning/08 K3): an optional selector narrows the audience to namespace AND selector — the bare namespace-wide form (no selector) keeps working but is deprecated and lint-flagged (DL022).",
       "properties": {
         "namespace": {
           "type": "string",
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
           "maxLength": 63,
-          "description": "Every resource in this namespace becomes reachable, in addition to the ordinary graph-derived edge set."
+          "description": "Every resource in this namespace (further narrowed by selector, if set) becomes reachable, in addition to the ordinary graph-derived edge set."
+        },
+        "selector": {
+          "$ref": "#/$defs/selector",
+          "description": "docs/adr/033 decision 3 (docs/planning/08 K3): a Kubernetes-style label selector over the candidate resource's metadata.labels — when set, only namespace members whose labels satisfy it are admitted (audience = namespace AND selector). Evaluated only under the LabelScopedAccess feature gate (the SAME gate K2 registered); with the gate disabled a selector-bearing grant is INERT (admits nobody), never falling back to the wider bare namespace-wide form."
         }
       },
       "required": ["namespace"],
+      "additionalProperties": false
+    },
+    "selector": {
+      "type": "object",
+      "description": "docs/adr/033 (Stage K2/K3): a Kubernetes-style label selector — matchLabels (equality, ANDed) plus matchExpressions (In/NotIn/Exists/DoesNotExist, ANDed with matchLabels and with each other). Mirrors schemas/policy/v1alpha1/policy.json#/$defs/selector exactly (internal/domain/policy.Selector is the single shared Go type both schemas describe; the two JSON Schema documents are independent embedded-schema graphs, so the shape is duplicated here rather than cross-file $ref'd — manifest resources and Policy documents compile through two separate jsonschema.Compiler instances, internal/application/manifest/schema.go and internal/application/policy/schema.go). At least one of matchLabels/matchExpressions must be set.",
+      "properties": {
+        "matchLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "matchExpressions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": { "type": "string", "minLength": 1 },
+              "operator": { "type": "string", "enum": ["In", "NotIn", "Exists", "DoesNotExist"] },
+              "values": { "type": "array", "items": { "type": "string" }, "description": "Required (non-empty) for In/NotIn; must be absent/empty for Exists/DoesNotExist." }
+            },
+            "required": ["key", "operator"],
+            "additionalProperties": false
+          }
+        }
+      },
       "additionalProperties": false
     }
   }

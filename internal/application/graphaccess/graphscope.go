@@ -5,8 +5,10 @@
 package graphaccess
 
 import (
+	"encoding/json"
 	"sort"
 
+	"github.com/rezarajan/platformctl/internal/domain/policy"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 )
 
@@ -58,9 +60,16 @@ func ContainerDomain(k resource.Key, resources map[resource.Key]resource.Envelop
 // AccessGrant is one docs/adr/026 §2 spec.access wide-grant entry: "all of
 // namespace Namespace" reachability, declared explicitly on the requesting
 // resource (visible in review, deniable/constrainable by a policy
-// matchGrant rule — see internal/domain/policy).
+// matchGrant rule — see internal/domain/policy). Selector (docs/adr/033
+// decision 3, docs/planning/08 K3) optionally narrows the audience: nil
+// means the original bare namespace-wide form (deprecated but still fully
+// working — DL022 flags it); non-nil means "namespace AND selector" —
+// reuses internal/domain/policy.Selector's exact matchLabels/
+// matchExpressions vocabulary (the SAME type K2 already gave the policy
+// engine) rather than duplicating selector matching here.
 type AccessGrant struct {
 	Namespace string
+	Selector  *policy.Selector
 }
 
 // AccessGrants reads env.Spec["access"] into typed grants. Malformed or
@@ -69,7 +78,8 @@ type AccessGrant struct {
 // already refuses a manifest that doesn't match the declared shape; this
 // reader is defensive, not authoritative, exactly like graphaccess'
 // sibling helpers (resolveProviderRef) that also assume a pre-validated
-// envelope.
+// envelope. A malformed selector block (shouldn't happen post-schema-
+// validation) decodes to nil rather than erroring, for the same reason.
 func AccessGrants(env resource.Envelope) []AccessGrant {
 	raw, ok := env.Spec["access"].([]any)
 	if !ok {
@@ -85,9 +95,29 @@ func AccessGrants(env resource.Envelope) []AccessGrant {
 		if ns == "" {
 			continue
 		}
-		out = append(out, AccessGrant{Namespace: resource.NormalizeNamespace(ns)})
+		grant := AccessGrant{Namespace: resource.NormalizeNamespace(ns)}
+		if sel, ok := m["selector"].(map[string]any); ok {
+			grant.Selector = decodeSelector(sel)
+		}
+		out = append(out, grant)
 	}
 	return out
+}
+
+// decodeSelector round-trips raw (already schema-validated JSON) through
+// encoding/json into a policy.Selector — the same round-trip
+// policy.Decode/manifest.validateAgainstSchema use elsewhere in this
+// codebase to bridge a raw map[string]any onto a typed Go struct.
+func decodeSelector(raw map[string]any) *policy.Selector {
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var sel policy.Selector
+	if err := json.Unmarshal(data, &sel); err != nil {
+		return nil
+	}
+	return &sel
 }
 
 // containerMembers returns every resource.Key that ContainerOf-collapses
@@ -108,9 +138,13 @@ func containerMembers(self resource.Key, resources map[resource.Key]resource.Env
 // where a resource collapsing onto self is the FROM side, resolved to the
 // TO side's own realizing container, plus every OTHER container found in a
 // namespace one of self's own (or self-collapsed) resources' spec.access
-// grants names. self is never included (ADR 026 decision 1's "brokers
+// grants names (narrowed by the grant's own selector, if any — see
+// grantAdmits). self is never included (ADR 026 decision 1's "brokers
 // reach brokers" — a container's own internal topology needs no grant).
-func EgressPeers(edges []Edge, self resource.Key, resources map[resource.Key]resource.Envelope) []resource.Key {
+// labelScopedAccessEnabled is the docs/adr/033 (K3) LabelScopedAccess gate
+// state — see grantAdmits for what it controls; a bare namespace-wide
+// grant (Selector == nil) is entirely unaffected by it.
+func EgressPeers(edges []Edge, self resource.Key, resources map[resource.Key]resource.Envelope, labelScopedAccessEnabled bool) []resource.Key {
 	members := containerMembers(self, resources)
 	out := map[resource.Key]bool{}
 	for _, e := range edges {
@@ -127,7 +161,7 @@ func EgressPeers(edges []Edge, self resource.Key, resources map[resource.Key]res
 			continue
 		}
 		for _, grant := range AccessGrants(env) {
-			addGrantedContainers(out, grant, self, resources)
+			addGrantedContainers(out, grant, self, resources, labelScopedAccessEnabled)
 		}
 	}
 	return sortedKeys(out)
@@ -139,8 +173,11 @@ func EgressPeers(edges []Edge, self resource.Key, resources map[resource.Key]res
 // only; egress has never been restricted, docs/planning/08 B7): every edge
 // where a resource collapsing onto self is the TO side, resolved to the
 // FROM side's own realizing container, plus every OTHER container whose
-// OWN spec.access grants a namespace self's container belongs to.
-func IngressPeers(edges []Edge, self resource.Key, resources map[resource.Key]resource.Envelope) []resource.Key {
+// OWN spec.access grants a namespace self's container belongs to — a
+// selector-bearing grant additionally requires self's OWN container
+// envelope to satisfy the selector (grantAdmits), since from self's
+// vantage self IS "the resource in the namespace" the selector narrows.
+func IngressPeers(edges []Edge, self resource.Key, resources map[resource.Key]resource.Envelope, labelScopedAccessEnabled bool) []resource.Key {
 	members := containerMembers(self, resources)
 	out := map[resource.Key]bool{}
 	for _, e := range edges {
@@ -151,15 +188,20 @@ func IngressPeers(edges []Edge, self resource.Key, resources map[resource.Key]re
 			out[other] = true
 		}
 	}
+	selfEnv := resources[self]
 	for k, env := range resources {
 		c := ContainerOf(k, resources)
 		if c == self {
 			continue
 		}
 		for _, grant := range AccessGrants(env) {
-			if grant.Namespace == self.Namespace {
-				out[c] = true
+			if grant.Namespace != self.Namespace {
+				continue
 			}
+			if !grantAdmits(grant, selfEnv, labelScopedAccessEnabled) {
+				continue
+			}
+			out[c] = true
 		}
 	}
 	return sortedKeys(out)
@@ -171,21 +213,53 @@ func IngressPeers(edges []Edge, self resource.Key, resources map[resource.Key]re
 // symmetrically, so the direction that matters for Kubernetes NetworkPolicy
 // is moot there). See EgressPeers/IngressPeers for the two directions this
 // unions.
-func MembershipEdges(edges []Edge, self resource.Key, resources map[resource.Key]resource.Envelope) []resource.Key {
+func MembershipEdges(edges []Edge, self resource.Key, resources map[resource.Key]resource.Envelope, labelScopedAccessEnabled bool) []resource.Key {
 	out := map[resource.Key]bool{}
-	for _, p := range EgressPeers(edges, self, resources) {
+	for _, p := range EgressPeers(edges, self, resources, labelScopedAccessEnabled) {
 		out[p] = true
 	}
-	for _, p := range IngressPeers(edges, self, resources) {
+	for _, p := range IngressPeers(edges, self, resources, labelScopedAccessEnabled) {
 		out[p] = true
 	}
 	return sortedKeys(out)
 }
 
-func addGrantedContainers(out map[resource.Key]bool, grant AccessGrant, self resource.Key, resources map[resource.Key]resource.Envelope) {
+// grantAdmits reports whether grant's audience covers candidateEnv — true
+// unconditionally for a bare namespace-wide grant (Selector == nil, the
+// pre-K3 form, callers already filtered candidateEnv's namespace before
+// calling this). For a selector-bearing grant (docs/adr/033 decision 3,
+// docs/planning/08 K3): INERT (never admits anyone) when
+// labelScopedAccessEnabled is false — the zero-trust answer ADR 033's K3
+// note settles on ("never wider than declared intent when the gate is
+// off" — a selector grant must not silently fall back to namespace-wide);
+// otherwise candidateEnv's own metadata.labels must satisfy the selector.
+func grantAdmits(grant AccessGrant, candidateEnv resource.Envelope, labelScopedAccessEnabled bool) bool {
+	if grant.Selector == nil {
+		return true
+	}
+	if !labelScopedAccessEnabled {
+		return false
+	}
+	return grant.Selector.Selects(candidateEnv.Metadata.Labels)
+}
+
+// addGrantedContainers adds every container in grant.Namespace whose own
+// envelope grantAdmits admits (self excluded) to out — the EgressPeers
+// side of grant compilation. A selector-bearing grant is evaluated against
+// the CANDIDATE CONTAINER's own labels (the resource that actually becomes
+// the peer/network member), not any collapsed resource's labels, mirroring
+// how peers are container-granular everywhere else in this file.
+func addGrantedContainers(out map[resource.Key]bool, grant AccessGrant, self resource.Key, resources map[resource.Key]resource.Envelope, labelScopedAccessEnabled bool) {
 	for candidate := range resources {
 		c := ContainerOf(candidate, resources)
 		if c == self || c.Namespace != grant.Namespace {
+			continue
+		}
+		containerEnv, ok := resources[c]
+		if !ok {
+			continue
+		}
+		if !grantAdmits(grant, containerEnv, labelScopedAccessEnabled) {
 			continue
 		}
 		out[c] = true

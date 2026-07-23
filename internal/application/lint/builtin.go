@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/rezarajan/platformctl/internal/application/compatibility"
+	"github.com/rezarajan/platformctl/internal/application/graphaccess"
 	"github.com/rezarajan/platformctl/internal/domain/binding"
 	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/dataset"
@@ -480,6 +481,30 @@ func lintProtectUnset(envelopes []resource.Envelope, opts Options) []Finding {
 			Resource: e.Key(),
 			Message:  fmt.Sprintf("%s %q does not set metadata.protect while this set's plan includes an authoritative delete elsewhere", e.Kind, e.Metadata.Name),
 		})
+	}
+	return findings
+}
+
+// lintNamespaceWideGrant is DL022 (docs/adr/033 decision 3, docs/planning/08
+// K3): a spec.access entry with no selector — the bare namespace-wide form
+// H7 shipped, now deprecated in favor of "namespace AND selector". Reuses
+// graphaccess.AccessGrants (the SAME reader the H7 compiler/matchGrant
+// evaluator already use) rather than re-parsing env.Spec["access"] here.
+func lintNamespaceWideGrant(envelopes []resource.Envelope) []Finding {
+	var findings []Finding
+	for _, e := range envelopes {
+		for _, grant := range graphaccess.AccessGrants(e) {
+			if grant.Selector != nil {
+				continue
+			}
+			findings = append(findings, Finding{
+				Code:     CodeNamespaceWideGrant,
+				Severity: lint.Warning,
+				Resource: e.Key(),
+				Message: fmt.Sprintf("%s %q declares a namespace-wide spec.access grant to %q with no selector — scope it with a selector (docs/adr/033 decision 3)",
+					e.Kind, e.Metadata.Name, grant.Namespace),
+			})
+		}
 	}
 	return findings
 }

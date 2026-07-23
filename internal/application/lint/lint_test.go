@@ -397,6 +397,61 @@ func TestDeletionPolicyAndProtectUnset(t *testing.T) {
 	})
 }
 
+// --- DL022 (docs/planning/08 K3) ------------------------------------------
+
+func TestNamespaceWideGrant(t *testing.T) {
+	t.Parallel()
+
+	t.Run("bare namespace-wide grant fires", func(t *testing.T) {
+		envelopes := []resource.Envelope{
+			envelope("Provider", "r1", map[string]any{
+				"access": []any{map[string]any{"namespace": "b"}},
+			}),
+		}
+		g := mustGraph(t, envelopes)
+		findings, err := Run(envelopes, g, resolverFor(nil), Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := codesOf(findings)[CodeNamespaceWideGrant]; n != 1 {
+			t.Errorf("DL022 = %d, want 1 for a grant with no selector", n)
+		}
+	})
+
+	t.Run("selector-scoped grant does not fire", func(t *testing.T) {
+		envelopes := []resource.Envelope{
+			envelope("Provider", "r1", map[string]any{
+				"access": []any{map[string]any{
+					"namespace": "b",
+					"selector":  map[string]any{"matchLabels": map[string]any{"tier": "gold"}},
+				}},
+			}),
+		}
+		g := mustGraph(t, envelopes)
+		findings, err := Run(envelopes, g, resolverFor(nil), Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := codesOf(findings)[CodeNamespaceWideGrant]; n != 0 {
+			t.Errorf("DL022 = %d, want 0 for a grant that already carries a selector", n)
+		}
+	})
+
+	t.Run("no access grant at all does not fire", func(t *testing.T) {
+		envelopes := []resource.Envelope{
+			envelope("Provider", "r1", map[string]any{}),
+		}
+		g := mustGraph(t, envelopes)
+		findings, err := Run(envelopes, g, resolverFor(nil), Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := codesOf(findings)[CodeNamespaceWideGrant]; n != 0 {
+			t.Errorf("DL022 = %d, want 0 when spec.access is unset", n)
+		}
+	})
+}
+
 // --- Waivers -------------------------------------------------------------------
 
 func TestWaivers(t *testing.T) {
@@ -561,7 +616,14 @@ func allCodesFixture(t *testing.T) ([]resource.Envelope, compatibility.ProviderR
 		envelope("Provider", "lake-p", map[string]any{"type": "lake-stub", "runtime": map[string]any{"type": "fake"}}),
 		envelope("Provider", "catalog-p", map[string]any{"type": "catalog-stub", "runtime": map[string]any{"type": "fake"}}),
 		envelope("Provider", "edge-p", map[string]any{"type": "edge-stub", "runtime": map[string]any{"type": "fake"}}),
-		envelope("Provider", "idle-p", map[string]any{"type": "idle-stub", "runtime": map[string]any{"type": "fake"}}),
+		// DL022: idle-p also carries a bare namespace-wide spec.access grant
+		// (no selector) — doubles as the DL012 unreferenced-Provider fixture
+		// below (spec.access is never a graph edge, so this changes no other
+		// lint's outcome).
+		envelope("Provider", "idle-p", map[string]any{
+			"type": "idle-stub", "runtime": map[string]any{"type": "fake"},
+			"access": []any{map[string]any{"namespace": "default"}},
+		}),
 
 		// DL001 + DL020 + DL021: src-dup has 2 overlapping cdc captures,
 		// unset deletionPolicy, and unset protect (state below implies an

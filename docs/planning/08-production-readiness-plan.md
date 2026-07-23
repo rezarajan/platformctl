@@ -4542,7 +4542,7 @@ evidence pattern every leg reuses.
       who-may-wear-this-label rule shape, and the self-claim attack
       (consumer labels itself into an audience) is a fixture that FAILS
       policy in CI.
-- [ ] A wide grant scoped by selector admits exactly the selected
+- [x] A wide grant scoped by selector admits exactly the selected
       audience; the bare namespace-wide grant form lints as deprecated.
 - [ ] The mediator enforces label-derived attributes at dial time
       (attribute-based service-policies), and its policy state is
@@ -4649,6 +4649,76 @@ evidence pattern every leg reuses.
   same commit.
 - **Accept:** stage criterion 3; H7 suites stay green; gate-off pinned
   byte-identical.
+- **Done (2026-07-23):** `schemas/v1alpha1/meta.json#/$defs/accessGrant`
+  gained an optional `selector` property (`$ref: #/$defs/selector`, a new
+  `$defs/selector` in the SAME file mirroring
+  `schemas/policy/v1alpha1/policy.json#/$defs/selector` — the two schema
+  documents compile through separate `jsonschema.Compiler` instances
+  (`internal/application/manifest/schema.go` vs
+  `internal/application/policy/schema.go`), so the JSON Schema shape is
+  duplicated across the two independent embedded-schema graphs while the
+  Go type it describes is not: `internal/application/graphaccess.AccessGrant`
+  gained `Selector *policy.Selector`, reusing K2's exact
+  `internal/domain/policy.Selector` type rather than a second selector
+  implementation — `graphaccess` already sits in `internal/application`, so
+  importing `internal/domain/policy` needed no layering exception or
+  package move (CLAUDE.md's rule only restricts `domain`/`ports` importing
+  adapters; application importing domain is ordinary). `AccessGrants`
+  decodes `spec.access[].selector` via the same raw-map round-trip
+  `policy.Decode`/`manifest.validateAgainstSchema` already use elsewhere.
+  Compilation: `EgressPeers`/`IngressPeers`/`addGrantedContainers`
+  (`internal/application/graphaccess/graphscope.go`) gained a
+  `labelScopedAccessEnabled bool` parameter and a new `grantAdmits` helper
+  — a selector-bearing grant only admits a candidate container whose OWN
+  envelope labels satisfy the selector (`EgressPeers`: the candidate being
+  reached; `IngressPeers`: `self`, since from the target's own vantage self
+  IS "the resource in the namespace" the selector narrows), and is
+  INERT (admits nobody) when the gate is off — never falls back to the
+  wider bare-namespace form (ADR 033's addendum, added in this commit,
+  records the reasoning). No new runtime mechanism: the SAME
+  `MembershipEdges`/`IngressPeers` outputs still feed H7's per-edge Docker
+  networks and Kubernetes `NetworkPolicy` peers unchanged
+  (`internal/application/engine/graphscoped.go`/`domainruntime.go`
+  untouched beyond threading the new bool through `newDomainRuntime`).
+  Gate wiring: `internal/application/engine/engine.go`'s `resolveRequest`
+  reads `LabelScopedAccess` via `e.Registry.GateEnabled` alongside the
+  existing `GraphScopedAccess` read, and passes it into `newDomainRuntime`
+  — independent of `GraphScopedAccess` (which still gates whether any grant
+  compiles at all) exactly as the stage exit criterion's "rides the SAME
+  gate" language requires. DL022 ("namespace-wide grant — scope it with a
+  selector", warning severity,
+  `internal/application/lint.CodeNamespaceWideGrant`) fires on any
+  `spec.access` entry with no selector, implemented via
+  `lintNamespaceWideGrant` (`internal/application/lint/builtin.go`, reusing
+  `graphaccess.AccessGrants` rather than re-parsing the raw spec map) and
+  wired into `Run`; catalog entry added
+  (`internal/domain/status/catalog.go`); positive (bare grant fires),
+  negative (selector-scoped grant doesn't fire), and unset-field negative
+  fixtures in `TestNamespaceWideGrant`
+  (`internal/application/lint/lint_test.go`), plus `allCodesFixture`
+  extended so `TestAllBuiltinCodesFixture`'s completeness golden covers
+  DL022 too. docs/planning/03 gained an additive paragraph (accessGrant
+  section) in the same commit as the schema change. Tests:
+  `internal/application/graphaccess/graphscope_test.go` gained
+  `TestAccessGrantsDecodesSelector`,
+  `TestMembershipEdgesSelectorGrantNarrowsAudience` (positive: reaches the
+  labeled member; negative: excludes the unlabeled one a bare grant would
+  have widened to),
+  `TestMembershipEdgesSelectorGrantInertWhenGateOff` (gate-off inert, not
+  namespace-wide fallback), and
+  `TestIngressPeersSelectorGrantChecksSelfLabels` (the ingress-side
+  mirror). The pre-existing H7 suites
+  (`TestGraphScopedAccessWideGrantReachesAllOfNamespace`,
+  `TestGraphScopedAccessGateOffIsByteIdentical`,
+  `TestMembershipEdgesWideGrant`) pass unchanged against manifests with no
+  selector grant — the gate-off byte-identical pin this task's Accept line
+  names. `gofmt`/`go build ./...`/`go vet` (both tag sets)/
+  `golangci-lint run` clean; unfiltered `go test ./...` true-exit=0.
+  **Note for K5:** the `policy.datascape.io` `matchGrant` rule shape is
+  unchanged by this task (it still matches by namespace only, deliberately
+  — ADR 026 decision 2's original scope) and the decision-audit trail
+  (structured decision events, `policy audit`) remains K5's own deliverable
+  per the stage's `K1 -> K2 -> {K3, K4} -> K5` sequencing.
 
 ### K4: Label-derived attributes through the mediation port
 

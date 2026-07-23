@@ -1275,6 +1275,18 @@ var Catalog = []CatalogEntry{
 			"If the resource is genuinely safe to delete, no action is needed beyond confirming the authoritative delete is intentional.",
 		},
 	},
+	{
+		Token: "DL022", Area: "lint", Kind: "lintCode",
+		Meaning: "A spec.access wide-grant entry has no selector — the bare namespace-wide form (docs/adr/026 §2, docs/planning/08 H7) reaches every resource in the named namespace under the GraphScopedAccess gate, broader than docs/adr/033 decision 3's bar (\"namespace AND selector\"). Deprecated but still fully functional: under LabelScopedAccess (off by default) a selector would additionally narrow the audience; without one, the grant stays namespace-wide.",
+		Causes: []string{
+			"The grant was written before docs/adr/033's selector form existed, or copied from an older example.",
+			"A genuinely namespace-wide audience is intended (e.g. a shared broker every consumer in that namespace may reach).",
+		},
+		Remedies: []string{
+			"Add a selector ({matchLabels: ...} and/or {matchExpressions: ...}) to narrow the grant's audience to exactly the intended resources, and enable the LabelScopedAccess gate.",
+			"If a namespace-wide audience is genuinely intended, waive DL022 with a reason.",
+		},
+	},
 
 	// --- provider-contributed design lints (docs/adr/020-design-lints.md
 	// §5, docs/planning/08 H2) — DL-<type>-NNN, one Area per contributing

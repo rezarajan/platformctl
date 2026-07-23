@@ -40,7 +40,7 @@ type Options struct {
 	State *state.State
 }
 
-// Run computes every built-in (DL001-DL021, DL000) and provider-contributed
+// Run computes every built-in (DL001-DL022, DL000) and provider-contributed
 // (DL-<type>-NNN) finding for envelopes, applies waivers declared via
 // metadata.annotations, and returns the result sorted per
 // domain/lint.Less — deterministic, byte-identical output for identical
@@ -59,6 +59,7 @@ func Run(envelopes []resource.Envelope, g *graph.Graph, resolve compatibility.Pr
 	findings = append(findings, lintSingleReplicaWithHAGate(envelopes, opts)...)
 	findings = append(findings, lintDeletionPolicyUnset(envelopes)...)
 	findings = append(findings, lintProtectUnset(envelopes, opts)...)
+	findings = append(findings, lintNamespaceWideGrant(envelopes)...)
 
 	providerFindings, err := runProviderLints(envelopes, g, resolve)
 	if err != nil {

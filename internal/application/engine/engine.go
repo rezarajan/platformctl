@@ -1371,7 +1371,13 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 			return nil, reconciler.Request{}, fmt.Errorf("%s: %w", env.Key(), err)
 		}
 	}
-	rt = newDomainRuntime(rt, p.RuntimeConfig, provEnv, env, byKey, graphScoped, accessEdges, p.RuntimeType, e.warnf)
+	// docs/adr/033 (K3): a selector-bearing spec.access grant's audience is
+	// only honored under the SAME LabelScopedAccess gate K2 registered —
+	// read once here, alongside graphScoped, and threaded through
+	// unconditionally (a no-op whenever graphScoped is false, since no
+	// grant is ever compiled at all in that case).
+	labelScopedAccessEnabled := e.Registry.GateEnabled("LabelScopedAccess")
+	rt = newDomainRuntime(rt, p.RuntimeConfig, provEnv, env, byKey, graphScoped, labelScopedAccessEnabled, accessEdges, p.RuntimeType, e.warnf)
 	// facts is the single state snapshot every published-fact lookup below
 	// reads from (docs/planning/08 I9) — taken once, under one lock
 	// acquisition, rather than each resolve* function separately locking
