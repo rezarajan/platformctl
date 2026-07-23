@@ -1992,6 +1992,61 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
      *uncommitted* tracked-file changes, so anything not yet committed is
      one command away from this — commit before any reset, always.
 
+### J2: Janitor adoption sweep — every integration test's cleanup through testkit (ADR 029)
+
+- **Size:** S-M (mechanical, wide). **Depends:** ADR 029 (merged with the
+  janitor + three exemplar adoptions: netpol enforcement, ingress-TLS
+  K8s, openziti Docker). **Why:** 31 integration tests hand-roll cleanup
+  closures; the 2026-07-23 residue audit showed the rules (workloads
+  before networks, raw fixtures never through the port's Remove, loud
+  post-clean) get re-derived per test and drift — two of three live
+  strays came from exactly that drift.
+- **Do:** replace each hand-rolled `cleanup := func()` in
+  cmd/platformctl/*_integration_test.go and adapter integration tests
+  with a declared `testkit.Janitor` (CleanSilent + Register). Where a
+  test's cleanup encodes something the janitor cannot (compose projects,
+  kubectl-level objects), extend the janitor rather than keeping a
+  bespoke closure. No behavior change intended; each converted suite is
+  gated by its own impact-mapped run.
+- **Accept:** no `cleanup := func()` remains in integration tests
+  (greppable); the converted suites are ledger-green.
+
+### J3: Provider clock injection — retire direct time.Now in adapters
+
+- **Size:** M. **Depends:** none. **Why:** the engine injects
+  clock.Clock, but adapters call time.Now() directly (~104 sites) —
+  timestamps in names, statuses, and deadlines are untestable and
+  non-deterministic there, and the I15 uppercase-timestamp bug lived in
+  exactly such a site. naming.Timestamp (ADR 030) now owns the format;
+  this task owns the *source*.
+- **Do:** thread the engine's clock to providers — likely a structural
+  Request field (frozen-list protocol, documented like Warn) or a
+  providerkit seam — and migrate name/status timestamp sites first;
+  ScaledWait deadline sites can stay wall-clock (they bound real waiting,
+  not recorded facts). Decide the seam in the task, record it in the
+  ADR 030 file as an addendum if it changes naming's surface.
+- **Accept:** no time.Now() in internal/adapters/providers for values
+  that land in names, state, or status (archtest-scanned); deadline
+  waits exempted explicitly.
+
+### J4: Database backup orchestration dedup — one harness in providerkit
+
+- **Size:** M. **Depends:** I13/I15 merged (done). **Why:**
+  postgres/backup.go and mysql/backup.go are ~580 near-duplicated lines
+  of the same orchestration (headroom precheck, manifest read/verify,
+  scratch-restore, atomic promote, warn-on-cleanup-failure) around a
+  small engine-specific core (dump/replay commands, promote SQL). Every
+  backup fix this cycle (RuntimeType threading, Warnf, naming.Derived)
+  touched both files in lockstep — the duplication tax is now measured.
+- **Do:** extract the shared orchestration into providerkit (or a
+  dbbackup package beside dbjob) parameterized by an engine profile
+  (dump command, replay command, promote/drop statements); postgres and
+  mysql shrink to profiles. Byte-identical behavior gated by the backup
+  suite plus the live K8s round-trip.
+- **Accept:** one orchestration implementation; both providers are
+  profiles; backup + backup-K8s suites green.
+
+
 ### E6: Provider author contract — guide, conformance suite, exemplars
 
 - **Size:** L. **Depends:** E5 (fragments are part of the contract); F5

@@ -212,6 +212,29 @@ type Request struct {
 	// outright (rather than keeping an unused wrapper) is the pattern any
 	// future field with no external consumers should follow; a field with
 	// real consumers stays a wrapper (see the five above).
+
+	// Warn is the provider diagnostics channel (docs/adr/031): a
+	// structural field (like Resource/Runtime/Provider), NOT a fact —
+	// engine-populated at Request construction, presented by the host
+	// (the CLI writes to stderr; stdout stays the machine-parsed output
+	// contract). Providers call Warnf, never this field directly and
+	// never a process-global stream (os.Stderr/os.Stdout are forbidden
+	// in adapters by archtest): a warning is for outcomes that must not
+	// fail the operation but must reach the operator — e.g. a
+	// best-effort post-promote cleanup failing with a harmless, named
+	// leftover.
+	Warn func(format string, args ...any)
+}
+
+// Warnf reports a non-fatal warning through the Request's diagnostics
+// channel (docs/adr/031). Safe to call when Warn is unwired (a host that
+// configured no channel): the warning is dropped rather than panicking —
+// the severity ladder is: return an error (fail), record a status
+// condition (degrade), Warnf (inform).
+func (r Request) Warnf(format string, args ...any) {
+	if r.Warn != nil {
+		r.Warn(format, args...)
+	}
 }
 
 // CatalogFacts is Request.CatalogFacts's payload — see its doc comment.

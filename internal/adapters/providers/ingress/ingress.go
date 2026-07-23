@@ -137,7 +137,9 @@ func (p *Provider) Probe(ctx context.Context, req reconciler.Request) (status.St
 // fact parsed from spec.runtime.type (postgres/redpanda already read
 // sibling RuntimeConfig keys the same way), never an adapter
 // type-assertion (docs/adr/018 "Layering").
-func isKubernetes(cfg provider.Provider) bool { return cfg.RuntimeType == "kubernetes" }
+func isKubernetes(cfg provider.Provider) bool {
+	return cfg.RuntimeType == provider.RuntimeTypeKubernetes
+}
 
 // parseTarget splits a Connection's spec.target ("host:port", a straight
 // passthrough of the manifest author's declared value — never constructed,

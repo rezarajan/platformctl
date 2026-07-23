@@ -459,6 +459,7 @@ func (a *app) newEngine(stderr io.Writer) (*engine.Engine, error) {
 		StateStore:  store,
 		SecretStore: secrets,
 		Clock:       clock.Real{},
+		Warnings:    stderr,
 		Logger:      newEngineLogger(stderr, a.logFormat),
 	}, nil
 }

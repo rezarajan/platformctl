@@ -683,3 +683,23 @@ static. Dimensions, each producing findings verified before fixing:
   13-day-old compose networks from a deleted POC also removed. User
   compose volumes (moe-data-platform-poc, datascape-playground) left
   untouched.
+- 2026-07-23: STRUCTURAL REVIEW (owner request) — the residue findings
+  promoted to system level and the whole codebase swept for problems
+  that belong in higher-level structures. Shipped (staged, GPG pending):
+  ADR 029 (residue-free lifecycle: Remove* contractually leaves zero
+  derived residue, live-enforced by a Docker volume-count test;
+  testkit.Janitor owns cleanup order/loudness, 3 exemplar adoptions);
+  ADR 030 (naming.Derived/Timestamp mint all derived runtime names —
+  lowercase RFC 1123, 63-char hash-truncation bound; runtime-type
+  constants; archtest forbids per-site concatenation); ADR 031
+  (Request.Warnf diagnostics channel, engine-brokered presentation;
+  archtest forbids process-global streams in adapters+application — it
+  caught a 4th undocumented site, the K8s adapter's networkPolicy:none
+  warning, now emitted at the engine's domainRuntime chokepoint).
+  Review findings deferred WITH owners: J2 janitor sweep (28 remaining
+  hand-rolled cleanups), J3 provider clock injection (104 direct
+  time.Now sites), J4 postgres/mysql backup orchestration dedup (~580
+  duplicated lines, tax measured — three lockstep edits this cycle).
+  Every new rule has a guard with a positive-case self-proof; all
+  guards green on the tree; live verification: residue 0.95s, netpol
+  6.8s, ziti 26.8s, ingress-TLS K8s 69.2s.

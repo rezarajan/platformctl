@@ -30,6 +30,7 @@ var frozenRequestFields = map[string]string{
 	"Secrets":               "structural: resolved spec.secretRefs",
 	"Resources":             "structural: the full validated manifest graph",
 	"Facts":                 "I9's generic, engine-backed published-fact query surface",
+	"Warn":                  "structural: the provider diagnostics channel (docs/adr/031) — a channel, not a fact",
 	"SchemaRegistryURL":     "deprecated wrapper over Facts (D1) — kept byte-identical, not removed by I9",
 	"KafkaBootstrapServers": "graph-resolved manifest fact (E2) — deliberately NOT a Facts wrapper (not a published fact, ADR 015 scope)",
 	"MetricsTargets":        "deprecated wrapper over Facts (C9) — kept byte-identical, not removed by I9",

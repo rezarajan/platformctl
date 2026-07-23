@@ -17,6 +17,7 @@ import (
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestOpenZitiMediatedConnectionEndToEnd is docs/planning/08 H6's accept
@@ -56,30 +57,27 @@ func TestOpenZitiMediatedConnectionEndToEnd(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	cleanup := func() {
-		for _, c := range []string{
+	// docs/adr/029: janitor-owned cleanup. RawContainers is the declared
+	// home for the docker-run fixtures the port's Remove refuses by design
+	// — the audit's ziti-canary stray came from listing one in the managed
+	// loop with the refusal swallowed. Both networks go through the raw
+	// channel: the VPC network is raw-created, and the platform network
+	// may hold the raw canary until this same cleanup removes it — the
+	// janitor removes raw containers before networks, so the loud
+	// (managed) network channel applies to both: each carries the
+	// managed-by label from its creation path.
+	jan := testkit.Janitor{
+		RT: rt,
+		Workloads: []string{
 			"ziti-orders-to-events", "datascape-ziti-dbz", "datascape-ziti-rp",
 			"orders-db-mediated", "mesh-ctrl", "mesh-router",
-		} {
-			_ = rt.Remove(ctx, c)
-		}
-		// Raw fixtures (docker run, no managed labels) MUST be removed with
-		// raw docker rm: rt.Remove refuses unmanaged containers by design,
-		// and the swallowed refusal left ziti-canary running — which in
-		// turn blocked `docker network rm` of the platform network (both
-		// found as live strays after the 2026-07-23 sweep).
-		for _, c := range []string{zitiDBContainer, "ziti-canary"} {
-			_ = exec.Command("docker", "rm", "-f", "-v", c).Run()
-		}
-		for _, v := range []string{"mesh-ctrl-data", "mesh-router-data", "orders-db-mediated-identity"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		for _, n := range []string{zitiPlatformNetwork, zitiVPCNetwork} {
-			_ = exec.Command("docker", "network", "rm", n).Run()
-		}
+		},
+		RawContainers: []string{zitiDBContainer, "ziti-canary"},
+		Volumes:       []string{"mesh-ctrl-data", "mesh-router-data", "orders-db-mediated-identity"},
+		Networks:      []string{zitiPlatformNetwork, zitiVPCNetwork},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	// --- Raw fixture: the isolated "VPC" network + database -------------
 	mustRunZ(t, "docker", "network", "create", "--label", zitiManagedByLabel, zitiVPCNetwork)

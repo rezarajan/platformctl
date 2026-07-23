@@ -25,6 +25,7 @@ package naming
 import (
 	"fmt"
 	"hash/fnv"
+	"time"
 
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 )
@@ -177,4 +178,34 @@ func lowerASCII(s string) string {
 		}
 	}
 	return string(b)
+}
+
+// TimestampFormat is the one time layout permitted inside runtime object
+// names: lowercase, because Kubernetes object names are RFC 1123
+// subdomains and reject uppercase outright — the uppercase form of this
+// exact layout failed live at the I15 merge gate (docs/adr/030). The
+// format string exists only here; an archtest keeps it that way.
+const TimestampFormat = "20060102t150405z"
+
+// Timestamp renders t in TimestampFormat (UTC) for embedding in a
+// Derived name — e.g. a backup job's unique-per-invocation suffix.
+func Timestamp(t time.Time) string {
+	return t.UTC().Format(TimestampFormat)
+}
+
+// Derived is the ONLY way to build a runtime object name from another
+// name (docs/adr/030): base joined with parts by "-", lowercased, and
+// bounded to the 63-char DNS-label limit with truncateName's
+// deterministic hash suffix so long inputs stay unique and legal on
+// every runtime instead of failing on Kubernetes only. Same inputs,
+// same output, always — Ensure* idempotency depends on it. Providers
+// concatenating onto RuntimeObjectName themselves is forbidden by
+// archtest for the reason ADR 030 records: name constraints discovered
+// per call site are discovered by live failure.
+func Derived(base string, parts ...string) string {
+	name := base
+	for _, p := range parts {
+		name += "-" + p
+	}
+	return truncateName(lowerASCII(name))
 }

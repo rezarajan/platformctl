@@ -17,7 +17,7 @@ Go 1.22+. Build: `CGO_ENABLED=0 go build -trimpath -buildvcs=false ./cmd/platfor
 3. **Capability interfaces** (docs/planning/02-architecture.md §4.2, §5.2): Does this touch `CDCCapableProvider`, `SinkCapableProvider`, or `LineageAware`? If so, re-read the exact error-message format.
 4. **Acceptance scenario** (docs/planning/05-v1-first-version-spec.md): Is this resource/provider used in the example?
 5. **Contract test suite** (docs/planning/02-architecture.md §9): Does the port have one? New adapters must pass it.
-6. **ADRs** (docs/adr/README.md): Does an accepted decision cover this area (layering 008, capabilities 009, validation 011, state 012, safety 013, gates 014, connectivity 015, provider contract 016)? Decisions are settled — don't re-litigate them mid-task; a task that needs to change one starts with a new ADR.
+6. **ADRs** (docs/adr/README.md): Does an accepted decision cover this area (layering 008, capabilities 009, validation 011, state 012, safety 013, gates 014, connectivity 015, provider contract 016, residue/cleanup 029, naming 030, diagnostics 031)? Decisions are settled — don't re-litigate them mid-task; a task that needs to change one starts with a new ADR.
 
 ## Conventions
 

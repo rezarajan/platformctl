@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
-	"os"
 	"strings"
 	"time"
 
@@ -58,8 +57,8 @@ func (p *Provider) Backup(ctx context.Context, req reconciler.Request, dest back
 		return backup.Manifest{}, err
 	}
 	dbHost := naming.RuntimeObjectName(req.Provider)
-	jobName := naming.RuntimeObjectName(req.Resource) + "-backup-" + started.Format("20060102t150405z")
-	objectKey := strings.TrimSuffix(dest.Prefix, "/") + "/" + req.Resource.Metadata.Name + "-" + started.Format("20060102t150405z") + ".sql"
+	jobName := naming.Derived(naming.RuntimeObjectName(req.Resource), "backup", naming.Timestamp(started))
+	objectKey := strings.TrimSuffix(dest.Prefix, "/") + "/" + req.Resource.Metadata.Name + "-" + naming.Timestamp(started) + ".sql"
 	objectKey = strings.TrimPrefix(objectKey, "/")
 
 	mcConfig, err := dbjob.MCConfig(dest)
@@ -179,8 +178,8 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 	if err != nil {
 		return err
 	}
-	restoreTS := time.Now().UTC().Format("20060102t150405z")
-	jobName := naming.RuntimeObjectName(req.Resource) + "-restore-" + restoreTS
+	restoreTS := naming.Timestamp(time.Now())
+	jobName := naming.Derived(naming.RuntimeObjectName(req.Resource), "restore", restoreTS)
 	// Unlike Backup's dest.Prefix (a directory-like prefix Backup appends a
 	// generated filename under), src.Prefix for Restore names the exact
 	// object to read back — the CLI/engine resolves --from plus --object
@@ -277,7 +276,7 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 	// harmless, named leftover, never this call's own failure (ADR
 	// addendum 2, known limitation (e)).
 	if err := dropDatabase(ctx, admin, oldName); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: Source %q: postgres restore: promoted successfully, but dropping the pre-restore database %q failed (harmless leftover, drop it by hand): %v\n", req.Resource.Metadata.Name, oldName, err)
+		req.Warnf("Source %q: postgres restore: promoted successfully, but dropping the pre-restore database %q failed (harmless leftover, drop it by hand): %v", req.Resource.Metadata.Name, oldName, err)
 	}
 	return nil
 }

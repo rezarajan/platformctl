@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/domain/backup"
+	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -260,7 +261,7 @@ type Result struct {
 // either way; only how the two sides are scheduled and inspected differs.
 // Docker/fake callers pass their own RuntimeType and are unaffected.
 func RunPipeline(ctx context.Context, rt runtime.ContainerRuntime, spec PipelineSpec) (Result, error) {
-	if spec.RuntimeType == runtimeTypeKubernetes {
+	if spec.RuntimeType == provider.RuntimeTypeKubernetes {
 		jrt, err := jobRuntime(rt)
 		if err != nil {
 			return Result{}, err
@@ -523,7 +524,7 @@ func diagnostics(ctx context.Context, rt runtime.ContainerRuntime, producerName,
 // Dispatch reads runtimeType, never a type assertion on rt (see
 // PipelineSpec.RuntimeType). Docker/fake are unaffected.
 func RunOneShot(ctx context.Context, rt runtime.ContainerRuntime, runtimeType, name string, labels map[string]string, side Side, timeout time.Duration, resultPath string) ([]byte, error) {
-	if runtimeType == runtimeTypeKubernetes {
+	if runtimeType == provider.RuntimeTypeKubernetes {
 		jrt, err := jobRuntime(rt)
 		if err != nil {
 			return nil, err
@@ -618,7 +619,7 @@ func CheckDiskHeadroom(ctx context.Context, rt runtime.ContainerRuntime, runtime
 		Volumes:   []runtime.VolumeMount{{VolumeName: volumeName, MountPath: mountPath}},
 		ShellCmd:  fmt.Sprintf("df -Pk %s | tail -1 | awk '{print $4}' > %s", mountPath, diskHeadroomResultPath),
 	}
-	if runtimeType == runtimeTypeKubernetes {
+	if runtimeType == provider.RuntimeTypeKubernetes {
 		jrt, err := jobRuntime(rt)
 		if err != nil {
 			return fmt.Errorf("disk headroom precheck: %w", err)
@@ -1010,16 +1011,6 @@ func runOneShotJob(ctx context.Context, jrt runtime.JobCapableRuntime, name stri
 		}
 	}
 }
-
-// runtimeTypeKubernetes is the provider.Provider.RuntimeType value that
-// selects the Kubernetes Job path. Dispatch reads this domain-layer fact,
-// passed through by callers from their own Provider config — never a type
-// assertion on the runtime, because every runtime wrapper statically
-// implements runtime.JobCapableRuntime (the wrapper-completeness archtest
-// requires forwarding) and errors only at call time, so the assertion is
-// always true through a wrapped runtime regardless of the adapter
-// underneath. Same rule as ingress's isKubernetes (docs/adr/018).
-const runtimeTypeKubernetes = "kubernetes"
 
 // jobRuntime obtains the JobCapableRuntime capability once the Kubernetes
 // path has been chosen by RuntimeType — the assertion OBTAINS the

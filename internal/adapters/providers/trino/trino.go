@@ -55,11 +55,11 @@ func (p *Provider) Type() string { return "trino" }
 // reason to: see naming's package doc for why "the realizing resource" is
 // deliberately the only convention it owns).
 func coordinatorName(provEnv resource.Envelope) string {
-	return naming.RuntimeObjectName(provEnv) + "-coordinator"
+	return naming.Derived(naming.RuntimeObjectName(provEnv), "coordinator")
 }
 
 func workerSetName(provEnv resource.Envelope) string {
-	return naming.RuntimeObjectName(provEnv) + "-worker"
+	return naming.Derived(naming.RuntimeObjectName(provEnv), "worker")
 }
 
 // workerCount reads spec.configuration.workers (default 1) — a positive

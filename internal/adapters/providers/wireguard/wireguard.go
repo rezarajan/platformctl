@@ -419,7 +419,7 @@ func waitViaTunnelServing(ctx context.Context, rt runtime.ContainerRuntime, netw
 // collide with the forwarder container proxy realizes for the same
 // Connection).
 func viaTunnelName(connEnv resource.Envelope) string {
-	return naming.RuntimeObjectName(connEnv) + "-via-tunnel"
+	return naming.Derived(naming.RuntimeObjectName(connEnv), "via-tunnel")
 }
 
 // reconcileConnection runs the Connection's own tunnel container: named

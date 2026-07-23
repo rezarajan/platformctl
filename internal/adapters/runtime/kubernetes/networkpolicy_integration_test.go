@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	runtimeport "github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestEnsureNetworkProvisionsIsolationBoundary covers docs/planning/08 B7
@@ -121,22 +122,14 @@ func TestNetworkPolicyEnforcementIsLive(t *testing.T) {
 	labels := map[string]string{runtimeport.LabelManagedBy: runtimeport.ManagedByValue}
 	const nsIn = "datascape-netpol-enforce-in"
 	const nsOut = "datascape-netpol-enforce-out"
-	t.Cleanup(func() {
-		// The listener must go before its namespace: RemoveNetwork refuses
-		// while a namespace still holds workloads (the ca9d719 safety), so
-		// skipping this removal strands the whole namespace — exactly what
-		// happened while this cleanup silently swallowed the refusal (found
-		// as a live stray, listener still running, after the 2026-07-23
-		// sweep). Cleanup failures are loud now for the same reason.
-		if err := rt.Remove(ctx, "npl-listener"); err != nil {
-			t.Errorf("cleanup: remove npl-listener: %v", err)
-		}
-		for _, ns := range []string{nsIn, nsOut} {
-			if err := rt.RemoveNetwork(ctx, ns); err != nil {
-				t.Errorf("cleanup: remove namespace %s: %v", ns, err)
-			}
-		}
-	})
+	// docs/adr/029: the janitor owns removal order (workloads before
+	// namespaces — RemoveNetwork refuses while occupied) and loudness
+	// (silent pre-clean, t.Errorf post-clean). This test was the audit's
+	// exemplar stray: its old namespace-only cleanup swallowed the refusal
+	// and stranded the listener on every skip-path run.
+	jan := testkit.Janitor{RT: rt, Workloads: []string{"npl-listener"}, Networks: []string{nsIn, nsOut}}
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 	for _, ns := range []string{nsIn, nsOut} {
 		if err := rt.EnsureNetwork(ctx, runtimeport.NetworkSpec{Name: ns, Labels: labels}); err != nil {
 			t.Fatalf("EnsureNetwork %s: %v", ns, err)

@@ -435,6 +435,14 @@ type ContainerRuntime interface {
 	EnsureContainer(ctx context.Context, spec ContainerSpec) (ContainerState, error)
 	WaitHealthy(ctx context.Context, name string, timeout time.Duration) error
 	Inspect(ctx context.Context, name string) (ContainerState, bool, error)
+	// Remove deletes the named managed workload and EVERYTHING the adapter
+	// derived from it (docs/adr/029: removal is residue-free) — anonymous
+	// volumes on Docker; per-container Secrets/Services/PDBs on
+	// Kubernetes — synchronously: when Remove returns nil, it is all gone.
+	// Removing an absent name is nil (idempotent, like every Ensure*);
+	// removing an unmanaged object is an error by design (safety, ADR
+	// 013). The Docker adapter's residue integration test enforces the
+	// no-derived-residue half; a new adapter must uphold both.
 	Remove(ctx context.Context, name string) error
 	// RemoveNetwork must never delete containers/workloads as a side effect,
 	// and must refuse (return a non-nil error, leaving the network intact)

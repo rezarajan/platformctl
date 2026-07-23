@@ -13,6 +13,7 @@ import (
 
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
 	runtimeport "github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // parseCertForTest decodes a single PEM-encoded certificate — a small local
@@ -52,30 +53,13 @@ func TestIngressTLSKubernetesEndToEnd(t *testing.T) {
 	}
 	ctx := context.Background()
 	const ns = "datascape-ingk8stls-test-ns"
-	// Workloads must go before the namespace: RemoveNetwork refuses while
-	// a namespace still holds Deployments (the ca9d719 safety), so a
-	// RemoveNetwork-only cleanup strands the whole namespace whenever the
-	// test dies before its inline destroy step (the same silent-strand
-	// class the netpol enforcement test hit live after the 2026-07-23
-	// sweep). Removals of absent objects are no-ops, so this is safe on
-	// every path; the final namespace removal is loud in t.Cleanup.
-	cleanup := func() {
-		for _, w := range []string{"ingk8stls-nessie", "ingk8stls-edge"} {
-			_ = rt.Remove(ctx, w)
-		}
-		_ = rt.RemoveNetwork(ctx, ns)
-	}
-	cleanup()
-	t.Cleanup(func() {
-		for _, w := range []string{"ingk8stls-nessie", "ingk8stls-edge"} {
-			if err := rt.Remove(ctx, w); err != nil {
-				t.Errorf("cleanup: remove %s: %v", w, err)
-			}
-		}
-		if err := rt.RemoveNetwork(ctx, ns); err != nil {
-			t.Errorf("cleanup: remove namespace %s: %v", ns, err)
-		}
-	})
+	// docs/adr/029: janitor-owned cleanup — workloads before the
+	// namespace (RemoveNetwork refuses while occupied), silent pre-clean,
+	// loud post-clean. Without the workload entries this test stranded
+	// its namespace whenever it died before the inline destroy step.
+	jan := testkit.Janitor{RT: rt, Workloads: []string{"ingk8stls-nessie", "ingk8stls-edge"}, Networks: []string{ns}}
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	// Provided cert+key (option 1) — same self-contained generator the
 	// Docker-leg test uses, defined in ingress_tls_integration_test.go

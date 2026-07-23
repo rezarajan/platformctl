@@ -24,6 +24,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/adapters/providers/dbjob"
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	"github.com/rezarajan/platformctl/internal/domain/backup"
+	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -468,7 +469,7 @@ func mcSideFor(t *testing.T, loc backup.Location) dbjob.Side {
 // it received before the FIFO's write end closed when the producer died.
 func TestBackupRestoreFaultProducerKilledMidStream(t *testing.T) {
 	rt, loc := setupFaultInjectionStore(t)
-	jobName := "bkp-fault-mid-" + time.Now().UTC().Format("20060102T150405Z")
+	jobName := naming.Derived("bkp-fault-mid", naming.Timestamp(time.Now()))
 	key := "dumps/" + jobName + ".bin"
 	mcSide := mcSideFor(t, loc)
 
@@ -528,7 +529,7 @@ func TestBackupRestoreFaultProducerKilledMidStream(t *testing.T) {
 // injection silently succeeded. Found live in this suite's first run.)
 func TestBackupRestoreFaultConsumerNeverStarts(t *testing.T) {
 	rt, loc := setupFaultInjectionStore(t)
-	jobName := "bkp-fault-noconsumer-" + time.Now().UTC().Format("20060102T150405Z")
+	jobName := naming.Derived("bkp-fault-noconsumer", naming.Timestamp(time.Now()))
 	key := "dumps/" + jobName + ".bin"
 	mcSide := mcSideFor(t, loc)
 
@@ -609,7 +610,7 @@ func TestBackupRestoreFaultExitFileProtocolBroken(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			jobName := "bkp-fault-exitfile-" + tc.name + "-" + time.Now().UTC().Format("20060102T150405Z")
+			jobName := naming.Derived("bkp-fault-exitfile", tc.name, naming.Timestamp(time.Now()))
 			key := "dumps/" + jobName + ".bin"
 
 			spec := dbjob.PipelineSpec{

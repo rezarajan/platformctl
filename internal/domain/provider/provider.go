@@ -10,7 +10,7 @@ import (
 
 type Provider struct {
 	Type          string // "redpanda" | "postgres" | "debezium" | "s3" | "minio" | "s3sink" | "openlineage" | "noop"
-	RuntimeType   string // "docker" | "kubernetes" (future) | "external" (future)
+	RuntimeType   string // RuntimeTypeDocker | RuntimeTypeKubernetes | RuntimeTypeFake
 	RuntimeConfig map[string]any
 	Configuration map[string]any // provider-specific, schema keyed by type
 	SecretRefs    []string
@@ -89,3 +89,14 @@ func (p Provider) HasSecretRef(name string) bool {
 	}
 	return false
 }
+
+// Runtime-type vocabulary (docs/adr/030 decision 3): RuntimeType is the
+// dispatch fact (docs/adr/007 amendment — path choice reads this domain
+// field, never a type assertion on the runtime), and a dispatch fact
+// deserves a greppable, typo-proof spelling. These are the only values a
+// registered runtime factory answers to (application/registry).
+const (
+	RuntimeTypeDocker     = "docker"
+	RuntimeTypeKubernetes = "kubernetes"
+	RuntimeTypeFake       = "fake"
+)

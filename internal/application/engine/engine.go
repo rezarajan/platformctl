@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"sort"
@@ -46,6 +47,10 @@ type Engine struct {
 	StateStore  state.StateStore
 	SecretStore secretstore.SecretStore // nil disables secretRefs resolution
 	Clock       clock.Clock
+	// Warnings receives provider diagnostics (docs/adr/031, Request.Warnf)
+	// — non-fatal, must-reach-the-operator messages. The CLI wires stderr
+	// (stdout is the machine-parsed output contract); nil drops warnings.
+	Warnings    io.Writer
 	HaltOnError bool
 	// HealDrift makes Apply probe plan-noop resources against live
 	// infrastructure and re-reconcile the ones that drifted (gated by
@@ -1366,7 +1371,7 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 			return nil, reconciler.Request{}, fmt.Errorf("%s: %w", env.Key(), err)
 		}
 	}
-	rt = newDomainRuntime(rt, p.RuntimeConfig, provEnv, env, byKey, graphScoped, accessEdges, p.RuntimeType)
+	rt = newDomainRuntime(rt, p.RuntimeConfig, provEnv, env, byKey, graphScoped, accessEdges, p.RuntimeType, e.warnf)
 	// facts is the single state snapshot every published-fact lookup below
 	// reads from (docs/planning/08 I9) — taken once, under one lock
 	// acquisition, rather than each resolve* function separately locking
@@ -1377,6 +1382,7 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 	facts := e.factsSnapshot(st)
 	return prov, reconciler.Request{
 		Resource:              env,
+		Warn:                  e.warnf,
 		Runtime:               rt,
 		Provider:              provEnv,
 		Secrets:               secrets,
@@ -1782,4 +1788,13 @@ func (e *Engine) resolveLineageEndpoint(ctx context.Context, observer resource.O
 		}
 	}
 	return lineage.LineageEndpoint{}, fmt.Errorf("observer %q: no resolvable endpoint (set spec.configuration.url or reconcile the provider first)", observer.Name)
+}
+
+// warnf realizes Request.Warn (docs/adr/031): one line per warning on
+// e.Warnings, prefixed for greppability. Dropped when no writer is wired.
+func (e *Engine) warnf(format string, args ...any) {
+	if e.Warnings == nil {
+		return
+	}
+	fmt.Fprintf(e.Warnings, "warning: "+format+"\n", args...)
 }

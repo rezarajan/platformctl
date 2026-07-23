@@ -6,7 +6,6 @@ package kubernetes
 import (
 	"context"
 	"fmt"
-	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -39,7 +38,9 @@ func (r *Runtime) EnsureNetwork(ctx context.Context, spec runtimeport.NetworkSpe
 	}
 
 	if spec.IsolationPolicy == runtimeport.IsolationNone {
-		fmt.Fprintf(os.Stderr, "warning: namespace %q uses networkPolicy: none — no isolation boundary is provisioned; every pod in the cluster can reach it unless something else in the cluster restricts it\n", spec.Name)
+		// The "no isolation boundary" warning for this declared opt-out is
+		// emitted by the engine's domainRuntime chokepoint (docs/adr/031)
+		// — adapters do not write to process-global streams (archtest).
 		return nil
 	}
 	graphScoped := spec.IsolationPolicy == runtimeport.IsolationGraphScoped

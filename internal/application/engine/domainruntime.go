@@ -15,6 +15,7 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/application/graphaccess"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
+	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
@@ -48,6 +49,9 @@ func networkToken(runtimeConfig map[string]any) (token string, pinned bool) {
 // ("exactly the holes the mediated entrypoint needs").
 type domainRuntime struct {
 	runtime.ContainerRuntime
+	// warn is the engine's diagnostics channel (docs/adr/031, Engine.warnf)
+	// — nil in tests wrapped via WrapDomainRuntimeForTest.
+	warn   func(format string, args ...any)
 	token  string
 	pinned bool
 	domain string
@@ -129,17 +133,18 @@ type domainRuntime struct {
 // asserting against it through the registry-obtained rt this function
 // always receives would see "Kubernetes" for every runtime, Docker
 // included. The plain type string sidesteps that gotcha entirely.
-func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any, provEnv, env resource.Envelope, byKey map[resource.Key]resource.Envelope, graphScoped bool, edges []graphaccess.Edge, runtimeType string) runtime.ContainerRuntime {
+func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any, provEnv, env resource.Envelope, byKey map[resource.Key]resource.Envelope, graphScoped bool, edges []graphaccess.Edge, runtimeType string, warn func(format string, args ...any)) runtime.ContainerRuntime {
 	token, pinned := networkToken(runtimeConfig)
 	d := &domainRuntime{
 		ContainerRuntime: rt,
 		token:            token,
 		pinned:           pinned,
 		domain:           resource.NormalizeDomain(provEnv.Metadata.Domain),
+		warn:             warn,
 	}
+	d.namespaced = runtimeType == provider.RuntimeTypeKubernetes
 	if graphScoped {
 		d.graphScoped = true
-		d.namespaced = runtimeType == "kubernetes"
 		d.self = provEnv.Key()
 		d.resources = byKey
 		d.peers = graphaccess.MembershipEdges(edges, d.self, byKey)
@@ -196,6 +201,15 @@ func (d *domainRuntime) holeNetworks() []string {
 func (d *domainRuntime) EnsureNetwork(ctx context.Context, spec runtime.NetworkSpec) error {
 	home := d.isHomeToken(spec.Name)
 	spec.Name = d.translate(spec.Name)
+	// networkPolicy: none is declared configuration the ENGINE resolved, so
+	// the engine warns about it (docs/adr/031) — moved here from the
+	// Kubernetes adapter's EnsureNetwork, which had been writing to
+	// os.Stderr directly. The isolation observer (H8) deliberately skips
+	// opted-out namespaces, so this reconcile-time warning is the only
+	// signal an operator gets that a namespace runs wall-less by request.
+	if d.namespaced && spec.IsolationPolicy == runtime.IsolationNone && d.warn != nil {
+		d.warn("namespace %q uses networkPolicy: none — no isolation boundary is provisioned; every pod in the cluster can reach it unless something else in the cluster restricts it", spec.Name)
+	}
 	if d.graphScoped && d.namespaced && home && spec.IsolationPolicy != runtime.IsolationNone {
 		// docs/adr/026 H7's Kubernetes realization: drop the
 		// allow-same-namespace rule for this namespace (default-deny
