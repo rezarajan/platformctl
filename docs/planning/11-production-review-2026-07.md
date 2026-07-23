@@ -455,3 +455,13 @@ static. Dimensions, each producing findings verified before fixing:
   sharded into two parallel kind clusters (adapter conformance vs cmd
   scenarios). Stale CI comments fixed (removed-twin policy rule, old
   job shape).
+- 2026-07-22: WAVE 4 (closeout) LAUNCHED — owner: "get all remaining
+  tasks finished and out the door", merge gates reviewed against ADRs by
+  the orchestrator. In flight: I9 (generic Facts query; TunnelFacts
+  migrated end-to-end, field list frozen by archtest), I10+I11 batched
+  (fragment guard + slog), I12 (dbjob hardening, ADR 007 addendum
+  decision first), H5 (domains, ADR 022 Rings 0-1, byte-identical
+  undeclared-domain pin). Queued behind dependencies: E6 (guide teaches
+  I9's generic form) → E7 (truth sweep + ContainerProvider retirement),
+  H6 (mediated connections, needs H5). Merge order on green: I10+I11
+  (smallest surface) → I12 → I9 → H5; then wave 4b.
