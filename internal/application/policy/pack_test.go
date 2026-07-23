@@ -29,8 +29,8 @@ func TestWritePackZeroTrust(t *testing.T) {
 	if len(policies) != 1 {
 		t.Fatalf("got %d policies, want 1", len(policies))
 	}
-	if got := len(policies[0].Rules()); got != 11 {
-		t.Errorf("zero-trust pack has %d rules, want 11", got)
+	if got := len(policies[0].Rules()); got != 12 {
+		t.Errorf("zero-trust pack has %d rules, want 12", got)
 	}
 }
 
@@ -110,8 +110,8 @@ func TestBuiltinRuleIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuiltinRuleIDs: %v", err)
 	}
-	if len(ids) != 11 {
-		t.Fatalf("got %d rule ids, want 11: %v", len(ids), ids)
+	if len(ids) != 12 {
+		t.Fatalf("got %d rule ids, want 12: %v", len(ids), ids)
 	}
 	for i := 1; i < len(ids); i++ {
 		if ids[i-1] >= ids[i] {
@@ -141,7 +141,7 @@ func TestBuiltinPackDeniesEveryFieldOrFindingRule(t *testing.T) {
 	fixture := fixtureEnvelopes()
 	findings := fixtureFindings()
 
-	decisions, err := Run(policies, fixture, nil, findings)
+	decisions, err := Run(policies, fixture, nil, findings, false)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

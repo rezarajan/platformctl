@@ -61,7 +61,7 @@ func (a *app) evaluatePolicies(envelopes []resource.Envelope, g *graph.Graph) ([
 		return nil, nil
 	}
 	findings, _ := a.runLint(context.Background(), envelopes, g)
-	decisions, err := apppolicy.Run(policies, envelopes, g, findings)
+	decisions, err := apppolicy.Run(policies, envelopes, g, findings, a.gates.Enabled("LabelScopedAccess"))
 	if err != nil {
 		return nil, cliutil.Exit(cliutil.ExitExecution, err)
 	}
@@ -211,7 +211,7 @@ func newPolicyTestCmd(a *app) *cobra.Command {
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}
-			decisions, err := apppolicy.Run(policies, envelopes, g, findings)
+			decisions, err := apppolicy.Run(policies, envelopes, g, findings, a.gates.Enabled("LabelScopedAccess"))
 			if err != nil {
 				return cliutil.Exit(cliutil.ExitExecution, err)
 			}

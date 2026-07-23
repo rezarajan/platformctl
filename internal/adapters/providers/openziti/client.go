@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
+
+	"go.mozilla.org/pkcs7"
 )
 
 // edgeClient is a minimal, hand-rolled client for OpenZiti's Edge
@@ -20,27 +24,100 @@ import (
 // identities, edge-routers, services, service-policies, terminators) were
 // verified live against the pinned controller image at authorship time.
 //
-// TLS: the controller's PKI is self-signed (bootstrap-generated CA) —
-// InsecureSkipVerify is used rather than fetching and pinning the
-// bootstrap CA bundle. Recorded as a follow-up (fetch
-// GET /.well-known/est/cacerts and pin it), not a silent gap: this
-// adapter's own trust boundary is the Docker/Kubernetes network the
-// controller is only reachable on plus the admin credential
-// (configuration.adminSecretRef) — matching the honest, narrower trust
-// model docs/adr/013 already accepts for other bootstrap-time secrets.
+// # TLS (docs/planning/08 H10)
+//
+// The controller's PKI is self-signed (ZITI_BOOTSTRAP_PKI-generated). Every
+// edgeClient here is built with RootCAs pinned to that bootstrap CA chain —
+// never InsecureSkipVerify — fetched via pinnedCAPool below. The ONE
+// necessarily-unverified TLS dial left in this file is pinnedCAPool's own
+// bootstrap request for the CA chain itself (RFC 7030 EST
+// GET /.well-known/est/cacerts, verified live against the pinned controller
+// image at authorship time: it answers `Content-Type:
+// application/pkcs7-mime`, a base64-encoded, degenerate ["certs-only",
+// no signerInfo] PKCS#7 SignedData carrying the root + intermediate CA).
+// That request is trust-on-first-use BY CONSTRUCTION — there is no CA to
+// verify it against yet — and this is the residual this adapter accepts,
+// deliberately, in place of the InsecureSkipVerify-for-everything this file
+// used before H10: the TOFU window is exactly one HTTP GET, scoped to
+// parsing a certificate bundle (not executing anything), over the
+// Docker/Kubernetes network the controller is only reachable on (the same
+// narrower trust model docs/adr/013 already accepts for other
+// bootstrap-time secrets) — every REST call AFTER that one fetch (identity
+// minting, policy compilation, everything upsertX below touches) is fully
+// chain-and-hostname verified against the pinned pool. Re-fetched fresh on
+// every dial (dialController, waitControllerServing) rather than cached on
+// *Provider — this adapter is stateless per call (docs/planning/08 F5), and
+// a fresh EST fetch is cheap (one extra round trip) and self-healing if the
+// controller's PKI is ever rotated.
 type edgeClient struct {
 	baseURL string
 	http    *http.Client
 	token   string
 }
 
-func newEdgeClient(baseURL string) *edgeClient {
+// pinnedCAPool performs the TOFU bootstrap fetch this file's package doc
+// comment above documents and returns a pool a caller pins into its own
+// http.Client.TLSClientConfig.RootCAs. baseURL is the same
+// "https://<reachable-addr>" dialController/waitControllerServing already
+// resolve via runtime.EnsureReachable — this function never talks to the
+// controller by any other address.
+func pinnedCAPool(ctx context.Context, baseURL string) (*x509.CertPool, error) {
+	boot := &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			// TOFU bootstrap fetch ONLY (see this file's package doc
+			// comment) — never used to build an edgeClient's own
+			// operational http.Client.
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // TOFU: fetching the CA to pin has nothing to verify it against yet
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/.well-known/est/cacerts", nil)
+	if err != nil {
+		return nil, fmt.Errorf("openziti: build cacerts request: %w", err)
+	}
+	resp, err := boot.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openziti: fetch bootstrap CA: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("openziti: read cacerts response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openziti: fetch bootstrap CA: unexpected status %d", resp.StatusCode)
+	}
+	// base64.StdEncoding.DecodeString skips embedded '\n'/'\r' — the
+	// controller wraps its response at 64 columns (RFC 2045-style), live-
+	// verified to decode correctly with no pre-trim needed.
+	der, err := base64.StdEncoding.DecodeString(string(body))
+	if err != nil {
+		return nil, fmt.Errorf("openziti: decode cacerts base64: %w", err)
+	}
+	p7, err := pkcs7.Parse(der)
+	if err != nil {
+		return nil, fmt.Errorf("openziti: parse cacerts PKCS7: %w", err)
+	}
+	if len(p7.Certificates) == 0 {
+		return nil, fmt.Errorf("openziti: cacerts response carried zero certificates")
+	}
+	pool := x509.NewCertPool()
+	for _, cert := range p7.Certificates {
+		pool.AddCert(cert)
+	}
+	return pool, nil
+}
+
+// newEdgeClient builds an edgeClient whose http.Client trusts ONLY pool —
+// no system roots, no InsecureSkipVerify. Every caller in this package
+// obtains pool via pinnedCAPool immediately before calling this.
+func newEdgeClient(baseURL string, pool *x509.CertPool) *edgeClient {
 	return &edgeClient{
 		baseURL: baseURL,
 		http: &http.Client{
 			Timeout: 15 * time.Second,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // see doc comment: follow-up is CA pinning, not verification proper
+				TLSClientConfig: &tls.Config{RootCAs: pool},
 			},
 		},
 	}

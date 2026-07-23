@@ -3712,6 +3712,114 @@ behavior changed. `go test ./...` unfiltered: true-exit=0. gofmt/`go vet`
   openziti; no secret-bearing Env key in either ziti ContainerSpec
   (grep-provable); openziti suite green on both runtimes.
 
+#### Done-note (2026-07-23)
+
+Shipped both hardening items, each verified live against the pinned
+`1.5.14` controller/router/tunnel images before any code was written.
+
+**(1) CA pinning.** `client.go`'s new `pinnedCAPool` fetches
+`GET /.well-known/est/cacerts` — live-verified to answer
+`Content-Type: application/pkcs7-mime`, a base64-wrapped (64 cols) DER
+degenerate ("certs-only", no signerInfo) PKCS#7 SignedData carrying the
+root + intermediate CA `ZITI_BOOTSTRAP_PKI` generated. Parsed with
+`go.mozilla.org/pkcs7` (MIT, zero transitive deps — added to go.mod);
+built into an `x509.CertPool` pinned as `RootCAs` on every `edgeClient`'s
+`http.Client`. `newEdgeClient` no longer accepts or sets
+`InsecureSkipVerify` anywhere. The bootstrap fetch itself is refetched
+fresh on every `dialController`/`waitControllerServing` call rather than
+cached on `*Provider` (F5 stateless-provider discipline; cheap — one
+extra round trip — and self-healing across a PKI rotation). Verified live
+end-to-end with a throwaway Go program before touching the adapter: a
+`RootCAs`-pinned client hit `/edge/client/v1/version` and got 200 OK with
+full chain+hostname verification, no `InsecureSkipVerify` anywhere in the
+request path; confirmed the server cert's SAN set (`localhost`, the
+container's own advertised name, `127.0.0.1`, `::1`) covers every address
+`EnsureReachable` ever hands back on both runtimes (a Docker published
+port or a Kubernetes port-forward, always loopback-addressed).
+**Residual, exactly as the Do-text asked to be recorded:** the CA fetch
+itself is necessarily trust-on-first-use — there is no CA to verify it
+against yet — narrowly scoped to one `pinnedCAPool` helper never used for
+authenticated Edge Management REST traffic; this is the ONE
+`InsecureSkipVerify` occurrence left in the package (documented at length
+in client.go's own package doc comment), and Go's `crypto/tls` offers no
+way to capture a first-contact certificate without it.
+
+**(2) Enrollment JWT off Env.** Extracted both pinned images' real
+entrypoint scripts rather than assuming a convention:
+- `ziti-router`'s `bootstrap.bash` already treats `ZITI_ENROLL_TOKEN` as
+  a FILE PATH whenever the value names an existing non-empty file
+  (literal-JWT only as the fallback) — the "documented equivalent" this
+  task's Do-text anticipated; no `_FILE`-suffixed var actually exists on
+  this image. So `instance.go` now FileMounts the JWT (mode **0o644**,
+  not the wireguard-precedent 0o600 — live-verified that 0600 fails: this
+  image's bootstrap runs as an unprivileged `ziggy` user while
+  `copyFilesIn`/the Kubernetes Secret-volume place the file root-owned,
+  so 0600 is unreadable cross-UID; the router panicked
+  `could not load JWT file` until relaxed to 0644) at an ephemeral,
+  non-volume path, and sets `Env["ZITI_ENROLL_TOKEN"]` to that PATH — a
+  non-secret string, never the token. This is a deliberate, live-verified
+  deviation from a stricter "the key must not appear in Env at all"
+  reading: the image's enroll() function has no other supported input for
+  the JWT in its containerized entrypoint path (its env-file mechanism is
+  bare-metal/systemd-only, unreachable from `entrypoint.bash`), and the
+  security property the Do-text actually asks for — no secret BYTES
+  transiting `docker inspect`/`kubectl get pod -o yaml` — is fully met.
+- `ziti-tunnel`'s `entrypoint.sh` searches fixed candidate directories
+  (`/enrollment-token` among them) for `<ZITI_IDENTITY_BASENAME>.jwt`
+  BEFORE ever consulting `ZITI_ENROLL_TOKEN` — so `connection.go`'s
+  dial-side tunneler needs **no Env var at all**: FileMount only, mode
+  0o600 (this image runs as root, live-verified via `id`, so 0600 works
+  as literally specified). This is the strictest possible reading,
+  achieved for free once the image's own mechanism was checked live
+  instead of assumed.
+
+Both JWT paths are deliberately OUTSIDE each container's own persisted
+named volume (`/ziti-router`, `/netfoundry`): `copyFilesIn` places
+FileMount content in the container's own writable layer, discarded by the
+settle-pass recreate below along with the old container (a named volume
+is NOT removed by that recreate) — inside the volume, the JWT would
+instead become permanent on-disk residue no later pass could ever clean
+up. The settle pass (both files) now strips `Files = nil` in the exact
+same call that already strips `Env`, so the steady-state spec carries
+neither.
+
+**A real bug, found only by the live Docker suite, not reproducible any
+other way:** the first Docker run of `TestOpenZitiMediatedConnectionEndToEnd`
+failed — `container "orders-db-mediated" publishes no host binding for
+port 25799` — traced (docker-ps watch loop) to the dial-side tunneler
+exiting (1) within ~2-3s of the settle-pass recreate. A/B-tested against
+the pre-H10 code (temporarily checked out, rerun, passed, restored) to
+confirm the regression was new, not pre-existing flake. Root cause: the
+OLD Env-based design was accidentally race-safe — `ziti-tunnel`'s
+entrypoint.sh copies `ZITI_ENROLL_TOKEN`'s content into a file INSIDE the
+persisted `/netfoundry` volume as its first action, so even an
+immediate recreate never lost the JWT. The new, deliberately-ephemeral
+FileMount has no such side effect: recreating the container before its
+own async `ziti edge enroll` call (RSA keygen + a REST round trip,
+~1-3s) finishes destroys the only copy of the JWT, and the replacement
+starts with nothing to enroll with. Fixed with `waitTunnelEnrolled`
+(connection.go): bounded-polls `rt.ReadFile(ctx, name,
+"/netfoundry/ziti_id.json")` — implemented identically on both runtimes
+(Docker: `CopyFromContainer` against any live path; Kubernetes: a live
+`cat` exec fallback for a path it didn't itself place) — until the
+identity durably lands in the volume, BEFORE the settle recreate,
+mirroring `waitEdgeRouterVerified`'s existing "wait for the real async
+fact before settling" pattern for the router (whose safety here was
+already a genuine bounded wait, not an accident). Verified: 2 consecutive
+green Docker runs after the fix (34.1s, 31.5s), a green Kubernetes rerun
+(102.4s) confirming the connection.go change didn't disturb the
+already-passing router path.
+
+**Live evidence:** `TestOpenZitiMediatedConnectionEndToEnd` green x2
+post-fix; `TestOpenZitiMediatedConnectionOnKubernetesEndToEnd` green x2
+(one pre-fix run exercising only the untouched router path, one full
+rerun post-fix). `go test ./...` unfiltered: true-exit=0. gofmt/`go vet`
+(both tag sets)/golangci-lint v2.12.2 (whole repo): 0 issues. Acceptance
+greps: the package's only remaining `InsecureSkipVerify` is the
+documented TOFU bootstrap fetch; the package's only remaining
+`Env["ZITI_ENROLL_TOKEN"]` assignment is the router's path-valued (not
+secret-valued) one, per the deviation recorded above.
+
 ## 7.8 Stage I — Production-review remediations (doc 11, 2026-07 owner review)
 
 Findings from docs/planning/11-production-review-2026-07.md promoted to
@@ -4427,10 +4535,10 @@ zero-trust. Sequencing is strict: K1 -> K2 -> {K3, K4} -> K5; H9 is the
 evidence pattern every leg reuses.
 
 **Stage exit criteria:**
-- [ ] A policy can deny/permit a specific declared edge by label
+- [x] A policy can deny/permit a specific declared edge by label
       selectors on BOTH endpoints; crossDomain remains as the
       compartment special case; deny names rule, selectors, and edge.
-- [ ] Label integrity is governable: the zero-trust pack ships a
+- [x] Label integrity is governable: the zero-trust pack ships a
       who-may-wear-this-label rule shape, and the self-claim attack
       (consumer labels itself into an audience) is a fixture that FAILS
       policy in CI.
@@ -4455,6 +4563,17 @@ evidence pattern every leg reuses.
   key); doc 03 additive entry; fixtures for valid/invalid.
 - **Accept:** invalid labels refused at validate with named keys; doc
   03 updated same commit.
+- **Done (2026-07-23):** `internal/domain/resource.ValidateLabelKey`/
+  `ValidateLabelValue` (Kubernetes label grammar: optional DNS-subdomain
+  prefix + name segment for keys, name-segment grammar for values), wired
+  into `Envelope.Validate()` — invalid keys/values refused at `validate`,
+  naming the offending key and the resource Kind/name (the repo's
+  capitalized-Kind error convention). Positive+negative fixtures in
+  `internal/domain/resource/resource_test.go`
+  (`TestValidateLabelKeyRejectsInvalid`/`AcceptsValid`,
+  `TestValidateLabelValueRejectsInvalid`/`AcceptsValid`,
+  `TestEnvelopeValidateRejectsInvalidLabels`/`AcceptsValidLabels`). Doc 03
+  §2 additive entry in the same commit.
 
 ### K2: Selector vocabulary in policy — matchEdge.selector + matchResource.selector
 
@@ -4469,6 +4588,54 @@ evidence pattern every leg reuses.
   explain catalog entries.
 - **Accept:** stage criteria 1-2; deny output names rule id, both
   selectors, and the edge key pair.
+- **Done (2026-07-23):** `schemas/policy/v1alpha1/policy.json` gained a
+  shared `$defs/selector` (`matchLabels`/`matchExpressions` with
+  In/NotIn/Exists/DoesNotExist), referenced from both `match.selector`
+  and `matchEdge.selector.{from,to}`.
+  `internal/domain/policy.Selector`/`SelectorRequirement`/`EdgeSelector`
+  implement the same Kubernetes `labels.Requirement.Matches` semantics
+  (NotIn matches an absent key too, letting a matchExpressions entry
+  express a negative audience condition); `Match` gained `Selector`,
+  `EdgeMatch` gained `Selector` alongside `CrossDomain` (exactly one of
+  the two, enforced by `Rule.Kind()`/`Validate()`).
+  `internal/application/policy.Run` gained a `labelScopedAccessEnabled
+  bool` parameter: a selector-bearing rule (`match.selector` or
+  `matchEdge.selector`) is skipped entirely when the gate is off —
+  every pre-existing rule shape (`matchEdge.crossDomain`, plain
+  `match.label`, ...) is evaluated exactly as before regardless,
+  pinned by `TestRunLabelScopedAccessGateOffIsByteIdentical`
+  (`internal/application/policy`) and
+  `TestPolicyTestLabelScopedGateOffIsByteIdentical` (`cmd/platformctl`,
+  the graphscoped-test shape). `evaluateEdgeSelector` reuses
+  `crossDomainEdges` (the SAME graph-derived edges `crossDomain`
+  evaluates), denying when the FROM endpoint's labels satisfy
+  `selector.from` AND the TO endpoint's labels satisfy `selector.to`;
+  the Decision message names both selectors and the edge key pair
+  (RuleID/Resource are the Decision's own fields).
+  The zero-trust pack gained `who-may-wear-clearance-label`
+  (`match.selector` + `assert`: denies any resource carrying a
+  `clearance` label outside namespace `trusted`) — the label-integrity
+  guardrail ADR 033's self-claim section calls for; catalog entry added
+  (`internal/domain/status/catalog.go`), completeness guard green
+  (`cmd/platformctl/policy_catalog_test.go`).
+  `cmd/platformctl/policy_labelscoped_test.go` is the Stage K exit
+  criterion 2 CI evidence: `TestPolicyTestLabelScopedSelfClaimAttackFails`
+  — a consumer that labels ITSELF `clearance: gold` (self-claiming
+  membership in a `matchEdge.selector` audience) still fails policy,
+  because `who-may-wear-clearance-label` denies the self-claimed label
+  independent of the edge rule (which the self-claim *does* fool,
+  proving the label-integrity guardrail is what actually closes the
+  loophole, not the edge selector alone) — and
+  `TestPolicyTestLabelScopedLegitimateConsumerPasses`/
+  `TestPolicyTestLabelScopedEdgeSelectorDeniesUnclearedConsumer` cover
+  both polarities via `platformctl policy test`. Gate
+  `LabelScopedAccess` (Alpha, disabled) registered in
+  `cmd/platformctl/main.go`; doc 04 §12 + this doc §8 gate rows added.
+  **Open items for K3-K5 (out of scope here, per the strict K1→K2→
+  {K3,K4}→K5 sequencing):** selector-scoped wide grants, mediation
+  label-derived attributes, and the decision audit trail are not yet
+  implemented — Stage K exit criteria 3-5 and the "guards all of it"
+  half of criterion 6 remain open.
 
 ### K3: Selector-scoped wide grants
 
@@ -4509,6 +4676,114 @@ evidence pattern every leg reuses.
 - **Accept:** stage criterion 5; an edge with no nameable justification
   is a test failure.
 
+## 7.11 Stage L — Mediation as the default transport (ADR 034)
+
+Theme: every declared edge is identity-mediated unless the manifest
+explicitly says `transport: direct` (lint-flagged, policy-deniable).
+Batteries-included: the fabric is platform-owned infrastructure the
+engine ensures; providers change ZERO lines (the facts chokepoint is
+the mechanism — ADR 034 "Why the engine can do this"). Sequencing is
+strict: L1 -> L2 -> L3 -> L4 -> L5. Depends on H9/H10 (evidence
+pattern + hardened client) and K4 (attributes) joining at L3. Gate:
+MediatedTransport (Alpha, disabled, byte-identical off).
+
+**Stage exit criteria:**
+- [ ] With the gate on, a scenario's every declared edge dials through
+      the mediator (positive mediator-state evidence, H9-style), the
+      targets publish NO underlay port, and the H6 canary class is
+      refused on EVERY edge — on both runtimes.
+- [ ] `transport: direct` is the only way to get an unmediated edge;
+      it lints; the zero-trust pack denies it; plan shows per-edge
+      transport changes on migration.
+- [ ] Fabric loss behavior is measured and documented: established
+      sessions vs new dials during controller/router outage (chaos
+      suite), controller HA shape decided and shipped.
+- [ ] Data-plane overhead measured on the standing CDC + lakehouse
+      scenarios; the number is in the ADR 027 claims table.
+- [ ] Gate off: byte-identical (pinned); providers diff-clean vs main
+      (the zero-provider-change bar, verified mechanically).
+
+### L1: The transport seam — engine-owned edge mediation requests (design spike, code-proven)
+
+- **Size:** M. **Depends:** —. **Why:** ADR 034's central claim — the
+  engine can mediate an edge by rewriting resolved endpoint facts at
+  one chokepoint with zero provider changes — must be PROVEN in code
+  before L2-L4 build on it, against a fake mediator, fast-tier.
+- **Do:** define the edge-transport resolution step in the engine:
+  for each declared edge (the ADR 026 derivation), when the gate is
+  on and the edge is not `transport: direct`, request mediation
+  through the MediationProvider port (extended if needed — port-only,
+  adapter untouched in this task) and substitute the mediated address
+  into the SAME facts/graph resolution the consumer already reads
+  (SchemaRegistryURL/KafkaBootstrapServers wrappers included where
+  graph-resolved). A fake MediationProvider (testkit or fake package,
+  honest per ADR 028) proves: consumer's resolved address IS the
+  mediated one; direct edges resolve unchanged; gate-off byte-identical
+  (pinned). Schema: `transport: direct` field lands where edges are
+  declared (Connection + Binding + refs — decide and document the
+  exact surface in this task, doc 03 same commit), inert without the
+  gate.
+- **Accept:** fast-tier proof of the substitution seam; zero adapter
+  edits; gate-off pin green.
+
+### L2: Platform-owned fabric — ensure the mesh like we ensure networks
+
+- **Size:** L. **Depends:** L1. **Why:** batteries-included means no
+  manifest declares the controller/router; the engine ensures them.
+- **Do:** fabric provisioning as an engine facility (registry-resolved
+  mediation runtime infra): controller + router ensured idempotently
+  per deployment when the gate is on and at least one mediated edge
+  exists; owned/labeled/GC-visible like every managed object; ADR 013
+  bar for implicit infrastructure (plan shows fabric creation;
+  destroy tears it down only when no mediated edges remain); H10's
+  pinned-CA client is the only client. Admin credential: engine-minted
+  secret, never user-declared, file-mounted (H10 discipline).
+- **Accept:** apply on a gate-on scenario stands the fabric up exactly
+  once; second apply zero API calls (conformance bar); destroy of the
+  last mediated edge removes it; gc sees orphans.
+
+### L3: Every edge mediated — identities, services, policies from the graph
+
+- **Size:** L. **Depends:** L2, K4. **Why:** the default flip itself.
+- **Do:** per-workload identity + tunneler sidecar (J5-bounded), per-
+  target service + bind, per-edge dial policies carrying K4 label
+  attributes; enrollment per H10 (file-mounted one-time tokens, settle
+  discipline); targets stop publishing underlay ports when every
+  consumer edge is mediated (dark-by-default); graph-scoped underlay
+  walls REMAIN as defense-in-depth. H9-style positive mediator-state
+  assertions + per-edge canary refusal, both runtimes.
+- **Accept:** stage criteria 1-2 on a multi-edge scenario (cdc +
+  lakehouse shapes), both runtimes.
+
+### L4: Protocol hard cases — redirect-shaped services (Kafka first)
+
+- **Size:** M-L. **Depends:** L3. **Why:** ADR 034 cost 3 — brokers
+  hand clients advertised addresses; the intercept must own them.
+- **Do:** advertised-listener alignment through the overlay for
+  redpanda (EventStream edges): brokers advertise the mediated names,
+  per-broker services/terminators for the ordinal set; prove CDC
+  end-to-end through fully mediated Kafka. Document the pattern for
+  future redirect-shaped providers (a providerkit note, not per-
+  provider code).
+- **Accept:** the cdc scenario green with EventStream edges mediated;
+  no provider-code change outside configuration surface redpanda
+  already owns.
+
+### L5: Production hardening — HA, chaos, and the measured tax
+
+- **Size:** M. **Depends:** L3 (L4 for full claims). **Why:** ADR 034
+  costs 1 and 4; the fabric is now the data plane's critical path.
+- **Do:** controller HA shape (decide: ziti controller clustering vs
+  fast-recreate + persisted PKI/state — record as ADR 034 addendum);
+  chaos suite: kill controller/router mid-stream, assert established
+  sessions vs new dials behavior matches the documented claim;
+  before/after throughput+latency on cdc + lakehouse standing
+  scenarios; ADR 027 claims table updated with measured numbers; gate
+  promotion criteria written (Alpha -> Beta needs all stage criteria;
+  GA needs owner sign-off on the measured tax).
+- **Accept:** stage criteria 3-4; claims table row cites the chaos
+  test and the benchmark by name.
+
 ## 8. New feature gates introduced by this plan
 
 Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
@@ -4531,6 +4806,7 @@ Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
 | `DesignLints` | H1 | **enabled** (read-only reporting) | Beta once blueprints + examples are lint-clean for a release |
 | `PolicyEngine` | H3 | disabled | Beta after the zero-trust pack soaks in this repo's own CI |
 | `MediatedConnections` | H6 | disabled | Beta after the owner-scenario e2e soaks on both runtimes |
+| `LabelScopedAccess` | K2 | disabled | Beta once the composed H9-style scenario passes on both runtimes (ADR 033 decision 6) |
 | Phase 6.5 gates (`MySQLProvider`, `NessieProvider`, `OpenLineageProvider`, `ProxyProvider`) | — | enabled (Alpha) | promote to Beta at Stage A close (their hardening period ends with the ops-hardening stage) |
 
 ## 9. Mapping to doc 07's open items

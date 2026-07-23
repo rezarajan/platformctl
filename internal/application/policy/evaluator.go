@@ -27,12 +27,26 @@ type Decision = policy.Decision
 // point, called only once a plan actually exists (plan/apply/destroy,
 // never validate — see docs/planning/08 §7.7 H3's "loadAndValidate after
 // compatibility + lint" wiring instruction).
-func Run(policies []policy.Policy, envelopes []resource.Envelope, g *graph.Graph, findings []lint.Finding) ([]Decision, error) {
+//
+// labelScopedAccessEnabled gates docs/adr/033 (Stage K2): a rule using the
+// new label-selector vocabulary (match.selector, matchEdge.selector) is
+// SKIPPED entirely — produces no decisions, exactly as if the rule were
+// absent — whenever the LabelScopedAccess feature gate is disabled. Every
+// pre-existing rule shape (plain match.label, matchEdge.crossDomain, ...)
+// is evaluated exactly as before regardless of this flag: gate-off is
+// byte-identical for everything that predates Stage K (the repo's
+// established gate-off pin pattern — see
+// internal/application/engine/graphscoped_test.go's
+// TestGraphScopedAccessGateOffIsByteIdentical for the shape this mirrors).
+func Run(policies []policy.Policy, envelopes []resource.Envelope, g *graph.Graph, findings []lint.Finding, labelScopedAccessEnabled bool) ([]Decision, error) {
 	var decisions []Decision
 	for _, pol := range policies {
 		for _, rule := range pol.Rules() {
 			switch rule.Kind() {
 			case policy.RuleKindFieldAssert:
+				if rule.Match.Selector != nil && !labelScopedAccessEnabled {
+					continue
+				}
 				ds, err := evaluateFieldAssert(rule, envelopes)
 				if err != nil {
 					return nil, fmt.Errorf("policy rule %q: %w", rule.ID, err)
@@ -41,7 +55,11 @@ func Run(policies []policy.Policy, envelopes []resource.Envelope, g *graph.Graph
 			case policy.RuleKindFinding:
 				decisions = append(decisions, evaluateFinding(rule, findings)...)
 			case policy.RuleKindEdge:
-				decisions = append(decisions, evaluateCrossDomain(rule, envelopes, g)...)
+				if rule.MatchEdge.CrossDomain != nil {
+					decisions = append(decisions, evaluateCrossDomain(rule, envelopes, g)...)
+				} else if labelScopedAccessEnabled {
+					decisions = append(decisions, evaluateEdgeSelector(rule, envelopes, g)...)
+				}
 			case policy.RuleKindGrant:
 				decisions = append(decisions, evaluateGrant(rule, envelopes)...)
 			}
@@ -247,6 +265,34 @@ func evaluateCrossDomain(rule policy.Rule, envelopes []resource.Envelope, g *gra
 			Message: message(rule, fmt.Sprintf(
 				"cross-domain edge %s (domain %q) -> %s (domain %q), via %s, is denied by policy",
 				edge.From.Key(), edge.FromDomain, edge.To.Key(), edge.ToDomain, edge.Owner.Key(),
+			)),
+		})
+	}
+	return out
+}
+
+// evaluateEdgeSelector evaluates one matchEdge.selector rule (docs/adr/033
+// decision 1) against every cross-domain-relevant edge crossDomainEdges
+// derives — the SAME graph-derived edges evaluateCrossDomain uses, per
+// docs/planning/08 K2's "evaluation ... over the SAME graph-derived edges
+// crossDomain already uses" — denying (or warning) each edge whose FROM
+// endpoint labels satisfy sel.From AND whose TO endpoint labels satisfy
+// sel.To. The message names the rule id, both selectors, and the edge key
+// pair (docs/planning/08 K2 accept bar).
+func evaluateEdgeSelector(rule policy.Rule, envelopes []resource.Envelope, g *graph.Graph) []Decision {
+	sel := rule.MatchEdge.Selector
+	var out []Decision
+	for _, edge := range crossDomainEdges(envelopes, g) {
+		if !sel.From.Selects(edge.From.Metadata.Labels) || !sel.To.Selects(edge.To.Metadata.Labels) {
+			continue
+		}
+		out = append(out, Decision{
+			RuleID:   rule.ID,
+			Effect:   rule.Effect,
+			Resource: edge.Owner.Key(),
+			Message: message(rule, fmt.Sprintf(
+				"edge %s -> %s, via %s, matches selector.from=(%s) selector.to=(%s), denied by policy",
+				edge.From.Key(), edge.To.Key(), edge.Owner.Key(), sel.From.String(), sel.To.String(),
 			)),
 		})
 	}

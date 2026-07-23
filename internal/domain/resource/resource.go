@@ -5,6 +5,7 @@ package resource
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/rezarajan/platformctl/internal/domain/status"
@@ -20,6 +21,18 @@ const DefaultNamespace = "default"
 const DefaultDomain = "default"
 
 var dnsLabelPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+// labelSegmentPattern is one Kubernetes label-key/value segment: alphanumeric,
+// '-', '_', '.', starting and ending alphanumeric (K8s label-value/label-key
+// name-segment grammar; see labelPrefixPattern for the key's optional
+// DNS-subdomain prefix half).
+var labelSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$`)
+
+// labelPrefixPattern is a label key's optional prefix: a DNS subdomain
+// (lowercase alphanumeric segments separated by '.', each segment optionally
+// hyphenated internally) — the same grammar as a Kubernetes annotation/label
+// key prefix (e.g. "example.com/tier").
+var labelPrefixPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 
 type GroupVersionKind struct {
 	APIVersion string `json:"apiVersion"` // e.g. "datascape.io/v1alpha1"
@@ -119,6 +132,57 @@ func ValidateDNSLabel(field, value string) error {
 	return nil
 }
 
+// ValidateLabelKey validates one metadata.labels key against the Kubernetes
+// label-key grammar (docs/planning/08 K1, docs/adr/033 decision 2): an
+// optional DNS-subdomain prefix (<=253 chars) followed by '/', then a name
+// segment (<=63 chars; alphanumeric, '-', '_', '.'; must start and end
+// alphanumeric). This is the same grammar Kubernetes itself enforces on
+// object labels — labels already flow through to runtime labels on every
+// runtime (docker, kubernetes), so a value only one runtime happens to
+// reject is exactly the docs/adr/030 failure class this closes off at
+// validate time instead.
+func ValidateLabelKey(key string) error {
+	prefix, name, hasSlash := strings.Cut(key, "/")
+	if !hasSlash {
+		name, prefix = prefix, ""
+	}
+	if prefix != "" {
+		if len(prefix) > 253 {
+			return fmt.Errorf("label key prefix %q is invalid: must be at most 253 characters", prefix)
+		}
+		if !labelPrefixPattern.MatchString(prefix) {
+			return fmt.Errorf("label key prefix %q is invalid: must be a lowercase DNS subdomain", prefix)
+		}
+	}
+	if name == "" {
+		return fmt.Errorf("label key %q is invalid: name segment is required", key)
+	}
+	if len(name) > 63 {
+		return fmt.Errorf("label key %q is invalid: name segment must be at most 63 characters", key)
+	}
+	if !labelSegmentPattern.MatchString(name) {
+		return fmt.Errorf("label key %q is invalid: name segment must be alphanumeric, '-', '_', or '.', and start/end alphanumeric", key)
+	}
+	return nil
+}
+
+// ValidateLabelValue validates one metadata.labels value against the
+// Kubernetes label-value grammar (docs/planning/08 K1): empty is valid;
+// otherwise <=63 chars, alphanumeric/'-'/'_'/'.', starting and ending
+// alphanumeric.
+func ValidateLabelValue(value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) > 63 {
+		return fmt.Errorf("label value %q is invalid: must be at most 63 characters", value)
+	}
+	if !labelSegmentPattern.MatchString(value) {
+		return fmt.Errorf("label value %q is invalid: must be alphanumeric, '-', '_', or '.', and start/end alphanumeric", value)
+	}
+	return nil
+}
+
 func RefFromSpec(spec map[string]any, field string) NameRef {
 	ref, ok := spec[field].(map[string]any)
 	if !ok {
@@ -205,6 +269,21 @@ func (e Envelope) Validate() error {
 	}
 	if err := ValidateDNSLabel("metadata.domain", NormalizeDomain(e.Metadata.Domain)); err != nil {
 		return fmt.Errorf("%s %q: %w", e.Kind, e.Metadata.Name, err)
+	}
+	if len(e.Metadata.Labels) > 0 {
+		keys := make([]string, 0, len(e.Metadata.Labels))
+		for k := range e.Metadata.Labels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if err := ValidateLabelKey(k); err != nil {
+				return fmt.Errorf("%s %q: metadata.labels: %w", e.Kind, e.Metadata.Name, err)
+			}
+			if err := ValidateLabelValue(e.Metadata.Labels[k]); err != nil {
+				return fmt.Errorf("%s %q: metadata.labels[%q]: %w", e.Kind, e.Metadata.Name, k, err)
+			}
+		}
 	}
 	for _, obs := range e.Metadata.Observers {
 		if err := ValidateDNSLabel("metadata.observers.name", obs.Name); err != nil {

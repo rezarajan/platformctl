@@ -755,3 +755,19 @@ static. Dimensions, each producing findings verified before fixing:
   fail policy. NO tasks struck: the audit found nothing obsolete —
   domains remain as compartments (blast radius), and every open task
   feeds the new plan. Wave: agents on H9, H10, K1+K2.
+- 2026-07-23: OWNER DECISION — MEDIATION IS THE DEFAULT TRANSPORT
+  (ADR 034): batteries-included production-grade means every declared
+  edge is identity-mediated unless the manifest says transport: direct
+  (lint-flagged, policy-deniable). The facts architecture is the
+  enabler: consumers resolve every address from engine-owned facts, so
+  the engine mediates edges at one chokepoint with ZERO provider
+  changes — the third and largest tenant of the domainRuntime pattern.
+  Costs recorded before discovery: fabric on the critical path
+  (controller HA + chaos become GA gates), ~2x container count (J5
+  bounds land at the right moment), Kafka advertised-listener alignment
+  (own task), measured throughput tax (claims-table entry). Stage L
+  (L1-L5) sequenced; gate MediatedTransport Alpha/disabled,
+  byte-identical off. Also: J5 sweep CLOSED FULLY GREEN 30/30 — the 5
+  failures were an expired RBAC token mid-sweep (re-minted 6h, rerun
+  5/5 green); every workload suite passed under the new resource
+  bounds on both runtimes.

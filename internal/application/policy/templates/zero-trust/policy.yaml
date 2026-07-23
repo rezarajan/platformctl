@@ -142,3 +142,22 @@ spec:
       effect: deny
       exemptible: true
       message: "The env secret backend is dev-only (ADR 013) — exempt with metadata.annotations[\"policy.datascape.io/exempt\"]: \"forbid-env-secret-backend: <reason>\" for local/dev use."
+
+    # 13. Label integrity (docs/adr/033 "the self-claim pitfall"): who may
+    #     WEAR a sensitive label is itself policy-governed, independent of
+    #     who benefits from it — closing the classic label-based-access
+    #     failure mode where a consumer labels ITSELF into a selector
+    #     audience (e.g. a matchEdge.selector rule elsewhere) to grant
+    #     itself access. This example restricts a "clearance" label to
+    #     namespace "trusted"; tailor the label key and namespace to your
+    #     organization's actual sensitive label(s) before enabling in CI.
+    - id: who-may-wear-clearance-label
+      match:
+        selector:
+          matchExpressions:
+            - key: clearance
+              operator: Exists
+      assert: { field: metadata.namespace, equals: "trusted" }
+      effect: deny
+      exemptible: true
+      message: "Only resources in namespace \"trusted\" may carry a clearance label (docs/adr/033 label-integrity governance) — tailor this rule's namespace/label to your organization's, or exempt with a reason."

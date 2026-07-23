@@ -26,6 +26,9 @@ metadata:
                        # nameRef fields accept an optional namespace for
                        # cross-namespace references.
   labels: {}       # optional, free-form
+                   # (keys/values validated to the Kubernetes label grammar
+                   # at `validate` — docs/planning/08 K1, docs/adr/033
+                   # decision 2; see the paragraph below)
   annotations: {}  # optional, free-form
   observers:       # optional, any data-plane Kind may declare this
     - name: local-marquez   # a Provider this resource's own provider may forward a LineageEndpoint to
@@ -67,6 +70,18 @@ B7); a managed `Connection` realizing an allowed cross-domain path joins exactly
 network plus each distinct consumer domain's network — nothing else. A manifest set that never
 declares a non-`default` domain produces byte-identical runtime objects to before this field
 existed — segmentation is opt-in per domain, never retroactive.
+
+`metadata.labels` (docs/planning/08 K1, docs/adr/033 decision 2) is validated at `validate` time
+to the Kubernetes label grammar: a key is an optional prefix (a lowercase DNS subdomain, at most
+253 characters) followed by `/`, then a name segment (at most 63 characters, alphanumeric/`-`/`_`/`.`,
+starting and ending alphanumeric); a value is empty or at most 63 characters under the same
+name-segment grammar. An invalid key or value is refused at `validate`, naming the offending key
+and the resource Kind/name (`internal/domain/resource.ValidateLabelKey`/`ValidateLabelValue`).
+Labels already flow through to runtime object labels on every runtime (Docker, Kubernetes); a
+value only one runtime happened to reject was the exact docs/adr/030 failure class this grammar
+check closes off at validate time instead of at apply. The policy vocabulary's `matchEdge.selector`
+and `match.selector` (§13) select resources/edges by these same labels — see the accepted-value
+grammar there.
 
 `spec.access` (docs/adr/026-graph-scoped-access.md §2, docs/planning/08 H7) is an additive, optional
 array of `{namespace: <string>}` wide-grant declarations, available on every Kind whose realizing
@@ -1949,3 +1964,40 @@ absent-passes posture means an unset field has opted out of nothing.
 manifest set without the rest of `validate`. Gated by `PolicyEngine`
 (Alpha, disabled by default — docs/planning/04-roadmap-and-feature-gates.md
 §12).
+
+### 13.1 Label selectors — `matchEdge.selector` and `match.selector` (docs/planning/08 K2, docs/adr/033)
+
+`crossDomain` and `matchGrant`'s bare `namespace` are compartment-granularity
+selectors; docs/adr/033 (Stage K2) adds a Kubernetes-style label selector —
+`matchLabels`/`matchExpressions`, evaluated against `metadata.labels` (§2,
+grammar validated at `validate` per K1 above) — giving the policy vocabulary
+the same resolution the reference graph already has (docs/adr/026, §12
+above). The shape is identical wherever it appears:
+
+```yaml
+selector:
+  matchLabels: {tier: gold}              # equality, ANDed
+  matchExpressions:                      # ANDed with matchLabels and each other
+    - {key: clearance, operator: Exists}          # In | NotIn | Exists | DoesNotExist
+    - {key: clearance, operator: In, values: [gold, platinum]}
+```
+
+`matchEdge.selector: {from, to}` is `matchEdge`'s second closed shape
+alongside `crossDomain` (exactly one of the two is set): an edge matches
+when the FROM endpoint's `metadata.labels` satisfy `from` AND the TO
+endpoint's `metadata.labels` satisfy `to`, evaluated over the identical
+graph-derived edges `crossDomain` uses (a `Binding`'s `sourceRef` ->
+`targetRef`, or a `connectionRef` consumer -> the `Connection` it
+references). `match.selector` is an additional, optional field alongside
+`match`'s existing `kind`/`label`/`name` selectors (composable with them,
+and with the plain equality-only `label` map) — the "matchResource gains
+the same selector form" decision, meant for label-integrity rules (e.g.
+"deny any resource carrying `clearance: *` outside namespace `trusted`" —
+see the shipped zero-trust pack's `who-may-wear-clearance-label` rule for
+a worked example, and docs/adr/033's "self-claim pitfall" section for why
+this rule exists independently of any selector-based audience rule
+elsewhere). Both forms are evaluated only when the `LabelScopedAccess`
+feature gate (Alpha, disabled by default) is enabled; gate-off, a rule
+using either form is skipped entirely — never evaluated, never a partial
+match — so every pre-existing policy rule shape is byte-identical to
+before this section existed.

@@ -59,6 +59,7 @@ pattern of recording a redirected first cut).
 | [031](031-provider-diagnostics-channel.md) | Provider diagnostics: Request.Warnf, no process-global streams in adapters | accepted | fail (error) / degrade (status) / inform (Warnf) is the whole ladder; engine brokers presentation; archtest forbids os.Stderr/Stdout/fmt.Print in adapters+application |
 | [032](032-provider-distribution-compiled-in.md) | Provider distribution: compiled-in until the plugin protocol earns its keep | accepted | conformance suite is the quality boundary, not process isolation; four reopen criteria recorded; Phase 8 owns the protocol if triggered |
 | [033](033-label-scoped-access-moderation.md) | Label-scoped access moderation: policy grants by selector, not by domain | accepted | three planes (compartment/wiring/moderation); selectors never create access; self-claim pitfall governed by label-integrity rules; attributes attested at the mediator; namespace-wide grants deprecated |
+| [034](034-mediation-default-transport.md) | Mediation is the default transport; direct is the declared exception | accepted | inverts ADR 027's opt-in via the facts chokepoint (zero provider changes); fabric is platform-owned infra; costs stated up front (critical path, container count, Kafka redirects, throughput tax); gate MediatedTransport |
 
 "Retroactive" ADRs (008–014) record decisions made in the planning package
 (docs 00–06) before this convention existed — written 2026-07-21 so the

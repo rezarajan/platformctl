@@ -173,6 +173,175 @@ func TestValidateMatchEdgeRequiresFromAndTo(t *testing.T) {
 	}
 }
 
+// TestSelectorRequirementSatisfied pins the four docs/adr/033 (Stage K2)
+// matchExpressions operators against Kubernetes' own labels.Requirement.Matches
+// semantics — In requires the key present with a matching value; NotIn
+// matches when the key is ABSENT too (not just present-with-a-different-
+// value), which is what lets a matchExpressions entry express a negative
+// audience condition (e.g. "consumer lacks clearance: gold").
+func TestSelectorRequirementSatisfied(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		req    SelectorRequirement
+		labels map[string]string
+		want   bool
+	}{
+		{"in-match", SelectorRequirement{Key: "clearance", Operator: SelectorIn, Values: []string{"gold"}}, map[string]string{"clearance": "gold"}, true},
+		{"in-no-match", SelectorRequirement{Key: "clearance", Operator: SelectorIn, Values: []string{"gold"}}, map[string]string{"clearance": "silver"}, false},
+		{"in-absent", SelectorRequirement{Key: "clearance", Operator: SelectorIn, Values: []string{"gold"}}, map[string]string{}, false},
+		{"notin-absent", SelectorRequirement{Key: "clearance", Operator: SelectorNotIn, Values: []string{"gold"}}, map[string]string{}, true},
+		{"notin-different-value", SelectorRequirement{Key: "clearance", Operator: SelectorNotIn, Values: []string{"gold"}}, map[string]string{"clearance": "silver"}, true},
+		{"notin-same-value", SelectorRequirement{Key: "clearance", Operator: SelectorNotIn, Values: []string{"gold"}}, map[string]string{"clearance": "gold"}, false},
+		{"exists-present", SelectorRequirement{Key: "clearance", Operator: SelectorExists}, map[string]string{"clearance": "anything"}, true},
+		{"exists-absent", SelectorRequirement{Key: "clearance", Operator: SelectorExists}, map[string]string{}, false},
+		{"doesnotexist-absent", SelectorRequirement{Key: "clearance", Operator: SelectorDoesNotExist}, map[string]string{}, true},
+		{"doesnotexist-present", SelectorRequirement{Key: "clearance", Operator: SelectorDoesNotExist}, map[string]string{"clearance": "gold"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.req.Satisfied(tc.labels); got != tc.want {
+				t.Errorf("Satisfied(%v) = %v, want %v", tc.labels, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSelectorSelectsAndsMatchLabelsAndMatchExpressions proves matchLabels
+// and matchExpressions compose with AND (both across the two blocks and
+// across every entry within each) — docs/adr/033 decision 1.
+func TestSelectorSelectsAndsMatchLabelsAndMatchExpressions(t *testing.T) {
+	t.Parallel()
+	sel := &Selector{
+		MatchLabels: map[string]string{"tier": "gold"},
+		MatchExpressions: []SelectorRequirement{
+			{Key: "clearance", Operator: SelectorIn, Values: []string{"gold", "platinum"}},
+		},
+	}
+	cases := []struct {
+		name   string
+		labels map[string]string
+		want   bool
+	}{
+		{"both-match", map[string]string{"tier": "gold", "clearance": "platinum"}, true},
+		{"matchLabels-only", map[string]string{"tier": "gold"}, false},
+		{"matchExpressions-only", map[string]string{"clearance": "gold"}, false},
+		{"neither", map[string]string{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sel.Selects(tc.labels); got != tc.want {
+				t.Errorf("Selects(%v) = %v, want %v", tc.labels, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSelectorValidateRejectsEmpty and TestSelectorValidateRejectsBadOperator
+// pin the docs/planning/08 K2 selector validation fixtures.
+func TestSelectorValidateRejectsEmpty(t *testing.T) {
+	t.Parallel()
+	if err := (&Selector{}).validate(); err == nil {
+		t.Fatal("expected an error for an empty selector (matches everything)")
+	}
+}
+
+func TestSelectorValidateRejectsBadOperator(t *testing.T) {
+	t.Parallel()
+	sel := &Selector{MatchExpressions: []SelectorRequirement{{Key: "clearance", Operator: "Bogus"}}}
+	if err := sel.validate(); err == nil {
+		t.Fatal("expected an error for an unknown operator")
+	}
+}
+
+func TestSelectorValidateRejectsInWithNoValues(t *testing.T) {
+	t.Parallel()
+	sel := &Selector{MatchExpressions: []SelectorRequirement{{Key: "clearance", Operator: SelectorIn}}}
+	if err := sel.validate(); err == nil {
+		t.Fatal("expected an error for In with no values")
+	}
+}
+
+func TestSelectorValidateRejectsExistsWithValues(t *testing.T) {
+	t.Parallel()
+	sel := &Selector{MatchExpressions: []SelectorRequirement{{Key: "clearance", Operator: SelectorExists, Values: []string{"gold"}}}}
+	if err := sel.validate(); err == nil {
+		t.Fatal("expected an error for Exists with values set")
+	}
+}
+
+func TestSelectorValidateAcceptsWellFormed(t *testing.T) {
+	t.Parallel()
+	sel := &Selector{
+		MatchLabels:      map[string]string{"tier": "gold"},
+		MatchExpressions: []SelectorRequirement{{Key: "clearance", Operator: SelectorExists}},
+	}
+	if err := sel.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil", err)
+	}
+}
+
+// TestMatchSelectsWithSelector proves Match.Selects composes the plain
+// Label equality map and the richer Selector — docs/adr/033's "matchResource
+// gains the same selector form" alongside the pre-existing Label map.
+func TestMatchSelectsWithSelector(t *testing.T) {
+	t.Parallel()
+	m := &Match{Selector: &Selector{MatchExpressions: []SelectorRequirement{
+		{Key: "clearance", Operator: SelectorExists},
+	}}}
+	withLabel := envelope("Provider", "p1", nil, map[string]string{"clearance": "gold"})
+	withoutLabel := envelope("Provider", "p2", nil, nil)
+	if !m.Selects(withLabel) {
+		t.Error("Selects() = false, want true for a resource carrying the clearance label")
+	}
+	if m.Selects(withoutLabel) {
+		t.Error("Selects() = true, want false for a resource with no clearance label")
+	}
+}
+
+// TestRuleKindMatchEdgeSelector and TestValidateMatchEdgeSelector pin the
+// docs/adr/033 (Stage K2) matchEdge.selector shape — the label-granularity
+// generalization of matchEdge.crossDomain, exactly one of the two set.
+func TestRuleKindMatchEdgeSelector(t *testing.T) {
+	t.Parallel()
+	rule := Rule{ID: "gold-tier-requires-clearance", Effect: Deny, MatchEdge: &EdgeMatch{Selector: &EdgeSelector{
+		From: &Selector{MatchExpressions: []SelectorRequirement{{Key: "clearance", Operator: SelectorNotIn, Values: []string{"gold"}}}},
+		To:   &Selector{MatchLabels: map[string]string{"tier": "gold"}},
+	}}}
+	if got := rule.Kind(); got != RuleKindEdge {
+		t.Fatalf("Kind() = %v, want RuleKindEdge", got)
+	}
+	if err := Validate([]Policy{validPolicy("p", rule)}); err != nil {
+		t.Fatalf("expected a well-formed matchEdge.selector rule to validate, got %v", err)
+	}
+}
+
+func TestRuleKindInvalidWhenBothCrossDomainAndSelectorSet(t *testing.T) {
+	t.Parallel()
+	rule := Rule{ID: "both", Effect: Deny, MatchEdge: &EdgeMatch{
+		CrossDomain: &CrossDomainSelector{From: "a", To: "b"},
+		Selector:    &EdgeSelector{From: &Selector{MatchLabels: map[string]string{"x": "y"}}, To: &Selector{MatchLabels: map[string]string{"x": "y"}}},
+	}}
+	if got := rule.Kind(); got != RuleKindInvalid {
+		t.Fatalf("Kind() = %v, want RuleKindInvalid when both crossDomain and selector are set", got)
+	}
+}
+
+func TestValidateMatchEdgeSelectorRequiresFromAndTo(t *testing.T) {
+	t.Parallel()
+	cases := []Rule{
+		{ID: "no-from", Effect: Deny, MatchEdge: &EdgeMatch{Selector: &EdgeSelector{To: &Selector{MatchLabels: map[string]string{"x": "y"}}}}},
+		{ID: "no-to", Effect: Deny, MatchEdge: &EdgeMatch{Selector: &EdgeSelector{From: &Selector{MatchLabels: map[string]string{"x": "y"}}}}},
+	}
+	for _, r := range cases {
+		t.Run(r.ID, func(t *testing.T) {
+			if err := Validate([]Policy{validPolicy(r.ID, r)}); err == nil {
+				t.Fatalf("rule %s: expected a from/to-required validation error", r.ID)
+			}
+		})
+	}
+}
+
 // TestRuleKindMatchGrant pins docs/adr/026 §2's matchGrant selector
 // (docs/planning/08 H7) — the same closed-shape-exclusivity dispatch
 // TestRuleKindMatchEdge already pins for matchEdge.
