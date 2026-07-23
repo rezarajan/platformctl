@@ -167,7 +167,9 @@ unless truly technology-specific" standard):
   found the drop was silent and undocumented — the only setter is the
   `wireguard` provider (gate `TunnelProvider`, Alpha/disabled), whose own
   ADR records it as Docker-only. If a second setter appears, the adapter
-  should refuse loudly rather than drop.
+  should refuse loudly rather than drop. **(Implemented, 2026-07-22 GA caveat sweep, doc 11: the
+  kubernetes adapter now returns a named refusal for any non-empty
+  Sysctls — pinned by TestEnsureContainerRefusesSysctls.)**
 - **CPU reservation.** Kubernetes has a real, portable reservation concept
   (`resources.requests.cpu`); Docker does not (CPU shares are a relative
   weight). `Resources.CPUReservation` was added to the port specifically

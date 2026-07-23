@@ -520,3 +520,24 @@ static. Dimensions, each producing findings verified before fixing:
   minikube and CI kind clusters (default CNIs don't enforce) — B7's
   known caveat; follow-up recorded: put a policy-enforcing CNI (Calico)
   on the CI kind cluster to make B7/H5/H7 enforcement live-proven.
+- 2026-07-22: GA CAVEAT SWEEP (owner: no GA without conclusive
+  evidence). Closed now: (A) NetworkPolicy enforcement is finally
+  LIVE-PROVEN in CI — kind gets Calico (default kindnet never enforced;
+  every isolation test silently skipped) + 3 nodes (anti-affinity
+  genuinely spreads, strengthening Stage C criterion 1's K8s half);
+  new TestNetworkPolicyEnforcementIsLive does the real negative probe
+  (cross-namespace dial through default-deny must FAIL, same-namespace
+  must succeed) and PLATFORMCTL_REQUIRE_NETPOL_ENFORCEMENT=1 in CI
+  turns non-enforcement into a hard failure — a skip can never
+  masquerade as coverage again. (C) ContainerSpec.Sysctls on Kubernetes
+  is now a NAMED REFUSAL instead of a silent drop (doc 07's loud-
+  refusal clause implemented + pinned). Remaining, sequenced: (B)
+  recreate the local minikube with --cni=calico AFTER wave-4 evidence
+  drains (cluster in active use) and run the enforcement suite locally;
+  (D) 63-char DNS-label truncation for domain-scoped network names —
+  fix in naming at H5's merge gate. Reviewed-and-kept (documented
+  external limitations, not unproven claims): Grafana admin rotation
+  (Grafana's own), restore verification post-hoc (inherent to
+  streaming, detection proven by I12 fault tests), backup Docker-only
+  (ADR 007 scope), Docker per-edge network scale bounds (ADR 026,
+  stated design envelope).

@@ -182,8 +182,21 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Create kind cluster
+      # Calico replaces kind's default CNI (kindnet), which does NOT
+      # enforce NetworkPolicy — without this, every isolation/segmentation
+      # test skips and "enforcement" was never actually proven (doc 11 GA
+      # caveat sweep, 2026-07-22). Three nodes so pod anti-affinity
+      # (broker spreading, Stage C criterion 1) genuinely spreads.
+      - name: Create kind cluster (Calico, 3 nodes)
         uses: helm/kind-action@v1
+        with:
+          config: .github/kind-calico.yaml
+
+      - name: Install Calico and wait for enforcement readiness
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
+          kubectl wait --for=condition=Ready nodes --all --timeout=180s
 
       # docs/planning/08 B5: exercise the K8s runtime under exactly the
       # ServiceAccount/ClusterRole deploy/kubernetes/rbac ships as the
@@ -221,6 +234,9 @@ jobs:
         env:
           KUBECONFIG: ${{ env.PLATFORMCTL_KUBECONFIG }}
           PLATFORMCTL_REQUIRE_K8S: "1"
+          # A skip can never masquerade as enforcement coverage again:
+          # with Calico installed, non-enforcement is a hard failure.
+          PLATFORMCTL_REQUIRE_NETPOL_ENFORCEMENT: "1"
         run: |
           if [ "${{ matrix.shard }}" = "adapter" ]; then
             go test -tags integration -timeout 1200s \

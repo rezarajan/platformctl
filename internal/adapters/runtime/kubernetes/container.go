@@ -31,6 +31,17 @@ import (
 // identity.md. Replicas <= 1 without StableIdentity reproduces this
 // adapter's original single-replica Deployment behavior byte-for-byte.
 func (r *Runtime) EnsureContainer(ctx context.Context, spec runtimeport.ContainerSpec) (runtimeport.ContainerState, error) {
+	// Refuse loudly, never drop silently (doc 07 "genuine per-runtime
+	// differences", loud-refusal clause implemented by the 2026-07 GA
+	// caveat sweep, doc 11): Kubernetes gates non-default sysctls behind
+	// cluster-admin node policy (securityContext.sysctls allowlists), so
+	// this adapter cannot honor ContainerSpec.Sysctls the way Docker's
+	// HostConfig.Sysctls does. Every setter today (wireguard/ADR 023) is
+	// Docker-only by its own ADR; if that changes, the K8s translation is
+	// a deliberate design task — not a silent no-op discovered in prod.
+	if len(spec.Sysctls) > 0 {
+		return runtimeport.ContainerState{}, fmt.Errorf("container %q: ContainerSpec.Sysctls is not supported on the kubernetes runtime (docs/planning/07 per-runtime differences; K8s requires cluster-level sysctl allowlisting) — this workload is Docker-only today", spec.Name)
+	}
 	n := spec.ReplicaCount()
 	if spec.StableIdentity {
 		return r.ensureStatefulSet(ctx, spec, int32(n))
