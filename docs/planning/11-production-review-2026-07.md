@@ -771,3 +771,13 @@ static. Dimensions, each producing findings verified before fixing:
   failures were an expired RBAC token mid-sweep (re-minted 6h, rerun
   5/5 green); every workload suite passed under the new resource
   bounds on both runtimes.
+- 2026-07-23: STAGE H COMPLETE — criterion 3 CHECKED with composed
+  evidence on both runtimes (Docker 27.4s, K8s 128.7s). Wave 6 fully
+  merged (K1+K2, H10, L1, K3, H9). The composition found THREE live
+  defects the components' own tests could not: listDialPolicies broken
+  since H6 (drift observation silently dead), the H6-recorded FQDN gap
+  (closed via runtime.AddressQualifier, engine-only), and — at the
+  merge gate — resolveRawMediatedTarget answering the providerRef edge
+  instead of the target host, so the qualifier compared a domain to
+  itself (root-caused from the router's own logs; fixed by
+  target-host runtime-name resolution, unit-pinned). Wave sweep next.

@@ -2736,7 +2736,7 @@ ADRs and is not restated.
       the standard error shape; the zero-trust pack ships and passes
       against the lakehouse example (with documented, justified waivers
       where the example is deliberately dev-flavored).
-- [ ] The owner's scenario holds end-to-end: a cdc Binding whose source
+- [x] The owner's scenario holds end-to-end: a cdc Binding whose source
       and sink chains carry different `metadata.domain` values is denied
       at validate by a cross-domain policy; with an allow policy, the
       same manifest reconciles the path through a MediatedConnection and
@@ -2751,6 +2751,14 @@ ADRs and is not restated.
       validate/plan — never auto-destroy on policy change. "Allow
       policy" means an exemption on an exemptible deny (the vocabulary
       has no allow effect, by design).*
+      *Checked 2026-07-23 (merge gate): Docker leg 27.4s and Kubernetes
+      leg 128.7s both green on merged main — the K8s leg after one more
+      live-found fix (resolveRawMediatedTarget took the Connection's
+      first graph edge, its providerRef, so the AddressQualifier compared
+      the Connection's domain to itself and never qualified the
+      terminator; now resolved by target-host runtime name, unit-pinned).
+      Third live defect the composition found; the criterion earned its
+      unchecked year.*
 - [x] Undeclared domains remain byte-identical to today's behavior
       (no segmentation, no mediation) — pinned by tests.
 

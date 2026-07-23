@@ -71,20 +71,33 @@ func compileMediatedConnection(res resource.Envelope, resources map[resource.Key
 // external target (nothing in-set resolves the host) — the expected,
 // non-error shape graph.Build itself treats leniently.
 func resolveRawMediatedTarget(res resource.Envelope, resources map[resource.Key]resource.Envelope) (resource.Envelope, bool, error) {
-	envs := make([]resource.Envelope, 0, len(resources))
-	for _, e := range resources {
-		envs = append(envs, e)
+	// Resolve the TARGET HOST specifically — never "the Connection's first
+	// graph edge": a managed Connection's edge list starts with its
+	// providerRef (the mesh Provider, same domain as the Connection), so
+	// Edges[0] answered the wrong envelope and QualifyTargetAddress
+	// compared the Connection's own domain to ITSELF — found live at the
+	// H9 merge gate as a router terminator dialing a bare cross-namespace
+	// name ("lookup xd-pg: no such host"). This mirrors graph.Build's own
+	// byRuntimeName target resolution (internal/domain/graph, the I4
+	// Connection-target edge): same-namespace, runtime-object-name match,
+	// lenient when nothing matches (a genuinely external address).
+	targetStr, _ := res.Spec["target"].(string)
+	host := targetStr
+	if h, _, err := net.SplitHostPort(targetStr); err == nil {
+		host = h
 	}
-	g, err := graph.Build(envs)
-	if err != nil {
-		return resource.Envelope{}, false, fmt.Errorf("openziti: rebuild graph: %w", err)
-	}
-	tos := g.Edges[res.Key()]
-	if len(tos) == 0 {
+	if host == "" {
 		return resource.Envelope{}, false, nil
 	}
-	e, ok := resources[tos[0]]
-	return e, ok, nil
+	for _, e := range resources {
+		if e.Key() == res.Key() || e.Metadata.Namespace != res.Metadata.Namespace {
+			continue
+		}
+		if naming.RuntimeObjectName(e) == host {
+			return e, true, nil
+		}
+	}
+	return resource.Envelope{}, false, nil
 }
 
 func tunnelContainerName(res resource.Envelope) string { return naming.RuntimeObjectName(res) }
