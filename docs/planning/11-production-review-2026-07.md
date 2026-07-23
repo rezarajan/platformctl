@@ -665,3 +665,21 @@ static. Dimensions, each producing findings verified before fixing:
   closed), v1.3.0 tag, ExternalResourceConfiguration GA, push (~48
   commits), and the minikube→Calico recreation for local enforcement
   suites (CI already runs Calico-enforced).
+- 2026-07-23: RESIDUE AUDIT (owner request) — live strays found on both
+  runtimes after the sweep, each root-caused to a cleanup CLASS, all
+  closed (b74fdb9): (1) the netpol enforcement test stranded its
+  namespace on every non-Calico run — its skip path swallowed
+  ca9d719's RemoveNetwork holds-workloads refusal (the safety fix was
+  right; the test's cleanup was incomplete — remove workloads first,
+  fail loud); same latent gap fixed in the ingress-TLS K8s test.
+  (2) ziti-canary: a raw docker-run fixture in the rt.Remove list —
+  Remove refuses unmanaged containers by design, swallowed, and the
+  survivor blocked network removal. (3) the big one: Docker
+  ContainerRemove never passed RemoveVolumes — every managed container
+  removal since the project began leaked its image-declared anonymous
+  volumes; 3853 dangling volumes (8.4GB) pruned, all three adapter
+  sites fixed (conformance green), seven test files' raw docker rm
+  gain -v. Both fixed tests re-run live and verified residue-free.
+  13-day-old compose networks from a deleted POC also removed. User
+  compose volumes (moe-data-platform-poc, datascape-playground) left
+  untouched.
