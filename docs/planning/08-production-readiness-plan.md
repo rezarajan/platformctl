@@ -2070,6 +2070,23 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
 - **Accept:** examples/lakehouse pods carry requests/limits on K8s;
   the scenarios shard passes CI twice consecutively; doc 03 documents
   the fragment.
+- **Done (2026-07-23):** `spec.runtime.resources` (cpu/cpuReservation in
+  cores; memory/memoryReservation as int+Ki|Mi|Gi) added to the Provider
+  schema + doc 03 same commit. Realized at the engine chokepoint —
+  domainRuntime.EnsureContainer injects the parsed bounds into every
+  spec that carries none (provider-set values win; none exist), so ALL
+  providers gained it with zero provider-side changes, pinned by
+  TestDomainRuntimeInjectsDeclaredResources (fake runtime grew an
+  exported Spec accessor, the Mutations() precedent). Both K8s-shard
+  examples bounded: all 8 lakehouse providers and all 6 cdc-attendance
+  providers carry memory limits+reservations (JVMs get 1-1.5Gi limits so
+  container-aware heap sizing replaces host-memory sizing — the CI
+  eviction-churn hypothesis's direct counter). CI scenarios shard also
+  split core/apps (it ran 1193s of its 1200s budget green) with an
+  archtest partition guard: a Kubernetes-named test matching neither or
+  both shard patterns is a build failure. Remaining accept item ("passes
+  CI twice consecutively") is CI-side evidence the owner's next two
+  pushes produce.
 
 ### E6: Provider author contract — guide, conformance suite, exemplars
 
