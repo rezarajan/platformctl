@@ -4,9 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	planpkg "github.com/rezarajan/platformctl/internal/application/plan"
+	"github.com/rezarajan/platformctl/internal/domain/graph"
 	"github.com/rezarajan/platformctl/internal/domain/lint"
 	"github.com/rezarajan/platformctl/internal/domain/policy"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
@@ -177,6 +179,128 @@ func TestRunPlanMatchesActionAndKind(t *testing.T) {
 	}
 	if len(decisions) != 1 || decisions[0].Resource.Name != "raw" {
 		t.Fatalf("got %+v, want exactly one decision for the Dataset delete", decisions)
+	}
+}
+
+// domainEnv builds a minimal envelope carrying metadata.domain, for the
+// crossDomain (docs/adr/022 Ring 0, docs/planning/08 H5) tests below.
+func domainEnv(kind, name, domain string, spec map[string]any) resource.Envelope {
+	return resource.Envelope{
+		GroupVersionKind: resource.GroupVersionKind{APIVersion: "datascape.io/v1alpha1", Kind: kind},
+		Metadata:         resource.Metadata{Name: name, Domain: domain},
+		Spec:             spec,
+	}
+}
+
+// cdcCrossDomainFixture builds docs/planning/08 H5's owner scenario: a cdc
+// Binding whose sourceRef lives in domain "payments" and whose targetRef
+// lives in domain "analytics" — plus the graph the two resolve through.
+func cdcCrossDomainFixture(t *testing.T, sourceDomain, targetDomain string) ([]resource.Envelope, *graph.Graph) {
+	t.Helper()
+	src := domainEnv("Source", "pg-src", sourceDomain, map[string]any{"providerRef": map[string]any{"name": "prov"}})
+	stream := domainEnv("EventStream", "events", targetDomain, map[string]any{"providerRef": map[string]any{"name": "prov"}})
+	prov := domainEnv("Provider", "prov", "", map[string]any{"type": "noop", "runtime": map[string]any{"type": "fake"}})
+	binding := domainEnv("Binding", "cdc-binding", "", map[string]any{
+		"mode":        "cdc",
+		"sourceRef":   map[string]any{"name": "pg-src"},
+		"targetRef":   map[string]any{"name": "events"},
+		"providerRef": map[string]any{"name": "prov"},
+	})
+	envelopes := []resource.Envelope{src, stream, prov, binding}
+	g, err := graph.Build(envelopes)
+	if err != nil {
+		t.Fatalf("graph.Build: %v", err)
+	}
+	return envelopes, g
+}
+
+func crossDomainPolicy(id, from, to string, effect policy.Effect) policy.Policy {
+	var p policy.Policy
+	p.APIVersion = policy.APIVersion
+	p.Kind = policy.KindName
+	p.Metadata.Name = "cross-domain-pack"
+	p.Spec.Rules = []policy.Rule{{
+		ID:        id,
+		MatchEdge: &policy.EdgeMatch{CrossDomain: &policy.CrossDomainSelector{From: from, To: to}},
+		Effect:    effect,
+	}}
+	return p
+}
+
+// TestRunCrossDomainDeniesBindingAcrossDomains is docs/planning/08 H5's
+// accept criterion (a): "the owner-scenario's validate half — a cdc Binding
+// whose source domain denies the sink's domain is caught at validate" — a
+// cdc Binding whose sourceRef lives in domain "payments" and whose
+// targetRef lives in domain "analytics", denied by a
+// deny{from:payments,to:analytics} matchEdge.crossDomain rule (docs/adr/022
+// Ring 0). The Decision must name both domains and the edge.
+func TestRunCrossDomainDeniesBindingAcrossDomains(t *testing.T) {
+	envelopes, g := cdcCrossDomainFixture(t, "payments", "analytics")
+	p := crossDomainPolicy("deny-payments-to-analytics", "payments", "analytics", policy.Deny)
+
+	decisions, err := Run([]policy.Policy{p}, envelopes, g, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(decisions) != 1 {
+		t.Fatalf("got %d decisions, want 1: %+v", len(decisions), decisions)
+	}
+	d := decisions[0]
+	if d.Resource.Kind != "Binding" || d.Resource.Name != "cdc-binding" {
+		t.Errorf("decision resource = %+v, want the Binding cdc-binding", d.Resource)
+	}
+	if d.Effect != policy.Deny {
+		t.Errorf("effect = %v, want Deny", d.Effect)
+	}
+	for _, want := range []string{"payments", "analytics", "pg-src", "events"} {
+		if !strings.Contains(d.Message, want) {
+			t.Errorf("message %q does not name %q (both domains + the edge)", d.Message, want)
+		}
+	}
+}
+
+// TestRunCrossDomainSameDomainNoDecision proves the selector matches the
+// exact (from, to) domain pair only — a Binding whose source and target
+// share a domain never fires a crossDomain rule naming two different
+// domains, and undeclared (default) domains behave identically.
+func TestRunCrossDomainSameDomainNoDecision(t *testing.T) {
+	envelopes, g := cdcCrossDomainFixture(t, "payments", "payments")
+	p := crossDomainPolicy("deny-payments-to-analytics", "payments", "analytics", policy.Deny)
+
+	decisions, err := Run([]policy.Policy{p}, envelopes, g, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(decisions) != 0 {
+		t.Fatalf("got %d decisions, want 0 (same-domain edge never matches a cross-domain selector): %+v", len(decisions), decisions)
+	}
+}
+
+// TestRunCrossDomainConnectionConsumption proves the second edge shape ADR
+// 022 Ring 0 names: "a Connection consumption is an edge" — a resource
+// declaring connectionRef in one domain, naming a Connection in another,
+// denied the same way a Binding's source/target edge is.
+func TestRunCrossDomainConnectionConsumption(t *testing.T) {
+	conn := domainEnv("Connection", "ext-db", "analytics", map[string]any{
+		"target": "10.0.0.5:5432", "port": 5432, "scheme": "tcp",
+	})
+	consumer := domainEnv("Provider", "ext-src", "payments", map[string]any{
+		"type": "postgres", "external": true, "runtime": map[string]any{"type": "fake"},
+		"connectionRef": map[string]any{"name": "ext-db"},
+	})
+	envelopes := []resource.Envelope{conn, consumer}
+	g, err := graph.Build(envelopes)
+	if err != nil {
+		t.Fatalf("graph.Build: %v", err)
+	}
+	p := crossDomainPolicy("deny-payments-to-analytics", "payments", "analytics", policy.Deny)
+
+	decisions, err := Run([]policy.Policy{p}, envelopes, g, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(decisions) != 1 || decisions[0].Resource.Name != "ext-src" {
+		t.Fatalf("got %+v, want exactly one decision on the connectionRef-declaring consumer", decisions)
 	}
 }
 

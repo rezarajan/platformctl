@@ -15,18 +15,18 @@ import (
 // internal/application/lint.Finding's identical re-export).
 type Decision = policy.Decision
 
-// Run evaluates every match+assert and matchFinding rule across policies
-// against envelopes/findings — the validate-time half of ADR 021's
-// evaluator: "a pure function (policies, envelopes, graph, plan, findings)
-// -> decisions". g is accepted for parity with that stated signature; no
-// shipped selector needs it yet (kept so a future selector — e.g. an
-// edge-aware one — doesn't need another signature change across every call
-// site). matchPlan rules never fire here: RunPlan is their evaluation
+// Run evaluates every match+assert, matchFinding, and matchEdge rule across
+// policies against envelopes/findings/the graph — the validate-time half of
+// ADR 021's evaluator: "a pure function (policies, envelopes, graph, plan,
+// findings) -> decisions". matchEdge.crossDomain (docs/adr/022 Ring 0,
+// docs/planning/08 H5) is the first selector to actually need g: it fires
+// against the graph's cross-domain data-flow edges (crossDomainEdges below),
+// which is why g was accepted (unused) from H3 on — this is that future
+// selector. matchPlan rules never fire here: RunPlan is their evaluation
 // point, called only once a plan actually exists (plan/apply/destroy,
 // never validate — see docs/planning/08 §7.7 H3's "loadAndValidate after
 // compatibility + lint" wiring instruction).
 func Run(policies []policy.Policy, envelopes []resource.Envelope, g *graph.Graph, findings []lint.Finding) ([]Decision, error) {
-	_ = g // see doc comment: accepted for signature parity, unused today.
 	var decisions []Decision
 	for _, pol := range policies {
 		for _, rule := range pol.Rules() {
@@ -39,6 +39,8 @@ func Run(policies []policy.Policy, envelopes []resource.Envelope, g *graph.Graph
 				decisions = append(decisions, ds...)
 			case policy.RuleKindFinding:
 				decisions = append(decisions, evaluateFinding(rule, findings)...)
+			case policy.RuleKindEdge:
+				decisions = append(decisions, evaluateCrossDomain(rule, envelopes, g)...)
 			}
 		}
 	}
@@ -138,4 +140,112 @@ func message(rule policy.Rule, fallback string) string {
 		return rule.Message
 	}
 	return fallback
+}
+
+// crossDomainEdge is one data-flow edge crossDomainEdges derives from the
+// graph (docs/adr/022 Ring 0): a Binding's sourceRef domain -> targetRef
+// domain, or a connectionRef consumer's own domain -> the Connection it
+// references ("a Connection consumption is an edge"). Owner is the resource
+// a firing rule's Decision attaches to — the Binding itself, or the
+// connectionRef-declaring consumer — always the resource whose author can
+// actually act on the denial.
+type crossDomainEdge struct {
+	Owner                resource.Envelope
+	From, To             resource.Envelope
+	FromDomain, ToDomain string
+}
+
+// connectionRefKinds mirrors graph.allowedKinds("connectionRef") (unexported
+// there): connectionRef may resolve to a Connection or a SecretReference,
+// but only a Connection is a "Connection consumption" edge for domain
+// purposes — a SecretReference has no independent segmentation meaning.
+var connectionRefKinds = map[string]bool{"Connection": true, "SecretReference": true}
+
+// crossDomainEdges derives every cross-domain-relevant edge from envelopes/g.
+// Re-resolving sourceRef/targetRef/connectionRef here (rather than reading
+// g.Edges directly) is deliberate: g.Edges is an unordered, unlabeled
+// dependency list (docs/domain/graph.Graph doc comment), so which edge came
+// from which spec field is not recoverable from it alone. Re-resolution is
+// safe to do without re-deriving graph.Build's own ambiguity checks: g was
+// already built successfully by the time policy.Run is called (every ref
+// field is guaranteed to resolve to exactly one node in g.Nodes), so a
+// direct namespace+name(+kind) scan over g.Nodes here can only ever find
+// the same single match graph.Build already validated.
+func crossDomainEdges(envelopes []resource.Envelope, g *graph.Graph) []crossDomainEdge {
+	if g == nil {
+		return nil
+	}
+	var edges []crossDomainEdge
+	for _, e := range envelopes {
+		if e.Kind == "Binding" {
+			from, okFrom := resolveRef(g, e, "sourceRef", nil)
+			to, okTo := resolveRef(g, e, "targetRef", nil)
+			if okFrom && okTo {
+				edges = append(edges, crossDomainEdge{
+					Owner: e, From: from, To: to,
+					FromDomain: resource.NormalizeDomain(from.Metadata.Domain),
+					ToDomain:   resource.NormalizeDomain(to.Metadata.Domain),
+				})
+			}
+			continue
+		}
+		if ref := resource.RefFromSpec(e.Spec, "connectionRef"); ref.Name != "" {
+			if to, ok := resolveRef(g, e, "connectionRef", connectionRefKinds); ok && to.Kind == "Connection" {
+				edges = append(edges, crossDomainEdge{
+					Owner: e, From: e, To: to,
+					FromDomain: resource.NormalizeDomain(e.Metadata.Domain),
+					ToDomain:   resource.NormalizeDomain(to.Metadata.Domain),
+				})
+			}
+		}
+	}
+	return edges
+}
+
+// resolveRef resolves spec.<field> on from against g.Nodes by namespace+name,
+// optionally filtered to allowed Kinds (nil = unfiltered, matching
+// graph.allowedKinds' default case for sourceRef/targetRef). Returns
+// (zero, false) when the field is unset — never an error, since every
+// present ref is already guaranteed resolvable by graph.Build having
+// succeeded.
+func resolveRef(g *graph.Graph, from resource.Envelope, field string, allowed map[string]bool) (resource.Envelope, bool) {
+	ref := resource.RefFromSpec(from.Spec, field)
+	if ref.Name == "" {
+		return resource.Envelope{}, false
+	}
+	ns := ref.NamespaceOr(from.Metadata.Namespace)
+	for _, e := range g.Nodes {
+		if e.Metadata.Name != ref.Name || resource.NormalizeNamespace(e.Metadata.Namespace) != ns {
+			continue
+		}
+		if allowed != nil && !allowed[e.Kind] {
+			continue
+		}
+		return e, true
+	}
+	return resource.Envelope{}, false
+}
+
+// evaluateCrossDomain evaluates one matchEdge.crossDomain rule against every
+// cross-domain edge in the graph, denying (or warning) each edge whose
+// (fromDomain, toDomain) matches the rule's selector exactly. The message
+// names both domains and the edge — docs/planning/08 H5's accept bar.
+func evaluateCrossDomain(rule policy.Rule, envelopes []resource.Envelope, g *graph.Graph) []Decision {
+	sel := rule.MatchEdge.CrossDomain
+	var out []Decision
+	for _, edge := range crossDomainEdges(envelopes, g) {
+		if edge.FromDomain != sel.From || edge.ToDomain != sel.To {
+			continue
+		}
+		out = append(out, Decision{
+			RuleID:   rule.ID,
+			Effect:   rule.Effect,
+			Resource: edge.Owner.Key(),
+			Message: message(rule, fmt.Sprintf(
+				"cross-domain edge %s (domain %q) -> %s (domain %q), via %s, is denied by policy",
+				edge.From.Key(), edge.FromDomain, edge.To.Key(), edge.ToDomain, edge.Owner.Key(),
+			)),
+		})
+	}
+	return out
 }

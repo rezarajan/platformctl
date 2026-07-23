@@ -42,7 +42,42 @@ func (r *Runtime) EnsureNetwork(ctx context.Context, spec runtimeport.NetworkSpe
 		fmt.Fprintf(os.Stderr, "warning: namespace %q uses networkPolicy: none — no isolation boundary is provisioned; every pod in the cluster can reach it unless something else in the cluster restricts it\n", spec.Name)
 		return nil
 	}
-	return r.ensureNetworkPolicies(ctx, spec.Name, spec.Labels)
+	if err := r.ensureNetworkPolicies(ctx, spec.Name, spec.Labels); err != nil {
+		return err
+	}
+	return r.ensureCrossDomainIngressPolicy(ctx, spec.Name, spec.Labels, spec.AllowFromNetworks)
+}
+
+// ensureCrossDomainIngressPolicy reconciles the single NetworkPolicy that
+// opens spec.Name's default-deny wall to spec.AllowFromNetworks (docs/adr/022
+// Ring 1, docs/planning/08 H5) — created/updated when non-empty, deleted
+// when empty, mirroring ensureExternalIngressPolicy's create-or-delete
+// shape. Update (not just create-if-absent) converges an allow-list that
+// shrinks or grows across reconciles to exactly what's currently declared.
+func (r *Runtime) ensureCrossDomainIngressPolicy(ctx context.Context, ns string, labels map[string]string, allowFrom []string) error {
+	desired := buildCrossDomainIngressPolicy(ns, labels, allowFrom)
+	if desired == nil {
+		if err := r.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, crossDomainIngressPolicyName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete cross-domain ingress policy in %q: %w", ns, err)
+		}
+		return nil
+	}
+	existing, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Get(ctx, crossDomainIngressPolicyName, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		if _, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, desired, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create cross-domain ingress policy in %q: %w", ns, err)
+		}
+		return nil
+	case err != nil:
+		return fmt.Errorf("get cross-domain ingress policy in %q: %w", ns, err)
+	default:
+		desired.ResourceVersion = existing.ResourceVersion
+		if _, err := r.clientset.NetworkingV1().NetworkPolicies(ns).Update(ctx, desired, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update cross-domain ingress policy in %q: %w", ns, err)
+		}
+		return nil
+	}
 }
 
 // ensureNetworkPolicies creates or updates the isolation-boundary

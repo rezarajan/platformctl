@@ -262,20 +262,42 @@ type PlanMatch struct {
 	Kind   string `json:"kind,omitempty"`
 }
 
+// CrossDomainSelector matches a domain-to-domain data-flow edge (docs/adr/022
+// Ring 0): From/To name the source/target metadata.domain values exactly —
+// a Binding's sourceRef domain -> targetRef domain (the owner's exact
+// scenario: a cdc Binding whose source lives in one domain and whose sink
+// chain lives in another), or a connectionRef consumer's own domain -> the
+// Connection it references ("a Connection consumption is an edge"). Both are
+// required — there is no wildcard in this closed vocabulary's first cut.
+type CrossDomainSelector struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// EdgeMatch selects graph edges rather than resources or findings — a
+// distinct match shape from Match (resource selectors) because an edge's
+// identity is the pair of resources it connects, not one resource's own
+// fields (docs/adr/022 Ring 0). crossDomain is the only edge shape this
+// closed vocabulary defines.
+type EdgeMatch struct {
+	CrossDomain *CrossDomainSelector `json:"crossDomain,omitempty"`
+}
+
 // Rule is one typed policy rule — exactly one of (Match+Assert),
-// MatchFinding, or MatchPlan is set (Validate enforces this).
+// MatchFinding, MatchPlan, or MatchEdge is set (Validate enforces this).
 type Rule struct {
 	ID           string        `json:"id"`
 	Match        *Match        `json:"match,omitempty"`
 	Assert       *Assert       `json:"assert,omitempty"`
 	MatchFinding *FindingMatch `json:"matchFinding,omitempty"`
 	MatchPlan    *PlanMatch    `json:"matchPlan,omitempty"`
+	MatchEdge    *EdgeMatch    `json:"matchEdge,omitempty"`
 	Effect       Effect        `json:"effect"`
 	Exemptible   bool          `json:"exemptible,omitempty"`
 	Message      string        `json:"message,omitempty"`
 }
 
-// RuleKind categorizes which of the three closed selector shapes a Rule
+// RuleKind categorizes which of the four closed selector shapes a Rule
 // uses, for the evaluator's dispatch.
 type RuleKind int
 
@@ -284,16 +306,19 @@ const (
 	RuleKindFieldAssert
 	RuleKindFinding
 	RuleKindPlan
+	RuleKindEdge
 )
 
 func (r Rule) Kind() RuleKind {
 	switch {
-	case r.Match != nil && r.Assert != nil && r.MatchFinding == nil && r.MatchPlan == nil:
+	case r.Match != nil && r.Assert != nil && r.MatchFinding == nil && r.MatchPlan == nil && r.MatchEdge == nil:
 		return RuleKindFieldAssert
-	case r.MatchFinding != nil && r.Match == nil && r.Assert == nil && r.MatchPlan == nil:
+	case r.MatchFinding != nil && r.Match == nil && r.Assert == nil && r.MatchPlan == nil && r.MatchEdge == nil:
 		return RuleKindFinding
-	case r.MatchPlan != nil && r.Match == nil && r.Assert == nil && r.MatchFinding == nil:
+	case r.MatchPlan != nil && r.Match == nil && r.Assert == nil && r.MatchFinding == nil && r.MatchEdge == nil:
 		return RuleKindPlan
+	case r.MatchEdge != nil && r.MatchEdge.CrossDomain != nil && r.Match == nil && r.Assert == nil && r.MatchFinding == nil && r.MatchPlan == nil:
+		return RuleKindEdge
 	default:
 		return RuleKindInvalid
 	}
@@ -349,7 +374,7 @@ func Decode(raw map[string]any) (Policy, error) {
 // entire loaded policy set: every rule id is non-empty and globally unique
 // (rule ids are the explain-catalog key and the exemption-annotation key,
 // so ambiguity there is a load-time error, not a runtime surprise), each
-// rule uses exactly one of the three closed selector shapes, effect is one
+// rule uses exactly one of the four closed selector shapes, effect is one
 // of deny/warn, and any assert.matches regex compiles.
 func Validate(policies []Policy) error {
 	seen := map[string]string{} // rule id -> owning policy name
@@ -389,8 +414,12 @@ func Validate(policies []Policy) error {
 				if r.MatchPlan.Action == "" {
 					return fmt.Errorf("rule %q: matchPlan.action is required", r.ID)
 				}
+			case RuleKindEdge:
+				if r.MatchEdge.CrossDomain.From == "" || r.MatchEdge.CrossDomain.To == "" {
+					return fmt.Errorf("rule %q: matchEdge.crossDomain.from and matchEdge.crossDomain.to are required", r.ID)
+				}
 			default:
-				return fmt.Errorf("rule %q: must set exactly one of (match+assert), matchFinding, or matchPlan", r.ID)
+				return fmt.Errorf("rule %q: must set exactly one of (match+assert), matchFinding, matchPlan, or matchEdge", r.ID)
 			}
 		}
 	}

@@ -366,6 +366,44 @@ func buildExternalIngressPolicy(namespace string, spec runtimeport.ContainerSpec
 	}
 }
 
+// crossDomainIngressPolicyName is the single NetworkPolicy that opens the
+// namespace's default-deny boundary to specific other namespaces —
+// docs/adr/022 Ring 1's "the holes the mediated entrypoint needs" mapped
+// onto B7's per-namespace wall (docs/planning/08 H5).
+const crossDomainIngressPolicyName = "datascape-allow-cross-domain"
+
+// buildCrossDomainIngressPolicy returns a NetworkPolicy admitting ingress
+// from every namespace named in allowFrom, or nil when allowFrom is empty
+// (no cross-domain hole needed — the ordinary default-deny/allow-same-
+// namespace pair from buildNetworkPolicies is the whole story). Each peer
+// selects a namespace by its automatically-labeled, immutable
+// "kubernetes.io/metadata.name" — every namespace since Kubernetes 1.22
+// carries it, so no matching label needs to be applied to the source
+// namespace by this adapter for the selector to work. A network name here
+// is expected to equal another NetworkSpec.Name this runtime already
+// ensures (the Docker-network-name == Kubernetes-namespace-name identity
+// docs/planning/08 B7 already established), so this policy always names a
+// real, adapter-managed namespace.
+func buildCrossDomainIngressPolicy(namespace string, labels map[string]string, allowFrom []string) *networkingv1.NetworkPolicy {
+	if len(allowFrom) == 0 {
+		return nil
+	}
+	peers := make([]networkingv1.NetworkPolicyPeer, 0, len(allowFrom))
+	for _, from := range allowFrom {
+		peers = append(peers, networkingv1.NetworkPolicyPeer{
+			NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": from}},
+		})
+	}
+	return &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: crossDomainIngressPolicyName, Namespace: namespace, Labels: withOwnership(labels)},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress:     []networkingv1.NetworkPolicyIngressRule{{From: peers}},
+		},
+	}
+}
+
 func filesSecretName(containerName string) string { return containerName + "-files" }
 
 func fileKey(i int) string { return fmt.Sprintf("f%d", i) }

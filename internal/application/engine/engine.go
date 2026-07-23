@@ -827,14 +827,20 @@ func (e *Engine) inNetworkConsumers(env resource.Envelope, byKey map[resource.Ke
 		if err != nil {
 			continue
 		}
-		// spec.runtime.network, default "datascape" — the same convention
-		// every provider adapter's own network(cfg) helper applies (e.g.
-		// internal/adapters/providers/debezium.network); duplicated here
-		// rather than imported since only application/registry may import
-		// concrete provider packages (CLAUDE.md's layering invariant).
-		netName := "datascape"
-		if n, ok := p.RuntimeConfig["network"].(string); ok && n != "" {
-			netName = n
+		// networkToken resolves spec.runtime.network exactly the same way
+		// every provider adapter's own network(cfg) helper does (e.g.
+		// internal/adapters/providers/debezium.network) — the shared
+		// domainRuntime.go helper, not re-duplicated here. This call site
+		// constructs its own throwaway runtime.ContainerRuntime directly
+		// (below, in probeInNetworkUnreachable) rather than through
+		// resolveRequest's decorator, so the domain-scoped concrete name
+		// (docs/adr/022 Ring 1) must be resolved explicitly here too — using
+		// provEnv's own metadata.domain, the Provider that actually owns
+		// this network.
+		token, pinned := networkToken(p.RuntimeConfig)
+		netName := token
+		if !pinned {
+			netName = naming.NetworkName(token, provEnv.Metadata.Domain)
 		}
 		key := p.RuntimeType + "|" + netName
 		if seen[key] {
@@ -1325,6 +1331,11 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 	if err != nil {
 		return nil, reconciler.Request{}, err
 	}
+	// docs/adr/022 Ring 1 / docs/planning/08 H5: decorate with the
+	// logical-token -> domain-scoped-concrete-name translation here, the one
+	// chokepoint every Reconcile/Probe/Destroy/capability call's Runtime
+	// passes through — no provider ever sees a domain-scoped name itself.
+	rt = newDomainRuntime(rt, p.RuntimeConfig, env, byKey)
 	// facts is the single state snapshot every published-fact lookup below
 	// reads from (docs/planning/08 I9) — taken once, under one lock
 	// acquisition, rather than each resolve* function separately locking

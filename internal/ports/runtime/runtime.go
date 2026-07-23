@@ -34,6 +34,21 @@ type NetworkSpec struct {
 	Labels map[string]string
 	// IsolationPolicy is one of the Isolation* constants above.
 	IsolationPolicy string
+	// AllowFromNetworks names other networks whose members may reach this
+	// one across the isolation boundary — the explicit "holes the mediated
+	// entrypoint needs" for an allowed cross-domain path (docs/adr/022 Ring
+	// 1, docs/planning/08 H5). Docker ignores this: joining multiple named
+	// networks (ContainerSpec.Networks) already achieves it directly, the
+	// same mechanism this field exists to give Kubernetes, where a Pod
+	// lives in exactly one Namespace and cross-namespace reachability must
+	// instead be opened as a NetworkPolicy ingress rule (mirroring
+	// ensureExternalIngressPolicy's "punch a hole in the default-deny wall"
+	// pattern, docs/planning/08 B7) scoped to exactly the named source
+	// namespaces — nothing else. Empty (the default) opens no extra holes;
+	// a network name here is expected to equal another NetworkSpec.Name
+	// this same runtime already ensures (Docker network / Kubernetes
+	// Namespace — the same string either way).
+	AllowFromNetworks []string
 }
 
 type VolumeSpec struct {

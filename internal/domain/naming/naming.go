@@ -22,7 +22,12 @@
 // consumer that currently spells out `.Metadata.Name` for the same purpose.
 package naming
 
-import "github.com/rezarajan/platformctl/internal/domain/resource"
+import (
+	"fmt"
+	"hash/fnv"
+
+	"github.com/rezarajan/platformctl/internal/domain/resource"
+)
 
 // RuntimeObjectName returns the ContainerRuntime object name (container,
 // Deployment/Service) for the resource that realizes it — the Provider
@@ -31,4 +36,36 @@ import "github.com/rezarajan/platformctl/internal/domain/resource"
 // a related-but-different one.
 func RuntimeObjectName(env resource.Envelope) string {
 	return env.Metadata.Name
+}
+
+// NetworkName derives a domain-scoped runtime network name from a base
+// network name (spec.runtime.network's configured-or-default value, e.g.
+// "datascape") and a resource's metadata.domain (docs/adr/022 Ring 1,
+// docs/planning/08 H5). The default domain is a no-op — NetworkName returns
+// base unchanged — so a manifest set that never declares a non-default
+// domain produces byte-identical network names to before domains existed;
+// every other domain gets its own network, "<base>-<domain>".
+//
+// On Kubernetes a network name already IS the namespace name (docs/planning/08
+// B7, internal/adapters/runtime/kubernetes's EnsureNetwork/targetNamespace),
+// so this one function gives Ring 1 both runtimes for free: a per-domain
+// Docker network and a per-domain Kubernetes namespace are the same string.
+func NetworkName(base, domain string) string {
+	d := resource.NormalizeDomain(domain)
+	if d == resource.DefaultDomain {
+		return base
+	}
+	name := base + "-" + d
+	// Kubernetes namespace names (which this doubles as, see above) are
+	// DNS labels: 63 chars max. A long base+domain pair is truncated to
+	// 53 chars and suffixed with an 8-hex FNV of the FULL name so two
+	// long names never silently collide post-truncation and the result
+	// stays deterministic (doc 11 GA caveat sweep, item D — recorded at
+	// H5's merge gate).
+	if len(name) > 63 {
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(name))
+		name = fmt.Sprintf("%s-%08x", name[:54], h.Sum32())
+	}
+	return name
 }

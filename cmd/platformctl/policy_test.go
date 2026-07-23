@@ -136,3 +136,126 @@ spec:
 		t.Fatalf("expected the error to name the denying matchPlan rule id, got: %v", err)
 	}
 }
+
+// TestPolicyCrossDomainDeniesCDCBindingAtValidate is docs/planning/08 H5's
+// accept criterion (a) end-to-end through the real CLI: the owner's exact
+// scenario (docs/adr/022 Ring 0) — a cdc Binding whose sourceRef lives in
+// domain "payments" and whose sink chain (its targetRef EventStream) lives
+// in domain "analytics" — denied at `validate` by a
+// deny{from:payments,to:analytics} matchEdge.crossDomain rule, before any
+// infrastructure exists (runtime: docker, never touched by validate).
+func TestPolicyCrossDomainDeniesCDCBindingAtValidate(t *testing.T) {
+	dir := writePolicyDir(t, `
+apiVersion: policy.datascape.io/v1alpha1
+kind: Policy
+metadata:
+  name: cross-domain-pack
+spec:
+  rules:
+    - id: deny-payments-to-analytics
+      matchEdge: {crossDomain: {from: payments, to: analytics}}
+      effect: deny
+      message: "payments may not feed analytics directly"
+`)
+
+	manifestDir := t.TempDir()
+	manifest := `
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: cdc-pg-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: cdc-pg-repl
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: cdc-rp
+spec:
+  type: redpanda
+  runtime: {type: docker}
+  configuration: {image: "docker.redpanda.com/redpandadata/redpanda:v24.2.1"}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: cdc-pg
+spec:
+  type: postgres
+  runtime: {type: docker}
+  configuration:
+    version: "16"
+    superuserSecretRef: cdc-pg-admin
+    replicationSecretRef: cdc-pg-repl
+  secretRefs: [cdc-pg-admin, cdc-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: cdc-dbz
+spec:
+  type: debezium
+  runtime: {type: docker}
+  configuration:
+    image: "quay.io/debezium/connect:2.7"
+    bootstrapServers: "cdc-rp:29092"
+    replicationSecretRef: cdc-pg-repl
+  secretRefs: [cdc-pg-repl]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: pg-src
+  domain: payments
+spec:
+  engine: postgres
+  providerRef: {name: cdc-pg}
+  postgres: {database: attendance, schema: public}
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: events
+  domain: analytics
+spec:
+  providerRef: {name: cdc-rp}
+  partitions: 1
+  retention: {duration: 1d}
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: cdc-binding
+spec:
+  mode: cdc
+  sourceRef: {name: pg-src}
+  targetRef: {name: events}
+  providerRef: {name: cdc-dbz}
+  options: {tables: [students], snapshotMode: initial}
+`
+	if err := os.WriteFile(filepath.Join(manifestDir, "manifests.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err, code := run(t, "validate", manifestDir, "--policies", dir, "--feature-gates", "PolicyEngine=true")
+	if code != cliutil.ExitValidation {
+		t.Fatalf("validate exit code = %d, want %d (ExitValidation); err=%v\n%s", code, cliutil.ExitValidation, err, out)
+	}
+	if err == nil {
+		t.Fatal("expected a denial error")
+	}
+	for _, want := range []string{"deny-payments-to-analytics", "payments", "analytics", "cdc-binding"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("validate error %q missing %q (rule id, both domains, and the edge)", err.Error(), want)
+		}
+	}
+}
