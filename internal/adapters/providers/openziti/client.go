@@ -493,19 +493,51 @@ func (c *edgeClient) deleteDialPolicy(ctx context.Context, name string) error {
 
 // listServicePolicies/listIdentities back ObservedEdges/ObservedIdentities
 // (the drift-detection primitive, mediation.MediationProvider's doc
-// comment).
+// comment). listDialPolicies lists ALL service-policies and filters to
+// type "Dial" client-side rather than server-side — found live
+// (docs/planning/08 H9): the controller's own filter query language
+// rejects `filter=type=%22Dial%22` outright (HTTP 400 INVALID_FILTER,
+// "operation type = Dial is not supported with operands types number,
+// string" — "type" resolves internally to a numeric enum, not a
+// string-comparable field, in the pinned controller version), so this
+// method has been silently returning a hard error on every real call
+// since H6 shipped it — ObservedEdges (drift detection) was broken for
+// every Connection with at least one authorized edge. An undocumented
+// numeric ordinal (`filter=type%3D1`) does work but is exactly the kind
+// of implementation-detail coupling docs/adr/023's "drive the tool
+// directly" ethos argues against relying on when a simple, robust
+// alternative exists — the whole collection is small (bounded by
+// declared edges) and cheap to filter in Go.
 func (c *edgeClient) listDialPolicies(ctx context.Context) ([]struct {
 	Name          string   `json:"name"`
 	IdentityRoles []string `json:"identityRoles"`
 	ServiceRoles  []string `json:"serviceRoles"`
 }, error) {
-	var out []struct {
+	var all []struct {
 		Name          string   `json:"name"`
+		Type          string   `json:"type"`
 		IdentityRoles []string `json:"identityRoles"`
 		ServiceRoles  []string `json:"serviceRoles"`
 	}
-	err := c.do(ctx, http.MethodGet, "/edge/management/v1/service-policies?filter=type=%22Dial%22&limit=500", nil, &out)
-	return out, err
+	if err := c.do(ctx, http.MethodGet, "/edge/management/v1/service-policies?limit=500", nil, &all); err != nil {
+		return nil, err
+	}
+	out := make([]struct {
+		Name          string   `json:"name"`
+		IdentityRoles []string `json:"identityRoles"`
+		ServiceRoles  []string `json:"serviceRoles"`
+	}, 0, len(all))
+	for _, p := range all {
+		if p.Type != "Dial" {
+			continue
+		}
+		out = append(out, struct {
+			Name          string   `json:"name"`
+			IdentityRoles []string `json:"identityRoles"`
+			ServiceRoles  []string `json:"serviceRoles"`
+		}{Name: p.Name, IdentityRoles: p.IdentityRoles, ServiceRoles: p.ServiceRoles})
+	}
+	return out, nil
 }
 
 func (c *edgeClient) listIdentities(ctx context.Context) ([]struct {

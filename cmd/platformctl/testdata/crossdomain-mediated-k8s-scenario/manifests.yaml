@@ -128,6 +128,7 @@ apiVersion: datascape.io/v1alpha1
 kind: Binding
 metadata:
   name: xd-cdc
+  domain: analytics
   annotations:
     policy.datascape.io/exempt: "deny-payments-to-analytics: mediated by xd-conn (openziti), ADR 022 Ring 2"
 spec:

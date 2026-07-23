@@ -216,6 +216,7 @@ type zitiEntity struct {
 type zitiDialPolicyEntity struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
+	Type          string   `json:"type"`
 	IdentityRoles []string `json:"identityRoles"`
 	ServiceRoles  []string `json:"serviceRoles"`
 }
@@ -253,22 +254,35 @@ func zitiListEntities(t *testing.T, client *http.Client, ctrlAddr, token, collec
 	return out.Data
 }
 
+// zitiListDialPolicies lists ALL service-policies and filters to type
+// "Dial" client-side — the controller's own filter query language rejects
+// `filter=type=%22Dial%22` (HTTP 400 INVALID_FILTER: "type" resolves to a
+// numeric enum internally, not a string-comparable field, in the pinned
+// controller version; found live, docs/planning/08 H9 — see this task's
+// matching fix to internal/adapters/providers/openziti/client.go's own
+// listDialPolicies, which had the identical broken filter).
 func zitiListDialPolicies(t *testing.T, client *http.Client, ctrlAddr, token string) []zitiDialPolicyEntity {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, "https://"+ctrlAddr+"/edge/management/v1/service-policies?filter=type=%22Dial%22&limit=500", nil)
+	req, _ := http.NewRequest(http.MethodGet, "https://"+ctrlAddr+"/edge/management/v1/service-policies?limit=500", nil)
 	req.Header.Set("zt-session", token)
 	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("list dial service-policies: %v", err)
+		t.Fatalf("list service-policies: %v", err)
 	}
 	defer resp.Body.Close()
 	var out struct {
 		Data []zitiDialPolicyEntity `json:"data"`
 	}
 	if derr := json.NewDecoder(resp.Body).Decode(&out); derr != nil {
-		t.Fatalf("decode dial service-policies: %v", derr)
+		t.Fatalf("decode service-policies: %v", derr)
 	}
-	return out.Data
+	dial := make([]zitiDialPolicyEntity, 0, len(out.Data))
+	for _, p := range out.Data {
+		if p.Type == "Dial" {
+			dial = append(dial, p)
+		}
+	}
+	return dial
 }
 
 // datascapeMediated filters entities to those this adapter itself minted
