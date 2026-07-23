@@ -46,7 +46,7 @@ func newLintCmd(a *app) *cobra.Command {
 			"Run `platformctl explain <code>` for any finding's meaning and remedies.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envelopes, g, err := a.loadAndValidate(pathArg(args))
+			envelopes, g, err := a.loadAndValidate(cmd.ErrOrStderr(), pathArg(args))
 			if err != nil {
 				return err
 			}

@@ -314,6 +314,7 @@ Common production shapes, each a documented walkthrough:
 | `lint [dir]` | Deterministic design lints over a valid set (ADR 020): built-in DL codes + provider-contributed checks; waivable per-resource with a reason; `--strict` exits `1` on warnings. |
 | `policy test [dir]` | Evaluate typed governance policies (ADR 021) against a manifest set without the rest of validate — a fast authoring loop. Exits `1` on any unexempted deny. Alpha, `PolicyEngine` gate. |
 | `policy init <pack>` | Write a built-in policy pack (`zero-trust`) for local tailoring — same blueprint pattern as `init`. |
+| `policy audit [dir]` | Render the permitted/denied-edge justification table for every declared edge (Binding, connectionRef, `spec.access` grant): names the rule/exemption/grant that admits it, or the rule that denies it. Read-only, never blocks. Alpha, `PolicyEngine` gate (ADR 033 decision 5). |
 | `explain <token>` | Explain any condition type, status reason, or lint code from the built-in catalog: meaning, likely causes, remedies. |
 | `plan <dir>` | Deterministic diff of manifests vs. state. Exit `1` when changes are pending. |
 | `apply <dir>` | Reconcile in topological order; state persisted after every resource. |
