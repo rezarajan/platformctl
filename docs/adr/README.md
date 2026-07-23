@@ -57,6 +57,7 @@ pattern of recording a redirected first cut).
 | [029](029-residue-free-lifecycle.md) | Residue-free lifecycle: removal is a contract, cleanup is a component | accepted | Remove* means gone including derived residue (conformance-enforced); testkit.Janitor replaces hand-rolled test cleanups; gc's label scope stays a safety boundary |
 | [030](030-runtime-object-naming-authority.md) | Runtime object names are minted, not concatenated | accepted | naming.Derived/Timestamp own derivation + the one timestamp layout; runtime-type constants; archtest forbids per-site concatenation |
 | [031](031-provider-diagnostics-channel.md) | Provider diagnostics: Request.Warnf, no process-global streams in adapters | accepted | fail (error) / degrade (status) / inform (Warnf) is the whole ladder; engine brokers presentation; archtest forbids os.Stderr/Stdout/fmt.Print in adapters+application |
+| [032](032-provider-distribution-compiled-in.md) | Provider distribution: compiled-in until the plugin protocol earns its keep | accepted | conformance suite is the quality boundary, not process isolation; four reopen criteria recorded; Phase 8 owns the protocol if triggered |
 
 "Retroactive" ADRs (008–014) record decisions made in the planning package
 (docs 00–06) before this convention existed — written 2026-07-21 so the
