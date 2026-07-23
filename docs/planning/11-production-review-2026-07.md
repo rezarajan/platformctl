@@ -650,3 +650,18 @@ static. Dimensions, each producing findings verified before fixing:
   sent Docker pipelines down the Job path), and FileMount.Mode is now
   honored by BOTH K8s Secret-mount paths (Deployment + Job). Remaining:
   the final merged-state sweep.
+- 2026-07-23: FINAL MERGED-STATE SWEEP GREEN — 30/30 suites at the
+  wave-5 content-state (--base dc3cf7b, ledger-recorded). Heavy legs:
+  k8s-adapter 387s, cdc 223s, lakehouse 208s, connect-ha-dlq 193s,
+  backup 188s (Docker round-trip exercising the new RuntimeType
+  dispatch), s3source 178s, openziti both legs 114s. One failure on the
+  first pass, root-caused and fixed: graphscoped's three tests passed
+  the ContainerProvider gate E7 retired — a merge-order interaction
+  invisible to both branches in isolation (each was green); test-only
+  fix, suite green on rerun (67s). THE BOARD IS CLEAR. Owner decisions
+  now unblocked, with the evidence bar met: KubernetesRuntime GA (HA
+  feature-complete since I7; backup/restore now runtime-parity with
+  live round-trip proof), BackupRestore GA (doc 08 I15 accept criterion
+  closed), v1.3.0 tag, ExternalResourceConfiguration GA, push (~48
+  commits), and the minikube→Calico recreation for local enforcement
+  suites (CI already runs Calico-enforced).
