@@ -1,0 +1,138 @@
+# H6 (docs/planning/08 §7.7, ADR 022/027) — the KUBERNETES leg of the
+# mediated-connection accept scenario. This is the substrate-equality proof
+# ADR 027 makes central: the SAME MediationProvider port + OpenZiti adapter,
+# on runtime.type: kubernetes, delivering the identical Layer-1 guarantee
+# (identity-attested, per-edge-authorized CDC) it delivers on Docker.
+#
+# Single namespace (datascape-zk8s) for memory economy (the shared cluster
+# is small): a managed postgres Provider is the mediated target (reachable
+# by the mesh router at its in-namespace Service DNS zk8s-pg:5432), and an
+# EXTERNAL Source routes Debezium's CDC dial THROUGH the mediated Connection
+# — never at the postgres Service directly. The dark-service posture that
+# Docker gets from an isolated network is, on this cluster's non-enforcing
+# bridge CNI, a Layer-2 concern (ADR 027: honestly reported by the H8
+# isolation probe, never the guarantee); the guarantee here is Layer 1,
+# proven by CDC RUNNING through the mediated entrypoint AND the
+# wrong-identity refusal in the test.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: zk8s-mesh-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: zk8s-pg-super
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: zk8s-pg
+spec:
+  type: postgres
+  runtime:
+    type: kubernetes
+    network: datascape-zk8s
+  configuration:
+    version: "16"
+    superuserSecretRef: zk8s-pg-super
+  secretRefs: [zk8s-pg-super]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: zk8s-mesh
+spec:
+  type: openziti
+  runtime:
+    type: kubernetes
+    network: datascape-zk8s
+  secretRefs: [zk8s-mesh-admin]
+  configuration:
+    adminSecretRef: zk8s-mesh-admin
+    controllerPort: 12890
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: zk8s-conn
+spec:
+  providerRef:
+    name: zk8s-mesh
+  scheme: tcp
+  port: 25799
+  target: zk8s-pg:5432
+  secretRef:
+    name: zk8s-pg-super
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: zk8s-rp
+spec:
+  type: redpanda
+  runtime:
+    type: kubernetes
+    network: datascape-zk8s
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: zk8s-dbz
+spec:
+  type: debezium
+  runtime:
+    type: kubernetes
+    network: datascape-zk8s
+  configuration:
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
+    bootstrapServers: zk8s-rp:29092
+  secretRefs: [zk8s-pg-super]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: zk8s-src
+spec:
+  engine: postgres
+  external: true
+  connectionRef:
+    name: zk8s-conn
+  postgres:
+    database: postgres
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: zk8s-events
+spec:
+  providerRef:
+    name: zk8s-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: zk8s-cdc
+spec:
+  mode: cdc
+  sourceRef:
+    name: zk8s-src
+  targetRef:
+    name: zk8s-events
+  providerRef:
+    name: zk8s-dbz
+  options:
+    tables: [orders]
+    snapshotMode: initial

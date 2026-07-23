@@ -387,6 +387,26 @@ const (
 	ReasonTunnelUpstreamUnreachable = "TunnelUpstreamUnreachable"
 )
 
+// --- openziti (mediation provider on the Connection seam; docs/planning/08
+// H6, docs/adr/022, docs/adr/027) ---------------------------------------
+const (
+	// ReasonMediationPlaneHealthy: the controller + router (Provider kind)
+	// are up, the controller's Edge Management API answers, and the
+	// router is enrolled/verified.
+	ReasonMediationPlaneHealthy = "MediationPlaneHealthy"
+	// ReasonMediationPlaneUnhealthy: bootstrap, authentication, or router
+	// enrollment failed — every mediated Connection realized through this
+	// Provider is unusable until it recovers.
+	ReasonMediationPlaneUnhealthy = "MediationPlaneUnhealthy"
+	// ReasonMediatedEdgeReady: the Ziti service + router-hosted terminator
+	// + dial service-policy for a mediated Connection's declared consumers
+	// are all in place (the ADR 026 per-edge authorization, realized).
+	ReasonMediatedEdgeReady = "MediatedEdgeReady"
+	// ReasonMediatedEdgeNotReady: identity minting, service/terminator/
+	// policy compilation, or the dial-side tunneler container failed.
+	ReasonMediatedEdgeNotReady = "MediatedEdgeNotReady"
+)
+
 // --- network isolation observation (Layer 2 honesty probe;
 // docs/adr/027-enforcement-layering.md, docs/planning/08 H8) ---------------
 // These are not a resource's own Ready-condition reasons — no Kind

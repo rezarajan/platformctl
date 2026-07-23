@@ -1753,3 +1753,59 @@ Remedies:
 - Point spec.backend at vault or kubernetes for non-dev use.
 - This rule ships exemptible: true — waive with metadata.annotations["policy.datascape.io/exempt"]: "forbid-env-secret-backend: <reason>" for local/dev use.
 
+## openziti
+
+### `MediationPlaneHealthy` (reason)
+
+The mediation Provider's controller + router are up, the controller's Edge Management API answers, and the router is enrolled/verified (docs/adr/022 Ring 2, docs/adr/027 Layer 1).
+
+Likely causes:
+
+- N/A — this reason indicates a healthy or successful state, not a problem.
+
+Remedies:
+
+- None required.
+
+### `MediationPlaneUnhealthy` (reason)
+
+Controller bootstrap, admin authentication, or router enrollment failed — every mediated Connection realized through this Provider is unusable until it recovers.
+
+Likely causes:
+
+- configuration.adminSecretRef does not resolve to a SecretReference carrying "username"/"password" keys.
+- The controller container failed to bootstrap (image pull failure, port conflict on configuration.controllerPort).
+- The router's one-time enrollment JWT expired before the router container started (a slow image pull, a starved CI runner).
+
+Remedies:
+
+- docker logs <provider-name>-ctrl / <provider-name>-router for the bootstrap failure detail.
+- platformctl apply <path> to retry — router re-enrollment is fetched fresh each attempt until the router reports isVerified.
+
+### `MediatedEdgeReady` (reason)
+
+The Ziti service, router-hosted terminator, and dial service-policy for a mediated Connection's declared consumers (the ADR 026 per-edge authorization) are all in place, and the dial-side tunneler container is up.
+
+Likely causes:
+
+- N/A — this reason indicates a healthy or successful state, not a problem.
+
+Remedies:
+
+- None required.
+
+### `MediatedEdgeNotReady` (reason)
+
+Identity minting, service/terminator/policy compilation, or the dial-side tunneler container failed for a mediated Connection.
+
+Likely causes:
+
+- The mediation Provider (controller/router) is not yet Ready — see MediationPlaneUnhealthy.
+- spec.target does not resolve from the router's configuration.targetNetworks.
+- The declared consumer's identity failed to mint (controller API error, exhausted enrollment JWT).
+
+Remedies:
+
+- platformctl status <path> to check the realizing Provider's own Ready condition first.
+- docker logs <connection-name> for the dial-side tunneler's own enrollment/connection errors.
+

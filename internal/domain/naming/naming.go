@@ -69,3 +69,56 @@ func NetworkName(base, domain string) string {
 	}
 	return name
 }
+
+// identityScheme is the URI scheme workload identities are minted under —
+// SPIFFE-aligned per docs/adr/022 ("cryptographic identity as the extension
+// of identity-by-handle") and promoted to the authoritative zero-trust
+// identity root by docs/adr/027. "datascape" is the trust domain: every
+// platformctl-managed workload, on every substrate, shares one trust
+// domain, matching a single SPIFFE deployment's convention (multiple trust
+// domains is a future multi-tenant concern, not designed here).
+const identityScheme = "spiffe://datascape"
+
+// WorkloadIdentityURI derives the SPIFFE-aligned workload identity URI for
+// a resource-graph node — the identity subject IS the declared graph node
+// (docs/adr/022, docs/adr/027: "identity derives from what a workload is
+// declared to be, never from where it happens to run or what IP it
+// holds"). Deterministic and side-effect-free: the same node always
+// derives the same URI, on any substrate, on any call — the naming
+// authority (docs/planning/08 F4) extended to identity the same way
+// RuntimeObjectName extends it to runtime object names.
+//
+// Shape: spiffe://datascape/<namespace>/<kind>/<name> when metadata.domain
+// is undeclared/default; spiffe://datascape/<namespace>/<domain>/<kind>/<name>
+// when a non-default domain is declared (docs/planning/08 H5,
+// resource.NormalizeDomain) — the SAME "undeclared domain is a byte-
+// identical no-op" rule NetworkName above already holds, extended to
+// identity: a manifest set authored before domains existed, or one that
+// never declares a non-default domain, derives the exact URI this function
+// produced before H5 merged (naming_test.go pins this explicitly). Kind is
+// lowercased (SPIFFE path segments are conventionally lowercase; the
+// resource Kind itself stays whatever case the manifest used — only the
+// URI segment is folded).
+func WorkloadIdentityURI(env resource.Envelope) string {
+	ns := resource.NormalizeNamespace(env.Metadata.Namespace)
+	kind := lowerASCII(env.Kind)
+	domain := resource.NormalizeDomain(env.Metadata.Domain)
+	if domain == resource.DefaultDomain {
+		return identityScheme + "/" + ns + "/" + kind + "/" + env.Metadata.Name
+	}
+	return identityScheme + "/" + ns + "/" + domain + "/" + kind + "/" + env.Metadata.Name
+}
+
+// lowerASCII avoids pulling in strings.ToLower's Unicode-aware casing for a
+// value that is always ASCII by construction (resource Kind names are Go
+// identifiers, docs/planning/03 §2.1) — a tiny, dependency-free helper so
+// this package's only import stays internal/domain/resource.
+func lowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
+}

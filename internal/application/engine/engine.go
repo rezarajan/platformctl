@@ -35,6 +35,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/status"
 	"github.com/rezarajan/platformctl/internal/ports/clock"
 	"github.com/rezarajan/platformctl/internal/ports/reconciler"
+	runtimeport "github.com/rezarajan/platformctl/internal/ports/runtime"
 	"github.com/rezarajan/platformctl/internal/ports/secretstore"
 	"github.com/rezarajan/platformctl/internal/ports/state"
 )
@@ -687,7 +688,28 @@ func (e *Engine) externalConnectionStatus(ctx context.Context, env resource.Enve
 				if closeAddr != nil {
 					defer closeAddr()
 				}
-				if derr := probeTCPReachable(ctx, addr); derr != nil {
+				// Bounded transient retry (H6's 3/3-reproduced race, doc 11):
+				// a single-shot probe right after apply loses to a mediated
+				// entrypoint's first-circuit setup latency (Ziti dial-side)
+				// or any slow-warming forwarder. Same transient-vs-verdict
+				// split as redpanda's retryTransientProbe: an error is
+				// "undetermined", retried within a 15s window; only a
+				// still-failing probe becomes the verdict. A genuinely-down
+				// endpoint still reports, honestly, 15s later.
+				derr := probeTCPReachable(ctx, addr)
+				if derr != nil {
+					deadline := time.Now().Add(runtimeport.ScaledWait(15 * time.Second))
+					for derr != nil && time.Now().Before(deadline) {
+						select {
+						case <-ctx.Done():
+							derr = ctx.Err()
+							deadline = time.Time{}
+						case <-time.After(2 * time.Second):
+							derr = probeTCPReachable(ctx, addr)
+						}
+					}
+				}
+				if derr != nil {
 					st.SetCondition(status.Condition{Type: status.Ready, Status: status.False, Reason: status.ReasonExternalEndpointUnreachable, Message: derr.Error()}, now)
 					st.SetCondition(status.Condition{Type: status.DriftDetected, Status: status.True, Reason: status.ReasonExternalEndpointUnreachable}, now)
 					return st
