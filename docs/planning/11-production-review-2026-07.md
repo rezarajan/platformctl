@@ -554,3 +554,14 @@ static. Dimensions, each producing findings verified before fixing:
   Calico remains CI test infrastructure only (standard NetworkPolicy
   objects; any conforming CNI). The ADR's claims table now governs all
   zero-trust language.
+- 2026-07-22: ADR 027 IMPLEMENTATION WAVE launched (owner: implement
+  before further tasks). H8 (isolation honesty probe: capability +
+  status/preflight surfacing, validate warns, minikube's non-enforcing
+  CNI is itself the live not-enforced evidence; registry-promotion
+  gotcha called out) and H6-as-amended (MediationProvider PORT +
+  OpenZiti first adapter behind an anti-coupling archtest; SPIFFE-
+  aligned identity from naming; per-edge authz from the ADR 026
+  derivation built reusable for H7; wrong-identity refusal + raw-TCP
+  CDC proof on BOTH runtimes; picks up H5's domains via mid-task main
+  re-merge). E6/E7 remain queued behind this per owner priority.
+  Wave-4 merge queue (I12, I9, H5) continues as evidence lands.
