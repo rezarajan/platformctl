@@ -404,3 +404,54 @@ func (d *domainRuntime) ExecInContainer(ctx context.Context, name string, cmd []
 	}
 	return ec.ExecInContainer(ctx, name, cmd)
 }
+
+// JobCapableRuntime delegation (domainRuntime — docs/planning/08 I13/I15):
+// required by the wrapper-completeness archtest so dbjob's type assertion
+// through this wrapper reaches the Kubernetes adapter's Job path.
+func (d *domainRuntime) EnsureJob(ctx context.Context, spec runtime.JobSpec) (runtime.JobState, error) {
+	jc, ok := d.ContainerRuntime.(runtime.JobCapableRuntime)
+	if !ok {
+		return runtime.JobState{}, fmt.Errorf("runtime does not implement JobCapableRuntime")
+	}
+	return jc.EnsureJob(ctx, spec)
+}
+
+func (d *domainRuntime) InspectJob(ctx context.Context, namespace, name string) (runtime.JobState, bool, error) {
+	jc, ok := d.ContainerRuntime.(runtime.JobCapableRuntime)
+	if !ok {
+		return runtime.JobState{}, false, fmt.Errorf("runtime does not implement JobCapableRuntime")
+	}
+	return jc.InspectJob(ctx, namespace, name)
+}
+
+func (d *domainRuntime) ReadJobFile(ctx context.Context, namespace, name, path string) ([]byte, error) {
+	jc, ok := d.ContainerRuntime.(runtime.JobCapableRuntime)
+	if !ok {
+		return nil, fmt.Errorf("runtime does not implement JobCapableRuntime")
+	}
+	return jc.ReadJobFile(ctx, namespace, name, path)
+}
+
+func (d *domainRuntime) JobLogs(ctx context.Context, namespace, name, containerName string, tail int) (string, error) {
+	jc, ok := d.ContainerRuntime.(runtime.JobCapableRuntime)
+	if !ok {
+		return "", fmt.Errorf("runtime does not implement JobCapableRuntime")
+	}
+	return jc.JobLogs(ctx, namespace, name, containerName, tail)
+}
+
+func (d *domainRuntime) RemoveJob(ctx context.Context, namespace, name string) error {
+	jc, ok := d.ContainerRuntime.(runtime.JobCapableRuntime)
+	if !ok {
+		return fmt.Errorf("runtime does not implement JobCapableRuntime")
+	}
+	return jc.RemoveJob(ctx, namespace, name)
+}
+
+func (d *domainRuntime) NodeNameOf(ctx context.Context, name string) (string, error) {
+	jc, ok := d.ContainerRuntime.(runtime.JobCapableRuntime)
+	if !ok {
+		return "", fmt.Errorf("runtime does not implement JobCapableRuntime")
+	}
+	return jc.NodeNameOf(ctx, name)
+}

@@ -145,6 +145,87 @@ func dropDatabase(ctx context.Context, adminConn, name string) error {
 	return nil
 }
 
+// schemaTables lists the base tables (excluding views) in the named schema —
+// I13's promote step needs this to know exactly which tables a batched
+// RENAME TABLE statement must move (docs/adr/007-backup-restore.md
+// addendum 2). Views are excluded deliberately: mysqldump/mariadb-dump's
+// plain-SQL output recreates a view via CREATE VIEW after its underlying
+// base tables already exist in the target schema, so a restored scratch
+// schema's views already reference scratch-local table names correctly and
+// need no separate rename handling — renaming a schema's tables alone
+// already makes every view inside it resolve against the newly-promoted
+// tables (a view is schema-scoped, not identity-bound to specific renamed
+// table objects the way a foreign key is).
+func schemaTables(ctx context.Context, adminConn, schema string) ([]string, error) {
+	db, err := open(adminConn)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(ctx, `SELECT table_name FROM information_schema.tables WHERE table_schema = ? AND table_type = 'BASE TABLE'`, schema)
+	if err != nil {
+		return nil, fmt.Errorf("list tables in schema %q: %w", schema, err)
+	}
+	defer rows.Close()
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan table name in schema %q: %w", schema, err)
+		}
+		tables = append(tables, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list tables in schema %q: %w", schema, err)
+	}
+	return tables, nil
+}
+
+// promoteDatabase implements I13's atomic promote step
+// (docs/adr/007-backup-restore.md addendum 2, verified live against a real
+// MySQL instance before this code was written): a single batched RENAME
+// TABLE statement moves every target table aside into oldName and every
+// scratch table into target's place, in one statement. MySQL/MariaDB
+// execute a multi-table RENAME TABLE batch atomically — a mid-batch
+// failure (a destination-schema collision, a missing schema, ...) rolls
+// back every rename in the statement, reproduced live by renaming into a
+// nonexistent schema and confirming the source tables were left exactly as
+// they started. Unlike Postgres, RENAME TABLE does not require other
+// connections to the schema to be closed first — it takes the necessary
+// metadata locks itself. oldName/target/scratch schemas must already exist
+// (CREATE DATABASE IF NOT EXISTS, the caller's job) before this runs; an
+// empty target (no tables) is valid and simply contributes no rename pairs
+// for that half.
+func promoteDatabase(ctx context.Context, adminConn, target, scratch, oldName string) error {
+	targetTables, err := schemaTables(ctx, adminConn, target)
+	if err != nil {
+		return fmt.Errorf("promote %q: %w", target, err)
+	}
+	scratchTables, err := schemaTables(ctx, adminConn, scratch)
+	if err != nil {
+		return fmt.Errorf("promote %q: %w", target, err)
+	}
+	if len(scratchTables) == 0 {
+		return fmt.Errorf("promote %q: scratch schema %q has no tables to promote", target, scratch)
+	}
+	var pairs []string
+	for _, t := range targetTables {
+		pairs = append(pairs, fmt.Sprintf("%s.%s TO %s.%s", quoteIdent(target), quoteIdent(t), quoteIdent(oldName), quoteIdent(t)))
+	}
+	for _, t := range scratchTables {
+		pairs = append(pairs, fmt.Sprintf("%s.%s TO %s.%s", quoteIdent(scratch), quoteIdent(t), quoteIdent(target), quoteIdent(t)))
+	}
+	db, err := open(adminConn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, "RENAME TABLE "+strings.Join(pairs, ", ")); err != nil {
+		return fmt.Errorf("promote %q: rename table batch: %w", target, err)
+	}
+	return nil
+}
+
 func databaseExists(ctx context.Context, adminConn, name string) (bool, error) {
 	db, err := open(adminConn)
 	if err != nil {

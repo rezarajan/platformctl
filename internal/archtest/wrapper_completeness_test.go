@@ -21,6 +21,7 @@ var optionalCapabilities = []reflect.Type{
 	reflect.TypeOf((*runtimeport.IngressCapableRuntime)(nil)).Elem(),
 	reflect.TypeOf((*runtimeport.IsolationObserver)(nil)).Elem(),
 	reflect.TypeOf((*runtimeport.ExecCapableRuntime)(nil)).Elem(),
+	reflect.TypeOf((*runtimeport.JobCapableRuntime)(nil)).Elem(),
 }
 
 // TestRuntimeWrappersForwardEveryOptionalCapability closes the ADR 018

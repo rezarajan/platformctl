@@ -365,3 +365,319 @@ liability this repo has consistently avoided elsewhere (ADR 003, A10).
   as no longer trustworthy and re-restore from a known-good backup, not
   assume the refusal rolled anything back. Recorded as a limitation, not
   silently glossed over, matching (a)-(c) above.
+
+## Addendum 2 (I13, docs/planning/08 §7.8): verify-then-promote restore closes limitation (d)
+
+**Status:** accepted, implemented.
+**Prompted by:** limitation (d) above — detection-after-replay means a
+corrupted stream partially applies to the TARGET database before the
+checksum verdict is known. The I12 addendum named this "a strong
+detection guarantee, not a prevention guarantee" and left it as a
+recorded limitation. Doc 08 I13 raises the bar: no-compromise, corruption
+must never reach the target at all. This addendum is written and
+committed before any I13 code, per doc 08 §2.1 step 3's Size-task rule.
+
+### The question
+
+How can `Restore` gate the write on a digest that isn't known until the
+stream ends, without buffering the whole payload in this process (ADR
+007's original constraint, unchanged) and without adding a new pinned
+image or bespoke transactional-replay tool per engine?
+
+### Options considered
+
+1. **Verify-then-promote via a scratch database (chosen).** Stream the
+   restore into a throwaway database/schema alongside the target,
+   checksum it exactly as today, and only promote the scratch copy over
+   the target — via a fast, engine-native rename/swap operation, not a
+   second data copy — once the checksum is confirmed good. On any
+   failure (pipeline failure or checksum mismatch) the scratch is
+   dropped and the target is never touched.
+2. **Buffer the whole dump in the job container's own filesystem, then
+   replay only after the checksum is known.** Rejected: this reintroduces
+   exactly the "never lands as a whole file" constraint ADR 007's
+   original decision exists to avoid, and scales the job container's
+   disk requirement to the full dump size for no benefit over option 1
+   (a scratch *database* already gives an all-or-nothing unit without
+   ever landing the payload as a flat file).
+3. **Wrap the restore in one long-lived database transaction, roll back
+   on checksum mismatch.** Rejected: neither `psql`'s plain-SQL replay
+   (a stream of independent statements, some of which — e.g.
+   `CREATE PUBLICATION`, already excluded via `--no-publications`, but
+   also sequence/index builds — are not always transaction-safe at scale)
+   nor MySQL's dump format (frequently interleaves
+   non-transactional DDL with DML, and MyISAM tables have no transaction
+   support at all) can be relied upon to roll back cleanly under an
+   umbrella transaction across every supported engine/table-engine
+   combination this platform's Source resources may declare. A
+   scratch-database swap gets the same all-or-nothing guarantee from the
+   catalog level instead, engine-attested rather than assumed.
+
+### What "verify-then-promote" means, concretely
+
+- **Scratch target.** `Restore` creates a scratch database/schema named
+  `<dbName>_restore_<UTC-timestamp>` (postgres: `CREATE DATABASE`; mysql:
+  `CREATE DATABASE` — MySQL's "database" and "schema" are the same
+  object, so this is the direct equivalent) using the same
+  `ensureDatabase`/admin-connection path `reconcileDatabase` already
+  uses, then wires the restore pipeline's consumer (`psql`/`mysql`/
+  `mariadb`) to connect to the scratch name instead of the live `dbName`
+  — a one-line change to the existing `Consumer` `Side`'s `PGDATABASE`/
+  `DATASCAPE_BACKUP_DATABASE` env value. The FIFO/checksum protocol
+  itself (`dbjob.RunPipeline`) is unchanged.
+- **Verify before promote.** `dbjob.VerifyIntegrity` runs exactly as
+  before, against the scratch database's freshly-streamed content. A
+  mismatch (or any pipeline failure) drops the scratch database
+  (best-effort, `dropDatabase`/`DROP DATABASE ... WITH (FORCE)` postgres;
+  `DROP DATABASE` mysql) and returns the named error — the live target is
+  never touched by this whole sequence, because nothing above ever wrote
+  to it.
+- **Atomic promote, postgres.** Verified live (this addendum): `ALTER
+  DATABASE ... RENAME TO ...` is fully transactional in PostgreSQL (a
+  catalog row update, unlike `CREATE`/`DROP DATABASE`, which cannot run
+  inside a transaction block at all) — `BEGIN; ALTER DATABASE <target>
+  RENAME TO <target>_old_<ts>; ALTER DATABASE <scratch> RENAME TO
+  <target>; COMMIT;` on one admin session either fully swaps both names
+  or, if the second rename fails for any reason, rolls back the first too
+  — the target keeps its original name and content. Postgres refuses to
+  rename a database with other backends connected
+  (`database "x" is being accessed by other users`, reproduced live), so
+  the promote step first issues `SELECT pg_terminate_backend(pid) FROM
+  pg_stat_activity WHERE datname = <target> AND pid <> pg_backend_pid()`
+  — the same forced-disconnect this file's original `dropDatabase`
+  already relies on via `WITH (FORCE)`, applied here explicitly since
+  `ALTER DATABASE RENAME` has no `FORCE` option of its own. `DROP
+  DATABASE <target>_old_<ts> WITH (FORCE)` runs as a separate,
+  non-transactional statement immediately after the commit — cannot be
+  folded into the same transaction (`DROP DATABASE` is one of the
+  operations Postgres refuses inside a transaction block), but by this
+  point the promote has already fully succeeded: a failure to drop the
+  aside-renamed old database is reported as an additional warning in the
+  returned context, never as the call's own failure, and never as data
+  loss (the aside-renamed database is exactly the target's pre-restore
+  content, recoverable by hand if the drop itself somehow fails).
+- **Atomic promote, mysql/mariadb.** Verified live (this addendum):
+  `RENAME TABLE` accepts a comma-separated batch spanning multiple
+  schemas in one statement, and MySQL/MariaDB execute the whole batch
+  atomically — a destination-schema collision (or any other mid-batch
+  failure) rolls back every rename in the statement, reproduced live by
+  renaming into a nonexistent schema and confirming the source tables
+  were left exactly as they started. The promote step: (1) enumerates
+  every base table in both the target and scratch schemas via
+  `information_schema.tables` (views are excluded — `mysqldump`/
+  `mariadb-dump`'s plain-SQL output recreates a view via `CREATE VIEW`
+  after its underlying tables exist, so a restored scratch schema's views
+  already reference scratch-local table names correctly and need no
+  separate rename handling); (2) issues one `RENAME TABLE
+  <target>.<t1> TO <target>_old_<ts>.<t1>, ..., <scratch>.<t1> TO
+  <target>.<t1>, ...` batch, moving every target table aside and every
+  scratch table in, in the same statement; (3) `DROP DATABASE
+  <target>_old_<ts>` and `DROP DATABASE <scratch>` afterward, same
+  best-effort/non-fatal-warning treatment as postgres's aside-database
+  drop. Unlike postgres, MySQL's `RENAME TABLE` does not require other
+  connections to the schema to be closed first — it takes the necessary
+  metadata locks itself — so no forced-disconnect step is needed here.
+- **Disk headroom precheck.** Before creating the scratch database,
+  `Restore` runs a one-shot job container (`dbjob.RunOneShot`, extended
+  with an optional `Side.Volumes` field so a one-shot container can mount
+  an existing named volume the same way a pipeline side already mounts
+  the shared work volume) that bind-mounts the instance's own data volume
+  (`<RuntimeObjectName>-data`, the same volume `reconcileInstance` already
+  attaches at `prof.DataMount`) read-only-in-intent (nothing in the
+  command writes) and runs `df -Pk <mount> | tail -1 | awk '{print $4}'`
+  (POSIX `df`, confirmed present in every pinned database image), read
+  back via `RunOneShot`'s `resultPath`. A result less than `2 *
+  wantManifest.Bytes` (the recorded backup's byte count — known before
+  any streaming starts, since it comes from the already-fetched integrity
+  manifest, not from probing the live stream) refuses outright, before
+  the scratch database is even created, with a named error stating the
+  free/required byte counts — an honest refusal, not a best-effort
+  attempt that fails partway through. `2x` covers the scratch copy
+  existing side-by-side with the target during the verify window (the
+  same volume backs both, since a scratch database is just another
+  database in the same data directory) — once promoted, the old target's
+  aside-renamed copy still occupies the space until its own drop
+  completes, which is why the check is `2x`, not `1x` plus overhead.
+
+### Fault-injection proof
+
+`cmd/platformctl/backup_integration_test.go` gains
+`TestBackupRestoreFaultCorruptionNeverReachesTarget` (both engines,
+mirroring the I12 fault tests' shape): seed the target with known rows,
+compute a checksum of the target's own current content, run a `Restore`
+whose source object is corrupted mid-stream (the same producer-kill /
+tamper injection techniques the I12 tests already established), assert
+the call fails with a named error, then re-checksum the target and
+assert it is byte-identical to the pre-restore checksum — not merely
+"still has the old rows" (which a partial-but-lucky overwrite could
+satisfy) but a full content fingerprint match, proving nothing touched
+it.
+
+### Known limitation this addendum adds
+
+- **(e) The promote step's own DDL failure is a narrow, separate risk
+  window from the guarantee above.** The core guarantee — corruption
+  detected during streaming never reaches the target — holds
+  unconditionally, because promote only ever runs *after* verification
+  already succeeded. But the promote step itself is real DDL against a
+  live catalog, and postgres's two-statement rename is transactional
+  while the *decision* to run it is not undone by a *later*,
+  independent, and vanishingly unlikely failure (e.g. the admin
+  connection itself dying between `COMMIT` and the follow-up cleanup
+  `DROP DATABASE`, or an operator killing `platformctl` mid-promote): the
+  target ends up correctly promoted either way (the rename transaction
+  either fully committed or fully rolled back — never left half-renamed),
+  but the aside-renamed old-target database may be left behind
+  undropped, and this is reported as a warning appended to a successful
+  call's context rather than silently cleaned up on a later, unrelated
+  restore. An operator who sees this warning has a fully-promoted,
+  fully-correct target and a harmless, named leftover database to drop
+  by hand (`gc`-visible follow-up left for a future task, not attempted
+  here since this Provider owns no generic "list stray databases"
+  surface today).
+
+## Addendum 3 (I15, docs/planning/08 §7.8): Kubernetes Jobs realization closes limitation (c)
+
+**Status:** accepted, implemented.
+**Prompted by:** limitation (c) — `backup`/`restore` refuse outright on
+any runtime other than Docker, because dbjob's mechanism depends on two
+Docker-only primitives: reading a file back from a container *after* it
+has stopped (`docker cp` on a stopped-but-not-removed container), and a
+container that runs to completion rather than restarting forever
+(Kubernetes Deployments/StatefulSets — the only shapes
+`ContainerRuntime.EnsureContainer` realizes today — always carry
+`restartPolicy: Always`). Doc 08 I15 requires the same guarantees on
+both runtimes before `BackupRestore` can GA.
+
+### The question
+
+Can dbjob's producer/consumer/cleanup mechanism run on Kubernetes without
+forking its protocol (the FIFO/tee/checksum shell script `sideSpec`
+generates) or teaching `dbjob`, `postgres`, or `mysql` anything about
+Kubernetes — i.e. purely by extending `internal/ports/runtime` with a
+capability the Kubernetes adapter implements and Docker/fake do not?
+
+### Options considered
+
+1. **A new optional `runtime.JobCapableRuntime` port capability, realized
+   as one Kubernetes `batchv1.Job` whose pod runs every side as a
+   sibling container sharing an `emptyDir` (chosen).** Mirrors
+   `IngressCapableRuntime`'s precedent exactly: a Kubernetes-only
+   capability the caller type-asserts, with Docker/fake continuing their
+   existing `EnsureContainer`-per-side behavior completely unchanged
+   (`dbjob.RunPipeline`/`RunOneShot` branch on the type assertion, taking
+   the Job path only when present). The FIFO's shared volume becomes the
+   pod's `emptyDir` instead of a Docker named volume — the same
+   `WorkDir`/`PipePath` constants, same shell script, same protocol,
+   different volume mechanism underneath.
+2. **Give every provider its own Kubernetes-specific backup code path.**
+   Rejected outright by the task's own instruction and by ADR 008's
+   layering: `postgres`/`mysql` would need to import or duplicate
+   Kubernetes-adapter knowledge, breaking the one-mechanism-two-engines
+   shape ADR 007's original decision chose `dbjob` for in the first
+   place.
+3. **A CronJob or an out-of-band Kubernetes-native backup operator.**
+   Rejected as out of scope: this platform's backup primitive is
+   synchronous and CLI-driven (`platformctl backup`/`restore`), not a
+   cluster-resident scheduler (ADR 007's original decision already
+   states "scheduling stays external — this is the primitive, not a
+   scheduler"); a CronJob-based redesign would also abandon the
+   already-hardened, already-tested `dbjob` protocol for a new one.
+
+### What the Job realization needs, concretely (research findings this addendum records)
+
+Confirmed by reading `internal/adapters/runtime/kubernetes/*.go` before
+writing any Job code (doc 08 §2.1 step 2):
+
+- `EnsureContainer` only ever produces a Deployment or (`StableIdentity:
+  true`) a StatefulSet — both `restartPolicy: Always`. No run-to-completion
+  path exists today; `batchv1.Job` appears nowhere in the codebase.
+- `ReadFile`'s exec fallback (`internal/adapters/runtime/kubernetes/exec.go`)
+  requires a **running** pod (`newestReadyPod` filters to
+  `PodRunning`) — it cannot read a file from a container that has already
+  terminated, unlike Docker's `docker cp` on a stopped container. `Logs`
+  has no such restriction (the `pods/log` subresource remains available
+  after termination). Neither `Inspect` path (`stateFromDeployment`/
+  `stateFromPod`) reads `pod.Status.ContainerStatuses[i].State.Terminated`
+  today — no per-container exit code is surfaced anywhere in the package.
+- `haGuardRuntime` (`internal/application/registry/registry.go`) embeds
+  `runtime.ContainerRuntime` as an **interface**, not the concrete
+  adapter — an optional capability's methods are invisible through it
+  unless explicitly re-declared as passthroughs with their own type
+  assertion (`IngressCapableRuntime`'s exact pattern). `JobCapableRuntime`
+  needs the same explicit forwarding.
+
+These findings drive two design decisions beyond the "one Job, shared
+`emptyDir`" headline:
+
+- **Per-container completion uses Kubernetes' native signal, not a
+  sentinel file.** `sideSpec`'s shell wrapper still writes its
+  `producer-exit`/`consumer-exit` sentinel file (the script is byte-for-byte
+  identical between runtimes — nothing K8s-specific leaks into it), but
+  the Kubernetes `JobCapableRuntime` implementation never reads it:
+  `InspectJob` reports each named container's running/terminated state
+  and exit code straight from `pod.Status.ContainerStatuses[i].State`
+  (added to the adapter — a strictly better signal than parsing a file,
+  and the only one that works post-termination without an exec).
+- **A keep-alive reader sidecar makes post-completion file reads
+  possible.** `readResult`'s checksum/byte-count files
+  (`producer-checksum`/`producer-bytes`) and `RunOneShot`'s `resultPath`
+  live on the shared volume and are read back *after* the container that
+  wrote them has already exited — exactly the read Kubernetes' exec
+  primitive cannot perform once a container is terminated. `EnsureJob`
+  therefore always adds one extra container to the pod — image taken
+  from `JobSpec.Containers[0].Image` (already a pinned, trusted image;
+  no new digest to track) running `sleep` bounded by the job's own
+  deadline — that stays running for `ReadJobFile`/`RemoveJob` to target
+  regardless of whether the producer/consumer containers it shares the
+  `emptyDir` with have already finished. Entirely internal to the
+  Kubernetes adapter; `dbjob` calls `ReadJobFile(ctx, ns, jobName, path)`
+  and never knows a reader container exists.
+- **Disk-headroom's co-mount needs same-node scheduling.** I13's
+  headroom precheck mounts the instance's own data volume from a second,
+  short-lived container — trivial on Docker (named volumes support
+  concurrent mounts), but a Kubernetes PVC's default `ReadWriteOnce`
+  access mode only guarantees a single *node* can mount it, not a single
+  pod — multiple pods on the *same* node can still both mount it.
+  `JobSpec` gained an optional `NodeName` field; when the caller supplies
+  it (I13's headroom check resolves the running instance pod's node via
+  a small `PodNodeName` capability method added alongside
+  `JobCapableRuntime`), the Job's pod is scheduled with `spec.nodeName`
+  pinned to it directly (a hard placement, not an affinity preference —
+  correct here because the whole point is co-location with a specific
+  already-running pod, not a soft scheduling hint).
+
+### RBAC and preflight
+
+`deploy/kubernetes/rbac/role.yaml` gains a `batch`/`jobs` rule (`get`,
+`create`, `update`, `delete`, `list`, `watch`); `internal/adapters/runtime/
+kubernetes/preflight.go`'s `preflightChecks` slice gains the matching
+`ResourceAttributes` tuples, kept in sync by hand as the file's own
+comment already requires. `README.md`'s Kubernetes RBAC section is
+updated in the same commit (doc 08 §2.1's same-commit rule for anything
+that changes what the minted service-account token must be able to do).
+
+### Accept
+
+The full I12 (producer-killed, consumer-never-starts, exit-file-broken)
+and I13 (corruption-never-reaches-target) fault suites, parameterized
+over runtime (`testRuntime(t)` selecting Docker or Kubernetes from the
+same test bodies — extending the existing suite, not forking a
+K8s-specific copy), green on both Docker and the minted minimal-RBAC
+Kubernetes kubeconfig. The backup suite's row in `scripts/test-impact.sh`
+gains the Kubernetes adapter directory to its scope.
+
+### Known limitation this addendum adds
+
+- **(f) The Job realization does not use `batchv1.Job`'s own completion
+  tracking.** Because the reader sidecar is intentionally long-running,
+  the Job's pod never reaches Kubernetes' own `Succeeded` phase on its
+  own — `InspectJob` answers completion per-container from
+  `ContainerStatuses` directly rather than trusting `Job.status.succeeded`,
+  and `RemoveJob` is what actually ends the pod's lifetime (mirroring
+  Docker's `Remove`-ends-the-container-lifetime shape exactly, and
+  keeping the two runtimes' caller-visible contract identical). An
+  operator inspecting the Job object directly with `kubectl` will see it
+  as perpetually running until `platformctl` removes it — expected, and
+  the same "the CLI, not the cluster, owns this object's lifetime" shape
+  every other one-shot mechanism in this codebase already has.

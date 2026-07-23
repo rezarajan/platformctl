@@ -71,6 +71,15 @@ var preflightChecks = []authorizationv1.ResourceAttributes{
 	{Verb: "update", Group: "networking.k8s.io", Resource: "ingresses"},
 	{Verb: "delete", Group: "networking.k8s.io", Resource: "ingresses"},
 	{Verb: "list", Group: "networking.k8s.io", Resource: "ingresses"},
+	// Jobs: runtime.JobCapableRuntime's Kubernetes realization of dbjob's
+	// producer/consumer/cleanup pipeline (docs/adr/007-backup-restore.md
+	// addendum 3, docs/planning/08 I15) — EnsureJob/InspectJob/RemoveJob.
+	{Verb: "get", Group: "batch", Resource: "jobs"},
+	{Verb: "create", Group: "batch", Resource: "jobs"},
+	{Verb: "update", Group: "batch", Resource: "jobs"},
+	{Verb: "delete", Group: "batch", Resource: "jobs"},
+	{Verb: "list", Group: "batch", Resource: "jobs"},
+	{Verb: "watch", Group: "batch", Resource: "jobs"},
 }
 
 // Preflight checks that the cluster config.New would build is reachable and

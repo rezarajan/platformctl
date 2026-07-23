@@ -1,0 +1,58 @@
+# I15's Kubernetes leg (docs/planning/08 §7.8; docs/adr/007-backup-restore.md
+# addendum 3): backup_kubernetes_integration_test.go's live proof that
+# dbjob's producer/consumer/cleanup pipeline realized as a Kubernetes Job
+# (runtime.JobCapableRuntime) actually round-trips a real restore — small on
+# purpose (docs/planning/06 §10 rule 5, minikube's limited memory): one
+# Source, one Dataset, node-port access so the test process (running outside
+# the cluster) can seed/verify rows and drive backup/restore directly.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: bkpk8s-postgres
+spec:
+  type: postgres
+  runtime:
+    type: kubernetes
+    network: datascape-bkpk8s-test-ns
+    access: node-port
+  configuration:
+    version: "16"
+    superuserSecretRef: bkpk8s-pg-admin
+  secretRefs: [bkpk8s-pg-admin]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: bkpk8s-pg-src
+spec:
+  engine: postgres
+  providerRef:
+    name: bkpk8s-postgres
+  postgres:
+    database: bkpk8sdb
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: bkpk8s-minio
+spec:
+  type: minio
+  runtime:
+    type: kubernetes
+    network: datascape-bkpk8s-test-ns
+    access: node-port
+  configuration:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e
+    rootSecretRef: bkpk8s-minio-root
+  secretRefs: [bkpk8s-minio-root]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: bkpk8s-store
+spec:
+  providerRef: {name: bkpk8s-minio}
+  bucket: bkpk8s-store
+  prefix: dumps
+  format: parquet

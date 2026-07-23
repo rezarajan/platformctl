@@ -66,6 +66,12 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "create", "update", "delete", "list"]
+  # Jobs: runtime.JobCapableRuntime's Kubernetes realization of dbjob's
+  # producer/consumer/cleanup pipeline (docs/adr/007-backup-restore.md
+  # addendum 3, docs/planning/08 I15) — backup/restore on Kubernetes.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "create", "update", "delete", "list", "watch"]
   # Preflight's own permission check (docs/planning/08 B6). Most clusters
   # already grant this to every authenticated principal via the built-in
   # system:basic-user ClusterRole bound to system:authenticated; listed

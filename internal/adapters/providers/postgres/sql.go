@@ -173,6 +173,48 @@ func dropDatabase(ctx context.Context, adminConn, name string) error {
 	return nil
 }
 
+// promoteDatabase implements I13's atomic promote step
+// (docs/adr/007-backup-restore.md addendum 2, verified live against a real
+// Postgres instance before this code was written): terminate any other
+// backends connected to target (ALTER DATABASE RENAME refuses otherwise —
+// "database %q is being accessed by other users", reproduced live), then
+// in ONE transaction rename target aside to oldName and rename scratch
+// into target's name. ALTER DATABASE RENAME is fully transactional in
+// Postgres (a catalog row update, unlike CREATE/DROP DATABASE, which
+// cannot run inside a transaction block at all) — if the second rename
+// fails for any reason, the transaction rolls back and target keeps its
+// original name and content untouched, exactly as if promoteDatabase had
+// never been called. The caller drops the aside-renamed oldName database
+// afterward as a separate, best-effort step (DROP DATABASE cannot run
+// inside a transaction block, and by that point the promote has already
+// fully succeeded — a failed drop is a harmless, named leftover, never
+// data loss and never this call's own failure).
+func promoteDatabase(ctx context.Context, adminConn, target, scratch, oldName string) error {
+	c, err := connect(ctx, adminConn)
+	if err != nil {
+		return err
+	}
+	defer c.Close(ctx)
+	if _, err := c.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, target); err != nil {
+		return fmt.Errorf("promote %q: terminate other connections before rename: %w", target, err)
+	}
+	tx, err := c.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("promote %q: begin transaction: %w", target, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once committed
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`ALTER DATABASE %s RENAME TO %s`, pgx.Identifier{target}.Sanitize(), pgx.Identifier{oldName}.Sanitize())); err != nil {
+		return fmt.Errorf("promote %q: rename aside to %q: %w", target, oldName, err)
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`ALTER DATABASE %s RENAME TO %s`, pgx.Identifier{scratch}.Sanitize(), pgx.Identifier{target}.Sanitize())); err != nil {
+		return fmt.Errorf("promote %q: rename scratch %q into place: %w", target, scratch, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("promote %q: commit: %w", target, err)
+	}
+	return nil
+}
+
 func databaseExists(ctx context.Context, adminConn, name string) (bool, error) {
 	c, err := connect(ctx, adminConn)
 	if err != nil {

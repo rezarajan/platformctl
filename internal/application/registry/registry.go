@@ -208,6 +208,65 @@ func (g *haGuardRuntime) RemoveTLSSecret(ctx context.Context, namespace, name st
 	return ic.RemoveTLSSecret(ctx, namespace, name)
 }
 
+// EnsureJob/InspectJob/ReadJobFile/JobLogs/RemoveJob/NodeNameOf make
+// haGuardRuntime itself satisfy runtime.JobCapableRuntime (docs/adr/
+// 007-backup-restore.md addendum 3, docs/planning/08 I15), delegating to
+// the embedded runtime when it implements the capability — the identical
+// explicit-delegation treatment EnsureIngress/GetIngress/RemoveIngress
+// needed above, for the identical reason: an embedded
+// runtime.ContainerRuntime *interface* only promotes that interface's own
+// declared method set, so without these methods dbjob's own
+// req.Runtime.(runtime.JobCapableRuntime) type assertion would always fail
+// for every runtime obtained through this registry, including a real
+// Kubernetes adapter that genuinely implements it.
+func (g *haGuardRuntime) EnsureJob(ctx context.Context, spec runtime.JobSpec) (runtime.JobState, error) {
+	jc, ok := g.ContainerRuntime.(runtime.JobCapableRuntime)
+	if !ok {
+		return runtime.JobState{}, fmt.Errorf("dbjob: runtime does not implement JobCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return jc.EnsureJob(ctx, spec)
+}
+
+func (g *haGuardRuntime) InspectJob(ctx context.Context, namespace, name string) (runtime.JobState, bool, error) {
+	jc, ok := g.ContainerRuntime.(runtime.JobCapableRuntime)
+	if !ok {
+		return runtime.JobState{}, false, fmt.Errorf("dbjob: runtime does not implement JobCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return jc.InspectJob(ctx, namespace, name)
+}
+
+func (g *haGuardRuntime) ReadJobFile(ctx context.Context, namespace, name, path string) ([]byte, error) {
+	jc, ok := g.ContainerRuntime.(runtime.JobCapableRuntime)
+	if !ok {
+		return nil, fmt.Errorf("dbjob: runtime does not implement JobCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return jc.ReadJobFile(ctx, namespace, name, path)
+}
+
+func (g *haGuardRuntime) JobLogs(ctx context.Context, namespace, name, containerName string, tail int) (string, error) {
+	jc, ok := g.ContainerRuntime.(runtime.JobCapableRuntime)
+	if !ok {
+		return "", fmt.Errorf("dbjob: runtime does not implement JobCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return jc.JobLogs(ctx, namespace, name, containerName, tail)
+}
+
+func (g *haGuardRuntime) RemoveJob(ctx context.Context, namespace, name string) error {
+	jc, ok := g.ContainerRuntime.(runtime.JobCapableRuntime)
+	if !ok {
+		return fmt.Errorf("dbjob: runtime does not implement JobCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return jc.RemoveJob(ctx, namespace, name)
+}
+
+func (g *haGuardRuntime) NodeNameOf(ctx context.Context, name string) (string, error) {
+	jc, ok := g.ContainerRuntime.(runtime.JobCapableRuntime)
+	if !ok {
+		return "", fmt.Errorf("dbjob: runtime does not implement JobCapableRuntime (expected on a Kubernetes-runtime Provider)")
+	}
+	return jc.NodeNameOf(ctx, name)
+}
+
 // AddressesMembersCollectively makes haGuardRuntime itself satisfy
 // runtime.MemberSetRuntime (docs/adr/004's I7 addendum, docs/planning/08
 // §7.8), delegating to the embedded runtime when it implements the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
+	"os"
 	"strings"
 	"time"
 
@@ -78,8 +79,9 @@ func (p *Provider) Backup(ctx context.Context, req reconciler.Request, dest back
 	}
 
 	spec := dbjob.PipelineSpec{
-		JobName: jobName,
-		Labels:  labels,
+		JobName:   jobName,
+		Namespace: providerkit.Network(cfg),
+		Labels:    labels,
 		Producer: dbjob.Side{
 			Image:    prof.Image,
 			Networks: []string{providerkit.Network(cfg)},
@@ -138,17 +140,22 @@ func (p *Provider) Backup(ctx context.Context, req reconciler.Request, dest back
 		Checksum:     "sha256:" + result.SHA256,
 		Bytes:        result.Bytes,
 	}
-	if err := dbjob.PersistManifest(ctx, req.Runtime, jobName, labels, dest, objectKey, manifest); err != nil {
+	if err := dbjob.PersistManifest(ctx, req.Runtime, jobName, providerkit.Network(cfg), labels, dest, objectKey, manifest); err != nil {
 		return backup.Manifest{}, fmt.Errorf("Source %q: postgres backup: dump uploaded but its integrity manifest was not: %w", req.Resource.Metadata.Name, err)
 	}
 	return manifest, nil
 }
 
-// Restore implements reconciler.BackupCapableProvider: streams src back
-// through the same two-container job mechanism in reverse (mc reads the
-// object, psql replays it), unconditionally overwriting the database's
-// current contents — the restore-over-existing-data safety gate is the
-// engine's job, enforced before Restore is ever called.
+// Restore implements reconciler.BackupCapableProvider: verify-then-promote
+// (docs/adr/007-backup-restore.md addendum 2, docs/planning/08 I13) —
+// streams src back through the same job mechanism in reverse (mc reads the
+// object, psql replays it) into a SCRATCH database, never the live target;
+// only once the streamed content's checksum is verified good does an
+// atomic rename-swap promote the scratch database over the target. On any
+// failure — disk headroom, pipeline, or integrity check — the scratch
+// database is dropped and the target is left completely untouched. The
+// restore-over-existing-data safety gate remains the engine's job, enforced
+// before Restore is ever called.
 func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src backup.Location) error {
 	cfg, err := provider.FromEnvelope(req.Provider)
 	if err != nil {
@@ -171,7 +178,8 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 	if err != nil {
 		return err
 	}
-	jobName := naming.RuntimeObjectName(req.Resource) + "-restore-" + time.Now().UTC().Format("20060102T150405Z")
+	restoreTS := time.Now().UTC().Format("20060102T150405Z")
+	jobName := naming.RuntimeObjectName(req.Resource) + "-restore-" + restoreTS
 	// Unlike Backup's dest.Prefix (a directory-like prefix Backup appends a
 	// generated filename under), src.Prefix for Restore names the exact
 	// object to read back — the CLI/engine resolves --from plus --object
@@ -194,14 +202,33 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 	// Fetch the backup's integrity manifest before streaming anything back —
 	// a missing sidecar refuses outright rather than silently skipping
 	// verification (docs/adr/007-backup-restore.md's I12 addendum).
-	wantManifest, err := dbjob.ReadManifest(ctx, req.Runtime, jobName, labels, src, objectKey)
+	wantManifest, err := dbjob.ReadManifest(ctx, req.Runtime, jobName, providerkit.Network(cfg), labels, src, objectKey)
 	if err != nil {
 		return fmt.Errorf("Source %q: postgres restore: %w", req.Resource.Metadata.Name, err)
 	}
 
+	// I13 disk-headroom precheck: 2x the recorded backup size must be free
+	// on the instance's own data volume before anything else starts.
+	if err := dbjob.CheckDiskHeadroom(ctx, req.Runtime, labels, jobName, providerkit.Network(cfg), dbHost, prof.Image, dbHost+"-data", prof.DataMount, wantManifest.Bytes); err != nil {
+		return fmt.Errorf("Source %q: postgres restore: %w", req.Resource.Metadata.Name, err)
+	}
+
+	addr, closeAddr, err := providerkit.ReachableAddr(ctx, req.Runtime, dbHost, 5432)
+	if err != nil {
+		return fmt.Errorf("Source %q: postgres restore: %w", req.Resource.Metadata.Name, err)
+	}
+	defer closeAddr()
+	admin := connStringAddr(addr, suUser, suPass, "postgres", nil)
+
+	scratchName := dbName + "_restore_" + restoreTS
+	if err := ensureDatabase(ctx, admin, scratchName); err != nil {
+		return fmt.Errorf("Source %q: postgres restore: create scratch database: %w", req.Resource.Metadata.Name, err)
+	}
+
 	spec := dbjob.PipelineSpec{
-		JobName: jobName,
-		Labels:  labels,
+		JobName:   jobName,
+		Namespace: providerkit.Network(cfg),
+		Labels:    labels,
 		Producer: dbjob.Side{
 			Image:    dbjob.MCImage,
 			Networks: producerNetworks,
@@ -209,6 +236,9 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 			Files:    []runtime.FileMount{{Path: dbjob.MCConfigPath, Content: mcConfig, Mode: 0o600}},
 			ShellCmd: fmt.Sprintf("mc cat %s/%s/%s", dbjob.MCAlias, src.Bucket, objectKey),
 		},
+		// Consumer replays into the SCRATCH database, never dbName — the
+		// verify-then-promote guarantee depends entirely on this: nothing
+		// above this line has written to the live target at all.
 		Consumer: dbjob.Side{
 			Image:    prof.Image,
 			Networks: []string{providerkit.Network(cfg)},
@@ -216,16 +246,36 @@ func (p *Provider) Restore(ctx context.Context, req reconciler.Request, src back
 				"PGHOST":     dbHost,
 				"PGPORT":     "5432",
 				"PGUSER":     suUser,
-				"PGDATABASE": dbName,
+				"PGDATABASE": scratchName,
 				"PGPASSFILE": pgpassPath,
 			},
-			Files:    []runtime.FileMount{{Path: pgpassPath, Content: []byte(fmt.Sprintf("%s:5432:%s:%s:%s", escapePgpass(dbHost), escapePgpass(dbName), escapePgpass(suUser), escapePgpass(suPass))), Mode: 0o600}},
+			Files:    []runtime.FileMount{{Path: pgpassPath, Content: []byte(fmt.Sprintf("%s:5432:%s:%s:%s", escapePgpass(dbHost), escapePgpass(scratchName), escapePgpass(suUser), escapePgpass(suPass))), Mode: 0o600}},
 			ShellCmd: "psql -h \"$PGHOST\" -p \"$PGPORT\" -U \"$PGUSER\" -d \"$PGDATABASE\" -v ON_ERROR_STOP=1",
 		},
 	}
 	result, err := dbjob.RunPipeline(ctx, req.Runtime, spec)
 	if err != nil {
+		_ = dropDatabase(ctx, admin, scratchName)
 		return fmt.Errorf("Source %q: postgres restore: %w", req.Resource.Metadata.Name, err)
 	}
-	return dbjob.VerifyIntegrity(req.Resource.Metadata.Name, src.Bucket, objectKey, wantManifest, result)
+	if err := dbjob.VerifyIntegrity(req.Resource.Metadata.Name, src.Bucket, objectKey, wantManifest, result); err != nil {
+		_ = dropDatabase(ctx, admin, scratchName)
+		return err
+	}
+
+	// Verified good — atomically promote the scratch database over the
+	// live target (docs/adr/007-backup-restore.md addendum 2).
+	oldName := dbName + "_old_" + restoreTS
+	if err := promoteDatabase(ctx, admin, dbName, scratchName, oldName); err != nil {
+		_ = dropDatabase(ctx, admin, scratchName)
+		return fmt.Errorf("Source %q: postgres restore: %w", req.Resource.Metadata.Name, err)
+	}
+	// Best-effort cleanup of the aside-renamed pre-restore database — the
+	// promote already fully succeeded at this point; a failure here is a
+	// harmless, named leftover, never this call's own failure (ADR
+	// addendum 2, known limitation (e)).
+	if err := dropDatabase(ctx, admin, oldName); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: Source %q: postgres restore: promoted successfully, but dropping the pre-restore database %q failed (harmless leftover, drop it by hand): %v\n", req.Resource.Metadata.Name, oldName, err)
+	}
+	return nil
 }

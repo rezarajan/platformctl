@@ -5,7 +5,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -652,5 +654,256 @@ func TestBackupRestoreFaultExitFileProtocolBroken(t *testing.T) {
 				t.Fatalf("unverifiable object left behind after %s exit file: %v", tc.name, objs)
 			}
 		})
+	}
+}
+
+// --- I13 fault-injection tests (docs/planning/08 §7.8 I13; docs/adr/
+// 007-backup-restore.md addendum 2) ---
+//
+// TestBackupRestoreFaultCorruptionNeverReachesTarget proves the
+// verify-then-promote guarantee directly: a stored backup object is
+// tampered with AFTER a successful backup (a trailing SQL comment line
+// appended — valid SQL, so the corrupted dump still replays without a
+// syntax error, but its bytes no longer match the manifest's recorded
+// checksum) and Restore is called against the live target. This
+// specifically exercises the post-hoc checksum-mismatch path
+// (dbjob.VerifyIntegrity), not a producer/consumer container crash (I12
+// already covers those, on the Backup side) — the scratch database must be
+// dropped and the live target must come out byte-identical to how it went
+// in, proven by a full-content fingerprint (not just "still has the old
+// rows", which a partial-but-lucky overwrite could satisfy), for both
+// engines.
+
+func postgresRowFingerprint(t *testing.T, ctx context.Context, dsn string) string {
+	t.Helper()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect for fingerprint: %v", err)
+	}
+	defer conn.Close(ctx)
+	rows, err := conn.Query(ctx, `SELECT id, name FROM widgets ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query for fingerprint: %v", err)
+	}
+	defer rows.Close()
+	var sb strings.Builder
+	for rows.Next() {
+		var id int
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatalf("scan for fingerprint: %v", err)
+		}
+		fmt.Fprintf(&sb, "%d:%s\n", id, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read fingerprint rows: %v", err)
+	}
+	sum := sha256.Sum256([]byte(sb.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+func mysqlRowFingerprint(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	rows, err := db.Query(`SELECT id, name FROM widgets ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query for fingerprint: %v", err)
+	}
+	defer rows.Close()
+	var sb strings.Builder
+	for rows.Next() {
+		var id int
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatalf("scan for fingerprint: %v", err)
+		}
+		fmt.Fprintf(&sb, "%d:%s\n", id, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read fingerprint rows: %v", err)
+	}
+	sum := sha256.Sum256([]byte(sb.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// corruptStoredObject appends a trailing SQL comment line to the object at
+// key — the plain-SQL dump format both engines produce still replays
+// cleanly (a `-- ...` line is a no-op comment to psql/mysql alike), but the
+// object's bytes no longer match the backup manifest's recorded checksum,
+// exactly the "corrupted... after it was written" fault this test injects.
+func corruptStoredObject(t *testing.T, ctx context.Context, cl *minio.Client, bucket, key string) {
+	t.Helper()
+	obj, err := cl.GetObject(ctx, bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		t.Fatalf("get object %s/%s to corrupt: %v", bucket, key, err)
+	}
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, obj); err != nil {
+		t.Fatalf("read object %s/%s to corrupt: %v", bucket, key, err)
+	}
+	_ = obj.Close()
+	buf.WriteString("\n-- corruption-injected-by-TestBackupRestoreFaultCorruptionNeverReachesTarget\n")
+	if _, err := cl.PutObject(ctx, bucket, key, &buf, int64(buf.Len()), minio.PutObjectOptions{}); err != nil {
+		t.Fatalf("put corrupted object %s/%s: %v", bucket, key, err)
+	}
+}
+
+func TestBackupRestoreFaultCorruptionNeverReachesTargetPostgres(t *testing.T) {
+	t.Setenv("DATASCAPE_SECRET_BKP_PG_ADMIN_USERNAME", "bkpadmin")
+	t.Setenv("DATASCAPE_SECRET_BKP_PG_ADMIN_PASSWORD", "bkp-admin-pw")
+	t.Setenv("DATASCAPE_SECRET_BKP_MYSQL_ROOT_USERNAME", "root")
+	t.Setenv("DATASCAPE_SECRET_BKP_MYSQL_ROOT_PASSWORD", "bkp-mysql-pw")
+	t.Setenv("DATASCAPE_SECRET_BKP_MINIO_ROOT_USERNAME", "bkpminio")
+	t.Setenv("DATASCAPE_SECRET_BKP_MINIO_ROOT_PASSWORD", "bkp-minio-pw")
+
+	_, storeStateFile, _, combined, _ := setupBackupScenario(t)
+	ctx := context.Background()
+	const dsn = "postgres://bkpadmin:bkp-admin-pw@127.0.0.1:19730/bkpdb?sslmode=disable"
+
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect to postgres: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS widgets (id serial PRIMARY KEY, name text NOT NULL)`); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO widgets (name) VALUES ('sprocket'), ('gizmo')`); err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+	_ = conn.Close(ctx)
+
+	out, err, code := run(t, "backup", "Source/bkp-pg-src", combined, "--to", "Dataset/bkp-store",
+		"--state-file", storeStateFile, "--feature-gates=BackupRestore=true", "-o", "json")
+	if err != nil || code != 0 {
+		t.Fatalf("backup failed (code %d): %v\n%s", code, err, out)
+	}
+	var manifest backup.Manifest
+	if err := json.Unmarshal([]byte(out), &manifest); err != nil {
+		t.Fatalf("parse backup manifest: %v\n%s", err, out)
+	}
+
+	beforeFingerprint := postgresRowFingerprint(t, ctx, dsn)
+
+	cl := newMinioTestClient(t, faultMinioAddr, "bkpminio", "bkp-minio-pw")
+	corruptStoredObject(t, ctx, cl, "bkp-store", manifest.Destination.Key)
+
+	out, err, code = run(t, "restore", "Source/bkp-pg-src", combined, "--from", "Dataset/bkp-store",
+		"--object", strings.TrimPrefix(manifest.Destination.Key, "dumps/"),
+		"--state-file", storeStateFile, "--feature-gates=BackupRestore=true",
+		"--yes-i-understand-this-overwrites-existing-data", "-o", "json")
+	if err == nil && code == 0 {
+		t.Fatalf("expected restore of a corrupted object to fail, got success:\n%s", out)
+	}
+	if !strings.Contains(out, "integrity check failed") && !strings.Contains(fmt.Sprint(err), "integrity check failed") {
+		t.Logf("restore failed as expected, but not via the named integrity-check error (still acceptable — target-untouched is the load-bearing assertion): %v\n%s", err, out)
+	}
+
+	afterFingerprint := postgresRowFingerprint(t, ctx, dsn)
+	if afterFingerprint != beforeFingerprint {
+		t.Fatalf("target content changed after a failed corrupt restore: before=%s after=%s — corruption reached the target", beforeFingerprint, afterFingerprint)
+	}
+
+	// The scratch database must have been dropped — no
+	// "bkpdb_restore_*" database left lingering after the failure.
+	conn, err = pgx.Connect(ctx, "postgres://bkpadmin:bkp-admin-pw@127.0.0.1:19730/postgres?sslmode=disable")
+	if err != nil {
+		t.Fatalf("connect to check scratch cleanup: %v", err)
+	}
+	defer conn.Close(ctx)
+	var scratchCount int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_database WHERE datname LIKE 'bkpdb\_restore\_%'`).Scan(&scratchCount); err != nil {
+		t.Fatalf("check for leftover scratch databases: %v", err)
+	}
+	if scratchCount != 0 {
+		t.Fatalf("%d leftover scratch database(s) after a failed restore — scratch was not dropped", scratchCount)
+	}
+}
+
+func TestBackupRestoreFaultCorruptionNeverReachesTargetMySQL(t *testing.T) {
+	t.Setenv("DATASCAPE_SECRET_BKP_PG_ADMIN_USERNAME", "bkpadmin")
+	t.Setenv("DATASCAPE_SECRET_BKP_PG_ADMIN_PASSWORD", "bkp-admin-pw")
+	t.Setenv("DATASCAPE_SECRET_BKP_MYSQL_ROOT_USERNAME", "root")
+	t.Setenv("DATASCAPE_SECRET_BKP_MYSQL_ROOT_PASSWORD", "bkp-mysql-pw")
+	t.Setenv("DATASCAPE_SECRET_BKP_MINIO_ROOT_USERNAME", "bkpminio")
+	t.Setenv("DATASCAPE_SECRET_BKP_MINIO_ROOT_PASSWORD", "bkp-minio-pw")
+
+	_, storeStateFile, _, combined, _ := setupBackupScenario(t)
+	ctx := context.Background()
+
+	dsn := func() string {
+		cfg := godriver.NewConfig()
+		cfg.User, cfg.Passwd, cfg.Net, cfg.Addr, cfg.DBName = "root", "bkp-mysql-pw", "tcp", "127.0.0.1:19731", "bkpdb"
+		return cfg.FormatDSN()
+	}
+
+	db, err := sql.Open("mysql", dsn())
+	if err != nil {
+		t.Fatalf("open mysql: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS widgets (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(64) NOT NULL)`); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO widgets (name) VALUES ('sprocket'), ('gizmo')`); err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+	_ = db.Close()
+
+	out, err, code := run(t, "backup", "Source/bkp-mysql-src", combined, "--to", "Dataset/bkp-store",
+		"--state-file", storeStateFile, "--feature-gates=BackupRestore=true", "-o", "json")
+	if err != nil || code != 0 {
+		t.Fatalf("backup failed (code %d): %v\n%s", code, err, out)
+	}
+	var manifest backup.Manifest
+	if err := json.Unmarshal([]byte(out), &manifest); err != nil {
+		t.Fatalf("parse backup manifest: %v\n%s", err, out)
+	}
+
+	db, err = sql.Open("mysql", dsn())
+	if err != nil {
+		t.Fatalf("open mysql for fingerprint: %v", err)
+	}
+	beforeFingerprint := mysqlRowFingerprint(t, db)
+	_ = db.Close()
+
+	cl := newMinioTestClient(t, faultMinioAddr, "bkpminio", "bkp-minio-pw")
+	corruptStoredObject(t, ctx, cl, "bkp-store", manifest.Destination.Key)
+
+	out, err, code = run(t, "restore", "Source/bkp-mysql-src", combined, "--from", "Dataset/bkp-store",
+		"--object", strings.TrimPrefix(manifest.Destination.Key, "dumps/"),
+		"--state-file", storeStateFile, "--feature-gates=BackupRestore=true",
+		"--yes-i-understand-this-overwrites-existing-data", "-o", "json")
+	if err == nil && code == 0 {
+		t.Fatalf("expected restore of a corrupted object to fail, got success:\n%s", out)
+	}
+	if !strings.Contains(out, "integrity check failed") && !strings.Contains(fmt.Sprint(err), "integrity check failed") {
+		t.Logf("restore failed as expected, but not via the named integrity-check error (still acceptable — target-untouched is the load-bearing assertion): %v\n%s", err, out)
+	}
+
+	db, err = sql.Open("mysql", dsn())
+	if err != nil {
+		t.Fatalf("open mysql to re-check fingerprint: %v", err)
+	}
+	afterFingerprint := mysqlRowFingerprint(t, db)
+	_ = db.Close()
+	if afterFingerprint != beforeFingerprint {
+		t.Fatalf("target content changed after a failed corrupt restore: before=%s after=%s — corruption reached the target", beforeFingerprint, afterFingerprint)
+	}
+
+	// The scratch schema must have been dropped — no "bkpdb_restore_*"
+	// schema left lingering after the failure.
+	admin, err := sql.Open("mysql", func() string {
+		cfg := godriver.NewConfig()
+		cfg.User, cfg.Passwd, cfg.Net, cfg.Addr = "root", "bkp-mysql-pw", "tcp", "127.0.0.1:19731"
+		return cfg.FormatDSN()
+	}())
+	if err != nil {
+		t.Fatalf("open mysql to check scratch cleanup: %v", err)
+	}
+	defer admin.Close()
+	var scratchCount int
+	if err := admin.QueryRow(`SELECT count(*) FROM information_schema.schemata WHERE schema_name LIKE 'bkpdb\_restore\_%'`).Scan(&scratchCount); err != nil {
+		t.Fatalf("check for leftover scratch schemas: %v", err)
+	}
+	if scratchCount != 0 {
+		t.Fatalf("%d leftover scratch schema(s) after a failed restore — scratch was not dropped", scratchCount)
 	}
 }

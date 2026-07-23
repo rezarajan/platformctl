@@ -3402,6 +3402,22 @@ behavior changed. `go test ./...` unfiltered: true-exit=0. gofmt/`go vet`
 - **Accept:** fault suite green; happy-path round-trip green both
   engines; the backup suite's existing green is the floor.
 - **Gate:** rides `BackupRestore`.
+- **Done (2026-07-23):** ADR 007 addendum 2 written and committed before
+  any code (docs/adr/007-backup-restore.md). Implemented for both
+  engines: postgres promotes via one transactional two-statement `ALTER
+  DATABASE RENAME` swap (verified live against a real instance before
+  writing the production code: fully rolls back on partial failure);
+  mysql promotes via one atomic batched `RENAME TABLE` statement (same
+  live-verification discipline). `dbjob.CheckDiskHeadroom` (shared, both
+  engines) precheck via a throwaway `df` job container against the
+  instance's own data volume. Fault-injection:
+  `TestBackupRestoreFaultCorruptionNeverReachesTargetPostgres`/`MySQL`
+  (`cmd/platformctl/backup_integration_test.go`) tamper a stored backup
+  object post-backup and prove the live target's full-content row
+  fingerprint is byte-identical before/after the failed restore attempt,
+  with no scratch database/schema left behind. Live-verified against
+  Docker: round-trip PG 32.01s PASS, round-trip MySQL 34.07s PASS, fault
+  PG 20.99s PASS, fault MySQL 20.15s PASS — all green.
 
 ### I14: Grafana admin credential rotation — the recorded limitation solved
 
@@ -3484,6 +3500,46 @@ behavior changed. `go test ./...` unfiltered: true-exit=0. gofmt/`go vet`
   K8s adapter dir.
 - **Gate:** rides `BackupRestore` (its GA now additionally requires
   this).
+- **Done (2026-07-23), partial — see open item below:** ADR 007 addendum
+  3 records the design (docs/adr/007-backup-restore.md). New optional
+  port capability `runtime.JobCapableRuntime`
+  (`internal/ports/runtime/job.go`, mirrors `IngressCapableRuntime`'s
+  Kubernetes-only type-assert precedent; `haGuardRuntime` in
+  `internal/application/registry/registry.go` gets the explicit
+  passthrough methods the embedded-interface gotcha requires) realized
+  in `internal/adapters/runtime/kubernetes/job.go`: one Job, one pod,
+  every side as a sibling container sharing an emptyDir, plus an
+  always-on keep-alive reader container so `ReadJobFile` works even
+  after producer/consumer have terminated (confirmed against `exec.go`
+  before writing this: Kubernetes' `pods/exec` cannot reach an already-
+  terminated container, unlike Docker's `docker cp` on a stopped one).
+  Per-container completion read from `pod.Status.ContainerStatuses`
+  natively rather than dbjob's sentinel-exit-file convention (script
+  unchanged, for Docker-path parity). `dbjob.go`'s `sideScript` extracted
+  from `sideSpec` so the FIFO/tee/checksum protocol is shared,
+  byte-for-byte, by both realizations; `RunPipeline`/`RunOneShot` branch
+  on the type assertion, Docker/fake completely unaffected. RBAC: `jobs`
+  verbs added to `deploy/kubernetes/rbac/role.yaml` +
+  `preflight.go`'s `preflightChecks` + the README's verb table, same
+  commit. Backup suite's scope in `scripts/test-impact.sh` gains the K8s
+  adapter dir + the new K8s testdata fixture + `deploy/kubernetes/rbac` +
+  `SHARED_CORE`. Verified: gofmt/build/vet/golangci-lint clean (both tag
+  sets); a new live-K8s round-trip test
+  (`TestBackupRestoreKubernetesPostgresRoundTrip`,
+  `cmd/platformctl/backup_kubernetes_integration_test.go`) was run
+  against the shared cluster and confirmed the RBAC-preflight wiring
+  itself works correctly (it failed with a clean, named "missing
+  permission(s): ... jobs.batch" error) — proving `preflight.go`'s new
+  entries are live-correct. **Open item:** the shared cluster's live
+  `platformctl` ClusterRole binding has not yet been updated to match
+  this commit's `role.yaml` (applying it is a privileged, blast-radius-
+  beyond-one-worktree action this session's permission scope didn't
+  cover — no workaround was attempted); once `kubectl apply -f
+  deploy/kubernetes/rbac/role.yaml` runs against the shared cluster (an
+  additive change — every existing verb is unchanged), the actual
+  backup-Job/restore-Job round trip and the full I12+I13 fault-suite
+  parameterization-over-runtime this task's Accept criterion names are
+  the remaining live-evidence work, not open design or code questions.
 
 ## 7.8 Stage I — Production-review remediations (doc 11, 2026-07 owner review)
 
