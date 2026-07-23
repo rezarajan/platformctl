@@ -1,114 +1,79 @@
-# H9 progress
+# J4 progress
 
-Task: docs/planning/08-production-readiness-plan.md §7.7 H9 — Stage H
-criterion 3 composed end-to-end (cross-domain deny/exempt/mediate/withdraw).
+Task: docs/planning/08-production-readiness-plan.md "### J4: Database
+backup orchestration dedup — one harness in providerkit" — extract
+postgres/backup.go and mysql/backup.go's ~580 near-duplicated lines of
+verify-then-promote backup/restore orchestration into one implementation.
 
 ## Setup
-- Worktree was branched from an older `main` (7072b2d) that predates the
-  H9 spec itself, ADR 021's severing amendment, testkit.Janitor (ADR 029),
-  and the CI shard-partition guard. Fast-forward merged to current `main`
-  (234cabe) before starting — worktree had zero unique commits, so this was
-  a clean `git merge --ff-only main`. Verified `go build ./...` clean after.
+- Worktree merged to main tip 0456b72 — fast-forward, already current, no
+  conflicts.
+- Read docs/adr/007-backup-restore.md in full (original decision + I12/I13/
+  I15 addenda + the 2026-07-23 merge-gate amendment), both backup.go files,
+  dbjob (untouched, per instructions), providerkit, and the integration test
+  suite (cmd/platformctl/backup_integration_test.go,
+  backup_kubernetes_integration_test.go) to pin every string/behavior that
+  must stay byte-identical.
 
-## Design decisions (see final commit message for the full rationale)
-- Scenario topology: Source domain "payments" (matches the real postgres
-  backend Provider's domain), Connection/mesh/debezium/redpanda/EventStream
-  all domain "analytics". This is the ONLY topology that satisfies all of:
-  (a) the Binding-level crossDomain edge (Source vs EventStream domain) is
-  genuinely cross-domain, (b) Debezium — the single container bridging
-  both chains — needs no domain-hole to reach either the mediated
-  Connection or redpanda (co-located with both), (c) the router genuinely
-  crosses a domain boundary to dial the dark postgres backend, exercising
-  the H6 K8s addendum's recorded FQDN gap live.
-- This topology produces TWO crossDomain decisions from ONE policy rule
-  (Binding sourceRef->targetRef edge, AND the Source's own connectionRef->
-  Connection edge — both (payments,analytics)) — unavoidable given Source
-  must hold connectionRef (Source resource model) and must differ in
-  domain from both EventStream (for edge a) and Connection (forced by the
-  network-reachability constraint above). Both get exemption annotations.
-- Live K8s bug found and fixed (as anticipated by the task brief):
-  `conn.Target` bypassed domain translation entirely (H6 K8s addendum's
-  recorded gap). Fixed via a NEW optional runtime.AddressQualifier
-  capability (internal/ports/runtime/address.go), implemented only by
-  engine's domainRuntime decorator (internal/application/engine/
-  domainruntime.go's QualifyTargetAddress) — Docker no-op, Kubernetes
-  qualifies conn.Target's host to `<host>.<domain-namespace>.svc.cluster.
-  local` when the resolved target's domain differs from the Connection's.
-  openziti/connection.go calls it via type-assertion only (no
-  .Metadata.Domain/naming.NetworkName/resource.NormalizeDomain reference
-  in the openziti package — domain_decoupling_test.go's regex fence stays
-  clean, confirmed green). Added `resolveRawMediatedTarget` (unfiltered
-  graph.Build edge lookup, since graphaccess.CompileMediatedConnections
-  deliberately excludes Provider-kind targets from MediatedConnection.
-  Targets for identity-subject purposes — a DIFFERENT concern from "what
-  domain does conn.Target's host live in").
+## Design
+- New package `internal/adapters/providers/dbbackup` (sibling to dbjob, not
+  providerkit — providerkit already covers unrelated concerns (endpoint
+  resolution, TLS, instance mgmt); dbbackup mirrors dbjob's own naming and
+  scope exactly).
+- `dbbackup.EngineProfile` parameterizes: ProviderType/Format (manifest
+  fields), BuildDumpSide/BuildReplaySide (dbjob.Side builders), Port/DBHost/
+  Image/DataMount (headroom + dial), AdminConn/EnsureDatabase/DropDatabase
+  (admin SQL), PromoteAndCleanup (the one genuinely divergent tail — mysql's
+  RENAME TABLE batch needs an aside schema created first and leaves two
+  leftovers to drop; postgres's ALTER DATABASE RENAME pair needs neither).
+- `dbbackup.Backup`/`dbbackup.Restore` own everything identical in shape:
+  objectKey derivation, the dump/manifest-persist pipeline (Backup), and
+  manifest-read -> headroom -> scratch-restore -> verify (Restore).
+- Byte-identical-behavior trick: every error-wrap that named the engine
+  ("Source %q: postgres backup: %w" vs mysql's dynamic cfg.Type) now
+  uniformly uses `cfg.Type` — provably identical for postgres because the
+  registry only ever instantiates postgres.Provider under type name
+  "postgres" (main.go's RegisterProvider("postgres", ...)), so cfg.Type is
+  always the literal "postgres" there too. The ONE asymmetry NOT unified:
+  the "spec.<X>.database is required" message uses a literal "postgres" for
+  postgres but the Source's own declared `src.Engine` for mysql (this was
+  already inconsistent pre-extraction, in mysql.go's reconcileSource too —
+  preserved via each wrapper computing dbName/its own error text itself,
+  BEFORE calling into dbbackup, so dbbackup never needs to know about it).
+- postgres/backup.go and mysql/backup.go now: decode cfg/src, validate
+  dbName (their own pre-existing error text), resolve credentials + version
+  profile (unchanged per-package helpers), then build one EngineProfile and
+  call dbbackup.Backup/Restore.
+- dbjob unchanged (not touched, per instructions).
 
 ## Status
-- [x] Read all required docs/ADRs/precedent files.
-- [x] Fast-forwarded worktree to current main.
-- [x] AddressQualifier port + domainRuntime impl + openziti adapter fix.
-  Build clean, archtest clean (domain_decoupling, wrapper_completeness,
-  mediation_layering, request_facts_frozen), full `go test ./...` green.
-- [x] testdata/crossdomain-mediated-scenario (Docker) + policies/policy.yaml
-- [x] testdata/crossdomain-mediated-k8s-scenario (Kubernetes) + policies/
-- [x] cmd/platformctl/crossdomain_mediated_integration_test.go (Docker, 5 legs)
-- [x] cmd/platformctl/crossdomain_mediated_kubernetes_integration_test.go
-      (TestOpenZitiCrossDomainPolicyOnKubernetesEndToEnd — CI shard name
-      match confirmed via TestCIScenarioShardsPartitionKubernetesTests)
-- [x] scripts/test-impact.sh suite row (`crossdomain-mediated`) +
-      TestIntegrationSuiteMapCoversEveryTest green
-- [x] gofmt/vet(both tag sets)/build all clean; full `go test ./...` green
-- [x] Live Docker run (flock-wrapped): PASS 26.73s, all 5 legs, zero
-      residue (scratchpad/docker_leg4.log). Two earlier live-found fixes:
-      Binding domain coherence; leg-5 NFR-3 double flags for the External
-      Source's removal.
-- [x] Live K8s run attempted: BLOCKED — minted kubeconfig token expired
-      mid-session (kubectl auth can-i: yes minutes earlier, Unauthorized
-      at run time). Per brief: recorded, token NOT re-minted, K8s leg
-      code-complete/unverified. Compensating unit coverage added:
-      TestDomainRuntimeQualifyTargetAddress (also fixed a pinned-network
-      inconsistency it exposed: pinned => qualification no-op).
-- [x] golangci-lint v2.12.2: 0 issues (merged tree, final).
-- [x] doc 08 H9 Done-note appended (additive; criterion-3 box left
-      UNCHECKED — Accept demands both runtimes green).
-- [x] Final commit
+- [x] Read all required docs/ADR/precedent files.
+- [x] internal/adapters/providers/dbbackup/dbbackup.go written.
+- [x] postgres/backup.go shrunk to profile + engine SQL helpers (in sql.go,
+      unchanged).
+- [x] mysql/backup.go shrunk to profile + engine SQL helpers (sql.go
+      unchanged); dbSide/dumpTool/restoreTool/clientCnf kept (used by the
+      profile closures, still covered by
+      TestDBSideDoesNotInterpolateDatabaseName).
+- [x] gofmt clean; `go build ./...` clean; `go vet ./...` and
+      `go vet -tags integration ./...` clean.
+- [x] `go test ./...` green (62 ok packages, 0 FAIL) — archtest
+      (naming-authority, adapter-streams, wrapper-completeness) all green.
+- [x] golangci-lint v2.12.2 clean (both scoped and full-repo run).
+- [x] Live: `go test -tags integration -count=1 -run 'TestBackupRestore'
+      -timeout 1800s ./cmd/platformctl/` under flock (queued behind another
+      session's sweep, ran after it released) — ALL GREEN, 190.8s total:
+      TestBackupRestorePostgresRoundTrip, TestBackupRestoreMySQLRoundTrip,
+      TestBackupRestoreS3DatasetRoundTrip, all 3 I12 fault-injection tests,
+      both I13 corruption-never-reaches-target tests (postgres + mysql),
+      and TestBackupRestoreKubernetesPostgresRoundTrip (the I15 Job
+      realization round trip, KUBECONFIG=/tmp/claude-1000/platformctl-rbac/
+      platformctl.kubeconfig — token was live, no K8s gap). Log at
+      /tmp/claude-1000/-home-cascadura-git-platformctl/
+      3ff96d5f-6a0c-4676-8628-0810b1d9fe68/scratchpad/j4-integration.log.
+- [x] Doc 08 J4 Done-note appended (additive).
+- [x] Final commit.
 
-## Coordinator correction (2026-07-23, mid-task)
-- Merged main again (now at e993a07): H10 (CA pinning via EST/PKCS7,
-  InsecureSkipVerify removed except the documented TOFU bootstrap fetch;
-  enrollment JWTs moved Env->FileMount with waitTunnelEnrolled) and K1/K2
-  (label grammar + selector policy vocabulary). Merge was CLEAN — no
-  conflicts; verified my AddressQualifier fix (connection.go) and my
-  listDialPolicies client-side-filter fix (client.go) both survived
-  coherently on top of H10's rewrites.
-- Re-examined my client fix against H10: main's H10 client.go STILL
-  carries the broken `filter=type=%22Dial%22` query (confirmed via
-  `git show main:...`), so my fix is a genuinely different defect
-  (drift-detection/ObservedEdges broken since H6), NOT a duplicate of
-  H10 — kept, applied cleanly by the merge itself.
-- GPG signing is unavailable in this session (pinentry timeout/killed,
-  reproduced twice). WIP + merge commits made with `-c
-  commit.gpgsign=false` (one-off flag, no config change). Final commit
-  will follow the brief's GPG protocol (attempt signed; else leave
-  staged + COMMIT_MSG.txt).
-
-## Live Docker findings so far (pre-merge, recorded in 4b5eec9)
-1. Binding metadata.domain must match realizing Provider's domain
-   (ADR 022 addendum coherence check) — fixed in both testdata files.
-2. listDialPolicies filter defect (above).
-3. Manual live apply of the Docker scenario succeeded end-to-end
-   (10/10 Ready, ~24s); Ziti state manually verified EXACT: 1 service
-   (spiffe-datascape-default-analytics-connection-xd-conn), 1
-   datascape-mediated identity
-   (spiffe-datascape-default-payments-source-xd-src), 1 Dial policy
-   (dial-<identity>-<service>) with exact @id role refs. Manually
-   destroyed cleanly afterward (9 destroyed, external Source no-op'd).
-
-## Names/ports used (avoid colliding with other suites)
-- Resources: xd-pg, xd-mesh (ctrl/router), xd-conn, xd-rp, xd-dbz, xd-src,
-  xd-events, xd-cdc. Docker host ports: controller 12895, connection port
-  25795, redpanda kafka 19295, debezium connect 18295.
-- Docker leg postgres volume "xd-pg-data", redpanda volume "xd-rp-data"
-  (providerkit.EnsureInstance's "<name>-data" convention) — if the live
-  run reports Janitor residue on these, the actual name differs and needs
-  correcting from what EnsureInstance/postgres.go/redpanda.go actually do.
+## Result
+J4 complete. One orchestration implementation (dbbackup), both providers
+are profiles, backup + backup-K8s suites green — no open items.

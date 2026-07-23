@@ -2045,6 +2045,40 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
   suite plus the live K8s round-trip.
 - **Accept:** one orchestration implementation; both providers are
   profiles; backup + backup-K8s suites green.
+- **Done (2026-07-23):** `internal/adapters/providers/dbbackup` (sibling to
+  dbjob, which stays untouched) implements the shared orchestration exactly
+  once: `Backup` (dump -> objectKey -> dbjob pipeline -> manifest persist)
+  and `Restore` (manifest read -> headroom precheck -> scratch restore ->
+  integrity verify -> atomic promote -> best-effort old-drop with
+  `req.Warnf`), parameterized by `dbbackup.EngineProfile` — dump/replay
+  `dbjob.Side` builders, the admin DSN builder, `EnsureDatabase`/
+  `DropDatabase` (both engines' existing `sql.go` functions passed through
+  unchanged), and `PromoteAndCleanup`, the one piece deliberately left
+  engine-owned since postgres's single `ALTER DATABASE RENAME` pair and
+  mysql's `RENAME TABLE` batch (which needs an aside schema created first
+  and leaves two leftovers to drop instead of one) take a genuinely
+  different number of steps, not just different SQL text. Every generic
+  error wrap that names the engine now reads `cfg.Type` uniformly —
+  provably byte-identical to postgres's old hardcoded `"postgres"` literal,
+  since the registry only ever instantiates `postgres.Provider` under that
+  exact type name (`main.go`'s `RegisterProvider("postgres", ...)`). The
+  one asymmetry deliberately left unresolved: `"spec.<X>.database is
+  required"` uses a literal `"postgres"` for postgres but the Source's own
+  declared `spec.engine` for mysql — a pre-existing inconsistency also
+  present in `mysql.go`'s `reconcileSource`, preserved by leaving dbName
+  validation and its error text in each provider's own thin wrapper, before
+  `dbbackup` is ever called. `postgres/backup.go`: 282 -> 175 lines;
+  `mysql/backup.go`: 292 -> 184 lines; `dbbackup.go`: 276 lines (145
+  non-comment/blank) implementing what was previously duplicated in full
+  across both files. Verified: `go build`/`go vet` (both tag sets)/
+  golangci-lint v2.12.2 clean; `go test ./...` green including the
+  naming-authority, adapter-streams, and wrapper-completeness archtest
+  guards; the live integration suite green end to end —
+  `TestBackupRestorePostgresRoundTrip`, `TestBackupRestoreMySQLRoundTrip`,
+  `TestBackupRestoreS3DatasetRoundTrip`, all three I12 fault-injection
+  tests, both I13 corruption-never-reaches-target tests (postgres and
+  mysql), and `TestBackupRestoreKubernetesPostgresRoundTrip` (the I15 Job
+  realization round trip) — 190.8s total, zero failures.
 
 
 ### J5: Resource requests/limits from spec to scheduler — the CI eviction fix
