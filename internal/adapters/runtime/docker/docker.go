@@ -69,9 +69,19 @@ func (r *Runtime) EnsureNetwork(ctx context.Context, spec runtime.NetworkSpec) e
 			return nil // exists — Ensure* is a no-op
 		}
 	}
-	_, err = r.cli.NetworkCreate(ctx, spec.Name, network.CreateOptions{
+	opts := network.CreateOptions{
 		Labels: withOwnership(spec.Labels),
-	})
+	}
+	// Subnet (docs/adr/026, the 2026-07-23 addendum to docs/planning/08 H7):
+	// an explicit IPAM config bypasses Docker's own default address-pool
+	// allocation entirely — the addendum's whole point (the "order tens per
+	// daemon" bound was that default pool's exhaustion, not a real limit).
+	if spec.Subnet != "" {
+		opts.IPAM = &network.IPAM{
+			Config: []network.IPAMConfig{{Subnet: spec.Subnet}},
+		}
+	}
+	_, err = r.cli.NetworkCreate(ctx, spec.Name, opts)
 	if err != nil && !errdefs.IsConflict(err) {
 		return fmt.Errorf("create network %q: %w", spec.Name, err)
 	}

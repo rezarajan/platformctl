@@ -22,8 +22,24 @@ import (
 // or-default value byte-for-byte unchanged; only the engine (per resource,
 // using metadata.domain) may turn that logical token into a concrete
 // network/namespace name.
+// The docs/adr/026 H7 additions (naming.PrivateNetworkName/EdgeNetworkName,
+// graphaccess's H7-specific membership compiler, internal/domain/subnet.For)
+// extend the SAME invariant to graph-scoped access: compiling a resource's
+// membership set and turning it into a concrete per-owner/per-edge network
+// name is exclusively the engine decorator's job
+// (internal/application/engine/graphscoped.go), not a provider's — a
+// provider that started calling these functions would be the identical
+// class of coupling H5's own fix eliminated, one layer further in. This is
+// deliberately narrower than "any graphaccess.* symbol": docs/adr/027's H6
+// amendment already established a DIFFERENT, legitimate provider-side use
+// of the graphaccess package (openziti calls
+// DeriveEdges/CompileMediatedConnections itself to realize identity-aware
+// edges) — only the H7-specific membership/grant/container-resolution
+// surface is fenced here.
 var domainScopedNetworkNaming = regexp.MustCompile(
-	`naming\.NetworkName\(|\.Metadata\.Domain\b|resource\.NormalizeDomain\(|resource\.DefaultDomain\b`,
+	`naming\.NetworkName\(|naming\.PrivateNetworkName\(|naming\.EdgeNetworkName\(|\.Metadata\.Domain\b|resource\.NormalizeDomain\(|resource\.DefaultDomain\b|` +
+		`graphaccess\.MembershipEdges\(|graphaccess\.EgressPeers\(|graphaccess\.IngressPeers\(|graphaccess\.ContainerOf\(|graphaccess\.ContainerDomain\(|graphaccess\.AccessGrant|` +
+		`domain/subnet"`,
 )
 
 // providerScanDirs is internal/adapters/providers alone — the technology
@@ -113,6 +129,36 @@ func network(cfg provider.Provider, env resource.Envelope) string {
 	}
 	if len(violations) != 1 {
 		t.Fatalf("got %d violations, want exactly 1 (both naming.NetworkName( and .Metadata.Domain on the same line, one violation per matching line): %v", len(violations), violations)
+	}
+}
+
+// TestScanFileForDomainNamingDetectsGraphScopedViolation pins docs/adr/026
+// H7's extension of the same invariant: a provider that imports graphaccess
+// or calls the new per-owner/per-edge naming functions must be caught
+// exactly like a pre-H7 domain-naming violation.
+func TestScanFileForDomainNamingDetectsGraphScopedViolation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fixture.go")
+	content := `package fixture
+
+import "github.com/rezarajan/platformctl/internal/application/graphaccess"
+
+func peers(edges []graphaccess.Edge, self resource.Key, resources map[resource.Key]resource.Envelope) []resource.Key {
+	return graphaccess.MembershipEdges(edges, self, resources)
+}
+`
+	// (Deliberately calls the H7-specific MembershipEdges, not H6's
+	// legitimate-for-providers CompileMediatedConnections, to exercise the
+	// narrower fence this test pins.)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var violations []string
+	if err := scanFileForDomainNaming(path, &violations); err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) == 0 {
+		t.Fatal("expected at least one violation for a provider file importing graphaccess")
 	}
 }
 

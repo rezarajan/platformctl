@@ -75,6 +75,73 @@ func TestNetworkNameTruncation(t *testing.T) {
 	}
 }
 
+// TestEdgeNetworkNameOrderIndependent pins docs/adr/026 H7's determinism
+// bar at the naming layer: either endpoint's own reconcile must derive the
+// identical per-edge network name, so swapping the pair must never change
+// the result.
+func TestEdgeNetworkNameOrderIndependent(t *testing.T) {
+	a := resource.Key{Namespace: "default", Kind: "Provider", Name: "r1"}
+	b := resource.Key{Namespace: "b", Kind: "Provider", Name: "x"}
+	if EdgeNetworkName(a, b) != EdgeNetworkName(b, a) {
+		t.Error("EdgeNetworkName must be symmetric under swap")
+	}
+}
+
+func TestEdgeNetworkNameDistinctForDistinctEdges(t *testing.T) {
+	a := resource.Key{Namespace: "default", Kind: "Provider", Name: "r1"}
+	b := resource.Key{Namespace: "b", Kind: "Provider", Name: "x"}
+	c := resource.Key{Namespace: "c", Kind: "Provider", Name: "y"}
+	if EdgeNetworkName(a, b) == EdgeNetworkName(a, c) {
+		t.Error("distinct edges must not collide (unlikely but check)")
+	}
+}
+
+func TestEdgeNetworkNameWithinDockerLimit(t *testing.T) {
+	a := resource.Key{Namespace: "default", Kind: "Provider", Name: strings.Repeat("a", 63)}
+	b := resource.Key{Namespace: "b", Kind: "Provider", Name: strings.Repeat("b", 63)}
+	name := EdgeNetworkName(a, b)
+	if len(name) > 63 {
+		t.Fatalf("EdgeNetworkName produced a name longer than 63 chars: %d (%q)", len(name), name)
+	}
+	if !strings.HasPrefix(name, "access-") {
+		t.Fatalf("EdgeNetworkName = %q, want an \"access-\" prefix", name)
+	}
+}
+
+// TestPrivateNetworkNameDistinctPerOwner pins docs/adr/026 H7's Docker
+// realization: under the gate, each realizing Provider/Connection gets an
+// EXCLUSIVE home network, not the shared domain-wide one — two owners in
+// the identical domain must never derive the same private network name
+// (that would silently re-flatten the very isolation this function exists
+// to provide).
+func TestPrivateNetworkNameDistinctPerOwner(t *testing.T) {
+	r1 := resource.Key{Namespace: "a", Kind: "Provider", Name: "r1"}
+	r2 := resource.Key{Namespace: "a", Kind: "Provider", Name: "r2"}
+	n1 := PrivateNetworkName("datascape", "", r1)
+	n2 := PrivateNetworkName("datascape", "", r2)
+	if n1 == n2 {
+		t.Fatalf("PrivateNetworkName must differ per owner: r1=%q r2=%q", n1, n2)
+	}
+	if n1 == "datascape" || n2 == "datascape" {
+		t.Fatal("PrivateNetworkName must never collide with the shared/undeclared-domain network name")
+	}
+}
+
+func TestPrivateNetworkNameDeterministic(t *testing.T) {
+	owner := resource.Key{Namespace: "a", Kind: "Provider", Name: "r1"}
+	if PrivateNetworkName("datascape", "alpha", owner) != PrivateNetworkName("datascape", "alpha", owner) {
+		t.Fatal("PrivateNetworkName must be deterministic")
+	}
+}
+
+func TestPrivateNetworkNameWithinDNSLimit(t *testing.T) {
+	owner := resource.Key{Namespace: "default", Kind: "Provider", Name: strings.Repeat("a", 63)}
+	name := PrivateNetworkName(strings.Repeat("b", 40), strings.Repeat("c", 40), owner)
+	if len(name) > 63 {
+		t.Fatalf("PrivateNetworkName produced a name longer than 63 chars: %d (%q)", len(name), name)
+	}
+}
+
 // TestWorkloadIdentityURIShape pins the exact SPIFFE-aligned form
 // docs/adr/022 specifies for an undeclared/default-domain resource:
 // spiffe://datascape/<namespace>/<kind>/<name>.

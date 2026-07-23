@@ -8,6 +8,7 @@ An engine-backed database asset. spec.engine is an open discriminator pairing wi
 |---|---|---|---|
 | `metadata.name` | string | yes | Unique per Kind within a manifest set. |
 | `metadata.observers[].name` | string | no | Provider names resolved to LineageEndpoints and forwarded when this resource's provider is LineageAware. |
+| `spec.access` | array of object | no | Explicit wide-grant declarations (docs/adr/026 §2, docs/planning/08 H7) widening this Source's reachability beyond its own declared graph edges to every resource in a named namespace. Only takes effect under the GraphScopedAccess feature gate (Alpha, disabled by default); schema-valid but inert otherwise. |
 | `spec.connectionRef` | object `{name}` | no | SecretReference describing how to reach an external source. Required when external. |
 | `spec.deletionPolicy` | `retain` \| `delete` | no | What Source destroy does to the database: retain (default) keeps it — destroying the platform's record of a source must not destroy the data; delete drops the database. Instance teardown (Provider destroy) removes the backing store regardless. Ignored for external sources (never touched). |
 | `spec.engine` | string | yes | Open-ended engine discriminator (postgres, mysql, ...). Names the sibling engine-specific block. |

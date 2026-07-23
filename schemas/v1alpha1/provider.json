@@ -100,6 +100,11 @@
         "connectionRef": {
           "$ref": "meta.json#/$defs/nameRef",
           "description": "A Connection (preferred) or SecretReference describing how to reach an externally-operated instance of this technology. Required when external. Verified reachable at apply; Datascape creates nothing for it (docs/planning/03 §3.3) — a Dataset/Source/Catalog naming this Provider in its own providerRef still reconciles normally, resolving this connectionRef itself (docs/planning/08 C4)."
+        },
+        "access": {
+          "type": "array",
+          "items": { "$ref": "meta.json#/$defs/accessGrant" },
+          "description": "Explicit wide-grant declarations (docs/adr/026 §2, docs/planning/08 H7) widening this Provider's reachability beyond its own declared graph edges to every resource in a named namespace. Only takes effect under the GraphScopedAccess feature gate (Alpha, disabled by default); schema-valid but inert otherwise."
         }
       },
       "required": [

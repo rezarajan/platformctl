@@ -20,6 +20,11 @@
             "duration": { "type": "string", "pattern": "^[0-9]+[smhd]$", "description": "Retention window, e.g. 7d, 12h, 30m, 45s." }
           },
           "additionalProperties": false
+        },
+        "access": {
+          "type": "array",
+          "items": { "$ref": "meta.json#/$defs/accessGrant" },
+          "description": "Explicit wide-grant declarations (docs/adr/026 §2, docs/planning/08 H7) widening this EventStream's reachability beyond its own declared graph edges to every resource in a named namespace. Only takes effect under the GraphScopedAccess feature gate (Alpha, disabled by default); schema-valid but inert otherwise."
         }
       },
       "required": ["providerRef"],

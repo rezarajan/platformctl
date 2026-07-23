@@ -8,6 +8,7 @@ A first-class, non-secret description of how to reach a system: address here, cr
 |---|---|---|---|
 | `metadata.name` | string | yes | Unique per Kind within a manifest set. |
 | `metadata.observers[].name` | string | no | Provider names resolved to LineageEndpoints and forwarded when this resource's provider is LineageAware. |
+| `spec.access` | array of object | no | Explicit wide-grant declarations (docs/adr/026 §2, docs/planning/08 H7) widening this Connection's reachability beyond its own declared graph edges to every resource in a named namespace. Only takes effect under the GraphScopedAccess feature gate (Alpha, disabled by default); schema-valid but inert otherwise. |
 | `spec.external` | boolean | no | A plain address record; nothing is created for it. |
 | `spec.host` | string | no | External only: where the system answers. |
 | `spec.port` | integer | yes | The port consumers use. Managed: the entrypoint's listen port on the shared network and the host. |

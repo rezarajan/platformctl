@@ -8,6 +8,7 @@ A durable, partitioned event log (a topic), realized by a streaming Provider suc
 |---|---|---|---|
 | `metadata.name` | string | yes | Unique per Kind within a manifest set. |
 | `metadata.observers[].name` | string | no | Provider names resolved to LineageEndpoints and forwarded when this resource's provider is LineageAware. |
+| `spec.access` | array of object | no | Explicit wide-grant declarations (docs/adr/026 §2, docs/planning/08 H7) widening this EventStream's reachability beyond its own declared graph edges to every resource in a named namespace. Only takes effect under the GraphScopedAccess feature gate (Alpha, disabled by default); schema-valid but inert otherwise. |
 | `spec.partitions` | integer | no | Partition count; increases apply in place, decreases are rejected by the broker. |
 | `spec.providerRef` | object `{name}` | yes |  |
 | `spec.replication` | integer | no | Replication factor (default 1). Must not exceed the realizing Provider's broker count (configuration.brokers), and redpanda additionally requires an odd factor (Raft quorum) — both refused at validate. Changing it on an existing topic is refused (Kafka cannot alter a topic's replication factor in place); recreate the EventStream instead. docs/adr/017. |

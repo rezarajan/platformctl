@@ -30,7 +30,12 @@
           },
           "additionalProperties": false
         },
-        "via": { "$ref": "meta.json#/$defs/nameRef", "description": "Managed only: optional reference to a tunnel-capable Provider (docs/adr/023) this Connection's egress additionally routes through. Schema-accepted and validate-time capability-checked (the named Provider must implement TunnelCapableProvider); no realizing provider consumes it yet — a tunnel-mediated Connection is realized directly by the tunnel provider itself today (see docs/adr/002's addendum, docs/adr/023's Scope section)." }
+        "via": { "$ref": "meta.json#/$defs/nameRef", "description": "Managed only: optional reference to a tunnel-capable Provider (docs/adr/023) this Connection's egress additionally routes through. Schema-accepted and validate-time capability-checked (the named Provider must implement TunnelCapableProvider); no realizing provider consumes it yet — a tunnel-mediated Connection is realized directly by the tunnel provider itself today (see docs/adr/002's addendum, docs/adr/023's Scope section)." },
+        "access": {
+          "type": "array",
+          "items": { "$ref": "meta.json#/$defs/accessGrant" },
+          "description": "Explicit wide-grant declarations (docs/adr/026 §2, docs/planning/08 H7) widening this Connection's reachability beyond its own declared graph edges to every resource in a named namespace. Only takes effect under the GraphScopedAccess feature gate (Alpha, disabled by default); schema-valid but inert otherwise."
+        }
       },
       "required": ["port"],
       "additionalProperties": false,

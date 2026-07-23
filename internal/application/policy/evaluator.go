@@ -3,6 +3,7 @@ package policy
 import (
 	"fmt"
 
+	"github.com/rezarajan/platformctl/internal/application/graphaccess"
 	planpkg "github.com/rezarajan/platformctl/internal/application/plan"
 	"github.com/rezarajan/platformctl/internal/domain/graph"
 	"github.com/rezarajan/platformctl/internal/domain/lint"
@@ -41,6 +42,8 @@ func Run(policies []policy.Policy, envelopes []resource.Envelope, g *graph.Graph
 				decisions = append(decisions, evaluateFinding(rule, findings)...)
 			case policy.RuleKindEdge:
 				decisions = append(decisions, evaluateCrossDomain(rule, envelopes, g)...)
+			case policy.RuleKindGrant:
+				decisions = append(decisions, evaluateGrant(rule, envelopes)...)
 			}
 		}
 	}
@@ -246,6 +249,36 @@ func evaluateCrossDomain(rule policy.Rule, envelopes []resource.Envelope, g *gra
 				edge.From.Key(), edge.FromDomain, edge.To.Key(), edge.ToDomain, edge.Owner.Key(),
 			)),
 		})
+	}
+	return out
+}
+
+// evaluateGrant evaluates one matchGrant rule against every resource's
+// declared docs/adr/026 §2 spec.access wide grants, denying (or warning)
+// each resource that names the rule's selected namespace — ADR 026
+// decision 2's "a matchGrant selector lets organizations deny or constrain
+// wide grants" realized exactly like evaluateCrossDomain realizes
+// matchEdge.crossDomain: a validate-time-only check, never re-evaluated by
+// the H7 compiler itself (domainruntime.go's own holes comment documents
+// the identical precedent this mirrors).
+func evaluateGrant(rule policy.Rule, envelopes []resource.Envelope) []Decision {
+	sel := rule.MatchGrant
+	var out []Decision
+	for _, e := range envelopes {
+		for _, grant := range graphaccess.AccessGrants(e) {
+			if grant.Namespace != sel.Namespace {
+				continue
+			}
+			out = append(out, Decision{
+				RuleID:   rule.ID,
+				Effect:   rule.Effect,
+				Resource: e.Key(),
+				Message: message(rule, fmt.Sprintf(
+					"%s declares a wide access grant to namespace %q, denied by policy",
+					e.Key(), grant.Namespace,
+				)),
+			})
+		}
 	}
 	return out
 }

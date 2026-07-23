@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/rezarajan/platformctl/internal/application/graphaccess"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
@@ -52,11 +53,49 @@ type domainRuntime struct {
 	domain string
 	// holes are the additional domains (already normalized) some other
 	// resource in the manifest set reaches this Connection from via
-	// connectionRef — non-empty only when env.Kind == "Connection". Ring 0
-	// (matchEdge.crossDomain deny at validate) already refused any such
-	// edge policy denies before apply ever runs, so this never re-evaluates
-	// policy — it only wires what validate allowed through.
+	// connectionRef — non-empty only when env.Kind == "Connection" AND
+	// graphScoped is false. Ring 0 (matchEdge.crossDomain deny at
+	// validate) already refused any such edge policy denies before apply
+	// ever runs, so this never re-evaluates policy — it only wires what
+	// validate allowed through. Under docs/adr/026 H7's GraphScopedAccess
+	// gate, this whole-domain hole mechanism is superseded (never merely
+	// layered on top of) by the resource-granular peers/ingressPeers
+	// below — a Connection is a container-of-record exactly like any other
+	// Provider (graphaccess.ContainerOf resolves it to itself), so its
+	// cross-resource reachability is already covered generically there;
+	// leaving both mechanisms active would let H5's coarse whole-namespace
+	// hole silently re-widen what H7 exists to narrow.
 	holes []string
+
+	// graphScoped and the fields below realize docs/adr/026 H7 — all
+	// zero-valued (graphScoped false) when the GraphScopedAccess gate is
+	// disabled, which is what makes every method below byte-identical to
+	// pre-H7 behavior (the gate-off pin).
+	graphScoped bool
+	// namespaced is true for runtimes where a network IS a pre-existing
+	// namespace boundary a workload cannot leave (set from p.RuntimeType
+	// == "kubernetes" — see newDomainRuntime's doc comment for why a
+	// plain type string, not a capability type-assert, decides this).
+	// Docker/fake treat a network as pure ACL-by-membership, so false
+	// there. See graphscoped.go's package doc for why the two
+	// realizations differ this much.
+	namespaced bool
+	// self is provEnv.Key() — the container this decorator's request
+	// realizes (see newDomainRuntime's provEnv doc: the domain-of-record
+	// container, not necessarily env itself).
+	self resource.Key
+	// peers is graphaccess.MembershipEdges(edges, self, byKey) — the
+	// Docker realization's per-edge-network join list (egress ∪ ingress;
+	// Docker network membership is symmetric, so direction is moot there).
+	peers []resource.Key
+	// ingressPeers is graphaccess.IngressPeers(edges, self, byKey) — the
+	// Kubernetes realization's ContainerSpec.AllowFromPeers list (only
+	// "who may dial ME" needs a NetworkPolicy ingress rule; egress is
+	// unrestricted by construction in this codebase).
+	ingressPeers []resource.Key
+	// resources is byKey, kept for graphscoped.go's k8sPeers (resolving a
+	// peer container's own runtime object name/home namespace).
+	resources map[resource.Key]resource.Envelope
 }
 
 // newDomainRuntime builds the decorator for one reconciler.Request. env is
@@ -72,7 +111,25 @@ type domainRuntime struct {
 // declared domain governs graph/policy edges only, and validate refuses
 // an explicit mismatch). env is the resource under reconcile — used only
 // for resource-shaped concerns like a Connection's cross-domain holes.
-func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any, provEnv, env resource.Envelope, byKey map[resource.Key]resource.Envelope) runtime.ContainerRuntime {
+// graphScoped/edges realize docs/adr/026 H7 (graphscoped.go): graphScoped
+// is the GraphScopedAccess gate's current state, and edges is the full
+// docs/adr/026 access-request graph (graphaccess.DeriveEdges) — both
+// resolved once per resolveRequest call by the caller (engine.go), never
+// by this function, so newDomainRuntime itself stays a pure constructor.
+// edges is ignored (and may be nil) when graphScoped is false. runtimeType
+// is p.RuntimeType ("docker"/"kubernetes"/"fake", the same string
+// Registry.Runtime(typeName, ...) was already constructed from) — passed
+// explicitly rather than type-asserting rt against an optional capability
+// (the way domainRuntime picks between IngressCapableRuntime-gated
+// behaviors elsewhere would seem to suggest): found live that
+// runtime.IngressCapableRuntime cannot be reused for this signal, because
+// registry.haGuardRuntime unconditionally implements it (explicit
+// delegation trio, for a DIFFERENT reason — docs/adr/018's provider-facing
+// promotion gotcha) regardless of what the WRAPPED runtime actually is, so
+// asserting against it through the registry-obtained rt this function
+// always receives would see "Kubernetes" for every runtime, Docker
+// included. The plain type string sidesteps that gotcha entirely.
+func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any, provEnv, env resource.Envelope, byKey map[resource.Key]resource.Envelope, graphScoped bool, edges []graphaccess.Edge, runtimeType string) runtime.ContainerRuntime {
 	token, pinned := networkToken(runtimeConfig)
 	d := &domainRuntime{
 		ContainerRuntime: rt,
@@ -80,7 +137,14 @@ func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any,
 		pinned:           pinned,
 		domain:           resource.NormalizeDomain(provEnv.Metadata.Domain),
 	}
-	if env.Kind == "Connection" {
+	if graphScoped {
+		d.graphScoped = true
+		d.namespaced = runtimeType == "kubernetes"
+		d.self = provEnv.Key()
+		d.resources = byKey
+		d.peers = graphaccess.MembershipEdges(edges, d.self, byKey)
+		d.ingressPeers = graphaccess.IngressPeers(edges, d.self, byKey)
+	} else if env.Kind == "Connection" {
 		d.holes = consumerDomainHoles(env, byKey)
 	}
 	return d
@@ -97,6 +161,15 @@ func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any,
 func (d *domainRuntime) translate(name string) string {
 	if d.pinned || name != d.token {
 		return name
+	}
+	if d.graphScoped && !d.namespaced {
+		// docs/adr/026 H7's Docker realization: under the gate, the home
+		// token maps to a network EXCLUSIVE to this one owner rather than
+		// the domain-wide network every Provider in a domain otherwise
+		// shares — see graphscoped.go's package doc for why Docker's
+		// "networks are the only isolation primitive" makes this the only
+		// way pairwise access is representable there at all.
+		return naming.PrivateNetworkName(name, d.domain, d.self)
 	}
 	return naming.NetworkName(name, d.domain)
 }
@@ -123,6 +196,17 @@ func (d *domainRuntime) holeNetworks() []string {
 func (d *domainRuntime) EnsureNetwork(ctx context.Context, spec runtime.NetworkSpec) error {
 	home := d.isHomeToken(spec.Name)
 	spec.Name = d.translate(spec.Name)
+	if d.graphScoped && d.namespaced && home && spec.IsolationPolicy != runtime.IsolationNone {
+		// docs/adr/026 H7's Kubernetes realization: drop the
+		// allow-same-namespace rule for this namespace (default-deny
+		// only) — namespace membership no longer implies reachability;
+		// only the per-container graph-scoped policy
+		// (ContainerSpec.AllowFromPeers, applied in EnsureContainer)
+		// does. A provider that explicitly opted all the way out
+		// (IsolationNone) is left alone — that is a stronger, distinct
+		// declaration this gate must not silently override.
+		spec.IsolationPolicy = runtime.IsolationGraphScoped
+	}
 	if home && len(d.holes) > 0 {
 		spec.AllowFromNetworks = append(append([]string{}, spec.AllowFromNetworks...), d.holeNetworks()...)
 	}
@@ -158,6 +242,18 @@ func (d *domainRuntime) EnsureContainer(ctx context.Context, spec runtime.Contai
 	nets := d.translateAll(spec.Networks)
 	for _, holeNet := range d.holeNetworks() {
 		nets = appendUnique(nets, holeNet)
+	}
+	if d.graphScoped && !d.namespaced {
+		edgeNets, err := d.edgeNetworks(ctx, spec.Labels)
+		if err != nil {
+			return runtime.ContainerState{}, err
+		}
+		for _, n := range edgeNets {
+			nets = appendUnique(nets, n)
+		}
+	}
+	if d.graphScoped && d.namespaced {
+		spec.AllowFromPeers = append(append([]runtime.NetworkPeer{}, spec.AllowFromPeers...), d.k8sPeers()...)
 	}
 	spec.Networks = nets
 	return d.ContainerRuntime.EnsureContainer(ctx, spec)

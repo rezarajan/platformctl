@@ -189,6 +189,16 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// suite (docs/planning/08 §7.7 H6) has not yet soaked.
 	gates.Register("MediatedConnections", featuregate.Alpha, false)
 
+	// docs/planning/08 H7 (docs/adr/026, as amended 2026-07-23): resource-
+	// granular least privilege compiled from the declared reference graph
+	// — Layer 2 (docs/adr/027) of the zero-trust progression. Flips
+	// reachability semantics for every existing manifest set the instant
+	// it's on (a resource that previously reached its whole domain/shared
+	// network now reaches only what it declared), so this is opt-in until
+	// the dual-runtime negative-proof suite (docs/planning/08 §7.7 H7)
+	// soaks — the same bar ADR 026's own Gate section states.
+	gates.Register("GraphScopedAccess", featuregate.Alpha, false)
+
 	// docs/planning/08 H1 (ADR 020): read-only reporting only — the gate
 	// exists to switch `validate`'s one-line design-findings summary off,
 	// not to hide the `lint` command itself, so it defaults enabled.

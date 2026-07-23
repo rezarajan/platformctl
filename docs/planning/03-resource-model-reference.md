@@ -68,6 +68,33 @@ network plus each distinct consumer domain's network — nothing else. A manifes
 declares a non-`default` domain produces byte-identical runtime objects to before this field
 existed — segmentation is opt-in per domain, never retroactive.
 
+`spec.access` (docs/adr/026-graph-scoped-access.md §2, docs/planning/08 H7) is an additive, optional
+array of `{namespace: <string>}` wide-grant declarations, available on every Kind whose realizing
+Provider/Connection has a runtime network identity (`Provider`, `Connection`, `Source`, `Binding`,
+`EventStream`, `Dataset` — schema `$ref: meta.json#/$defs/accessGrant`). It only takes effect under
+the `GraphScopedAccess` feature gate (Alpha, disabled by default — docs/planning/04
+§12): when enabled, a resource reaches **exactly** the endpoints its declared references imply
+(`providerRef`/`sourceRef`/`targetRef`/`connectionRef`/`secretRef`/`warehouseRef`/`via`/`observers`
+— the same graph `internal/domain/graph.Build` already constructs) and nothing else, with
+`spec.access` as the one explicit escape hatch: each entry widens reachability to *every* other
+resource in the named namespace, not just the ones referenced — visible in review, and deniable or
+constrainable by a `policy.datascape.io` `matchGrant: {namespace: <string>}` rule (§13) at
+`validate` time, mirroring `matchEdge.crossDomain`'s own validate-time-only enforcement. Realization
+is core-only (`internal/application/engine`'s per-request runtime decorator; zero provider code):
+**Docker** — each realizing Provider/Connection's home network becomes exclusive to itself (a flat,
+domain-wide network would make pairwise access unrepresentable there — Docker has no per-container
+ACL beyond network membership), and every declared access edge additionally joins both endpoints to
+a small, deterministic per-edge network with an explicit `/28` subnet drawn from a dedicated
+supernet (default `10.94.0.0/16`, `internal/domain/subnet` — the "order tens of networks" bound a
+default Docker address pool would impose does not apply, since the subnet is explicit). **Kubernetes**
+— domain/namespace placement is unchanged (docs/adr/022 Ring 1 above); only the `NetworkPolicy`
+changes: the default-deny + allow-same-namespace pair (§ above) drops its allow-same-namespace rule
+under the gate, replaced by one per-container policy admitting ingress from exactly the peers the
+graph names (a `NetworkPolicyPeer` combining a namespace selector with a pod selector on the peer's
+own runtime object name). A manifest set with the gate off — the default — is byte-identical to
+before this field existed; the graph-scoped compilation only runs when `GraphScopedAccess` is
+enabled.
+
 `metadata.annotations["lint.datascape.io/waive"]` (docs/adr/020-design-lints.md, 08 H1) waives one
 or more `platformctl lint` findings against this resource: `"DL010: <reason>"`, one entry per line
 for more than one code on the same resource (newline-separated, not comma — a reason is prose and
@@ -1878,7 +1905,22 @@ spec:
     - id: no-dataset-deletes-in-ci
       matchPlan: {action: delete, kind: Dataset}  # evaluated at plan/apply/destroy only
       effect: deny
+    - id: no-crossing-payments-to-analytics
+      matchEdge: {crossDomain: {from: payments, to: analytics}}  # docs/adr/022 Ring 0
+      effect: deny
+    - id: no-wide-grants-to-payments
+      matchGrant: {namespace: payments}   # docs/adr/026 §2 / docs/planning/08 H7
+      effect: deny
 ```
+
+Two additional closed selector shapes exist beyond the three above:
+`matchEdge.crossDomain: {from, to}` selects a domain-to-domain graph edge
+(§2's `metadata.domain` paragraph above has the full realization), and
+`matchGrant: {namespace}` selects a `spec.access` wide-grant declaration
+(§2's `spec.access` paragraph above) — "deny/warn any resource that
+declares a wide grant reaching this namespace." A rule sets exactly one of
+`(match + assert)`, `matchFinding`, `matchPlan`, `matchEdge`, or
+`matchGrant` — never more than one.
 
 A rule sets exactly one of `(match + assert)`, `matchFinding`, or
 `matchPlan` — never more than one. `assert`'s field selector reads the raw,
