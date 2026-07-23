@@ -26,6 +26,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/backup"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestBackupRestorePostgresRoundTrip and its mysql/s3 siblings cover
@@ -297,17 +298,16 @@ func setupBackupScenario(t *testing.T) (rt *dockerruntime.Runtime, storeStateFil
 		t.Fatalf("connect to Docker: %v", err)
 	}
 	ctx := context.Background()
-	cleanup := func() {
-		for _, c := range []string{"bkp-postgres", "bkp-mysql", "bkp-minio"} {
-			_ = rtc.Remove(ctx, c)
-		}
-		for _, v := range []string{"bkp-postgres-data", "bkp-mysql-data", "bkp-minio-data"} {
-			_ = rtc.RemoveVolume(ctx, v)
-		}
-		_ = rtc.RemoveNetwork(ctx, "datascape-bkp")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rtc,
+		Workloads: []string{"bkp-postgres", "bkp-mysql", "bkp-minio"},
+		Volumes:   []string{"bkp-postgres-data", "bkp-mysql-data", "bkp-minio-data"},
+		Networks:  []string{"datascape-bkp"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	storeStateFile = filepath.Join(t.TempDir(), "store-state.json")
 	dbStateFile = filepath.Join(t.TempDir(), "db-state.json")
@@ -402,13 +402,16 @@ func setupFaultInjectionStore(t *testing.T) (rt *dockerruntime.Runtime, loc back
 		t.Fatalf("connect to Docker: %v", err)
 	}
 	ctx := context.Background()
-	cleanup := func() {
-		_ = rtc.Remove(ctx, "bkp-minio")
-		_ = rtc.RemoveVolume(ctx, "bkp-minio-data")
-		_ = rtc.RemoveNetwork(ctx, faultNetwork)
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rtc,
+		Workloads: []string{"bkp-minio"},
+		Volumes:   []string{"bkp-minio-data"},
+		Networks:  []string{faultNetwork},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "store-state.json")
 	storeOnly := "testdata/backup-restore-scenario/store-only"

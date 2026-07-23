@@ -12,6 +12,7 @@ import (
 
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
 	"github.com/rezarajan/platformctl/internal/domain/backup"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestBackupRestoreKubernetesPostgresRoundTrip is I15's (docs/planning/08
@@ -39,14 +40,15 @@ func TestBackupRestoreKubernetesPostgresRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	const ns = "datascape-bkpk8s-test-ns"
 	workloads := []string{"bkpk8s-postgres", "bkpk8s-minio"}
-	cleanup := func() {
-		for _, name := range workloads {
-			_ = rt.Remove(ctx, name)
-		}
-		_ = rt.RemoveNetwork(ctx, ns)
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: workloads,
+		Networks:  []string{ns},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := t.TempDir() + "/state.json"
 	manifests := "testdata/backup-restore-k8s-scenario"

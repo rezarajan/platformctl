@@ -15,6 +15,7 @@ import (
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	"github.com/rezarajan/platformctl/internal/domain/hostport"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestBlueprintCDCToLakeAppliesToReady is the docs/planning/08 §E1 accept
@@ -58,18 +59,17 @@ func TestBlueprintCDCToLakeAppliesToReady(t *testing.T) {
 	// the identity function): db, broker, cdc, lake, sink; volumes carry
 	// each data-bearing provider's "<name>-data" convention.
 	containers := []string{"sink", "lake", "cdc", "db", "broker"}
-	cleanup := func() {
-		for _, c := range containers {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"db-data", "broker-data", "lake-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape")
-		_ = exec.Command("docker", "network", "rm", "datascape").Run()
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:          rt,
+		Workloads:   containers,
+		Volumes:     []string{"db-data", "broker-data", "lake-data"},
+		Networks:    []string{"datascape"},
+		RawNetworks: []string{"datascape"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 

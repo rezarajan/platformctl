@@ -17,6 +17,7 @@ import (
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	"github.com/rezarajan/platformctl/internal/adapters/state/localfile"
 	"github.com/rezarajan/platformctl/internal/cliutil"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 func setSinkSecrets(t *testing.T) {
@@ -73,17 +74,16 @@ func TestChaosExternalFailures(t *testing.T) {
 	ctx := context.Background()
 
 	containers := []string{"datascape-sink-s3", "datascape-sink-minio", "datascape-sink-dbz", "datascape-sink-pg", "datascape-sink-rp"}
-	cleanup := func() {
-		for _, c := range containers {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"datascape-sink-pg-data", "datascape-sink-rp-data", "datascape-sink-minio-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape-sink-net")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: containers,
+		Volumes:   []string{"datascape-sink-pg-data", "datascape-sink-rp-data", "datascape-sink-minio-data"},
+		Networks:  []string{"datascape-sink-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/sink-scenario"
@@ -200,17 +200,16 @@ func TestChaosApplyKilledMidRun(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	cleanup := func() {
-		for _, c := range []string{"datascape-cdc-dbz", "datascape-cdc-pg", "datascape-cdc-rp"} {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"datascape-cdc-pg-data", "datascape-cdc-rp-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape-cdc-net")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: []string{"datascape-cdc-dbz", "datascape-cdc-pg", "datascape-cdc-rp"},
+		Volumes:   []string{"datascape-cdc-pg-data", "datascape-cdc-rp-data"},
+		Networks:  []string{"datascape-cdc-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	bin := filepath.Join(t.TempDir(), "platformctl")
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {

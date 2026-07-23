@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 const (
@@ -54,17 +55,16 @@ func TestJDBCSinkEndToEnd(t *testing.T) {
 		"datascape-jdbcsink-connect", "datascape-jdbcsink-dbz",
 		"datascape-jdbcsink-pg-dst", "datascape-jdbcsink-pg-src", "datascape-jdbcsink-rp",
 	}
-	cleanup := func() {
-		for _, c := range containers {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"datascape-jdbcsink-pg-src-data", "datascape-jdbcsink-pg-dst-data", "datascape-jdbcsink-rp-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape-jdbcsink-net")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: containers,
+		Volumes:   []string{"datascape-jdbcsink-pg-src-data", "datascape-jdbcsink-pg-dst-data", "datascape-jdbcsink-rp-data"},
+		Networks:  []string{"datascape-jdbcsink-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/jdbcsink-scenario"

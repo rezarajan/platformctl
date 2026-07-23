@@ -703,3 +703,26 @@ static. Dimensions, each producing findings verified before fixing:
   Every new rule has a guard with a positive-case self-proof; all
   guards green on the tree; live verification: residue 0.95s, netpol
   6.8s, ziti 26.8s, ingress-TLS K8s 69.2s.
+- 2026-07-23: S-TASK CLOSE-OUT + CI SCENARIOS FAILURE. (1) E7's
+  impact-map gap closed: every ./cmd/platformctl suite's scope now
+  names its own test files (generated from the -run patterns);
+  main.go/root.go join SHARED_CORE — a test-file edit selected 0
+  suites before, which is how the graphscoped stale-gate reached the
+  sweep unseen. (2) ADR 032: providers stay compiled-in; plugin-protocol
+  reopen criteria recorded (E6's last follow-up). (3) J2 COMPLETE: zero
+  hand-rolled cleanup closures remain — 24 mechanical conversions + 7
+  specials (compose's SweepAllManaged, ziti-K8s/ingress-K8s/redpanda-K8s
+  x2/cdc-example's destroy-then-janitor for the namespace-strand class,
+  trino's ordinal expansion, harness veneer); janitor grew
+  RawVolumes/RawImages/SweepAllManaged. (4) CI kubernetes/scenarios
+  failure (owner report): nessie recreated 4x in 6min post-apply, all
+  forwards refused — eviction/OOM-churn signature. S-fixes landed:
+  lakehouse test pings are now bounded transient-aware condition-polls
+  (the one-shot http.Get violated the settledness doctrine outright),
+  and the CI job dumps pod restarts/events/node-pressure on failure so
+  the next occurrence NAMES its cause. Structural fix specced as J5
+  (resources from spec to scheduler — the port maps Resources fully;
+  nothing populates it). E6's conformance retrofit deliberately NOT
+  claimed as S: each provider needs a fake-servable scoping judgment
+  (the redpanda exemplar's own registry-disabled note is why E6 cut it
+  to three).

@@ -14,6 +14,7 @@ import (
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	"github.com/rezarajan/platformctl/internal/cliutil"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestAcceptanceCDCAttendance is the v1.0.0 acceptance scenario
@@ -50,18 +51,17 @@ func TestAcceptanceCDCAttendance(t *testing.T) {
 	ctx := context.Background()
 
 	containers := []string{"s3-sink", "local-minio", "postgres-cdc", "local-postgres", "local-redpanda"}
-	cleanup := func() {
-		for _, c := range containers {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"local-postgres-data", "local-redpanda-data", "local-minio-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape")
-		_ = exec.Command("docker", "network", "rm", "datascape").Run()
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:          rt,
+		Workloads:   containers,
+		Volumes:     []string{"local-postgres-data", "local-redpanda-data", "local-minio-data"},
+		Networks:    []string{"datascape"},
+		RawNetworks: []string{"datascape"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "../../examples/cdc-attendance"

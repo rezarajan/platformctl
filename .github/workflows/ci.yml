@@ -258,3 +258,23 @@ jobs:
           else
             go test -tags integration -timeout 1200s -run Kubernetes ./cmd/platformctl/...
           fi
+
+      # Observed, never assumed (docs/adr/027's own discipline applied to CI
+      # forensics): the 2026-07-23 scenarios failure surfaced only as
+      # port-forward noise ("connection refused inside namespace") across
+      # four pod sandboxes — the signature of kubelet eviction/OOM churn,
+      # but nothing in the log NAMED it. On failure, dump the cluster's own
+      # account: restart counts, evictions, OOMKills, node memory pressure.
+      # Uses kind-action's admin kubeconfig (default context), not the
+      # minted minimal-RBAC one — forensics need cluster-wide read.
+      - name: Dump cluster diagnostics on failure
+        if: failure()
+        run: |
+          echo '=== pods (all namespaces, restart counts) ==='
+          kubectl get pods -A -o wide || true
+          echo '=== recent events (evictions, OOM, probe kills surface here) ==='
+          kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true
+          echo '=== node conditions (MemoryPressure/DiskPressure) ==='
+          kubectl describe nodes | grep -A12 'Conditions:' || true
+          echo '=== last-state of any restarted/waiting containers ==='
+          kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{": "}{range .status.containerStatuses[*]}{.name}{" restarts="}{.restartCount}{" lastState="}{.lastState}{"\n"}{end}{end}' | grep -v 'restarts=0 lastState=map\[\]' || true

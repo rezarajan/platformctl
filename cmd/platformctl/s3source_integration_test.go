@@ -13,6 +13,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 const (
@@ -46,17 +47,16 @@ func TestS3SourceIngestEndToEnd(t *testing.T) {
 	containers := []string{
 		"datascape-s3src-source", "datascape-s3src-sink", "datascape-s3src-minio", "datascape-s3src-rp",
 	}
-	cleanup := func() {
-		for _, c := range containers {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"datascape-s3src-rp-data", "datascape-s3src-minio-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape-s3src-net")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: containers,
+		Volumes:   []string{"datascape-s3src-rp-data", "datascape-s3src-minio-data"},
+		Networks:  []string{"datascape-s3src-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/s3source-scenario"

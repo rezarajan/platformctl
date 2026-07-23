@@ -9,6 +9,7 @@ import (
 	"time"
 
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // probeReachableEventually polls ProbeReachable until it succeeds or
@@ -56,13 +57,14 @@ func TestDomainSegmentationOnKubernetesEndToEnd(t *testing.T) {
 		betaNS  = "datascape-beta"
 		baseNS  = "datascape"
 	)
-	cleanup := func() {
-		for _, ns := range []string{alphaNS, betaNS, baseNS} {
-			_ = rt.RemoveNetwork(ctx, ns)
-		}
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:       rt,
+		Networks: []string{alphaNS, betaNS, baseNS},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/domains-k8s-scenario"

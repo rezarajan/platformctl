@@ -19,6 +19,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 const (
@@ -62,17 +63,16 @@ func TestParquetSinkEndToEnd(t *testing.T) {
 	ctx := context.Background()
 
 	containers := []string{"datascape-pqt-s3", "datascape-pqt-minio", "datascape-pqt-dbz", "datascape-pqt-pg", "datascape-pqt-rp"}
-	cleanup := func() {
-		for _, c := range containers {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"datascape-pqt-pg-data", "datascape-pqt-rp-data", "datascape-pqt-minio-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape-pqt-net")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: containers,
+		Volumes:   []string{"datascape-pqt-pg-data", "datascape-pqt-rp-data", "datascape-pqt-minio-data"},
+		Networks:  []string{"datascape-pqt-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	jsonManifests := "testdata/parquet-sink-scenario/json"

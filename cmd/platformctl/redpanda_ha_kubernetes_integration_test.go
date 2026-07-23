@@ -19,6 +19,7 @@ import (
 
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 const (
@@ -177,12 +178,15 @@ func TestRedpandaHAKubernetesEndToEnd(t *testing.T) {
 	// Remove the workload first: RemoveNetwork refuses (by contract) while
 	// the namespace still holds a StatefulSet, so a network-only cleanup
 	// would leak the whole deployment into the next run.
-	cleanup := func() {
-		_ = rt.Remove(ctx, rpHAK8sBase)
-		_ = rt.RemoveNetwork(ctx, rpHAK8sNS)
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: []string{rpHAK8sBase},
+		Networks:  []string{rpHAK8sNS},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/redpanda-ha-k8s-scenario"

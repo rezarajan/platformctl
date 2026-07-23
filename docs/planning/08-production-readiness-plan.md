@@ -2047,6 +2047,30 @@ independent and parallelizable; E1/E2 deliver the largest direct UX value.
   profiles; backup + backup-K8s suites green.
 
 
+### J5: Resource requests/limits from spec to scheduler — the CI eviction fix
+
+- **Size:** M. **Depends:** none. **Why:** the 2026-07-23 kubernetes
+  scenarios CI failure: after a green apply, nessie's pod was recreated
+  four times in six minutes, every port-forward refused — the signature
+  of kubelet eviction/OOM churn. Root condition: ContainerSpec.Resources
+  exists and the Kubernetes adapter maps it fully to requests/limits,
+  but NO provider populates it and NO spec surface exposes it — every
+  workload runs unbounded, JVMs (nessie, marquez) size their default
+  heap from HOST memory, and the scheduler packs pods by count. The
+  interim S-fixes (settled test pings; CI failure-forensics dump) make
+  the failure retryable and diagnosable, not impossible.
+- **Do:** add a resources fragment to the Provider schema
+  (spec.runtime.resources or per-configuration), thread it through
+  providerkit to ContainerSpec.Resources so ALL providers gain it
+  without per-provider changes (the decoupling rule), set sane defaults
+  in the heavyweight examples (lakehouse JVMs), and update doc 03 in
+  the same commit (schema-change rule). Verify on the CI kind cluster:
+  scheduler places by requests; no eviction churn in the scenarios
+  shard.
+- **Accept:** examples/lakehouse pods carry requests/limits on K8s;
+  the scenarios shard passes CI twice consecutively; doc 03 documents
+  the fragment.
+
 ### E6: Provider author contract — guide, conformance suite, exemplars
 
 - **Size:** L. **Depends:** E5 (fragments are part of the contract); F5

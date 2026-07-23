@@ -44,17 +44,33 @@ type Janitor struct {
 	RawContainers []string
 	// RawNetworks are unlabeled `docker network create` fixtures.
 	RawNetworks []string
+	// RawVolumes are unlabeled `docker volume create` fixtures — removed
+	// between raw containers and managed volumes.
+	RawVolumes []string
+	// RawImages are test-built image tags (`docker build`/`docker tag`) —
+	// removed last; failures always ignored (an image may be shared with
+	// a concurrent suite or already pruned).
+	RawImages []string
+	// SweepAllManaged removes EVERY managed object the runtime lists
+	// (containers, then volumes, then networks) before the declared lists
+	// run — for suites whose fixtures create objects with generated names
+	// the test cannot enumerate statically (e.g. compose scenarios).
+	SweepAllManaged bool
 }
 
 // CleanSilent removes everything best-effort, ignoring errors — the
 // pre-test invocation, where absent objects are the normal case and a
 // leftover from a crashed prior run should be swept without ceremony.
 func (j Janitor) CleanSilent(ctx context.Context) {
+	j.sweepManaged(ctx)
 	for _, w := range j.Workloads {
 		_ = j.RT.Remove(ctx, w)
 	}
 	for _, c := range j.RawContainers {
 		_ = exec.Command("docker", "rm", "-f", "-v", c).Run()
+	}
+	for _, v := range j.RawVolumes {
+		_ = exec.Command("docker", "volume", "rm", v).Run()
 	}
 	for _, v := range j.Volumes {
 		_ = j.RT.RemoveVolume(ctx, v)
@@ -64,6 +80,33 @@ func (j Janitor) CleanSilent(ctx context.Context) {
 	}
 	for _, n := range j.RawNetworks {
 		_ = exec.Command("docker", "network", "rm", n).Run()
+	}
+	for _, img := range j.RawImages {
+		_ = exec.Command("docker", "rmi", "-f", img).Run()
+	}
+}
+
+// sweepManaged realizes SweepAllManaged: list-and-remove every managed
+// object, silently — enumeration is best-effort by construction; the
+// declared lists that follow are the loud, deterministic part.
+func (j Janitor) sweepManaged(ctx context.Context) {
+	if !j.SweepAllManaged {
+		return
+	}
+	if cs, err := j.RT.ListManaged(ctx); err == nil {
+		for _, c := range cs {
+			_ = j.RT.Remove(ctx, c.Name)
+		}
+	}
+	if vs, err := j.RT.ListManagedVolumes(ctx); err == nil {
+		for _, v := range vs {
+			_ = j.RT.RemoveVolume(ctx, v.Name)
+		}
+	}
+	if ns, err := j.RT.ListManagedNetworks(ctx); err == nil {
+		for _, n := range ns {
+			_ = j.RT.RemoveNetwork(ctx, n.Name)
+		}
 	}
 }
 
@@ -75,6 +118,7 @@ func (j Janitor) CleanSilent(ctx context.Context) {
 // is an expected error, not residue).
 func (j Janitor) Register(ctx context.Context, t *testing.T) {
 	t.Cleanup(func() {
+		j.sweepManaged(ctx)
 		for _, w := range j.Workloads {
 			if err := j.RT.Remove(ctx, w); err != nil {
 				t.Errorf("cleanup: remove workload %s: %v", w, err)
@@ -82,6 +126,9 @@ func (j Janitor) Register(ctx context.Context, t *testing.T) {
 		}
 		for _, c := range j.RawContainers {
 			_ = exec.Command("docker", "rm", "-f", "-v", c).Run()
+		}
+		for _, v := range j.RawVolumes {
+			_ = exec.Command("docker", "volume", "rm", v).Run()
 		}
 		for _, v := range j.Volumes {
 			if err := j.RT.RemoveVolume(ctx, v); err != nil {
@@ -95,6 +142,9 @@ func (j Janitor) Register(ctx context.Context, t *testing.T) {
 		}
 		for _, n := range j.RawNetworks {
 			_ = exec.Command("docker", "network", "rm", n).Run()
+		}
+		for _, img := range j.RawImages {
+			_ = exec.Command("docker", "rmi", "-f", img).Run()
 		}
 	})
 }

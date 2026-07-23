@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 const (
@@ -335,14 +336,15 @@ func TestKubernetesConnectDeadLetterQueueAndWorkerResilience(t *testing.T) {
 	}
 	ctx := context.Background()
 	workloads := []string{chdlqk8sS3Name, chdlqk8sMinioName, chdlqk8sDBZName, chdlqk8sPGName, chdlqk8sRPName}
-	cleanup := func() {
-		for _, name := range workloads {
-			_ = rt.Remove(ctx, name)
-		}
-		_ = rt.RemoveNetwork(ctx, chdlqk8sNS)
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: workloads,
+		Networks:  []string{chdlqk8sNS},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/connect-ha-dlq-k8s-scenario"

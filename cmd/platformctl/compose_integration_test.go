@@ -12,6 +12,7 @@ import (
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	"github.com/rezarajan/platformctl/internal/application/compose"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestComposeOwnerScenario is the E9 Accept criterion (docs/planning/08
@@ -55,20 +56,18 @@ func TestComposeOwnerScenario(t *testing.T) {
 		t.Fatalf("connect to Docker: %v", err)
 	}
 	ctx := context.Background()
-	cleanup := func() {
-		managed, _ := rt.ListManaged(ctx)
-		for _, m := range managed {
-			_ = rt.Remove(ctx, m.Name)
-		}
-		vols, _ := rt.ListManagedVolumes(ctx)
-		for _, v := range vols {
-			_ = rt.RemoveVolume(ctx, v.Name)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape")
-		_ = exec.Command("docker", "network", "rm", "datascape").Run()
+	// docs/adr/029 (J2 sweep): compose scenarios create objects with names
+	// the test cannot enumerate statically — SweepAllManaged is the
+	// janitor's declared home for exactly that shape. The raw network-rm
+	// mirrors the old belt for a "datascape" network left unlabeled by a
+	// crashed pre-janitor run.
+	jan := testkit.Janitor{
+		RT:              rt,
+		SweepAllManaged: true,
+		RawNetworks:     []string{"datascape"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 

@@ -9,6 +9,7 @@ import (
 
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
 	runtimeport "github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestIngressKubernetesEndToEnd covers docs/planning/08 C7's Kubernetes leg:
@@ -27,13 +28,20 @@ func TestIngressKubernetesEndToEnd(t *testing.T) {
 	}
 	ctx := context.Background()
 	const ns = "datascape-ingk8s-test-ns"
-	cleanup := func() { _ = rt.RemoveNetwork(ctx, ns) }
-	cleanup()
-	t.Cleanup(cleanup)
-
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/ingress-k8s-scenario"
 	gate := "IngressProvider=true"
+
+	// docs/adr/029 (J2 sweep): a namespace-only cleanup strands under the
+	// holds-workloads refusal whenever the test dies before its inline
+	// destroy — CLI destroy in cleanup (LIFO: runs before the janitor)
+	// empties the namespace, the janitor removes it loud.
+	jan := testkit.Janitor{RT: rt, Networks: []string{ns}}
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
+	t.Cleanup(func() {
+		_, _, _ = run(t, "destroy", manifests, "--state-file", stateFile, "--auto-approve", "--feature-gates", gate)
+	})
 
 	out, err, code := run(t, "apply", manifests, "--state-file", stateFile, "--auto-approve", "--feature-gates", gate)
 	if err != nil || code != 0 {

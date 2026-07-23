@@ -15,6 +15,7 @@ import (
 
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
 	"github.com/rezarajan/platformctl/internal/adapters/state/localfile"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 const chaosK8sGates = "KubernetesRuntime=true"
@@ -45,14 +46,15 @@ func TestKubernetesChaosApplyKilledMidRun(t *testing.T) {
 	// the whole deployment into the next run (the same rule
 	// TestRedpandaHAKubernetesEndToEnd and the lakehouse K8s example lean
 	// on).
-	cleanup := func() {
-		for _, name := range workloads {
-			_ = rt.Remove(ctx, name)
-		}
-		_ = rt.RemoveNetwork(ctx, ns)
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: workloads,
+		Networks:  []string{ns},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	bin := filepath.Join(t.TempDir(), "platformctl")
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {

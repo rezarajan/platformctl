@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestImagePullAuthPullsFromPrivateRegistry covers docs/planning/08 A1:
@@ -48,13 +49,16 @@ func TestImagePullAuthPullsFromPrivateRegistry(t *testing.T) {
 	dockerConfigDir := t.TempDir() // isolates docker login/push from the real credential store
 	dockerEnv := append(os.Environ(), "DOCKER_CONFIG="+dockerConfigDir)
 
-	cleanup := func() {
-		_ = rt.Remove(ctx, pullName)
-		_ = exec.Command("docker", "rm", "-f", registryName).Run()
-		_ = exec.Command("docker", "rmi", "-f", imageTag).Run()
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:            rt,
+		Workloads:     []string{pullName},
+		RawContainers: []string{registryName},
+		RawImages:     []string{imageTag},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	// 1. Generate a bcrypt htpasswd entry (what registry:2's htpasswd auth
 	// backend requires) via httpd's own htpasswd binary — no local install

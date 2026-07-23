@@ -13,6 +13,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestRedpandaKubernetesEndToEnd covers docs/planning/08 B1's literal accept
@@ -30,13 +31,18 @@ func TestRedpandaKubernetesEndToEnd(t *testing.T) {
 	}
 	ctx := context.Background()
 	const ns = "datascape-rpk8s-test-ns"
-	cleanup := func() { _ = rt.RemoveNetwork(ctx, ns) }
-	cleanup()
-	t.Cleanup(cleanup)
-
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/redpanda-k8s-scenario"
 	const gateVal = "KubernetesRuntime=true"
+
+	// docs/adr/029 (J2 sweep): destroy-then-janitor — see the ingress K8s
+	// suite's comment for why namespace-only cleanup strands.
+	jan := testkit.Janitor{RT: rt, Networks: []string{ns}}
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
+	t.Cleanup(func() {
+		_, _, _ = run(t, "destroy", manifests, "--state-file", stateFile, "--auto-approve", "--feature-gates", gateVal)
+	})
 
 	out, err, code := run(t, "apply", manifests, "--state-file", stateFile, "--auto-approve", "--feature-gates", gateVal)
 	if err != nil || code != 0 {

@@ -13,6 +13,7 @@ import (
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestWireGuardTunnelEndToEnd covers docs/planning/08 D5's original Accept
@@ -59,18 +60,17 @@ func TestWireGuardTunnelEndToEnd(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	cleanup := func() {
-		for _, c := range []string{"wg-orders-to-events", "datascape-wg-dbz", "datascape-wg-rp", "wg-orders-db-conn", "wg-orders-db-conn-via-tunnel"} {
-			_ = rt.Remove(ctx, c)
-		}
-		_ = exec.Command("docker", "rm", "-f", "-v", wgDBContainer, wgResponderContainer).Run()
-		_ = rt.RemoveVolume(ctx, "datascape-wg-rp-data")
-		for _, n := range []string{wgPlatformNetwork, wgTransitNetwork, wgVPCNetwork} {
-			_ = exec.Command("docker", "network", "rm", n).Run()
-		}
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:            rt,
+		Workloads:     []string{"wg-orders-to-events", "datascape-wg-dbz", "datascape-wg-rp", "wg-orders-db-conn", "wg-orders-db-conn-via-tunnel"},
+		RawContainers: []string{wgDBContainer, wgResponderContainer},
+		Volumes:       []string{"datascape-wg-rp-data"},
+		RawNetworks:   []string{wgPlatformNetwork, wgTransitNetwork, wgVPCNetwork},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	// --- Raw fixtures: the "VPC" (isolated network + database) and the
 	// WireGuard responder (the VPC's own gateway) --------------------------

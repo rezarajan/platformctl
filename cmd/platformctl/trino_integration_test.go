@@ -19,6 +19,7 @@ import (
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 const (
@@ -121,20 +122,17 @@ func TestTrinoComputeEngineEndToEnd(t *testing.T) {
 		"datascape-trn-nessie", "datascape-trn-s3", "datascape-trn-minio",
 		"datascape-trn-dbz", "datascape-trn-pg", "datascape-trn-rp",
 	}
-	cleanup := func() {
-		for _, c := range containers {
-			_ = rt.Remove(ctx, c)
-		}
-		for i := 0; i < 3; i++ {
-			_ = rt.Remove(ctx, fmt.Sprintf("datascape-trn-trino-worker-%d", i))
-		}
-		for _, v := range []string{"datascape-trn-pg-data", "datascape-trn-rp-data", "datascape-trn-minio-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape-trn-net")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — the worker replica
+	// ordinals are enumerated statically (replicas: 3 in the scenario).
+	jan := testkit.Janitor{
+		RT: rt,
+		Workloads: append(append([]string{}, containers...),
+			"datascape-trn-trino-worker-0", "datascape-trn-trino-worker-1", "datascape-trn-trino-worker-2"),
+		Volumes:  []string{"datascape-trn-pg-data", "datascape-trn-rp-data", "datascape-trn-minio-data"},
+		Networks: []string{"datascape-trn-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/trino-scenario"

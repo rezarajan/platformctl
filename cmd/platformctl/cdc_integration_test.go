@@ -14,6 +14,7 @@ import (
 	"time"
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 const cdcConnectURL = "http://localhost:18183"
@@ -35,17 +36,16 @@ func TestCDCEndToEnd(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	cleanup := func() {
-		for _, c := range []string{"datascape-cdc-dbz", "datascape-cdc-pg", "datascape-cdc-rp"} {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"datascape-cdc-pg-data", "datascape-cdc-rp-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape-cdc-net")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: []string{"datascape-cdc-dbz", "datascape-cdc-pg", "datascape-cdc-rp"},
+		Volumes:   []string{"datascape-cdc-pg-data", "datascape-cdc-rp-data"},
+		Networks:  []string{"datascape-cdc-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/cdc-scenario"

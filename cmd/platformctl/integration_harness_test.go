@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // This file is G6 (docs/planning/08 §7.6): the setup/cleanup shape repeated
@@ -49,17 +50,13 @@ func requireDocker(t *testing.T) *dockerruntime.Runtime {
 func registerDockerCleanup(t *testing.T, rt *dockerruntime.Runtime, containers, volumes []string, network string) func() {
 	t.Helper()
 	ctx := context.Background()
-	cleanup := func() {
-		for _, c := range containers {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range volumes {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		if network != "" {
-			_ = rt.RemoveNetwork(ctx, network)
-		}
+	// docs/adr/029 (J2 sweep): this helper is now a thin veneer over
+	// testkit.Janitor — the registered post-test cleanup is the janitor's
+	// LOUD path; the returned func is its silent pre-clean.
+	jan := testkit.Janitor{RT: rt, Workloads: containers, Volumes: volumes}
+	if network != "" {
+		jan.Networks = []string{network}
 	}
-	t.Cleanup(cleanup)
-	return cleanup
+	jan.Register(ctx, t)
+	return func() { jan.CleanSilent(ctx) }
 }

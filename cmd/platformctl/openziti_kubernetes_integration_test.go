@@ -14,6 +14,7 @@ import (
 
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestOpenZitiMediatedConnectionOnKubernetesEndToEnd is docs/adr/027's
@@ -66,13 +67,19 @@ func TestOpenZitiMediatedConnectionOnKubernetesEndToEnd(t *testing.T) {
 	manifests := "testdata/openziti-k8s-scenario"
 	stateFile := t.TempDir() + "/state.json"
 
-	cleanup := func() {
-		_ = rt.Remove(ctx, "zk8s-canary")
+	// docs/adr/029 (J2 sweep): the CLI destroy is this scenario's workhorse
+	// cleanup (it removes every state-managed workload); the janitor owns
+	// what destroy cannot — the out-of-state canary and the namespace
+	// itself, loud. t.Cleanup is LIFO: the janitor registers FIRST so it
+	// runs AFTER the destroy pass has emptied the namespace.
+	jan := testkit.Janitor{RT: rt, Workloads: []string{"zk8s-canary"}, Networks: []string{ns}}
+	destroy := func() {
 		_, _, _ = run(t, "destroy", manifests, "--state-file", stateFile, "--auto-approve", "--feature-gates", gates)
-		_ = rt.RemoveNetwork(ctx, ns)
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	destroy()
+	jan.Register(ctx, t)
+	t.Cleanup(destroy)
 
 	start := time.Now()
 	out, err, code := run(t, "apply", manifests, "--state-file", stateFile, "--auto-approve", "--feature-gates", gates)

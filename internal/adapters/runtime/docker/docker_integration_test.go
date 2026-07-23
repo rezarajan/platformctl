@@ -12,6 +12,7 @@ import (
 
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 	"github.com/rezarajan/platformctl/internal/ports/runtime/conformance"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestConformance runs the same suite the fake adapter passes, against the
@@ -23,14 +24,16 @@ func TestConformance(t *testing.T) {
 	}
 
 	prefix := "datascape-conf"
-	cleanup := func() {
-		ctx := context.Background()
-		_ = rt.Remove(ctx, prefix+"-ctr")
-		_ = rt.RemoveNetwork(ctx, prefix+"-net")
-		_ = rt.RemoveVolume(ctx, prefix+"-vol")
+	ctx := context.Background()
+	// docs/adr/029: janitor-owned cleanup (J2 sweep).
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: []string{prefix + "-ctr"},
+		Volumes:   []string{prefix + "-vol"},
+		Networks:  []string{prefix + "-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	conformance.Run(t, rt, prefix)
 }
@@ -158,13 +161,15 @@ func TestNetworkAliasResolvesInNetwork(t *testing.T) {
 	netName := "datascape-alias-net"
 	target := "datascape-alias-target"
 	probe := "datascape-alias-probe"
-	cleanup := func() {
-		_ = rt.Remove(ctx, probe)
-		_ = rt.Remove(ctx, target)
-		_ = rt.RemoveNetwork(ctx, netName)
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: []string{probe, target},
+		Networks:  []string{netName},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	labels := map[string]string{runtime.LabelManagedBy: runtime.ManagedByValue}
 	if err := rt.EnsureNetwork(ctx, runtime.NetworkSpec{Name: netName, Labels: labels}); err != nil {

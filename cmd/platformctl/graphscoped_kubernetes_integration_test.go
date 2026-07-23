@@ -10,6 +10,7 @@ import (
 	"time"
 
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestGraphScopedAccessOnKubernetesEndToEnd is docs/planning/08 H7's accept
@@ -52,13 +53,14 @@ func TestGraphScopedAccessOnKubernetesEndToEnd(t *testing.T) {
 		bNS  = "datascape-b"
 		cNS  = "datascape-c"
 	)
-	cleanup := func() {
-		for _, ns := range []string{r1NS, r2NS, bNS, cNS} {
-			_ = rt.RemoveNetwork(context.Background(), ns)
-		}
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:       rt,
+		Networks: []string{r1NS, r2NS, bNS, cNS},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/graphscoped-k8s-scenario"

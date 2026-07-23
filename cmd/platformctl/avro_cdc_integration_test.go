@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 const (
@@ -68,17 +69,16 @@ func TestAvroCDCEndToEnd(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	cleanup := func() {
-		for _, c := range []string{"datascape-avro-dbz", "datascape-avro-pg", "datascape-avro-rp"} {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"datascape-avro-pg-data", "datascape-avro-rp-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape-avro-net")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: []string{"datascape-avro-dbz", "datascape-avro-pg", "datascape-avro-rp"},
+		Volumes:   []string{"datascape-avro-pg-data", "datascape-avro-rp-data"},
+		Networks:  []string{"datascape-avro-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/avro-cdc-scenario"

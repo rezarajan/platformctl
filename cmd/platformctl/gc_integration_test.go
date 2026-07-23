@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestGCPlanAndApply covers docs/planning/08 A2: a container/network/volume
@@ -36,13 +37,16 @@ func TestGCPlanAndApply(t *testing.T) {
 		"--label", "io.datascape.namespace=default",
 		"--label", "io.datascape.kind=Provider",
 	}
-	cleanup := func() {
-		_ = rt.Remove(ctx, containerName)
-		_ = exec.Command("docker", "network", "rm", networkName).Run()
-		_ = exec.Command("docker", "volume", "rm", volumeName).Run()
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:          rt,
+		Workloads:   []string{containerName},
+		RawVolumes:  []string{volumeName},
+		RawNetworks: []string{networkName},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	// Out-of-band creation: platformctl never ran, so no state entry will
 	// ever account for these — exactly the "left behind by a crash" case.

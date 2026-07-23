@@ -21,6 +21,7 @@ import (
 
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
 	runtimeport "github.com/rezarajan/platformctl/internal/ports/runtime"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // rewriteExampleForKubernetes reads every *.yaml file in srcDir, rewrites
@@ -141,16 +142,24 @@ func TestCDCAttendanceExampleOnKubernetes(t *testing.T) {
 	}
 	ctx := context.Background()
 	const ns = "datascape-cdc-example-test"
-	cleanup := func() { _ = rt.RemoveNetwork(ctx, ns) }
-	cleanup()
-	t.Cleanup(cleanup)
-
 	manifests := rewriteExampleForKubernetes(t, "../../examples/cdc-attendance", ns, "node-port")
 	stateFile := filepath.Join(t.TempDir(), "state.json")
+
 	// SchemaRegistrySupport: the example lands parquet via the Avro/schema-
 	// registry chain since docs/planning/08 D2, same as the Docker
 	// acceptance test.
 	const gateVal = "KubernetesRuntime=true,SchemaRegistrySupport=true"
+
+	// docs/adr/029 (J2 sweep): destroy-then-janitor — a namespace-only
+	// cleanup strands under the holds-workloads refusal whenever the test
+	// dies before its inline destroy (LIFO: the destroy below runs before
+	// the janitor removes the namespace, loud).
+	jan := testkit.Janitor{RT: rt, Networks: []string{ns}}
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
+	t.Cleanup(func() {
+		_, _, _ = run(t, "destroy", manifests, "--state-file", stateFile, "--auto-approve", "--feature-gates", gateVal)
+	})
 
 	out, err, code := run(t, "validate", manifests, "--feature-gates", gateVal)
 	if err != nil || code != 0 {
@@ -229,27 +238,62 @@ func insertCDCAttendanceRow(t *testing.T, ctx context.Context, addr string) {
 
 // pingLakehouseHTTP is a small helper mirroring the Docker lakehouse test's
 // inline HTTP checks, parameterized on address instead of a hardcoded port.
+// pingLakehouseHTTP is a bounded condition-poll, not a one-shot GET (doc
+// 02 §4.1's settledness doctrine): a fresh port-forward's first dials race
+// stream setup, and on CI a JVM service (nessie, marquez) may be seconds
+// from binding — or mid-recreation under node memory pressure, the churn
+// the 2026-07-23 scenarios-shard failure showed (four pod sandboxes in six
+// minutes, every one-shot GET refused). Transport errors are transient and
+// retried until the ScaledWait-bounded deadline; a non-200 HTTP response
+// is a real answer from the service and fails immediately (verdict, not
+// transience). The deadline bounds FAILURE reporting only — success
+// returns on the first good response.
 func pingLakehouseHTTP(t *testing.T, url string) {
 	t.Helper()
-	resp, err := http.Get(url)
-	if err != nil {
-		t.Errorf("GET %s: %v", url, err)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
+	deadline := time.Now().Add(runtimeport.ScaledWait(120 * time.Second))
+	var lastErr error
+	for {
+		resp, err := http.Get(url)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
+			}
+			return
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			t.Errorf("GET %s: still failing at deadline: %v", url, lastErr)
+			return
+		}
+		time.Sleep(2 * time.Second)
 	}
 }
 
+// pingLakehouseMySQL: same settledness shape as pingLakehouseHTTP — dial
+// errors are transient until the bounded deadline; per-attempt timeout
+// stays on the DSN.
 func pingLakehouseMySQL(t *testing.T, addr string) error {
 	t.Helper()
-	db, err := sql.Open("mysql", fmt.Sprintf("root:mysql-root-pw@tcp(%s)/eventsdb?timeout=10s", addr))
-	if err != nil {
-		return err
+	deadline := time.Now().Add(runtimeport.ScaledWait(120 * time.Second))
+	var lastErr error
+	for {
+		lastErr = func() error {
+			db, err := sql.Open("mysql", fmt.Sprintf("root:mysql-root-pw@tcp(%s)/eventsdb?timeout=10s", addr))
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			return db.Ping()
+		}()
+		if lastErr == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("still failing at deadline: %w", lastErr)
+		}
+		time.Sleep(2 * time.Second)
 	}
-	defer db.Close()
-	return db.Ping()
 }
 
 // TestLakehouseExampleOnKubernetes covers the Stage B goal's literal exit
@@ -283,12 +327,15 @@ func TestLakehouseExampleOnKubernetes(t *testing.T) {
 	// the namespace while it (a workload) is still present — the same "network
 	// in use" refusal Docker gives. Tear it down explicitly first so cleanup
 	// can actually drop the namespace and leave nothing behind.
-	cleanup := func() {
-		_ = rt.Remove(ctx, "external-orders-db")
-		_ = rt.RemoveNetwork(ctx, ns)
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: []string{"external-orders-db"},
+		Networks:  []string{ns},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	labels := map[string]string{runtimeport.LabelManagedBy: runtimeport.ManagedByValue}
 	if err := rt.EnsureNetwork(ctx, runtimeport.NetworkSpec{Name: ns, Labels: labels}); err != nil {

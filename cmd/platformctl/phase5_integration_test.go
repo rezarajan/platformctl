@@ -13,6 +13,7 @@ import (
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	"github.com/rezarajan/platformctl/internal/adapters/state/localfile"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestImportEndToEnd covers the Phase 5 exit criterion: importing a
@@ -28,11 +29,14 @@ func TestImportEndToEnd(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	cleanup := func() {
-		_ = exec.Command("docker", "rm", "-f", "-v", "datascape-imp-pg").Run()
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:            rt,
+		RawContainers: []string{"datascape-imp-pg"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	// The pre-existing instance: plain `docker run`, no Datascape labels.
 	if out, err := exec.Command("docker", "run", "-d", "--name", "datascape-imp-pg",
@@ -123,16 +127,17 @@ func TestExternalSourceEndToEnd(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	cleanup := func() {
-		for _, c := range []string{"datascape-ext-dbz", "datascape-ext-rp"} {
-			_ = rt.Remove(ctx, c)
-		}
-		_ = exec.Command("docker", "rm", "-f", "-v", "datascape-ext-outofband-pg").Run()
-		_ = rt.RemoveVolume(ctx, "datascape-ext-rp-data")
-		_ = exec.Command("docker", "network", "rm", "datascape-ext-net").Run()
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:            rt,
+		Workloads:     []string{"datascape-ext-dbz", "datascape-ext-rp"},
+		RawContainers: []string{"datascape-ext-outofband-pg"},
+		Volumes:       []string{"datascape-ext-rp-data"},
+		RawNetworks:   []string{"datascape-ext-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	// The "production" database: out-of-band, on the shared network, never
 	// managed by Datascape.

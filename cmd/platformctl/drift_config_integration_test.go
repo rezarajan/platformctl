@@ -18,6 +18,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // This file covers docs/planning/08 A8: doc 07 §2.1's per-provider drift
@@ -40,13 +41,16 @@ func TestDriftDetectsRedpandaRetentionMismatch(t *testing.T) {
 		t.Fatalf("connect to Docker: %v", err)
 	}
 	ctx := context.Background()
-	cleanup := func() {
-		_ = rt.Remove(ctx, "datascape-rp-test")
-		_ = rt.RemoveVolume(ctx, "datascape-rp-test-data")
-		_ = rt.RemoveNetwork(ctx, "datascape-rp-test-net")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: []string{"datascape-rp-test"},
+		Volumes:   []string{"datascape-rp-test-data"},
+		Networks:  []string{"datascape-rp-test-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/redpanda-scenario"
@@ -105,17 +109,16 @@ func TestDriftDetectsDebeziumConnectorConfigMismatch(t *testing.T) {
 		t.Fatalf("connect to Docker: %v", err)
 	}
 	ctx := context.Background()
-	cleanup := func() {
-		for _, c := range []string{"datascape-cdc-dbz", "datascape-cdc-pg", "datascape-cdc-rp"} {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"datascape-cdc-pg-data", "datascape-cdc-rp-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape-cdc-net")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: []string{"datascape-cdc-dbz", "datascape-cdc-pg", "datascape-cdc-rp"},
+		Volumes:   []string{"datascape-cdc-pg-data", "datascape-cdc-rp-data"},
+		Networks:  []string{"datascape-cdc-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/cdc-scenario"
@@ -179,17 +182,16 @@ func TestDriftDetectsMariaDBReplicationCredentialMismatch(t *testing.T) {
 		t.Fatalf("connect to Docker: %v", err)
 	}
 	ctx := context.Background()
-	cleanup := func() {
-		for _, c := range []string{"datascape-maria-dbz", "datascape-maria-db", "datascape-maria-rp"} {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"datascape-maria-db-data", "datascape-maria-rp-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape-maria-net")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: []string{"datascape-maria-dbz", "datascape-maria-db", "datascape-maria-rp"},
+		Volumes:   []string{"datascape-maria-db-data", "datascape-maria-rp-data"},
+		Networks:  []string{"datascape-maria-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/mariadb-cdc-scenario"

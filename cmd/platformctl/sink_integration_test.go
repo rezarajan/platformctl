@@ -18,6 +18,7 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 const (
@@ -47,17 +48,16 @@ func TestSinkEndToEnd(t *testing.T) {
 	ctx := context.Background()
 
 	containers := []string{"datascape-sink-s3", "datascape-sink-minio", "datascape-sink-dbz", "datascape-sink-pg", "datascape-sink-rp"}
-	cleanup := func() {
-		for _, c := range containers {
-			_ = rt.Remove(ctx, c)
-		}
-		for _, v := range []string{"datascape-sink-pg-data", "datascape-sink-rp-data", "datascape-sink-minio-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape-sink-net")
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:        rt,
+		Workloads: containers,
+		Volumes:   []string{"datascape-sink-pg-data", "datascape-sink-rp-data", "datascape-sink-minio-data"},
+		Networks:  []string{"datascape-sink-net"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	stateFile := filepath.Join(t.TempDir(), "state.json")
 	manifests := "testdata/sink-scenario"

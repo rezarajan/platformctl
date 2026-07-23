@@ -16,6 +16,7 @@ import (
 
 	dockerruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/docker"
 	"github.com/rezarajan/platformctl/internal/cliutil"
+	"github.com/rezarajan/platformctl/internal/testkit"
 )
 
 // TestLakehouse covers the Phase 6.5 exit criteria against the literal
@@ -42,19 +43,18 @@ func TestLakehouse(t *testing.T) {
 	ctx := context.Background()
 
 	containers := []string{"orders-cdc", "lake-redpanda", "orders-db", "lake-lineage", "lake-lineage-db", "catalog-svc", "lake-mysql", "lake-postgres", "lake-minio"}
-	cleanup := func() {
-		for _, c := range containers {
-			_ = rt.Remove(ctx, c)
-		}
-		_ = exec.Command("docker", "rm", "-f", "-v", "external-orders-db").Run()
-		for _, v := range []string{"lake-minio-data", "lake-postgres-data", "lake-mysql-data", "lake-lineage-db-data", "lake-redpanda-data"} {
-			_ = rt.RemoveVolume(ctx, v)
-		}
-		_ = rt.RemoveNetwork(ctx, "datascape")
-		_ = exec.Command("docker", "network", "rm", "datascape").Run()
+	// docs/adr/029: janitor-owned cleanup (J2 sweep) — declared
+	// objects, canonical order, silent pre-clean, loud post-clean.
+	jan := testkit.Janitor{
+		RT:            rt,
+		Workloads:     containers,
+		RawContainers: []string{"external-orders-db"},
+		Volumes:       []string{"lake-minio-data", "lake-postgres-data", "lake-mysql-data", "lake-lineage-db-data", "lake-redpanda-data"},
+		Networks:      []string{"datascape"},
+		RawNetworks:   []string{"datascape"},
 	}
-	cleanup()
-	t.Cleanup(cleanup)
+	jan.CleanSilent(ctx)
+	jan.Register(ctx, t)
 
 	// The external database the Connection targets — out-of-band, on the
 	// shared network, never managed. wal_level=logical so the CDC Binding
