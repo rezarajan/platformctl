@@ -2579,6 +2579,33 @@ addendum) and protect-data recorded as the known dev-example baseline.
   config-drift bar applied to mediator state).
 - **Gate:** `MediatedConnections` (Alpha, disabled).
 
+### H7: Graph-scoped access — least privilege from the reference graph (ADR 026)
+
+- **Size:** L. **Depends:** H5 (the decorator chokepoint + domains
+  compose); benefits from H6 but does not require it.
+- **Why:** owner requirement (2026-07-22): resource-granular least
+  privilege — a resource reaches exactly the resources its declared
+  references name (cross-namespace included), never "all of namespace
+  B", unless a wide grant is explicitly declared. The manifest
+  reference graph is already the complete access-request set (ADR 026).
+- **Do:** engine derives each resource's membership set from graph
+  edges; injects it at the H5 per-request runtime decorator (ZERO
+  provider edits — the doc 11 decoupling contract, archtest-pinned).
+  K8s: per-edge NetworkPolicies replace allow-same-namespace under the
+  gate. Docker: per-edge networks (I1's transit pattern generalized;
+  scale bounds documented honestly). Explicit wide-grant field
+  (`spec.access`, shape per ADR 026 §2) + policy `matchGrant`/edge
+  selectors so organizations can deny or constrain grants. Drift: any
+  attachment beyond the membership set. Schema + doc 03 same-commit;
+  explain-catalog entries; blueprint/example sets stay green with the
+  gate OFF (default) and are exercised ON in the accept suite.
+- **Accept:** the owner's worked example as a live test on BOTH
+  runtimes: A/R1→{B/X, C/Y} reachable, A/R2→{B/X} reachable,
+  R2→C/Y FAILS, R1→(anything else in B) FAILS (negative proofs from
+  the consumers' vantage); wide-grant path proves reach-all-B only
+  when declared and policy-permitted; gate-off byte-identical pin.
+- **Gate:** `GraphScopedAccess` (Alpha, disabled).
+
 ## 7.8 Stage I — Production-review remediations (doc 11, 2026-07 owner review)
 
 Findings from docs/planning/11-production-review-2026-07.md promoted to

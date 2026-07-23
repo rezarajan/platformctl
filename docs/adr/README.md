@@ -51,6 +51,7 @@ pattern of recording a redirected first cut).
 | [023](023-wireguard-tunnel.md) | WireGuard tunnel provider | accepted (Stage D5) | `linuxserver/wireguard` pinned; file-mounted key, rotation-by-recreate; iptables DNAT forwarder, not socat; `ContainerSpec.Sysctls`; handshake-recency probe; `Connection.spec.via` schema-complete, not yet `proxy`-wired |
 | [024](024-interactive-composition.md) | Interactive composition | accepted (E9/E10) | add/wire/expose compile to manifests, never bypass them; graph-aware reuse; Huh v2 prompts confined to cmd/cliutil |
 | [025](025-cloud-iam-database-auth.md) | Cloud IAM database auth: out of scope, composable via auth proxies | accepted | 2026-07-22 |
+| [026](026-graph-scoped-access.md) | Graph-scoped access: least privilege compiled from declared references | accepted (H7) | the reference graph IS the access-request set; wide grants explicit + policy-visible; per-edge NetworkPolicies (K8s) / per-edge networks (Docker); zero provider edits via the H5 decorator |
 
 "Retroactive" ADRs (008–014) record decisions made in the planning package
 (docs 00–06) before this convention existed — written 2026-07-21 so the

@@ -494,3 +494,16 @@ static. Dimensions, each producing findings verified before fixing:
   folds into the same authority. H5's acceptance now includes the
   zero-provider-diff proof and a decoupling archtest. Once landed, the
   invariant holds across every audited facility.
+- 2026-07-22: OWNER REQUIREMENT captured as ADR 026 + doc 08 H7:
+  graph-scoped access — least privilege at RESOURCE granularity,
+  compiled from the declared reference graph (the graph IS the
+  access-request set; refs are namespace-qualified, so the owner's
+  A→{B/X,C/Y} vs A→{B/X} example is expressible today with zero new
+  declarations). Wide grants become explicit, policy-visible
+  declarations. Realization rides the H5 decorator chokepoint (zero
+  provider edits, archtest-pinned) — per-edge NetworkPolicies on K8s,
+  per-edge networks on Docker (scale bounds documented). Gate
+  GraphScopedAccess Alpha/disabled. Sequenced AFTER H5 merges; the
+  zero-trust progression is now: namespace walls → domain walls →
+  graph-scoped reachability → identity-attested edges (H6), all from
+  one graph.
