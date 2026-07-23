@@ -60,7 +60,13 @@ func TestBackupRestoreKubernetesPostgresRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureReachable(bkpk8s-postgres): %v", err)
 	}
-	dsn := "postgres://bkpk8sadmin:bkpk8s-admin-pw@" + addr + "/bkpk8sdb?sslmode=disable"
+	// Each EnsureReachable mints a FRESH local forward (a new port) and its
+	// predecessor is closed by then — the DSN must be rebuilt per call, never
+	// reused across closeAddr boundaries.
+	dsnFor := func(addr string) string {
+		return "postgres://bkpk8sadmin:bkpk8s-admin-pw@" + addr + "/bkpk8sdb?sslmode=disable"
+	}
+	dsn := dsnFor(addr)
 
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -96,11 +102,11 @@ func TestBackupRestoreKubernetesPostgresRoundTrip(t *testing.T) {
 	// Docker test's destroy/apply-fresh cycle — this test's job is proving
 	// the Kubernetes Job realization round-trips a real restore, not
 	// re-proving the runtime-independent destroy/apply semantics).
-	_, closeAddr, err = rt.EnsureReachable(ctx, "bkpk8s-postgres", 5432)
+	addr, closeAddr, err = rt.EnsureReachable(ctx, "bkpk8s-postgres", 5432)
 	if err != nil {
 		t.Fatalf("EnsureReachable(bkpk8s-postgres) before drop: %v", err)
 	}
-	conn, err = pgx.Connect(ctx, dsn)
+	conn, err = pgx.Connect(ctx, dsnFor(addr))
 	if err != nil {
 		closeAddr()
 		t.Fatalf("connect to postgres before drop: %v", err)
@@ -119,12 +125,12 @@ func TestBackupRestoreKubernetesPostgresRoundTrip(t *testing.T) {
 		t.Fatalf("restore failed (code %d): %v\n%s", code, err, out)
 	}
 
-	_, closeAddr, err = rt.EnsureReachable(ctx, "bkpk8s-postgres", 5432)
+	addr, closeAddr, err = rt.EnsureReachable(ctx, "bkpk8s-postgres", 5432)
 	if err != nil {
 		t.Fatalf("EnsureReachable(bkpk8s-postgres) after restore: %v", err)
 	}
 	defer closeAddr()
-	conn, err = pgx.Connect(ctx, dsn)
+	conn, err = pgx.Connect(ctx, dsnFor(addr))
 	if err != nil {
 		t.Fatalf("connect to restored postgres: %v", err)
 	}
