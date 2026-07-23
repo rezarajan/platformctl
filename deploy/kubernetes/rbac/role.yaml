@@ -47,7 +47,7 @@ rules:
     verbs: ["get", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "create", "delete"] # create/delete: ProbeReachable's ephemeral probe pod fallback (docs/planning/08 C10)
+    verbs: ["get", "list", "create", "delete"] # create/delete: ProbeReachable's ephemeral probe pod fallback (docs/planning/08 C10); also ObserveIsolationEnforcement's ephemeral canary listener (docs/planning/08 H8) — no new verb needed, reuses these same four
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
@@ -59,7 +59,7 @@ rules:
     verbs: ["create"] # port-forward access mode (docs/planning/08 B1), the default
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
-    verbs: ["get", "create", "update", "delete"]
+    verbs: ["get", "create", "update", "delete"] # "get" (not "list") is deliberately enough for ObserveIsolationEnforcement (docs/planning/08 H8) too — it checks one well-known policy name per already-listed managed namespace
   # Ingresses: the ingress provider's Kubernetes realization of a managed
   # HTTP Connection (docs/planning/08 C7, docs/adr/018) —
   # runtime.IngressCapableRuntime's EnsureIngress/GetIngress/RemoveIngress.

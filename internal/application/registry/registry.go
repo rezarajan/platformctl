@@ -217,6 +217,33 @@ func (g *haGuardRuntime) AddressesMembersCollectively() bool {
 	return ok && ms.AddressesMembersCollectively()
 }
 
+// ObserveIsolationEnforcement makes haGuardRuntime itself satisfy
+// runtime.IsolationObserver (docs/adr/027-enforcement-layering.md,
+// docs/planning/08 H8), delegating to the embedded runtime when it
+// implements the capability — the identical registry-promotion treatment
+// EnsureIngress/AddressesMembersCollectively needed above, for the
+// identical reason (docs/adr/018 addendum): an embedded
+// runtime.ContainerRuntime *interface* only promotes that interface's own
+// declared method set, so without this method a provider's or command's
+// own rt.(runtime.IsolationObserver) type assertion would always fail for
+// every runtime obtained through this registry — including a real
+// Kubernetes adapter that genuinely implements it. Unlike EnsureIngress (a
+// genuine capability gap is an error) and like AddressesMembersCollectively
+// (absence is itself meaningful), a runtime that doesn't implement this
+// capability legitimately answers IsolationUnknown, never an error — ADR
+// 027's own tri-state already has a slot for "no conclusive observation
+// possible."
+func (g *haGuardRuntime) ObserveIsolationEnforcement(ctx context.Context) (runtime.IsolationStatus, error) {
+	iso, ok := g.ContainerRuntime.(runtime.IsolationObserver)
+	if !ok {
+		return runtime.IsolationStatus{
+			State:  runtime.IsolationUnknown,
+			Reason: "this runtime does not implement IsolationObserver", // archtest:allow-reason-literal: IsolationStatus.Reason is free-text detail, not a status.Condition reason token (docs/planning/08 H8)
+		}, nil
+	}
+	return iso.ObserveIsolationEnforcement(ctx)
+}
+
 func joinKeys[V any](m map[string]V) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

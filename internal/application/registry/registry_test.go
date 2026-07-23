@@ -245,3 +245,78 @@ func TestRuntime_PromotesMemberSetRuntime(t *testing.T) {
 		t.Error("AddressesMembersCollectively() = true for a non-capable underlying runtime, want false")
 	}
 }
+
+// isolationCapableFake wraps the fake runtime and adds a bare-bones
+// runtime.IsolationObserver implementation — enough to prove
+// Registry.Runtime's wrapper promotes the capability correctly, without
+// pulling in the real Kubernetes adapter package (the same constraint
+// ingressCapableFake/memberSetCapableFake above document).
+type isolationCapableFake struct {
+	*fakeruntime.Runtime
+}
+
+func (isolationCapableFake) ObserveIsolationEnforcement(context.Context) (runtime.IsolationStatus, error) {
+	return runtime.IsolationStatus{State: runtime.IsolationEnforced, Reason: "fake: enforced by construction"}, nil
+}
+
+// TestRuntime_PromotesIsolationObserver is the H8 counterpart of
+// TestRuntime_PromotesIngressCapableRuntime/TestRuntime_PromotesMemberSetRuntime
+// above (docs/adr/027-enforcement-layering.md, docs/planning/08 H8):
+// haGuardRuntime embeds the runtime.ContainerRuntime *interface*, so
+// without an explicit delegating ObserveIsolationEnforcement method, a
+// caller's own rt.(runtime.IsolationObserver) type assertion would always
+// fail for every runtime obtained through this registry — including a
+// real Kubernetes adapter that genuinely implements it — the identical bug
+// class ADR 018's addendum caught live for IngressCapableRuntime.
+func TestRuntime_PromotesIsolationObserver(t *testing.T) {
+	gates := featuregate.NewRegistry()
+	gates.Register("HighAvailability", featuregate.Alpha, false)
+	reg := New(gates)
+	reg.RegisterRuntime("isolation-fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return isolationCapableFake{Runtime: fakeruntime.New()}, nil
+	})
+	reg.RegisterRuntime("plain-fake", func(_ map[string]any) (runtime.ContainerRuntime, error) {
+		return fakeruntime.New(), nil
+	})
+
+	rt, err := reg.Runtime("isolation-fake", nil)
+	if err != nil {
+		t.Fatalf("Runtime: %v", err)
+	}
+	io, ok := rt.(runtime.IsolationObserver)
+	if !ok {
+		t.Fatal("registry-wrapped runtime does not implement IsolationObserver even though the underlying adapter does")
+	}
+	status, err := io.ObserveIsolationEnforcement(context.Background())
+	if err != nil {
+		t.Fatalf("ObserveIsolationEnforcement: %v", err)
+	}
+	if status.State != runtime.IsolationEnforced {
+		t.Errorf("State = %q, want %q (delegated to the underlying adapter)", status.State, runtime.IsolationEnforced)
+	}
+
+	// The negative path: a runtime whose underlying adapter genuinely does
+	// not implement the capability (Docker/fake in production — Docker
+	// gets its own real implementation, but the plain fake test double
+	// here doesn't) still satisfies the IsolationObserver type assertion —
+	// haGuardRuntime itself always declares the method now — but answers
+	// IsolationUnknown, never an error, ADR 027's own tri-state.
+	plainRt, err := reg.Runtime("plain-fake", nil)
+	if err != nil {
+		t.Fatalf("Runtime: %v", err)
+	}
+	plainIO, ok := plainRt.(runtime.IsolationObserver)
+	if !ok {
+		t.Fatal("registry-wrapped runtime does not implement IsolationObserver at all (haGuardRuntime should always declare this method)")
+	}
+	plainStatus, err := plainIO.ObserveIsolationEnforcement(context.Background())
+	if err != nil {
+		t.Fatalf("ObserveIsolationEnforcement (plain): %v", err)
+	}
+	if plainStatus.State != runtime.IsolationUnknown {
+		t.Errorf("State = %q for a non-capable underlying runtime, want %q", plainStatus.State, runtime.IsolationUnknown)
+	}
+	if plainStatus.Reason == "" {
+		t.Error("Reason is empty for IsolationUnknown; the tri-state contract requires naming why")
+	}
+}

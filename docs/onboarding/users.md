@@ -162,6 +162,43 @@ never an opaque mid-apply failure (see Troubleshooting).
 startup as "planned but not yet available" — not silently ignored (see
 [docs/positioning/terraform.md](../positioning/terraform.md) for what that reservation is about).
 
+### Network isolation: what's actually enforced
+
+[docs/adr/027-enforcement-layering.md](../adr/027-enforcement-layering.md) draws a hard line
+between two layers, and only one of them is ever the guarantee:
+
+| Configuration | Honest claim |
+|---|---|
+| Layer 1 active (mediated edges) | Zero-trust: identity-attested, policy-authorized edges — on ANY substrate |
+| Layer 2 only, enforcement observed active | Network-segmented least privilege (location-based; defense-in-depth) |
+| Layer 2 only, enforcement observed absent | Isolation NOT enforced — reported in status/preflight; validate warns |
+
+**Layer 1** is workload identity, minted from the naming authority and the declared resource
+graph, attested on every allowed edge regardless of network reachability — this is the
+authoritative guarantee, and it is identical on Docker, Kubernetes, or a future Terraform-
+provisioned substrate.
+
+**Layer 2** is the platform's compiled network objects (Docker networks, Kubernetes
+`NetworkPolicy`) — best-effort defense-in-depth, never assumed to work. A Kubernetes cluster's
+CNI can silently ignore `NetworkPolicy` (kindnet and several managed defaults do), which would
+make a Layer-2-only deployment's isolation claim false without anyone ever knowing. platformctl
+never assumes: `apply` (preflight), `drift`, `status`, and `inventory` each run a bounded, live
+probe (docs/planning/08 H8) — an ephemeral canary pair dialed across two of the platform's own
+managed namespaces — and print exactly what they observed:
+
+```
+network isolation (kubernetes): enforced [IsolationEnforced]
+WARNING: network isolation (kubernetes): NOT ENFORCED by this cluster's CNI [IsolationNotEnforced] — ...
+network isolation (kubernetes): unknown [IsolationUnknown] — ...
+```
+
+Docker reports `enforced` unconditionally and without probing — network membership on Docker
+*is* the isolation mechanism, so there is nothing to observe. A not-enforced report is always a
+**warning**, never a hard failure: Layer 1, not Layer 2, is what platformctl actually promises.
+Paste any bracketed token into `platformctl explain <token>` for causes and remedies. The probe
+never runs during `validate` — validate makes no runtime calls at all (see Daily workflow above),
+so it has no live fact to report.
+
 ## Feature gates
 
 Every provider and behavior beyond the GA core ships behind a named gate, staged **Alpha**

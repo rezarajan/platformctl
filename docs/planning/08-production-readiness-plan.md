@@ -2606,6 +2606,66 @@ addendum) and protect-data recorded as the known dev-example baseline.
   reproduced with kindnet); on the Calico CI cluster it reports
   enforced; Docker path unit-covered.
 - **Gate:** none (honesty reporting).
+- **Done (2026-07-22):** `runtime.IsolationObserver` (optional
+  `ContainerRuntime` capability, `internal/ports/runtime/isolation.go`):
+  `ObserveIsolationEnforcement(ctx) (IsolationStatus, error)`, tri-state
+  `Enforced | NotEnforced | Unknown` (Reason always set on the latter
+  two) and never a non-nil error for an ordinary observation failure —
+  every failure mode degrades to Unknown rather than aborting the
+  caller. Kubernetes (`internal/adapters/runtime/kubernetes/isolation.go`)
+  productizes TestNetworkPolicyEnforcementIsLive: picks two already-
+  managed namespaces carrying the default-deny wall (never freshly
+  created scratch ones), schedules a bounded ephemeral canary listener
+  (alpine/socat, the same pinned image the test uses) in one, and proves
+  enforcement via the runtime's own `ProbeReachable` from both —
+  same-namespace must succeed, cross-namespace must fail; fewer than two
+  walled namespaces is reported Unknown, not guessed at; the canary is
+  deleted unconditionally in a deferred `context.WithoutCancel` cleanup;
+  no new RBAC verbs needed (reuses `pods` get/list/create/delete and
+  `networkpolicies` get — role.yaml annotated). Docker
+  (`internal/adapters/runtime/docker/isolation.go`) always reports
+  Enforced without touching the daemon — network membership is the
+  mechanism, nothing to probe. `application/registry`'s `haGuardRuntime`
+  gets the registry-promotion delegating method (the ADR 018-addendum
+  gotcha this task's own spec named) — `TestRuntime_PromotesIsolationObserver`
+  proves it, mirroring the Ingress/MemberSet precedents.
+  Surfacing/trigger policy (decided, since the spec text itself
+  second-guessed this point): `apply` (preflight, before the
+  confirmation prompt), `drift`, `status`, and `inventory` each call a
+  new `(*app).observeIsolation` helper (`cmd/platformctl/isolation.go`)
+  that probes at most once per distinct runtime configuration per
+  command invocation (deduped by kubeconfig/context, mirroring
+  `kubernetesPreflight`'s own pattern) — an in-process memo only, never
+  persisted to state, so every call gets a live answer (ADR 027 "never
+  assumed") without a manifest touching many resources on one cluster
+  spawning more than one canary pair. Notes print table-mode only
+  (`WARNING: network isolation (...): NOT ENFORCED ... [IsolationNotEnforced]`,
+  pasteable straight into `platformctl explain`) and are scoped to
+  Kubernetes-runtime Providers only — Docker's answer is constant, so
+  printing it on every invocation would be pure noise for the
+  overwhelmingly common Docker case; its `IsolationObserver` still
+  exists at the port level, unit-tested. **Deviation:** `validate` does
+  NOT probe or warn, contrary to the "Do" bullet's literal wording —
+  doc 02 pins validate "no state, no runtime calls," and the same
+  paragraph's own later text ("actually validate must NOT probe...
+  preflight is the right probing point") resolves the tension the same
+  way; with no state persistence there is nothing honest for an offline
+  command to report anyway. New explain-catalog tokens
+  `IsolationEnforced`/`IsolationNotEnforced`/`IsolationUnknown`
+  (`internal/domain/status/reasons.go` + `catalog.go`, `docs/reference/explain.md`
+  regenerated); onboarding claims table added to
+  `docs/onboarding/users.md` (additive "Network isolation" subsection
+  under Runtimes). New tests:
+  `internal/adapters/runtime/docker/isolation_test.go` (unit, the Docker
+  accept leg — no daemon needed), `internal/adapters/runtime/kubernetes/isolation_integration_test.go`
+  (`TestObserveIsolationEnforcement`, same
+  `PLATFORMCTL_REQUIRE_NETPOL_ENFORCEMENT` env var as
+  TestNetworkPolicyEnforcementIsLive — the CI k8s "adapter" shard already
+  runs the whole package, so no ci.yml change was needed to prove the
+  enforced leg there), `internal/application/registry/registry_test.go`'s
+  `TestRuntime_PromotesIsolationObserver`. Live evidence against the
+  shared minikube (non-enforcing CNI, minted kubeconfig): see this
+  agent's final report.
 
 ### H7: Graph-scoped access — least privilege from the reference graph (ADR 026)
 
