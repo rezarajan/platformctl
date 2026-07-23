@@ -307,7 +307,11 @@ func newTestClient(t *testing.T) (*edgeClient, *fakeZitiController) {
 	f := newFakeZitiController()
 	srv := httptest.NewServer(f.handler())
 	t.Cleanup(srv.Close)
-	c := newEdgeClient(srv.URL)
+	// nil RootCAs: srv is plain HTTP (httptest.NewServer, no TLS), so the
+	// TLSClientConfig is never consulted — CA pinning only matters for the
+	// https:// dial dialController/waitControllerServing perform against a
+	// real controller (see client.go's pinnedCAPool).
+	c := newEdgeClient(srv.URL, nil)
 	if err := c.Authenticate(context.Background(), "admin", "pw"); err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
