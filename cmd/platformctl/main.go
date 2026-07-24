@@ -232,6 +232,13 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// every pre-existing policy rule shape (internal/application/policy.Run's
 	// own doc comment).
 	gates.Register("LabelScopedAccess", featuregate.Beta, false)
+	// ZeroTrust (docs/adr/035 decision 3) subsumes MediatedConnections +
+	// GraphScopedAccess + LabelScopedAccess + PolicyEngine — the developer
+	// thinks only "zero-trust on or off". Registered default-OFF; a project
+	// (datascape.yaml) turns it ON by default (spec.zeroTrust, default
+	// true), so a legacy manifest set with no project keeps today's opt-in
+	// behavior byte-identically while a Project gets zero-trust by default.
+	gates.Register("ZeroTrust", featuregate.Beta, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")

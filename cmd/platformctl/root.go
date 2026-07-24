@@ -43,6 +43,7 @@ type wiringFunc func(*featuregate.Registry) *registry.Registry
 type app struct {
 	stateFile    string
 	featureGates string
+	noZeroTrust  bool
 	output       string
 	envFile      string
 	// logFormat is --log-format (docs/planning/08 I11, NFR-4): "text"
@@ -135,6 +136,7 @@ func newRootCmd(wire wiringFunc) *cobra.Command {
 	}
 	root.PersistentFlags().StringVar(&a.stateFile, "state-file", ".datascape/state.json", "path to the state file (local backend only)")
 	root.PersistentFlags().StringVar(&a.featureGates, "feature-gates", "", "comma-separated Name=true|false overrides")
+	root.PersistentFlags().BoolVar(&a.noZeroTrust, "no-zero-trust", false, "disable zero-trust for this project (mediation + graph-scoped access + policy); the default for a project (datascape.yaml) is on")
 	root.PersistentFlags().StringVarP(&a.output, "output", "o", "table", "output format: table|json|yaml")
 	root.PersistentFlags().StringVar(&a.envFile, "env-file", "", "load KEY=VALUE lines from a file into the environment before resolving secrets (shell environment wins on conflict)")
 	root.PersistentFlags().StringVar(&a.policies, "policies", "", "directory of Policy documents (docs/adr/021), evaluated at validate/plan/apply/destroy when the PolicyEngine gate is enabled; default: .datascape/policies/ if it exists")
@@ -408,6 +410,23 @@ func (a *app) loadAndValidate(w io.Writer, path string) ([]resource.Envelope, *g
 	envelopes, err := manifest.Load(path)
 	if err != nil {
 		return nil, nil, cliutil.Exit(cliutil.ExitValidation, err)
+	}
+	// Zero-trust resolution (docs/adr/035 decision 3, M4): a project
+	// (datascape.yaml) is zero-trust ON by default; a legacy manifest set
+	// with no project keeps today's opt-in (off). Precedence: an explicit
+	// --feature-gates ZeroTrust=... wins (already applied at PreRun); then
+	// --no-zero-trust; then the project's spec.zeroTrust; then off.
+	if !strings.Contains(a.featureGates, "ZeroTrust") {
+		zt := false
+		if proj, perr := manifest.LoadProject(path); perr == nil && proj != nil {
+			zt = proj.ZeroTrust
+		}
+		if a.noZeroTrust {
+			zt = false
+		}
+		if err := a.gates.Apply(fmt.Sprintf("ZeroTrust=%t", zt)); err != nil {
+			return nil, nil, cliutil.Exit(cliutil.ExitValidation, err)
+		}
 	}
 	g, err := graph.Build(envelopes)
 	if err != nil {

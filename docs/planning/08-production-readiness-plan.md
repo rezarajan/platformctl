@@ -5777,3 +5777,18 @@ one `v1.2.0` tag — Stages A+B+F closed plus C1 and D1 merged;
   explicit spec.runtime.resources always wins. providerType threaded
   through newDomainRuntime from p.Type. Pinned by
   TestDomainRuntimeAppliesProviderDefaultResources. doc 03 note additive.
+
+- **M4 Done (2026-07-24):** zero-trust unified into ONE default-on
+  concept (ADR 035 decision 3). New `ZeroTrust` gate (featuregate)
+  subsumes MediatedConnections/GraphScopedAccess/LabelScopedAccess/
+  PolicyEngine — `Registry.Enabled`/`Require` return true for any of the
+  four when ZeroTrust is on, so every existing call site unifies with
+  zero churn. Registered default-OFF; loadAndValidate turns it ON when a
+  project (datascape.yaml, M1) is present unless spec.zeroTrust: false or
+  --no-zero-trust (new CLI flag) or an explicit --feature-gates ZeroTrust=
+  wins. A legacy manifest set with NO datascape.yaml keeps today's opt-in
+  behavior byte-identically (ZeroTrust off) — every existing test/example
+  unaffected. Proven by TestZeroTrustDefaultOnForProject (project+no-flags
+  makes openziti available; --no-zero-trust refuses it naming the subsumed
+  gate). doc 04 §12 table + gate row added. The developer now thinks only
+  "zero-trust on (default for a project) or off".

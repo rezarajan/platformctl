@@ -26,9 +26,37 @@ type GateState struct {
 	Enabled bool
 }
 
+// zeroTrustFamily is the set of gates the single ZeroTrust gate subsumes
+// (docs/adr/035 decision 3): the developer thinks only "zero-trust on
+// (default for a project) or off", never these four individually. When
+// ZeroTrust is enabled, each of these reports enabled — so a Connection is
+// mediated, access is graph-scoped, and policy (incl. label selectors) is
+// enforced, all at once, with zero call-site changes. Each stays
+// independently settable for backward compatibility (a manifest set with no
+// datascape.yaml that enabled one of these directly still works, ZeroTrust
+// off).
+var zeroTrustFamily = map[string]bool{
+	"MediatedConnections": true,
+	"GraphScopedAccess":   true,
+	"LabelScopedAccess":   true,
+	"PolicyEngine":        true,
+}
+
 type Registry struct {
 	mu    sync.RWMutex
 	gates map[string]GateState
+}
+
+// enabledLocked resolves a gate's effective state under the ZeroTrust
+// subsumption. Caller holds at least RLock.
+func (r *Registry) enabledLocked(name string) bool {
+	if r.gates[name].Enabled {
+		return true
+	}
+	if zeroTrustFamily[name] && r.gates["ZeroTrust"].Enabled {
+		return true
+	}
+	return false
 }
 
 func NewRegistry() *Registry {
@@ -46,7 +74,7 @@ func (r *Registry) Register(name string, stage Stage, def bool) {
 func (r *Registry) Enabled(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.gates[name].Enabled
+	return r.enabledLocked(name)
 }
 
 // Require returns a clear error when a gate is disabled or unknown.
@@ -57,7 +85,7 @@ func (r *Registry) Require(name string) error {
 	if !ok {
 		return fmt.Errorf("feature gate %q is not registered", name)
 	}
-	if !g.Enabled {
+	if !r.enabledLocked(name) {
 		return fmt.Errorf("feature gate %q (stage: %s) is disabled; enable with --feature-gates=%s=true", name, g.Stage, name)
 	}
 	return nil

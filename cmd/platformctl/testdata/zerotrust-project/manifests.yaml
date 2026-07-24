@@ -1,0 +1,12 @@
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata: { name: mesh-admin }
+spec: { backend: env, keys: [username, password] }
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata: { name: mesh }
+spec:
+  type: openziti
+  secretRefs: [mesh-admin]
+  configuration: { adminSecretRef: mesh-admin }
