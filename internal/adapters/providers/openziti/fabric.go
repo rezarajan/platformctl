@@ -168,6 +168,17 @@ func (f *FabricProvisioner) EnsureFabric(ctx context.Context, req mediation.Fabr
 		if ctrlState, err = rt.EnsureContainer(ctx, stableSpec); err != nil {
 			return mediation.FabricState{}, fmt.Errorf("mediation fabric: settle controller: %w", err)
 		}
+		// The settle recreate above restarts the controller container
+		// (Docker: stop+remove+recreate to change Env/Files) — dialing
+		// immediately afterward raced a not-yet-listening controller and
+		// failed live with a connection EOF (docs/planning/08 L2's Done-
+		// note). Re-wait the same bounded, re-resolved-tunnel-per-attempt
+		// check waitControllerServing already performs before the first
+		// dial, exactly the discipline reconcileInstance's own settle
+		// comment documents for the router/tunneler equivalents.
+		if err := waitControllerServing(ctx, rt, fabricControllerName, fabricControllerPort); err != nil {
+			return mediation.FabricState{}, fmt.Errorf("mediation fabric: controller did not settle after credential strip: %w", err)
+		}
 	}
 
 	client, closeCtrl, err := dialController(ctx, rt, fabricControllerName, fabricControllerPort)

@@ -173,7 +173,7 @@ func TestEnsureMediationFabricNoopWhenNoMediatedEdgeDeclared(t *testing.T) {
 // TestEnsureMediationFabricStableAcrossReapply is the idempotency proof
 // (docs/planning/08 L2's accept: "second apply zero API calls" at the
 // runtime.ContainerRuntime layer, which this fake does not itself model —
-// the real openziti.FabricProvisioner reuses instance.go's own
+// the real adapter's FabricProvisioner reuses the openziti package's own
 // EnsureContainer/EnsureNetwork/EnsureVolume calls, already held to that
 // bar by the existing docker/kubernetes conformance suites). At the
 // ENGINE orchestration layer proven here: EnsureFabric is asked on every

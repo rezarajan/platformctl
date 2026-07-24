@@ -48,16 +48,19 @@
    tears down when no mediated edge remains, destroy KEEPS when a mediated
    edge remains. All green.
 
-## Remaining before commit
+## Verification (all green, post state-field pivot)
 
-- [ ] Full `go build ./...`, `go vet ./...` + `-tags integration`, `go test
-      ./...` (log to file), golangci-lint v2.12.2 — none run yet after the
+- [x] gofmt clean; `go build ./...` clean.
+- [x] `go vet ./...` and `go vet -tags integration ./...` both clean.
+- [x] `go test ./...` — true-exit=0 (gotest_final2.log).
+- [x] golangci-lint v2.12.2 — 0 issues.
+- [x] Live: `TestFabricProvisionerLiveDocker` (bounded flock, real Docker,
+      pinned images) — PASS 12.7s. EnsureFabric x2 idempotent (same
+      controller container id, same router id, credential read back from
+      volume), DestroyFabric removes all + idempotent no-op. Zero residue
+      confirmed. Registered as `mediation-fabric` suite in test-impact.sh.
+- [x] L2 Done-note appended to doc 08 (additive, +108/-0), covering the
+      openziti-convergence decision (additive; L3 precondition) and the
       state-field pivot.
-- [ ] Live scenario (bounded, flock'd) if a fast route exists; otherwise
-      record the live run as a required follow-up (do not fabricate a
-      pass).
-- [ ] Append L2 Done-note to docs/planning/08-production-readiness-plan.md
-      (additive only) — must state the openziti-convergence decision
-      (additive, not reconciled with the per-Connection path; L3
-      precondition) and the state-field pivot above.
-- [ ] Final commit (unsigned).
+
+## DONE — L2 complete, ready for final commit.
