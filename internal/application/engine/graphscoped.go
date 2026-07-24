@@ -35,8 +35,10 @@ import (
 	"github.com/rezarajan/platformctl/internal/application/graphaccess"
 	"github.com/rezarajan/platformctl/internal/domain/graph"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
+	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/subnet"
+	"github.com/rezarajan/platformctl/internal/ports/reconciler"
 	"github.com/rezarajan/platformctl/internal/ports/runtime"
 )
 
@@ -105,7 +107,15 @@ func (d *domainRuntime) k8sPeers() []runtime.NetworkPeer {
 // here would indicate a genuine internal inconsistency, not a user error —
 // surfaced as an error rather than silently degrading to "no edges" (which
 // would silently disable the very access control the gate promises).
-func deriveGraphAccessEdges(byKey map[resource.Key]resource.Envelope) ([]graphaccess.Edge, error) {
+// capable is docs/planning/08 M5's addition: the engine's own
+// graphaccess.MediationCapable predicate (e.mediationCapable below),
+// threaded through so the derived edge set also carries
+// graphaccess.MediatedConsumerEdges' synthetic consumer->tunneler-Provider
+// edges — see that function's doc comment for the composition gap this
+// closes. A nil capable (never passed by resolveRequest itself, but kept
+// safe for any other/future caller) makes CompileMediatedConnections find
+// no mediated connections at all, degrading to the pre-M5 edge set.
+func deriveGraphAccessEdges(byKey map[resource.Key]resource.Envelope, capable graphaccess.MediationCapable) ([]graphaccess.Edge, error) {
 	envelopes := make([]resource.Envelope, 0, len(byKey))
 	for _, e := range byKey {
 		envelopes = append(envelopes, e)
@@ -114,5 +124,32 @@ func deriveGraphAccessEdges(byKey map[resource.Key]resource.Envelope) ([]graphac
 	if err != nil {
 		return nil, fmt.Errorf("graph-scoped access: rebuild reference graph: %w", err)
 	}
-	return graphaccess.DeriveEdges(g), nil
+	edges := graphaccess.DeriveEdges(g)
+	if capable != nil {
+		edges = append(edges, graphaccess.MediatedConsumerEdges(g, byKey, capable)...)
+	}
+	return edges, nil
+}
+
+// mediationCapable is the engine's own graphaccess.MediationCapable
+// predicate supplier (graphaccess's own doc comment on the MediationCapable
+// type: "the engine, which alone constructs reconciler.Provider instances
+// through the registry, supplies it by type-asserting to
+// reconciler.MediationCapableProvider"). A provider type that fails to
+// construct — most commonly, its own gate (e.g. MediatedConnections)
+// disabled, registry.Registry.Provider's own gate guard — answers false,
+// exactly like "not mediation-capable": docs/planning/08 M5's synthetic-
+// edge compiler must never see a mediated connection realized by a
+// provider that could not itself reconcile in the first place.
+func (e *Engine) mediationCapable(provEnv resource.Envelope) bool {
+	p, err := provider.FromEnvelope(provEnv)
+	if err != nil {
+		return false
+	}
+	prov, err := e.Registry.Provider(p.Type)
+	if err != nil {
+		return false
+	}
+	_, ok := prov.(reconciler.MediationCapableProvider)
+	return ok
 }

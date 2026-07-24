@@ -210,6 +210,103 @@ func TestGraphScopedAccessWideGrantReachesAllOfNamespace(t *testing.T) {
 	}
 }
 
+// buildMediatedCDCResources is docs/planning/08 M5's accept scenario: a
+// debezium-realized Binding reaches a mediated Connection ONLY
+// transitively — Binding.sourceRef -> Source.connectionRef -> Connection —
+// exactly the capstone's real shape (examples/zero-trust-lakehouse's
+// orders Source/orders-db-mediated Connection), never a direct
+// Binding.connectionRef (the one-hop shape graphaccess_test.go's own
+// buildScenario already covers and CompileMediatedConnections' one-hop
+// Consumers field already handled before M5). The Connection's target
+// resolves IN-SET to the "pg" Provider — the dark backend M5 must never
+// expose a network edge to.
+func buildMediatedCDCResources(t *testing.T) (byKey map[resource.Key]resource.Envelope, edges []graphaccess.Edge, debezium, mesh, pg resource.Envelope) {
+	t.Helper()
+	debezium = gsaEnv("default", "Provider", "debezium", map[string]any{})
+	mesh = gsaEnv("default", "Provider", "mesh", map[string]any{})
+	pg = gsaEnv("default", "Provider", "pg", map[string]any{})
+
+	source := gsaEnv("default", "Source", "orders", map[string]any{
+		"external":      true,
+		"connectionRef": gsaRef("", "orders-mediated"),
+	})
+	conn := gsaEnv("default", "Connection", "orders-mediated", map[string]any{
+		"providerRef": gsaRef("", "mesh"),
+		"target":      "pg:5432",
+		"port":        5432,
+	})
+	binding := gsaEnv("default", "Binding", "orders-cdc", map[string]any{
+		"mode":        "cdc",
+		"providerRef": gsaRef("", "debezium"),
+		"sourceRef":   gsaRef("", "orders"),
+	})
+
+	all := []resource.Envelope{debezium, mesh, pg, source, conn, binding}
+	g, err := graph.Build(all)
+	if err != nil {
+		t.Fatalf("graph.Build: %v", err)
+	}
+	byKey = make(map[resource.Key]resource.Envelope, len(all))
+	for _, e := range all {
+		byKey[e.Key()] = e
+	}
+	meshOnly := func(provEnv resource.Envelope) bool { return provEnv.Key() == mesh.Key() }
+	edges = graphaccess.DeriveEdges(g)
+	edges = append(edges, graphaccess.MediatedConsumerEdges(g, byKey, meshOnly)...)
+	return byKey, edges, debezium, mesh, pg
+}
+
+// TestGraphScopedAccessMediatedConsumerReachesTunnelerNotDarkTarget is
+// docs/planning/08 M5's accept bar (doc 08 M5, docs/planning/11's
+// 2026-07-23 capstone finding): under GraphScopedAccess, a consumer that
+// reaches a mediated Connection ONLY transitively (Binding -> Source ->
+// Connection.connectionRef) must land on a network shared with the
+// Connection's REALIZING (mediation) Provider — the container hosting the
+// dial-side tunneler (internal/adapters/providers/openziti/connection.go's
+// tunnelContainerName, created under that Provider's own domainRuntime
+// self) — and must NOT get any network edge to the dark target directly.
+// Before M5's graphaccess.MediatedConsumerEdges, this edge simply never
+// existed: DeriveEdges alone never flattens a pass-through Source's
+// connectionRef into a container-level edge, which is exactly the
+// composition gap the capstone diagnosed live (Debezium and the
+// tunneler shared zero networks).
+func TestGraphScopedAccessMediatedConsumerReachesTunnelerNotDarkTarget(t *testing.T) {
+	rt := fakeruntime.New()
+	byKey, edges, debezium, mesh, pg := buildMediatedCDCResources(t)
+
+	for _, p := range []resource.Envelope{debezium, mesh, pg} {
+		ensureWorkedExampleContainer(t, rt, p, byKey, edges)
+	}
+	ctx := context.Background()
+
+	// Positive: debezium (the transitive consumer) and mesh (the mediated
+	// Connection's realizing Provider — the tunneler's own container)
+	// share their deterministic per-edge network, computed independently
+	// by each side's own domainRuntime construction.
+	tunnelNet := naming.EdgeNetworkName(debezium.Key(), mesh.Key())
+	if err := rt.ProbeReachable(ctx, tunnelNet, "mesh:1"); err != nil {
+		t.Errorf("debezium must reach mesh (the tunneler's own container) via their per-edge network: %v", err)
+	}
+
+	// Negative: debezium must NOT get any edge network reaching the dark
+	// target (pg) directly — M5 fixes consumer->tunneler reachability,
+	// the target stays dark exactly as the mediated-entrypoint model
+	// requires. No such edge network was ever declared, so a probe
+	// against what WOULD be that network fails outright.
+	darkNet := naming.EdgeNetworkName(debezium.Key(), pg.Key())
+	if err := rt.ProbeReachable(ctx, darkNet, "pg:1"); err == nil {
+		t.Error("debezium must NOT reach pg (the dark target) directly — no such edge was ever declared, only consumer->tunneler")
+	}
+
+	// mesh's own private home network must not incidentally expose
+	// debezium a path to pg either (the flat-network confound the worked
+	// example's own negative proof already guards against).
+	meshHome := naming.PrivateNetworkName("datascape", "", mesh.Key())
+	if err := rt.ProbeReachable(ctx, meshHome, "pg:1"); err == nil {
+		t.Error("mesh's own private home network must not reach pg — pg is reachable only via mesh's OWN edges, never handed to debezium")
+	}
+}
+
 // TestGraphScopedAccessGateOffIsByteIdentical proves the archtest/H5
 // precedent holds for H7 too: with graphScoped=false, the decorator takes
 // the EXACT pre-H7 code path — no private network, no edge networks, the

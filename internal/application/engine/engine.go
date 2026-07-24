@@ -1415,7 +1415,7 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 	graphScoped := e.Registry.GateEnabled("GraphScopedAccess")
 	var accessEdges []graphaccess.Edge
 	if graphScoped {
-		accessEdges, err = deriveGraphAccessEdges(byKey)
+		accessEdges, err = deriveGraphAccessEdges(byKey, e.mediationCapable)
 		if err != nil {
 			return nil, reconciler.Request{}, fmt.Errorf("%s: %w", env.Key(), err)
 		}
