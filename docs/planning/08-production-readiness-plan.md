@@ -5148,6 +5148,114 @@ splitting per-Binding transport for one shared worker->broker edge.
   once; second apply zero API calls (conformance bar); destroy of the
   last mediated edge removes it; gc sees orphans.
 
+#### Done-note (2026-07-23)
+
+Shipped the platform-owned fabric as an engine facility, wired
+unconditionally and gated internally (nil-disables + gate + trigger
+checks), byte-identical-off.
+
+**The port.** `internal/ports/mediation/fabric.go` adds
+`FabricProvisioner` (`EnsureFabric`/`DestroyFabric`) + `FabricRequest`/
+`FabricState` — technology-silent, a SEPARATE port from L1's
+`AddressResolver` (they answer different questions: "does the fabric
+exist" vs "what address do I dial for this edge"), the same
+capability-interface-beside pattern L1 itself followed. `FabricState`
+carries only non-secret host facts (docs/adr/013 fingerprints-only).
+
+**The adapter.** `internal/adapters/providers/openziti/fabric.go`
+implements it, reusing instance.go/client.go's H10 pinned-CA client and
+the exact bootstrap/enroll/settle mechanics the manifest-declared
+Provider(type: openziti) path already uses — only the naming
+(fixed `datascape-mediation-{ctrl,router}`, engine-chosen, not derived
+from a user-declared Provider name) and the admin-credential handling
+differ. **Admin credential is engine-minted (`crypto/rand`), never
+user-declared** (L2's requirement). Live-verified against the pinned
+`ziti-controller:1.5.14` image BEFORE writing the code (the H10
+discipline): its containerized entrypoint (`entrypoint.bash run` ->
+`bootstrap()` -> `makeDatabase`) reads `ZITI_USER`/`ZITI_PWD` ONLY from
+the process environment — there is NO file-path-detection branch for
+these two (unlike `ZITI_ENROLL_TOKEN`, H10's own finding); a controller
+started with the credential in a FileMount-only channel refused with
+"unable to create default admin ... ZITI_USER and ZITI_PWD must both be
+set". So the credential necessarily transits Env on the ONE bootstrap
+call — the same live-verified, documented deviation H10 accepted for the
+router JWT, applied to a secret the image offers no file input for. What
+IS achieved: (1) Env carries it on the bootstrap `EnsureContainer` call
+only, then a settle-recreate strips it (the instance.go/connection.go
+settle-then-strip discipline); (2) the same credential is durably written
+into the controller's OWN persisted volume (`/ziti-controller/.admin-
+credential`, mode 0600) so every LATER `EnsureFabric` call — a fresh
+`platformctl` process, nothing held in memory (F5) — reads the SAME
+credential back via `ContainerRuntime.ReadFile` (connection.go's
+`waitTunnelEnrolled` proves this works on both runtimes) rather than
+minting a new, wrong one. **Found live:** the controller settle-recreate
+restarts the container, and dialing immediately raced a not-yet-listening
+controller (connection EOF); fixed by re-running the same bounded
+`waitControllerServing` check after the credential strip, exactly as
+reconcileInstance's own settle comment prescribes for its router/tunneler
+equivalents.
+
+**The engine facility.** `internal/application/engine/mediation_fabric.go`
+adds `Engine.Fabric` and two hooks: `ensureMediationFabric` (Apply, BEFORE
+the main reconcile loop — a platform facility every future mediated edge
+needs, not a plan.Entry) and `maybeDestroyMediationFabric` (Destroy, after
+the destroy loop). Trigger: gate on AND `Engine.Fabric` wired AND
+`anyMediatedEdgeDeclared` — at least one Binding/Connection NOT declaring
+`spec.transport: direct` (ADR 034's "mediated by default" is a property of
+the DECLARATION, independent of which consumer surfaces L1 has migrated so
+far). **docs/adr/013 bar met:** apply SHOWS fabric creation; destroy tears
+it down ONLY when no mediated edge remains in state (`remaining` is
+computed from what's LEFT in `st.Resources` post-destroy, and re-uses the
+EXACT runtime type/config `EnsureFabric` persisted at creation, never
+re-derives it from a possibly-empty remaining set). The runtime is the
+first Provider's (sorted by key) — one fabric per deployment, like the
+shared platform network.
+
+**State-shape pivot, found live by test.** First recorded the fabric as a
+normal `state.Resources` entry (for gc visibility). Broke immediately:
+`plan.Compute`'s `computeApplyDeletes` marks EVERY `state.Resources` entry
+absent from the current manifest's envelopes as `ActionDelete` — since no
+manifest Kind ever names "MediationFabric", the very next apply of ANY
+unrelated manifest tried to destroy the fabric through the normal
+resolveRequest path (and failed, "no providerRef"). Fixed with a dedicated
+`state.State.MediationFabric *MediationFabricState` field, entirely outside
+`Resources`/`RawResources` and the orphan sweep; `cmd/platformctl/gc.go`'s
+`accounted` closure special-cases `kind == "MediationFabric"` against it so
+`gc plan` still recognizes the fabric's labeled objects (which carry
+`ManagedLabels(... "MediationFabric" ...)`) as owned rather than orphans.
+
+**OpenZiti-convergence decision (recorded, per the L2 prompt).** The
+pre-existing per-`MediatedConnection` openziti path (instance.go/
+connection.go, H6/H9/H10) still stands up its OWN controller + router,
+independent of this platform fabric — different container names, different
+admin credential, no shared state. Fully reconciling them (making every
+`MediatedConnection` ride the ONE platform fabric) is **explicitly
+deferred as an L3 precondition**: this file's fabric is ADDITIVE and
+changes instance.go/connection.go behavior in NO way. L3, which builds the
+per-workload identity/service/terminator machinery a real
+`AddressResolver` over the platform fabric needs, is where the two
+converge — and where `Engine.Mediation` finally becomes non-nil over this
+fabric (today it stays nil: L2 is infrastructure-only, so L1's
+resolveRequest call sites keep resolving unmediated addresses byte-
+identically). Recorded in mediation_fabric.go's own package doc comment.
+
+**Proof.** Fast tier (`internal/application/engine/
+mediation_fabric_test.go`, honest fake `FabricProvisioner`, ADR 028):
+stand-up-once on a gate-on mediated-edge scenario; gate-off / nil-Fabric /
+all-edges-direct each a no-op; state stable + credential-free across
+reapply; destroy tears down when no mediated edge remains AND KEEPS the
+fabric while one remains (the ADR 013 negative case). Live tier
+(`internal/adapters/providers/openziti/fabric_integration_test.go`,
+`TestFabricProvisionerLiveDocker`, tag `integration`, its own
+`scripts/test-impact.sh` `mediation-fabric` suite row): against the pinned
+images on a real Docker daemon — EnsureFabric stands up controller+router
+from nothing; a SECOND EnsureFabric returns the SAME controller container
+ID (no recreate) and SAME router entity ID, re-authenticating with the
+credential read back from the volume (the idempotency make-or-break);
+DestroyFabric removes every container/volume/network and is a clean no-op
+on a second call. PASS in 12.7s, zero residue confirmed via
+`docker ps -a`/`volume ls` after.
+
 ### L3: Every edge mediated — identities, services, policies from the graph
 
 - **Size:** L. **Depends:** L2, K4. **Why:** the default flip itself.

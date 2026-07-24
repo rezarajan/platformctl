@@ -153,6 +153,16 @@ func (a *app) gcOrphans(ctx context.Context, runtimeType string) ([]gcOrphan, er
 			// objects only, but be defensive against a malformed label set).
 			return true
 		}
+		// docs/planning/08 L2: the engine-owned platform mediation fabric
+		// is intentionally NOT a state.Resources entry (state.State.
+		// MediationFabric's own doc comment explains why — plan.Compute's
+		// orphan sweep would otherwise mark it for deletion on the very
+		// next unrelated apply). Account for it here instead, so `gc plan`
+		// still recognizes it as owned rather than reporting every
+		// controller/router/volume/network it created as an orphan.
+		if kind == "MediationFabric" {
+			return st.MediationFabric != nil
+		}
 		key := resource.Key{Namespace: resource.NormalizeNamespace(namespace), Kind: kind, Name: name}
 		_, ok := st.Resources[key]
 		return ok

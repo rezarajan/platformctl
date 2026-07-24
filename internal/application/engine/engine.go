@@ -102,10 +102,23 @@ type Engine struct {
 	// already reads (ADR 034 "why the engine can do this with zero
 	// provider changes"). nil disables (mirrors SecretStore's own "nil
 	// disables" convention above) — today's production wiring
-	// (cmd/platformctl) leaves this nil: L1 proves the seam against a
-	// fake; standing up the real fabric a non-nil value would come from
-	// is L2.
+	// (cmd/platformctl) still leaves this nil: L2 stands up the fabric
+	// (Fabric, below) but wiring a real per-edge AddressResolver over it
+	// needs the per-workload identity/service/terminator machinery L3
+	// scopes — see mediation_fabric.go's package doc comment for the
+	// full L1/L2/L3 boundary.
 	Mediation mediation.AddressResolver
+
+	// Fabric is docs/planning/08 L2's engine-owned platform mediation
+	// fabric facility (docs/adr/034, docs/adr/013's implicit-infrastructure
+	// bar): when non-nil AND the MediatedTransport gate is on AND at least
+	// one declared edge in the deployment is mediated (not
+	// transport: direct), Apply ensures one controller + router exists
+	// before reconciling anything else, and Destroy tears it down once no
+	// mediated edge remains anywhere in the deployment. nil disables
+	// (mirrors Mediation/SecretStore's own "nil disables" convention) — see
+	// mediation_fabric.go for the full mechanism.
+	Fabric mediation.FabricProvisioner
 }
 
 type Result struct {
@@ -177,6 +190,19 @@ func (e *Engine) Apply(ctx context.Context, p plan.Plan, envelopes []resource.En
 		if rs, ok := st.Resources[entry.Key]; ok && rs.LastApplied != nil {
 			byKey[entry.Key] = *rs.LastApplied
 		}
+	}
+
+	// docs/planning/08 L2: ensure the platform mediation fabric BEFORE
+	// reconciling anything else in this apply — "ensure the mesh like we
+	// ensure networks" (docs/adr/034), a platform facility every future
+	// mediated edge depends on, not a per-resource concern any plan.Entry
+	// represents. byKey here is the FULL desired set for this deployment
+	// (this apply's own envelopes, plus every previously-applied entry the
+	// loop above just filled in for anything plan.Compute left as a noop),
+	// so anyMediatedEdgeDeclared sees the whole deployment, not just what
+	// changed this apply.
+	if err := e.ensureMediationFabric(ctx, byKey, &st); err != nil {
+		return res, err
 	}
 
 	total := 0
@@ -1292,6 +1318,14 @@ func (e *Engine) Destroy(ctx context.Context, p plan.Plan, envelopes []resource.
 
 	if len(res.Failed) > 0 {
 		return res, fmt.Errorf("%d resource(s) failed to destroy", len(res.Failed))
+	}
+	// docs/planning/08 L2 / docs/adr/013: tear the platform fabric down
+	// ONLY once every declared mediated edge in the deployment is gone —
+	// never merely because THIS destroy pass touched a mediated edge. st
+	// has already had every successfully destroyed key deleted from it
+	// above, so it reflects exactly what remains.
+	if err := e.maybeDestroyMediationFabric(ctx, &st); err != nil {
+		return res, err
 	}
 	return res, nil
 }

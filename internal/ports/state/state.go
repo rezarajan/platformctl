@@ -36,6 +36,32 @@ type State struct {
 	// RawResources is the serialized form; resource.Key is not a valid JSON
 	// map key, so persistence flattens to "Kind/Name" strings.
 	RawResources map[string]ResourceState `json:"resources"`
+	// MediationFabric records docs/planning/08 L2's engine-owned platform
+	// mediation fabric, when one has been ensured — nil otherwise (the
+	// gate-off/no-mediated-edge default, and every state file predating
+	// L2). Deliberately NOT a Resources/RawResources entry: plan.Compute's
+	// own orphan sweep (computeApplyDeletes) treats every Resources entry
+	// as "should be present in the current desired manifest set, or be
+	// deleted" — correct authoritative-apply semantics for every
+	// user-declared Kind, but wrong here, since no manifest Kind ever
+	// represents the platform fabric at all (it is provisioned like a
+	// network, not declared like a Provider). Putting it in Resources was
+	// tried and found live to self-destruct on the very next plan/apply/
+	// destroy call of an unrelated manifest (docs/planning/08 L2's Done-
+	// note records the finding) — this field exists specifically to avoid
+	// that sweep while still surviving Save/Load like any other state.
+	MediationFabric *MediationFabricState `json:"mediationFabric,omitempty"`
+}
+
+// MediationFabricState is the persisted record for the one engine-owned
+// platform mediation fabric a deployment may have (docs/planning/08 L2).
+// Provider carries only non-secret host facts (docs/adr/013's
+// fingerprints-only discipline) — the same shape ResourceState.Provider
+// holds for every other managed object, just addressed directly instead of
+// through resource.Key since there is exactly one of these per deployment.
+type MediationFabricState struct {
+	Status   status.Status  `json:"status"`
+	Provider map[string]any `json:"providerState,omitempty"`
 }
 
 // migration upgrades a State in place from FromVersion to FromVersion+1,
