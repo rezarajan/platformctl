@@ -1,0 +1,124 @@
+# docs/planning/08 M5 accept scenario, as amended by docs/adr/035
+# decision 3's "graph×mediation composition is fixed" paragraph: the SAME
+# topology testdata/openziti-scenario proves (a CDC Binding reaching a
+# cross-network Postgres source ONLY through an openziti-realized
+# Connection), but WITHOUT any spec.runtime.network pin — every Provider
+# here uses the default "datascape" token, so GraphScopedAccess's Docker
+# realization (each owner's home network EXCLUSIVE to itself, docs/adr/026
+# H7's addendum) actually applies, exercising the exact composition gap
+# docs/planning/11's 2026-07-23 capstone diagnosed live: without M5's
+# graphaccess.MediatedConsumerEdges, gsm-dbz (Debezium, reaching the
+# mediated Connection only transitively via gsm-orders-db's connectionRef)
+# and gsm-mesh's dial-side tunneler shared zero networks, so the connector
+# never reached RUNNING. Host ports: Kafka 19398, Connect 18390, controller
+# 12990, mediated Connection 25890 — a fresh range, distinct from
+# testdata/openziti-scenario's, so both suites can run in the same CI
+# sweep without port collision.
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: gsm-mesh-admin
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: SecretReference
+metadata:
+  name: gsm-db-creds
+spec:
+  backend: env
+  keys: [username, password]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: gsm-mesh
+spec:
+  type: openziti
+  runtime:
+    type: docker
+  secretRefs: [gsm-mesh-admin]
+  configuration:
+    adminSecretRef: gsm-mesh-admin
+    controllerPort: 12990
+    targetNetworks: [gsm-vpc]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: gsm-orders-mediated
+spec:
+  providerRef:
+    name: gsm-mesh
+  scheme: tcp
+  port: 25890
+  target: gsm-vpc-db:5432
+  secretRef:
+    name: gsm-db-creds
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: gsm-rp
+spec:
+  type: redpanda
+  runtime:
+    type: docker
+  configuration:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1@sha256:f60d828ed6cafd7ce4c9b987ff71699895b81fe53f1d0e27ebf045277fcff21a
+    kafkaPort: 19398
+---
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: gsm-dbz
+spec:
+  type: debezium
+  runtime:
+    type: docker
+  configuration:
+    image: quay.io/debezium/connect:2.7@sha256:f062d06e19be455ebf43cca662747f2ab6efbe4678954e7d64ac06055b8c7aff
+    connectPort: 18390
+    bootstrapServers: gsm-rp:29092
+  secretRefs: [gsm-db-creds]
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: gsm-orders-db
+spec:
+  engine: postgres
+  external: true
+  connectionRef:
+    name: gsm-orders-mediated
+  postgres:
+    database: ordersdb
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: gsm-orders-events
+spec:
+  providerRef:
+    name: gsm-rp
+  partitions: 1
+  retention:
+    duration: 1d
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: gsm-orders-to-events
+spec:
+  mode: cdc
+  sourceRef:
+    name: gsm-orders-db
+  targetRef:
+    name: gsm-orders-events
+  providerRef:
+    name: gsm-dbz
+  options:
+    tables: [orders]
+    snapshotMode: initial

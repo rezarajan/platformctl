@@ -5406,6 +5406,77 @@ rebuilt example) proves it all on both runtimes.
 - **Accept:** graph-scoped + mediated CDC green both runtimes; the
   standalone graphscoped and openziti suites stay green.
 
+#### Done-note (2026-07-24)
+
+Shipped: `graphaccess.MediatedConsumerEdges(g, resources, capable)`
+(internal/application/graphaccess/graphaccess.go) — for each
+`CompileMediatedConnections` entry, walks the FULL transitive dependent
+set (`graph.Dependents(mc.Connection)`, not the one-hop `Consumers` field
+`CompileMediatedConnections` itself reserves for openziti's identity
+minting) and collapses each dependent to the first Provider-kind
+container via the EXISTING `ContainerOf`; emits one synthetic
+`Edge{From: container, To: mediationProviderKey}` per discovered
+container. Both endpoints are already literal, self-resolving container
+keys, so the fix needed ZERO changes to `ContainerOf`/`EgressPeers`/
+`IngressPeers`/`MembershipEdges` (the "Connection resolves to itself"
+pin stays exactly as `TestContainerOfConnectionResolvesToItself` fixes
+it) — one edge, fed into the unmodified compiler, closes BOTH
+directions: the consumer's own `EgressPeers` scan discovers the mediation
+Provider (the container the dial-side tunneler is created under —
+`internal/application/engine/domainruntime.go`'s `newDomainRuntime`
+resolves a Connection's own `self` from ITS OWN `providerRef`, never the
+Connection's own key), and the mediation Provider's own `IngressPeers`
+scan discovers the consumer. `mc.Targets` (the dark backend) is never
+named — the target stays dark exactly as before. Wired via a new
+`(*Engine).mediationCapable` predicate
+(internal/application/engine/graphscoped.go, type-asserts a registry-
+constructed `reconciler.Provider` to `MediationCapableProvider`, mirroring
+`graphaccess.MediationCapable`'s own doc-mandated pattern) into
+`deriveGraphAccessEdges`, called once per `resolveRequest` only when
+`GraphScopedAccess` is on (the gate-off byte-identical pin is untouched:
+a nil/false-everywhere predicate finds no mediated connections at all).
+
+Proof: unit-level (`graphaccess_test.go`:
+`TestMediatedConsumerEdgesFollowsConnectionRefTransitively`,
+`...EmptyWhenNoMediationCapableProvider`; `engine/graphscoped_test.go`:
+`TestGraphScopedAccessMediatedConsumerReachesTunnelerNotDarkTarget`, which
+was manually verified to FAIL — reproducing the exact diagnosed symptom,
+"container ... is not attached to network ..." — with the fix reverted).
+Live (Docker, real daemon, `testdata/graphscoped-mediated-scenario`: the
+exact `openziti-scenario` topology with every `spec.runtime.network` pin
+removed, since a pinned network bypasses both the private-home-network
+and per-edge mechanisms and would prove nothing —
+`TestGraphScopedMediatedConnectionEndToEnd`,
+cmd/platformctl/graphscoped_mediated_integration_test.go): apply reaches
+Ready with `MediatedConnections=true,GraphScopedAccess=true`, the CDC
+connector reaches RUNNING, and the consumer/tunneler pair is proven to
+share their per-edge network directly (`ProbeReachable` against
+`naming.EdgeNetworkName(dbzKey, meshKey)`) while the dark target gets no
+edge at all. Regression-checked green, unchanged, both runtimes: the
+non-graph-scoped mediated suite (`TestOpenZitiMediatedConnectionEndToEnd`,
+Docker AND Kubernetes) and the non-mediated graph-scoped suite
+(`TestGraphScopedAccessEndToEnd`/`GateOffEndToEnd`, Docker).
+
+K8s gap (recorded, not hidden): a dedicated K8s
+graph-scoped+mediated scenario was not built. This cluster's CNI does not
+enforce NetworkPolicy — confirmed live by running the EXISTING
+`TestGraphScopedAccessOnKubernetesEndToEnd`, which self-detects this
+("this cluster's CNI does not appear to enforce NetworkPolicy... a
+separate environment decision docs/planning/08 B7 already documents as
+not always available") and SKIPS rather than false-passing. On a cluster
+without policy enforcement, a new mediated+graph-scoped K8s scenario would
+apply successfully with or without this fix and prove nothing beyond
+"apply doesn't error" — the fix's K8s code path (`k8sPeers()` /
+`ContainerSpec.AllowFromPeers`, fed by the SAME `IngressPeers` this task's
+unit tests already exercise runtime-agnostically) is otherwise covered by
+`internal/adapters/runtime/kubernetes`'s own `TestBuildGraphScopedIngressPolicy`
+compilation tests (untouched, still green) plus this task's own unit
+proof. `TestOpenZitiMediatedConnectionOnKubernetesEndToEnd` (mediated,
+non-graph-scoped) was re-run live on this cluster and stays green,
+confirming no regression on the K8s mediation path. Building a policy-
+enforcing CNI (kind+Calico or equivalent) to close this gap for real is
+the same follow-up B7 and the H7 Done-note already name — not new to M5.
+
 ### M4: Unify zero-trust into one default-on concept
 
 - **Size:** L. **Depends:** M5. **Why:** ADR 035 decision 3 — the

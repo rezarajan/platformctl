@@ -1,6 +1,9 @@
 # M5 — graph×mediation composition fix (doc 08 §7.12 M5)
 
-## Status: fix implemented + unit-proven; live Docker proof pending.
+## Status: DONE. Fix implemented, unit-proven, live-proven on Docker,
+regression-checked on both runtimes. K8s live proof of enforcement not
+possible on this cluster (CNI has no NetworkPolicy enforcement — recorded
+as a gap, not hidden). Doc 08 Done-note appended. Ready to commit.
 
 ## The bug (diagnosed doc 11 2026-07-23 capstone)
 GraphScopedAccess + MediatedConnection did not compose: a consumer (e.g.
@@ -55,13 +58,42 @@ engine.go resolveRequest, `deriveGraphAccessEdges(byKey, e.mediationCapable)`.
   worked-example test, non-mediated graphscoped tests) all still pass
   unchanged.
 
-## Remaining for this task
-- [ ] Live Docker proof: graph-scoped + mediated CDC path reaches RUNNING
-      (the exact capstone-failing case). Candidate: extend
-      cmd/platformctl/testdata/openziti-scenario with GraphScopedAccess=true,
-      or build a small dedicated scenario.
-- [ ] K8s: check KUBECONFIG=/tmp/claude-1000/platformctl-rbac/platformctl.kubeconfig
-      liveness; record gap if dead.
-- [ ] Add new integration test as a suite row in scripts/test-impact.sh.
-- [ ] Append M5 Done-note to doc 08 (additive).
-- [ ] Final commit + report.
+## Live proof (Docker, real daemon)
+New scenario testdata/graphscoped-mediated-scenario (openziti-scenario's
+topology with every spec.runtime.network pin removed — a pin bypasses
+BOTH the private-home-network and per-edge mechanisms and would prove
+nothing) + cmd/platformctl/graphscoped_mediated_integration_test.go
+(TestGraphScopedMediatedConnectionEndToEnd). Ran under
+`flock /tmp/platformctl-itest.lock`:
+- apply reaches Ready with MediatedConnections=true,GraphScopedAccess=true.
+- CDC connector reaches RUNNING (18390 REST).
+- gsm-dbz and the tunneler ("gsm-orders-mediated") proven to share their
+  M5 per-edge network directly (ProbeReachable).
+- Dark target gets no edge network.
+- Confirmed clean teardown (no docker residue: containers/networks/volumes
+  all gone after the run).
+
+## Regression checks (live, both runtimes)
+- Docker: TestOpenZitiMediatedConnectionEndToEnd (mediated, non-graph-
+  scoped) — PASS. TestGraphScopedAccessEndToEnd /
+  TestGraphScopedAccessGateOffEndToEnd (graph-scoped, non-mediated) —
+  PASS.
+- Kubernetes (KUBECONFIG=/tmp/claude-1000/platformctl-rbac/platformctl.kubeconfig,
+  live minikube cluster, confirmed via `kubectl auth can-i create
+  deployments` = yes): TestOpenZitiMediatedConnectionOnKubernetesEndToEnd
+  — PASS. TestGraphScopedAccessOnKubernetesEndToEnd — SKIPS (pre-existing,
+  self-detected: this cluster's CNI does not enforce NetworkPolicy — same
+  skip the test already produced before this task). Given that, a new K8s
+  graph-scoped+mediated scenario would apply successfully with or without
+  this fix and prove nothing beyond "apply doesn't error" — recorded as
+  the K8s gap in doc 08's M5 Done-note rather than building one.
+
+## Housekeeping
+- New suite row `graphscoped-mediated` added to scripts/test-impact.sh;
+  internal/archtest's completeness test (TestIntegrationSuiteMapCoversEveryTest)
+  confirms every new integration Test* function is mapped.
+- Doc 08 M5 Done-note appended (additive).
+- Full `go test ./...`, gofmt, go vet (plain + -tags integration),
+  golangci-lint v2.12.2 (repo-pinned) all clean at every checkpoint.
+
+## Done. Final commit follows.
