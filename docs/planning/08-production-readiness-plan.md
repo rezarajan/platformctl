@@ -5377,6 +5377,32 @@ rebuilt example) proves it all on both runtimes.
 - **Accept:** a Connection with no port applies; its consumers reach it;
   a pinned port still works byte-identically.
 
+**Done note (2026-07-23):** implemented. `schemas/v1alpha1/connection.json`
+drops `port` from the top-level `required` list; the `external`-branch
+`allOf` still requires it there (an external connection's port is the
+external system's own — nothing to auto-allocate). `internal/domain/
+connection.FromEnvelope` auto-allocates an omitted managed-connection port
+via `hostport.Resolve(c.Port, naming.RuntimeObjectName(e))` — the identical
+allocator, and identical shared collision table, a Provider's own omitted
+host port already resolves through (`providerkit.HostPort`); `validate`'s
+port-required check narrowed to the external case only. No provider
+adapter changed: `proxy`/`wireguard`/`openziti` all read the already-
+resolved `conn.Port`, so the auto-allocated value flows unmodified to the
+entrypoint's listen port and the published endpoint fact. Verified fast-
+tier: `internal/domain/connection/port_test.go` (omitted port auto-
+allocates and is stable across repeated `FromEnvelope` calls; pinned port
+unchanged; external connection still requires a port) and
+`internal/application/engine/connection_port_test.go`'s
+`TestConnectionAutoAllocatedPortPublishedAndResolved` (a real `graph.Build`
+-> `plan.Compute` -> `Engine.Apply` run proving the auto-allocated port is
+what the realizing provider's container listens on, what it publishes as
+the endpoint fact's `ContainerPort`, and what a consumer resolves through
+`Engine.connectionDialAddress` — never a literal). doc 03 §8.2 field notes
+and `docs/reference/connection.md` (regenerated) updated in the same
+commit. Open item: no existing example manifest omits `spec.port` yet, so
+the new path is unexercised on a live runtime — a follow-up example/live
+smoke is recommended once M5/M4 land alongside it (doc 11 candidate).
+
 ### M3: Sensible per-provider resource defaults
 
 - **Size:** M. **Depends:** —. **Why:** ADR 035 decision 4 (the owner's
