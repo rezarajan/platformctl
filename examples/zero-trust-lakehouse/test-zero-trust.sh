@@ -23,10 +23,8 @@
 # denying, because there is no hand-written policy.
 #
 # Run AFTER `platformctl apply` has brought the stack up (see
-# README.md#run-it). NOTE (2026-07-24): apply itself is blocked today —
-# see README.md's "Known blocker" section — so this script is unverified
-# live; it is written correct-for-target and will run as soon as the CLI
-# can load the plane-folder manifest set.
+# README.md#run-it). Verified live on Docker 2026-07-24: all five checks
+# pass against a fresh apply of this example.
 #
 # Usage: ./test-zero-trust.sh [path to platformctl binary]
 set -uo pipefail
@@ -36,7 +34,15 @@ PLATFORMCTL="${1:-${PLATFORMCTL:-platformctl}}"
 FEATURE_GATES="HighAvailability=true,TrinoProvider=true"
 STATE="${ZTL_STATE:-${HERE}/ztl.state.json}"
 
-PLATFORM_NETWORK="${PLATFORM_NETWORK:-datascape}"
+# The mesh control-plane network. Zero-trust graph-scoped access gives the
+# openziti mesh its OWN private network (datascape-own-<hash>) where the
+# controller and router edge listeners live — there is deliberately no flat
+# "datascape" network every container shares (that segmentation is the whole
+# point). Discover it as the datascape-own-* network the mesh controller is
+# on, so the canary can enroll against the controller and attempt a dial
+# through the router by container name, exactly as the legitimate tunneler
+# does. Override with PLATFORM_NETWORK if you run a custom topology.
+PLATFORM_NETWORK="${PLATFORM_NETWORK:-$(docker inspect mesh-ctrl --format '{{range $k,$v := .NetworkSettings.Networks}}{{println $k}}{{end}}' 2>/dev/null | grep '^datascape-own-' | head -1)}"
 VPC_NETWORK="${ZTL_ORDERS_VPC:-ztl-orders-vpc}"
 DB_CONTAINER="${ZTL_ORDERS_DB:-ztl-orders-db}"
 
@@ -59,7 +65,11 @@ except Exception:
     sys.exit(0)
 for e in data.get("endpoints") or []:
     if e.get("component") == "default/Provider/lake-debezium" and e.get("host") and e["host"] != "(in-network only)":
-        print(f"{e[\"scheme\"]}://{e[\"host\"]}")
+        host = e["host"]
+        # inventory already prefixes the scheme for http endpoints
+        # (host="http://127.0.0.1:PORT") but not for raw tcp/kafka/mysql —
+        # only prepend when the host is not already a URL.
+        print(host if "://" in host else e["scheme"] + "://" + host)
         break
 ')"
 
@@ -109,6 +119,17 @@ else
   if [ -z "$token" ]; then
     bad "could not authenticate to mesh controller at ${ctrl_addr} — canary proof skipped"
   else
+    # Idempotent: remove any canary identity left by a prior run (the ziti
+    # identity outlives its container, so a killed/failed run leaves it in
+    # the controller's unique-name index — delete it before re-minting).
+    stale_id="$(curl -ks "https://${ctrl_addr}/edge/management/v1/identities?filter=name%3D%22canary-unauthorized%22" \
+      -H "zt-session: ${token}" | python3 -c 'import json,sys
+d=(json.load(sys.stdin).get("data") or [])
+print(d[0]["id"] if d else "")' 2>/dev/null)"
+    if [ -n "$stale_id" ]; then
+      curl -ks -X DELETE "https://${ctrl_addr}/edge/management/v1/identities/${stale_id}" -H "zt-session: ${token}" >/dev/null 2>&1 || true
+    fi
+
     create_resp="$(curl -ks -X POST "https://${ctrl_addr}/edge/management/v1/identities" \
       -H 'Content-Type: application/json' -H "zt-session: ${token}" \
       -d '{"name":"canary-unauthorized","type":"Device","isAdmin":false,"enrollment":{"ott":true}}')"
@@ -140,26 +161,49 @@ else
           openziti/ziti-tunnel:1.5.14@sha256:5966139d3db0f54b58f979d1e3374a0fd0f132322ecade29b852d2cabedaf861 \
           proxy "${service_name}:${canary_port}" >/dev/null
 
-        refused=1
-        deadline=$((SECONDS + 20))
-        while [ $SECONDS -lt $deadline ]; do
-          if docker run --rm --network "$PLATFORM_NETWORK" \
-              alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e \
-              -T2 - "TCP:ziti-canary:${canary_port},connect-timeout=2" >/dev/null 2>&1; then
-            sleep 1
-          else
-            refused=0
+        # Gate the refusal proof on ENROLLMENT: the canary must be accepted
+        # into the mesh (a valid identity) for the dial-refusal below to
+        # prove the Dial *authorization* check — not a network artifact or a
+        # canary that never came up. Without this gate a canary that failed
+        # to start would look identical to a refused dial (a false PASS, the
+        # exact trap the first run's "network datascape not found" hit).
+        enrolled=0
+        edeadline=$((SECONDS + 30))
+        while [ $SECONDS -lt $edeadline ]; do
+          if docker logs ziti-canary 2>&1 | grep -q "enrolled successfully"; then
+            enrolled=1
             break
           fi
+          sleep 1
         done
 
-        if [ "$refused" = "1" ]; then
-          bad "dial through the canary's unauthorized identity unexpectedly succeeded — the per-edge identity check is not enforcing"
+        if [ "$enrolled" != "1" ]; then
+          bad "canary did not enroll against the mesh — cannot distinguish an authz refusal from an enrollment/network failure (proof inconclusive); logs: $(docker logs ziti-canary 2>&1 | tail -3 | tr '\n' ' ')"
         else
-          ok "wrong-identity dial correctly refused (no Dial service-policy authorizes canary-unauthorized) — the dark orders DB stays reachable only by the legitimate identity"
+          refused=1
+          deadline=$((SECONDS + 20))
+          while [ $SECONDS -lt $deadline ]; do
+            if docker run --rm --network "$PLATFORM_NETWORK" \
+                alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e \
+                -T2 - "TCP:ziti-canary:${canary_port},connect-timeout=2" >/dev/null 2>&1; then
+              sleep 1
+            else
+              refused=0
+              break
+            fi
+          done
+
+          if [ "$refused" = "1" ]; then
+            bad "dial through the canary's unauthorized identity unexpectedly succeeded — the per-edge identity check is not enforcing"
+          else
+            ok "canary enrolled into the mesh but its dial was refused (no Dial service-policy authorizes canary-unauthorized) — the identity check itself, not a network artifact; the dark orders DB stays reachable only by the legitimate identity"
+          fi
         fi
 
         docker rm -f ziti-canary >/dev/null 2>&1 || true
+        # Clean up the ziti identity we minted (the container is already
+        # gone). Named-only teardown — never touches the legitimate mesh.
+        curl -ks -X DELETE "https://${ctrl_addr}/edge/management/v1/identities/${canary_id}" -H "zt-session: ${token}" >/dev/null 2>&1 || true
       fi
     fi
   fi

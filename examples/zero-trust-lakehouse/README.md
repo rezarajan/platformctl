@@ -5,33 +5,20 @@ platform** declared entirely as resources in data-platform **planes**
 (folders) and brought up with one `platformctl apply`. It is the
 reference for "what just-works Datascape looks like" (docs/adr/035).
 
-> ## ⚠ Known blocker — recorded 2026-07-24, not yet fixed
+> ## ✅ Verified live on Docker — 2026-07-24
 >
-> **`platformctl` cannot read a manifest set spread across subdirectories
-> today.** `internal/application/manifest/manifest.go`'s `collectFiles`
-> skips every directory entry (`if entry.IsDir() { continue }`) and every
-> CLI command that takes a manifest path (`validate`/`plan`/`apply`/
-> `status`/`destroy`/...) is `cobra.MaximumNArgs(1)` — one path, one
-> directory level, no recursion, no multi-path form. This example is
-> deliberately organized into planes as **folders**
-> (`platform/`, `sources/`, `cdc/`, `sinks/`, `catalog/`, `query/`,
-> `lineage/`) per docs/planning/08 M7 / docs/adr/035, so **`platformctl
-> apply examples/zero-trust-lakehouse` finds zero manifests today** — it
-> is not a manifest-content problem (every resource below is individually
-> schema/graph/gate valid — verified by flattening all plane files into
-> one temp directory and running `validate`/`plan`/`lint` against it,
-> 26 resources, zero errors) — it is a missing capability in the CLI's
-> file-discovery layer. **Nothing in this example has been proven live**
-> (no Docker apply, no HA kill-test, no Dagster connectivity check, no
-> Kubernetes leg) because the one command that would drive all of that
-> cannot load the manifest set. See `TASK_PROGRESS.md` at the repo root
-> for the full finding and what unblocks it (recursive directory walking
-> in `collectFiles`, or an equivalent multi-path/glob form on the
-> manifest-path flag). Until that lands, this README documents the
-> **target** design — read it as the spec for what `apply` proves once
-> the CLI can see it, not as a today-verified walkthrough.
+> `platformctl apply examples/zero-trust-lakehouse` brings the whole set
+> up from the plane folders: 26 resources to `Ready`, zero-trust on with
+> no `--feature-gates` for it, all 5 checks in `test-zero-trust.sh`
+> passing (positive mediated-CDC path, an unauthorized-identity dial
+> refused, dark-DB posture), and the HA broker-loss kill-test surviving
+> (see [High availability](#high-availability)). The plane-folder layout
+> loads via the project's explicit `spec.resources` member list (the
+> Helm/Kustomize include pattern, docs/adr/035 / M7): the root
+> `datascape.yaml` names its planes; each plane's own `datascape.yaml`
+> names its files.
 
-## What it proves (once unblocked)
+## What it proves
 
 | Capability | How this example demonstrates it |
 |---|---|
@@ -84,14 +71,14 @@ through `platform/`'s Connection; that omission is deliberate, not a gap
 
 ## Prerequisites
 
-- Docker (once unblocked: ~15+ containers across the HA sets; JVMs for
+- Docker (~15+ containers across the HA sets; JVMs for
   Nessie/Marquez/Trino/Connect). Recommended 8+ GB free RAM, 4+ CPUs — HA
   triples the Redpanda footprint and quadruples MinIO's versus the
   original single-container build.
 - `platformctl` on your PATH (or point at a built binary).
 - Python 3 (`test-zero-trust.sh` parses JSON).
 
-## Run it (the target command, once the blocker above is fixed)
+## Run it
 
 ```bash
 cd examples/zero-trust-lakehouse
@@ -152,7 +139,7 @@ only way to turn it off. With it on:
   Binding to what X needs to reach instead." That refusal is exactly why
   no plane in this example carries one.
 
-`test-zero-trust.sh` (once the blocker is fixed) proves: (1) the
+`test-zero-trust.sh` proves: (1) the
 legitimate mediated CDC path reaches connector state RUNNING; (2) a
 canary holding a different, unauthorized Ziti identity is refused the
 dial; (3) the dark DB has no host port and is on no network any other
@@ -169,13 +156,29 @@ HighAvailability=true`:
 | `sinks/01-providers.yaml` | `nodes: 4` | A 4-node erasure-coded MinIO cluster (distinct topology from `nodes: 1`; 2-3 has no supported shape). |
 | `query/01-provider.yaml` | `workers: 2` | A Trino coordinator with 2 independent query-execution workers. |
 
-Once unblocked, the live proof is: `docker ps` shows 3 `lake-redpanda-*`
-broker containers, 4 `lake-minio-*` node containers, and a
-`lake-trino` coordinator + 2 worker containers; killing one Redpanda
-broker (`docker kill lake-redpanda-1`) leaves the CDC path serving
-(Kafka's own quorum tolerates one loss out of 3); the platform keeps
-reporting `Ready=True` for every resource that doesn't depend on the
-killed container specifically.
+The live proof (run against a Docker apply of this example): `docker ps`
+shows 3 `lake-redpanda-*` broker containers, 4 `lake-minio-*` node
+containers, and a `lake-trino` coordinator + 2 worker containers. Killing
+even the **leader** broker for the orders CDC topic (`docker kill
+lake-redpanda-2`) leaves the orders CDC path serving — the connector stays
+`RUNNING`, a row inserted into the dark DB *after* the kill is still
+captured end-to-end, and the platform keeps reporting `Ready=True` for
+`lake-redpanda`, `lake-debezium`, and the `orders-to-events` Binding.
+
+That survival is not automatic from `brokers: 3` alone — it required a fix
+found by running this very proof: Kafka Connect's per-table CDC data topics
+**and** the connect worker's own internal state topics (config/offset/
+status) are now created replicated to the target EventStream's declared
+`replication` (`internal/adapters/providers/debezium`), where they were
+previously hardcoded to a single replica and a broker loss stranded the
+data. A single-broker project is unaffected (replication stays 1).
+
+Scope note: the fully broker-loss-proven leg is the **orders** (Postgres)
+CDC path. The second **events** (MySQL) leg additionally keeps a Debezium
+`schema-history` topic that Debezium auto-creates at replication factor 1
+(the connector exposes no per-connector override in this version); it is
+not part of the broker-loss claim above and would need the cluster's
+`default_topic_replications` raised to be equally resilient.
 
 ## Known adaptations (found verifying this example against the current code)
 
@@ -274,10 +277,10 @@ anything else on your Docker host.
 
 ## Troubleshooting
 
-- **`error: no manifest files (*.yaml, *.yml, *.json) found under
-  examples/zero-trust-lakehouse`:** this is the known blocker at the top
-  of this file, not a misconfiguration — `platformctl` does not read
-  subdirectories yet.
+- **`error: ... declares spec.resources but they resolved to no manifest
+  files`:** a plane named in a `datascape.yaml`'s `spec.resources` is
+  missing or empty. The root lists its plane directories; each plane's own
+  `datascape.yaml` lists its files — check both against the actual layout.
 - **`Binding/orders-to-events` fails "connection attempt failed":** the
   dark DB isn't up or its credential doesn't match
   `orders-db-replication`. Re-run `./setup-external-db.sh` (it uses that

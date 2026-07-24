@@ -5,10 +5,10 @@
 # It never pattern-matches Docker state — a shared host may hold your own
 # unrelated volumes/networks, which this script must never touch.
 #
-# NOTE: as of 2026-07-24 `platformctl destroy` against the plane-folder
-# layout below is blocked (see README.md's "Known blocker" section —
-# platformctl does not read subdirectories yet). Step 1 is written for
-# when that lands; step 2 (the unmanaged external fixtures) works today.
+# Step 1 destroys every platformctl-managed resource across the plane
+# folders (loaded via the project's spec.resources member list); step 2
+# removes the unmanaged external fixtures (the dark DB + its isolated
+# network) by exact name.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
