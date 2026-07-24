@@ -15,16 +15,29 @@ Merged main at 6fa6b48 (fast-forward, no conflicts).
       cleanup, K5 policy decision stderr events, lowercase backup
       timestamps) — verified each against code/git log before writing.
       Entries added, dated 2026-07-23.
-- [ ] Bump version to v1.3.0 in cmd/platformctl/main.go.
-- [ ] Gate graduation review: decide + apply main.go changes + doc 11
-      addendum + upgrade-notes entries for any default flips.
-- [ ] Author CHANGELOG.md.
-- [ ] Regenerate docs/reference if version strings appear (check
-      `go run ./cmd/platformctl docs build`).
-- [ ] Run releasing.md preconditions checklist (gofmt, build, vet, test,
-      docsgen sync test; skip test-integration per task instructions —
-      a separate certification agent owns that).
-- [ ] golangci-lint v2.12.2 run.
+- [x] Bump version to v1.3.0 in cmd/platformctl/main.go + README badge.
+- [x] Gate graduation review: drafted GA graduations for KubernetesRuntime/
+      BackupRestore/ExternalResourceConfiguration with full evidence
+      citations, then REVERTED per mid-task coordinator scope-change
+      (see "SCOPE CHANGE" section above) — no gate maturity/default
+      changes ship in this commit. Reasoning preserved in CHANGELOG.md's
+      "Gate graduation review" section instead of docs/planning/04 (since
+      the doc-04 addendum was part of what got reverted).
+- [x] Author CHANGELOG.md (v1.3.0 section covering Stage I/J/K/L, H9/H10,
+      E6, plus the gate-graduation review outcome and the flagged
+      conflict).
+- [x] docs/reference: TestGeneratedReferenceInSync passes; no schema
+      changes in this session, so no regen needed. README.md version
+      badge bumped to v1.3.0 (only other v1.2.0 string outside
+      docs/releasing.md's historical tag-mapping table, which is
+      intentionally left alone).
+- [x] Releasing.md preconditions checklist run (see final report for
+      pass/fail per item). gofmt clean, build clean, vet clean (plain +
+      -tags integration), full `go test ./...` 65 packages ok / 0 fail,
+      example validate (cdc-attendance, lakehouse) both clean.
+      test-integration explicitly SKIPPED per task instructions (separate
+      certification agent owns it).
+- [x] golangci-lint v2.12.2: 0 issues.
 - [ ] Final unsigned commit; report.
 
 ## Gate graduation candidates (from research, to decide)
