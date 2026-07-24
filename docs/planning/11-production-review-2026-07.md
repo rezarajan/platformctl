@@ -799,3 +799,33 @@ static. Dimensions, each producing findings verified before fixing:
   with full messages per owner directive; owner signs at finalization.
   Pending: K4 (K8s leg in flight), then L2 + pkcs7 swap, then THE
   authoritative single-content-state sweep.
+- 2026-07-23: OVERFIT / SDK-CONFORMANCE REVIEW of L2 + the port surfaces
+  (owner-directed: conform to CRI/CNI-style technology-silent ports as we
+  move toward an SDK). Findings:
+  * FIXED PRE-MERGE (port-contract leak): mediation.FabricState exposed
+    ControllerContainerID/RouterContainerID/RouterID — OpenZiti's own
+    two-node control-plane topology named in a technology-silent port. A
+    SPIRE adapter has server+agents, Consul has servers; neither has a
+    "router". The engine read NONE of them (RouterContainerID was never
+    set); teardown finds objects by ownership label. Collapsed to one
+    technology-neutral ControlPlaneAddress, following
+    runtime.ContainerRuntime's discipline (expose what the caller dials,
+    keep object bookkeeping inside the adapter). Live idempotency proof
+    strengthened to inspect the real container id via the runtime.
+  * The two well-formed ports (mediation.MediationProvider,
+    mediation.AddressResolver) are exemplary — technology-silent,
+    capability-separated (AddressResolver is an optional interface beside
+    MediationProvider, the reconciler.*CapableProvider pattern), archtest
+    pins "no ziti import outside the adapter". These are the CRI/CNI
+    model done right.
+  * GAP RECORDED (not blocking, specced): (a) no CONFORMANCE SUITE exists
+    for the mediation port, though mediation.go's doc CLAIMS one ("proves
+    this the same way runtime adapters are proven"). runtime + reconciler
+    both have internal/ports/*/conformance packages; mediation must too
+    before a second adapter (SPIRE) is verifiable — the doctrine that
+    makes ports real, not aspirational. (b) fabricRuntimeSource picks
+    "first Provider by key" for the fabric runtime, explicitly assuming
+    every Provider shares one runtime.type — a mixed-runtime deployment
+    (allowed by the architecture) would pick arbitrarily. Both promoted
+    to Stage L: L2a (mediation conformance suite) + an L3 note on
+    mixed-runtime fabric selection.

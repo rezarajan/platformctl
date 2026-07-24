@@ -5256,6 +5256,33 @@ DestroyFabric removes every container/volume/network and is a clean no-op
 on a second call. PASS in 12.7s, zero residue confirmed via
 `docker ps -a`/`volume ls` after.
 
+### L2a: Mediation port conformance suite (the CRI/CNI-style adapter contract)
+
+- **Size:** M. **Depends:** L2 (merged). **Why:** the owner's
+  SDK-conformance review (doc 11, 2026-07-23) found the mediation port
+  has NO conformance suite though mediation.go's own doc comment claims
+  one ("proves this the same way runtime adapters are proven").
+  internal/ports/runtime/conformance and .../reconciler/conformance are
+  the precedent: a technology-independent suite EVERY adapter must pass,
+  the thing that makes a port a real contract rather than one
+  implementation's shape. Without it a second adapter (SPIRE, Consul)
+  has nothing to verify against, and the "port not overfit to OpenZiti"
+  claim is untested.
+- **Do:** internal/ports/mediation/conformance — drive any
+  MediationProvider (+ optional AddressResolver, + FabricProvisioner)
+  through the Ensure*-idempotent contract every method documents:
+  MintIdentity twice = same URI/fingerprint zero extra writes;
+  RealizeEdge idempotent + in-place authorization update; RevokeEdge/
+  RevokeIdentity "already gone is success"; ObservedEdges/Identities
+  round-trip; EnsureFabric idempotent (real object not recreated);
+  DestroyFabric idempotent + residue-free; label-attribute derivation
+  (K4) converges. Run it against openziti in the deep tier AND against a
+  fake mediation adapter in the fast tier (the fake becomes the L3/L4
+  test double). Mirror the runtime conformance suite's structure exactly.
+- **Accept:** openziti passes the suite live; the fake passes it
+  fast-tier; a deliberately-broken fake (non-idempotent MintIdentity)
+  fails it (the suite has teeth).
+
 ### L3: Every edge mediated — identities, services, policies from the graph
 
 - **Size:** L. **Depends:** L2, K4. **Why:** the default flip itself.
