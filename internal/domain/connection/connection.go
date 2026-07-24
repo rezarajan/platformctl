@@ -22,17 +22,26 @@ import (
 	"net"
 	"strconv"
 
+	"github.com/rezarajan/platformctl/internal/domain/hostport"
+	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 )
 
 type Connection struct {
 	ProviderRef *string // required unless External: the Provider realizing the entrypoint
 	External    bool
-	Scheme      string  // transport scheme; "tcp" (default) is what v1 forwarders support
-	Host        string  // External only: where the system answers
-	Port        int     // the port consumers use (managed: listen port on network + host)
-	Target      string  // managed only: host:port the entrypoint forwards to
-	SecretRef   *string // optional SecretReference carrying credentials for whatever answers
+	Scheme      string // transport scheme; "tcp" (default) is what v1 forwarders support
+	Host        string // External only: where the system answers
+	// Port is the port consumers use (managed: listen port on network +
+	// host). Managed connections auto-allocate it deterministically
+	// (internal/domain/hostport, keyed on this Connection's own runtime
+	// object name — docs/adr/035 decision 2) when spec.port is omitted; an
+	// explicit value is kept byte-identically. External connections have no
+	// entrypoint to auto-allocate for, so Port stays the required, literal
+	// port the external system answers on.
+	Port      int
+	Target    string  // managed only: host:port the entrypoint forwards to
+	SecretRef *string // optional SecretReference carrying credentials for whatever answers
 	// Via is the optional nameRef to a tunnel-capable Provider (managed
 	// only) this Connection's egress additionally routes through
 	// (docs/adr/002's addendum, docs/adr/023). Schema-accepted and
@@ -132,6 +141,17 @@ func FromEnvelope(e resource.Envelope) (Connection, error) {
 	case float64:
 		c.Port = int(n)
 	}
+	// Managed connections auto-allocate an omitted port deterministically,
+	// keyed on this Connection's own runtime object name — the identical
+	// mechanism (and the identical shared collision table, docs/adr/035
+	// decision 2) a Provider's own omitted host port already resolves
+	// through (internal/adapters/providers/providerkit.HostPort). An
+	// explicit pin (c.Port > 0) passes through Resolve unchanged. External
+	// connections have no entrypoint to allocate for — their port is the
+	// external system's own, and stays required (checked in validate).
+	if !c.External {
+		c.Port = hostport.Resolve(c.Port, naming.RuntimeObjectName(e))
+	}
 	if raw, ok := e.Spec["tls"].(map[string]any); ok {
 		t := &TLS{}
 		if ref := refName(raw, "secretRef"); ref != "" {
@@ -156,8 +176,12 @@ func FromEnvelope(e resource.Envelope) (Connection, error) {
 }
 
 func (c Connection) validate(name string) error {
-	if c.Port <= 0 {
-		return fmt.Errorf("Connection %q: spec.port is required", name)
+	// A managed connection's port is auto-allocated above when omitted, so
+	// it is never <= 0 by the time validate runs; an external connection
+	// has no auto-allocation path (nothing Datascape controls to allocate a
+	// port for) and so still requires an explicit spec.port.
+	if c.External && c.Port <= 0 {
+		return fmt.Errorf("Connection %q: spec.port is required when spec.external is true", name)
 	}
 	if c.Transport != "" && c.Transport != "direct" {
 		return fmt.Errorf("Connection %q: spec.transport must be \"direct\" when set (docs/adr/034: mediated is the unset default)", name)

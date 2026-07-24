@@ -11,7 +11,7 @@ A first-class, non-secret description of how to reach a system: address here, cr
 | `spec.access` | array of object | no | Explicit wide-grant declarations (docs/adr/026 §2, docs/planning/08 H7) widening this Connection's reachability beyond its own declared graph edges to every resource in a named namespace. Only takes effect under the GraphScopedAccess feature gate (Alpha, disabled by default); schema-valid but inert otherwise. |
 | `spec.external` | boolean | no | A plain address record; nothing is created for it. |
 | `spec.host` | string | no | External only: where the system answers. |
-| `spec.port` | integer | yes | The port consumers use. Managed: the entrypoint's listen port on the shared network and the host. |
+| `spec.port` | integer | no | The port consumers use. Managed: the entrypoint's listen port on the shared network and the host — optional; omitted, it auto-allocates deterministically (the same internal/domain/hostport allocator a Provider's own omitted host port uses). A data engineer pins it only when an external system needs a fixed port. External: the port the external system answers on — always required, since Datascape does not control it. |
 | `spec.providerRef` | object `{name}` | no | The connection-capable Provider realizing the entrypoint. Required unless external. |
 | `spec.scheme` | string | no | Transport scheme; the realizing provider must declare it in SupportedConnectionSchemes(). Default: tcp. |
 | `spec.secretRef` | object `{name}` | no | Optional SecretReference carrying credentials for whatever answers at this connection. |

@@ -1408,6 +1408,17 @@ spec:
 ```
 
 Field notes:
+- `spec.port` is **optional on a managed Connection** (docs/adr/035
+  decision 2): omitted, the entrypoint's listen port auto-allocates
+  deterministically via `internal/domain/hostport` — the identical
+  allocator, and the identical shared collision table, a Provider's own
+  omitted host port already resolves through. A pinned port is unchanged,
+  byte-identically. Consumers never learn or need the port either way —
+  they resolve the connection's address from its published endpoint fact
+  (§3.2, docs/adr/015), exactly as before; a data engineer pins one only
+  when an external system requires a fixed port. On an **external**
+  Connection, `spec.port` stays required — it is the external system's own
+  port, which Datascape does not control and so cannot allocate.
 - Consumers never address `spec.target` — they address the Connection
   (managed: its own name / `127.0.0.1`; external: `spec.host`). Moving the
   real system is a one-line manifest change.
@@ -1439,6 +1450,13 @@ spec:
   port: 80                           # required by the base Connection schema; not separately used by ingress (routing is by Host header, not by port)
   target: nessie:19120               # host:port the entrypoint forwards to, passed through as-is
 ```
+
+**Update (docs/adr/035 decision 2, M2):** `port` is now optional on every
+managed Connection, this one included — the `80` above is pinned only for
+illustration; an omitted port auto-allocates the same way the base
+`Connection` field notes in §8.2 describe. Since `ingress` never reads the
+port itself (routing is by `Host` header, not by port), the auto-allocated
+value is exactly as usable here as a pinned one.
 
 - Docker: one shared Caddy container per `Provider(type: ingress)`, routing
   `Host(<connection-name>.<domain>)` to `spec.target`. `domain` is
