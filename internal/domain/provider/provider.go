@@ -61,6 +61,15 @@ func (p Provider) validate(name string) error {
 		return fmt.Errorf("Provider %q: spec.type is required", name)
 	}
 	if p.RuntimeType == "" {
+		// docs/adr/035 decision 1 (docs/planning/08 M1): spec.runtime is now
+		// schema-optional (schemas/v1alpha1/provider.json) — a Provider
+		// under a project (datascape.yaml) inherits its runtime before
+		// this ever runs (internal/application/manifest.
+		// ResolveProjectRuntime, called from manifest.Load before
+		// Validate). This check now only fires in the backward-compat
+		// case this ADR is careful to preserve byte-for-byte: no
+		// datascape.yaml at all, so a Provider with no spec.runtime has
+		// nowhere to inherit one from — exactly today's error.
 		return fmt.Errorf("Provider %q: spec.runtime.type is required", name)
 	}
 	if p.External && p.ConnectionRef == nil {

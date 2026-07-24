@@ -5367,6 +5367,80 @@ rebuilt example) proves it all on both runtimes.
   project runtime; a mixed-runtime inventory is refused with a clear
   message; existing per-Provider-runtime manifests still work (override).
 
+#### Done-note (2026-07-23)
+
+Shipped: `internal/domain/project` (new package — `Project{Name,
+Runtime{Type,Config}, ZeroTrust}`, `FromEnvelope`, mirrors
+`internal/domain/provider`'s shape) and `schemas/v1alpha1/project.json`,
+registered in `schemas.KindFiles["datascape.io/v1alpha1"]["Project"]` —
+same compiler, same `meta.json` `$ref`, deliberately NOT added to
+`manifest.KnownKinds` (a Project document never enters the governed
+envelope set, the graph, or a plan/apply resource list — same posture as
+Policy §13, just sharing the apiVersion-keyed schema map since Project's
+apiVersion already matches). `internal/application/manifest/project.go`:
+`LoadProject(path)` reads the reserved `datascape.yaml` at path's root
+(path itself if a directory, its parent directory if path names a single
+manifest file), nil on absence; `ResolveProjectRuntime(envelopes, proj)`
+populates every Provider's `spec.runtime` from the project's (a clone per
+Provider — no aliased maps) when omitted, and refuses an explicit
+override whose `type` doesn't match the project's, with exactly the
+message the design called for. `collectFiles` excludes `datascape.yaml`
+from the ordinary manifest scan; `manifest.Load` calls LoadProject then
+ResolveProjectRuntime before Validate — every existing caller
+(`loadAndValidate`, `policy test`, `compose`) gets project-runtime
+resolution for free with **no signature change**. `schemas/v1alpha1/
+provider.json`: `spec.runtime` dropped from `required` (still required
+*inside* the object when present, and `provider.Provider.validate`'s
+Go-level "spec.runtime.type is required" check is unchanged — it now
+fires only in the true backward-compat case: no project, no per-Provider
+runtime).
+
+Single-runtime-per-inventory (item 3) is implemented as a corollary of
+the per-Provider override check, not a separate whole-inventory scan: once
+a project exists, every Provider's resolved runtime is proven, one at a
+time, to equal `proj.Runtime.Type` (inherited, or an override checked
+against it) — no second pass can find a divergence a first pass didn't
+already refuse. This is scoped strictly to "a project file exists":
+`examples/cdc-attendance/provider-lineage-fake.yaml` sets `runtime: fake`
+alongside sibling `docker` Providers with NO `datascape.yaml`, exercised
+live by `cmd/platformctl/acceptance_integration_test.go` — proof the
+free-for-all per-Provider-runtime path must and does keep working
+byte-identically when no project config exists (doc 03 §1.1 records this
+explicitly).
+
+Proof: `internal/application/manifest/project_test.go` (new) — a project
+resolves omitted-runtime Providers to its own (no map aliasing across
+Providers), an explicit override matching the project type is kept
+verbatim, a mismatched override is refused with the exact message, three
+no-project-file backward-compat cases (explicit runtime still works,
+mixed docker+fake still works, an omitted runtime still fails exactly as
+before), `LoadProject`'s own nil/single-file-parent-dir/zeroTrust-default/
+malformed-input contracts, and a regression pinning `datascape.yaml`'s
+exclusion from the governed manifest scan. `schema_test.go`'s pre-existing
+"provider without runtime" schema-rejection case was retired (that
+omission is schema-valid now by design) with a comment pointing at its
+replacement. Live-verified beyond the unit suite: `platformctl validate`/
+`plan`/`apply` run against a hand-built `datascape.yaml` + two Providers
+(one omitting runtime, one overriding to a mismatched family, one
+overriding to a matching family) on the `fake` runtime — refusal,
+inheritance, and a full create-succeeds apply all behaved as designed.
+`go build`/`go vet`/`go vet -tags integration`/`go test ./...`/
+`golangci-lint run ./...` all clean; `docs/reference/project.md` +
+`index.md` regenerated via `platformctl docs build` (`docsgen`'s own
+sync test passes). Archtests (wrapper-completeness, request-frozen,
+layering) unaffected — this task touches no runtime wrapper, no
+`reconciler.Request` field, and no domain/ports->adapters import.
+
+Open items: `spec.zeroTrust` is parsed and stored only — M4 is the task
+that wires it into engine behavior. No example ships a `datascape.yaml`
+yet (left to M7, the rebuilt capstone example) — `examples/cdc-attendance`
+and friends are intentionally untouched, still on the pre-M1
+per-Provider-runtime path, which is exactly the backward-compat
+contract this task had to preserve. No live Kubernetes verification was
+run (not required by this task's scope — the change is runtime-agnostic
+plumbing exercised here on `docker`/`kubernetes`/`fake` types purely at
+the validate/resolve layer, not against a real cluster).
+
 ### M2: Auto-provisioned Connection ports
 
 - **Size:** S-M. **Depends:** —. **Why:** ADR 035 decision 2.
