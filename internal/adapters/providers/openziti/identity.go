@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/rezarajan/platformctl/internal/adapters/providers/providerkit"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
@@ -339,15 +340,46 @@ func (s *session) RevokeEdge(ctx context.Context, edge mediation.Edge) error {
 	return s.client.deleteDialPolicy(ctx, policyName)
 }
 
-// RevokeIdentity implements mediation.MediationProvider: removing the
-// identity by name (its role-attribute-derived, deterministic name — the
-// same value MintIdentity/RealizeEdge compute) removes every policy
-// referencing it too (Ziti's own referential-integrity behavior on
-// identity delete cascades to service-policy identityRoles entries that
-// name it by @id).
+// RevokeIdentity implements mediation.MediationProvider: removes the
+// identity AND every edge (dial policy) plus the target service that names
+// it — explicitly, not by trusting a cascade. An earlier version relied on
+// "Ziti's own referential-integrity behavior on identity delete", but the
+// L2a conformance suite disproved that live: deleting an identity leaves
+// the dial policy object standing (Ziti orphans the @id reference rather
+// than deleting the policy), which is exactly the dangling policy — the
+// posture-decay docs/planning/09 §4 warns against — this method's contract
+// forbids. So teardown is now explicit and name-keyed, the same
+// deterministic encoding RealizeEdge/RevokeEdge use: the dial policy is
+// "dial-<fromAttr>-<toAttr>", so a policy references this identity when its
+// name is prefixed "dial-<attr>-" (identity is the From) or suffixed
+// "-<attr>" (identity is the To); the To side additionally has a service
+// named <attr>. All deletes are "already gone is success" (idempotent).
 func (s *session) RevokeIdentity(ctx context.Context, identity mediation.WorkloadIdentity) error {
-	name := identityRoleAttribute(identity.URI)
-	id, ok, err := s.client.findByName(ctx, "identities", name)
+	attr := identityRoleAttribute(identity.URI)
+
+	policies, err := s.client.listDialPolicies(ctx)
+	if err != nil {
+		return fmt.Errorf("openziti: revoke identity %s: list edges: %w", identity.URI, err)
+	}
+	for _, pol := range policies {
+		if strings.HasPrefix(pol.Name, "dial-"+attr+"-") || strings.HasSuffix(pol.Name, "-"+attr) {
+			if derr := s.client.deleteDialPolicy(ctx, pol.Name); derr != nil {
+				return fmt.Errorf("openziti: revoke identity %s: delete edge %q: %w", identity.URI, pol.Name, derr)
+			}
+		}
+	}
+
+	// The To-side service (RealizeEdge names it after the target identity's
+	// URI) — remove it so no orphan service survives the identity it fronts.
+	if svcID, ok, serr := s.client.findByName(ctx, "services", attr); serr != nil {
+		return fmt.Errorf("openziti: revoke identity %s: find service: %w", identity.URI, serr)
+	} else if ok {
+		if derr := s.client.deleteService(ctx, svcID); derr != nil {
+			return fmt.Errorf("openziti: revoke identity %s: delete service: %w", identity.URI, derr)
+		}
+	}
+
+	id, ok, err := s.client.findByName(ctx, "identities", attr)
 	if err != nil {
 		return fmt.Errorf("openziti: revoke identity %s: %w", identity.URI, err)
 	}
