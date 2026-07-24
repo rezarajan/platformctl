@@ -105,3 +105,68 @@ adapter, not the architecture.
 
 Doc 08 §7.11 Stage L (L1–L5 sequencing + exit criteria), ADR 013 (the
 implicit-infrastructure safety bar L2 must meet), doc 11 2026-07-23.
+
+## Addendum (2026-07-23): L3 is atomic — the default-transport flip cannot be partially enabled
+
+**Prompted by:** the L3 implementation review (personal, following the
+L2a conformance work). Reading the per-`MediatedConnection` machinery
+(connection.go's dial-side tunneler injection) against L1's
+`Engine.Mediation` seam made a sequencing constraint concrete that the
+original Stage L plan left implicit, and it is important enough to
+record before any agent wires `Engine.Mediation` non-nil.
+
+**The constraint.** L1 substitutes a *mediated address* into the address
+a consumer resolves. But a mediated address is only reachable through a
+**consumer-side tunneler** — a sidecar that enrolls a workload identity,
+intercepts the consumer's dial, and routes it over the fabric (exactly
+what connection.go injects, per MediatedConnection, today). Therefore:
+
+- Wiring `Engine.Mediation` to a real `AddressResolver` **without** also
+  injecting the consumer tunneler and making the target dark hands every
+  gate-on consumer an address it cannot dial — a hard break, not a
+  degradation.
+- A resolver that returns a deterministic-but-unreachable address is
+  *dead code that looks alive*: it passes an idempotency/determinism
+  check while delivering nothing.
+
+So the three pieces — (a) the `AddressResolver` over the platform fabric
+(mint identities, realize the dial edge, return the intercept address),
+(b) the consumer-side tunneler injected at reconcile for every workload
+with a mediated edge, (c) the target going dark (no published underlay
+port) — are **one atomic unit**. `Engine.Mediation` stays nil in
+production until all three land and are proven end-to-end.
+
+**Why this is safe to state without blocking anything.** The
+`MediatedTransport` gate defaults **off** and is pinned byte-identical
+off (L1). Nothing is broken by L3 being unfinished; what would break is
+a *half-finished* L3 that flips the seam on. The existing
+per-`MediatedConnection` path (H6/H9/H10) is untouched and remains the
+supported way to mediate a specific edge today.
+
+**Decomposition (supersedes the single L3 line; all three gate together,
+gate stays off until the end-to-end scenario is green on BOTH runtimes):**
+
+- **L3a** — `openziti.AddressResolver` over the L2 platform fabric:
+  `DialAddress(edge)` mints From/To identities on the fabric controller,
+  realizes the dial authorization, ensures the To-side service +
+  terminator, and returns the intercept address. Covered by the L2a
+  conformance suite's Resolver leg (determinism/idempotency) plus a live
+  leg.
+- **L3b** — consumer-side tunneler injection: the engine adds a dial-side
+  tunneler to every workload that declares a mediated edge (generalizing
+  connection.go's per-Connection injection to the fabric), enrolled per
+  H10 (file-mounted one-time token, settle discipline), J5-bounded.
+- **L3c** — dark-by-default targets: a target every consumer edge of
+  which is mediated stops publishing its underlay port; the
+  graph-scoped underlay walls remain as defense-in-depth (ADR 027 Layer
+  2, observed-never-assumed).
+- **Gate flip** — only after an end-to-end scenario (consumer dials a
+  mediated address → tunneler → fabric → dark target, plus the H6 canary
+  refusal on every edge) is live-green on Docker AND Kubernetes may
+  `MediatedTransport` move toward Beta. The measured throughput tax
+  (ADR 034 cost 4) and the fabric-outage chaos behavior (cost 1) are GA
+  gates, per the original Stage L exit criteria.
+
+This is the same honesty discipline ADR 027's claims table enforces:
+"mediation is the default transport" becomes a shipped claim only when
+the whole path is real, not when the seam is wired.

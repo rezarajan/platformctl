@@ -104,9 +104,11 @@ type Edge struct {
 // — calling MintIdentity or RealizeEdge twice with identical inputs must
 // make zero additional control-plane writes once observed state already
 // matches desired state. A conformance suite proves this the same way
-// runtime adapters are proven (docs/planning/02 §9); see
-// internal/adapters/providers/openziti's own tests for the first
-// implementation's proof.
+// runtime adapters are proven (docs/planning/02 §9, docs/planning/08 L2a):
+// internal/ports/mediation/conformance drives any implementation through
+// the full contract — the fake (internal/adapters/mediation/fake) passes
+// it fast-tier, the OpenZiti adapter passes the SAME suite live
+// (conformance_integration_test.go).
 type MediationProvider interface {
 	// MintIdentity ensures a cryptographic identity exists for node,
 	// deriving its SPIFFE-aligned subject via

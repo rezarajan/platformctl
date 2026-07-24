@@ -829,3 +829,24 @@ static. Dimensions, each producing findings verified before fixing:
     (allowed by the architecture) would pick arbitrarily. Both promoted
     to Stage L: L2a (mediation conformance suite) + an L3 note on
     mixed-runtime fabric selection.
+- 2026-07-23: L2a DONE + L3 ATOMICITY DECISION (personal). L2a: the
+  mediation port conformance suite the SDK-review flagged as
+  claimed-but-missing now exists (internal/ports/mediation/conformance
+  + a reusable honest fake at internal/adapters/mediation/fake, the
+  L3/L4 test double). It has teeth (a non-idempotent fake FAILS it) and
+  caught three things on first run: two over-fits in my OWN suite
+  (fingerprint-non-empty vs the unenrolled-identity reality; exact-URI
+  Observed round-trip vs the port's allowed lossy encoding), and — the
+  payoff — a REAL openziti defect: RevokeIdentity trusted Ziti's cascade
+  but the live controller LEAVES the dial policy standing (a dangling
+  policy = posture decay the port forbids). Fixed with an explicit
+  name-keyed cascade; openziti now passes the same suite live (12.7s).
+  L3: reading the consumer-tunneler machinery against L1's seam proved
+  L3 is ATOMIC (resolver + consumer tunneler + dark target ship together
+  or a gate-on consumer gets an unreachable address) — recorded as an
+  ADR 034 addendum decomposing L3 into L3a/L3b/L3c that gate together,
+  with Engine.Mediation staying nil until the end-to-end is live-green
+  on both runtimes. Deliberately did NOT ship a half-flip: the gate is
+  off, nothing is broken, and a dead-code resolver that looks alive is
+  worse than an honest not-yet. This is the no-defects bar applied to my
+  own hand.

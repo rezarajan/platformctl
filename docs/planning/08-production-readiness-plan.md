@@ -5283,18 +5283,35 @@ on a second call. PASS in 12.7s, zero residue confirmed via
   fast-tier; a deliberately-broken fake (non-idempotent MintIdentity)
   fails it (the suite has teeth).
 
-### L3: Every edge mediated — identities, services, policies from the graph
+### L3: Every edge mediated — the ATOMIC default flip (L3a+L3b+L3c)
 
-- **Size:** L. **Depends:** L2, K4. **Why:** the default flip itself.
-- **Do:** per-workload identity + tunneler sidecar (J5-bounded), per-
-  target service + bind, per-edge dial policies carrying K4 label
-  attributes; enrollment per H10 (file-mounted one-time tokens, settle
-  discipline); targets stop publishing underlay ports when every
-  consumer edge is mediated (dark-by-default); graph-scoped underlay
-  walls REMAIN as defense-in-depth. H9-style positive mediator-state
-  assertions + per-edge canary refusal, both runtimes.
-- **Accept:** stage criteria 1-2 on a multi-edge scenario (cdc +
-  lakehouse shapes), both runtimes.
+- **Size:** L. **Depends:** L2, K4, L2a. **Why:** the default flip
+  itself. **ATOMICITY (docs/adr/034 addendum, 2026-07-23):** the three
+  sub-parts below are ONE unit — Engine.Mediation stays nil in
+  production until all three land and are proven end-to-end, because a
+  resolver wired without the consumer tunneler + dark target hands
+  gate-on consumers unreachable addresses (a hard break, not a
+  degradation). The MediatedTransport gate defaults off and is pinned
+  byte-identical off (L1), so nothing is broken by L3 being unfinished;
+  a HALF-finished L3 that flips the seam on is the only hazard.
+- **L3a — AddressResolver over the platform fabric:** openziti.
+  AddressResolver.DialAddress(edge) mints From/To identities on the L2
+  fabric controller, realizes the dial authorization (RealizeEdge),
+  ensures the To-side service + terminator, returns the intercept
+  address. Covered by the L2a conformance Resolver leg + a live leg.
+- **L3b — consumer-side tunneler injection:** the engine adds a
+  dial-side tunneler to every workload declaring a mediated edge
+  (generalizing connection.go's per-Connection injection to the
+  fabric), enrolled per H10 (file-mounted one-time token, settle
+  discipline), J5-bounded.
+- **L3c — dark-by-default targets:** a target every consumer edge of
+  which is mediated stops publishing its underlay port; graph-scoped
+  underlay walls REMAIN as defense-in-depth (ADR 027 Layer 2,
+  observed-never-assumed).
+- **Accept:** an end-to-end scenario (consumer dials a mediated address
+  -> tunneler -> fabric -> dark target) + H9-style positive
+  mediator-state assertions + per-edge canary refusal, green on Docker
+  AND Kubernetes, before MediatedTransport may move toward Beta.
 
 ### L4: Protocol hard cases — redirect-shaped services (Kafka first)
 
