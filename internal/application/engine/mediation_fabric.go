@@ -148,13 +148,14 @@ func (e *Engine) ensureMediationFabric(ctx context.Context, byKey map[resource.K
 		Provider: map[string]any{
 			// Never the admin credential (docs/adr/013's fingerprints-only
 			// discipline, mirrored from mediation.WorkloadIdentity's own
-			// doc comment) — only host facts and the runtime choice this
-			// fabric must be torn down through later.
-			"controllerContainerId": fs.ControllerContainerID,
-			"controllerInternal":    fs.ControllerInternal,
-			"routerId":              fs.RouterID,
-			"runtimeType":           runtimeType,
-			"runtimeConfig":         runtimeConfig,
+			// doc comment) — only the control-plane dial address L3 will
+			// resolve through, and the runtime choice this fabric must be
+			// torn down through later. Adapter-internal object IDs are NOT
+			// persisted: teardown finds them by ownership label (see
+			// mediation.FabricState's doc comment).
+			"controlPlaneAddress": fs.ControlPlaneAddress,
+			"runtimeType":         runtimeType,
+			"runtimeConfig":       runtimeConfig,
 		},
 	}
 	saveErr := e.StateStore.Save(ctx, *st)

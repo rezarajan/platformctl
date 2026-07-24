@@ -42,16 +42,26 @@ type FabricRequest struct {
 // deliberately non-secret (docs/adr/013's fingerprints-only discipline,
 // mirrored from mediation.WorkloadIdentity's own doc comment): no
 // credential, no private key, ever crosses this boundary.
+//
+// It carries ONLY what a consumer of the fabric needs, never the adapter's
+// internal topology. An earlier draft exposed ControllerContainerID /
+// RouterContainerID / RouterID — OpenZiti's own two-node control-plane
+// shape — but those named one technology's internals in a
+// technology-silent port (a SPIRE-native adapter has a server + agents, a
+// Consul adapter has servers; neither has a "router"), and the engine read
+// none of them: teardown finds the fabric's objects by ownership label
+// like every other adapter (DestroyFabric takes only Runtime + Labels).
+// Following runtime.ContainerRuntime's own discipline — expose what the
+// caller dials, keep object bookkeeping inside the adapter — this reports
+// exactly the one forward-looking fact L3's AddressResolver needs.
 type FabricState struct {
-	ControllerContainerID string
-	RouterContainerID     string
-	// ControllerInternal is the in-network address (Docker network DNS /
+	// ControlPlaneAddress is the in-network address (Docker network DNS /
 	// Kubernetes Service DNS) other engine-owned facilities dial the
-	// controller's Edge Management API through — never a host-published
-	// address, which is ephemeral (a fresh port-forward per call) on
-	// Kubernetes.
-	ControllerInternal string
-	RouterID           string
+	// fabric's management/control-plane API through — never a
+	// host-published address, which is ephemeral (a fresh port-forward per
+	// call) on Kubernetes. Technology-neutral by name: a Ziti controller,
+	// a SPIRE server, and a Consul server all answer here.
+	ControlPlaneAddress string
 }
 
 // FabricProvisioner is the engine-owned facility docs/planning/08 L2 adds:

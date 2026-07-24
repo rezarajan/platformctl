@@ -251,10 +251,14 @@ func (f *FabricProvisioner) EnsureFabric(ctx context.Context, req mediation.Fabr
 		return mediation.FabricState{}, fmt.Errorf("mediation fabric: %w", err)
 	}
 
+	// ctrlState/routerID were ensured for their side effects (the running
+	// controller, the enrolled router); their IDs are the adapter's own
+	// bookkeeping, deliberately no longer surfaced across the port —
+	// teardown finds these objects by ownership label, not by a persisted
+	// ID (see FabricState's doc comment).
+	_ = ctrlState
 	return mediation.FabricState{
-		ControllerContainerID: ctrlState.ID,
-		ControllerInternal:    fmt.Sprintf("%s:%d", fabricControllerName, fabricControllerPort),
-		RouterID:              routerID,
+		ControlPlaneAddress: fmt.Sprintf("%s:%d", fabricControllerName, fabricControllerPort),
 	}, nil
 }
 

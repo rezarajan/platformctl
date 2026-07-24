@@ -23,8 +23,9 @@ import (
 //     including the live-verified admin-credential mechanism this task's
 //     package doc comment records (Env on the bootstrap call only, then
 //     read back from the controller's own persisted volume).
-//  2. A second EnsureFabric call is idempotent: same ControllerContainerID
-//     (no container recreate) and no error re-authenticating with the
+//  2. A second EnsureFabric call is idempotent: the same underlying
+//     controller container (inspected via the runtime — the port no longer
+//     surfaces object ids), and no error re-authenticating with the
 //     credential read back from the volume, not re-minted.
 //  3. DestroyFabric removes every container/volume/network it created.
 func TestFabricProvisionerLiveDocker(t *testing.T) {
@@ -58,8 +59,16 @@ func TestFabricProvisionerLiveDocker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureFabric (first, bootstrap): %v", err)
 	}
-	if fs1.ControllerContainerID == "" || fs1.RouterID == "" {
-		t.Fatalf("EnsureFabric returned incomplete state: %+v", fs1)
+	if fs1.ControlPlaneAddress == "" {
+		t.Fatalf("EnsureFabric returned no control-plane address: %+v", fs1)
+	}
+	// Capture the REAL controller container id from the runtime — a
+	// stronger idempotency check than trusting the adapter's own returned
+	// value (the port no longer surfaces object ids by design): assert the
+	// daemon's actual object is not recreated on the second call.
+	ctrl1, found, err := rt.Inspect(ctx, fabricControllerName)
+	if err != nil || !found {
+		t.Fatalf("inspect controller after first EnsureFabric: found=%v err=%v", found, err)
 	}
 
 	// Idempotency: the whole point of the read-back-from-volume credential
@@ -71,11 +80,15 @@ func TestFabricProvisionerLiveDocker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureFabric (second, idempotent): %v", err)
 	}
-	if fs2.ControllerContainerID != fs1.ControllerContainerID {
-		t.Errorf("controller container recreated on second EnsureFabric: %q -> %q", fs1.ControllerContainerID, fs2.ControllerContainerID)
+	if fs2.ControlPlaneAddress != fs1.ControlPlaneAddress {
+		t.Errorf("control-plane address changed on second EnsureFabric: %q -> %q", fs1.ControlPlaneAddress, fs2.ControlPlaneAddress)
 	}
-	if fs2.RouterID != fs1.RouterID {
-		t.Errorf("router entity id changed on second EnsureFabric: %q -> %q", fs1.RouterID, fs2.RouterID)
+	ctrl2, found, err := rt.Inspect(ctx, fabricControllerName)
+	if err != nil || !found {
+		t.Fatalf("inspect controller after second EnsureFabric: found=%v err=%v", found, err)
+	}
+	if ctrl2.ID != ctrl1.ID {
+		t.Errorf("controller container recreated on second EnsureFabric: %q -> %q", ctrl1.ID, ctrl2.ID)
 	}
 
 	if err := f.DestroyFabric(ctx, mediation.FabricRequest{Runtime: rt, Labels: labels}); err != nil {

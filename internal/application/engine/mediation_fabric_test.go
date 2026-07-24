@@ -35,9 +35,7 @@ func (f *fakeFabricProvisioner) EnsureFabric(_ context.Context, req mediation.Fa
 		return mediation.FabricState{}, f.ensureErr
 	}
 	return mediation.FabricState{
-		ControllerContainerID: "fake-ctrl-id",
-		RouterID:              "fake-router-id",
-		ControllerInternal:    "fake-ctrl:1280",
+		ControlPlaneAddress: "fake-ctrl:1280",
 	}, nil
 }
 
@@ -99,13 +97,13 @@ func TestEnsureMediationFabricStandsUpWhenGateOnAndEdgeMediated(t *testing.T) {
 		t.Fatalf("fabric Ready condition = %+v, ok=%v, want Ready=True", c, ok)
 	}
 	for k := range rs.Provider {
-		if k == "controllerContainerId" || k == "controllerInternal" || k == "routerId" || k == "runtimeType" || k == "runtimeConfig" {
+		if k == "controlPlaneAddress" || k == "runtimeType" || k == "runtimeConfig" {
 			continue
 		}
 		t.Errorf("unexpected ProviderState key %q — docs/adr/013 forbids any credential/secret material in state", k)
 	}
-	if rs.Provider["controllerInternal"] != "fake-ctrl:1280" {
-		t.Errorf("controllerInternal = %v, want the fabric's own reported value", rs.Provider["controllerInternal"])
+	if rs.Provider["controlPlaneAddress"] != "fake-ctrl:1280" {
+		t.Errorf("controlPlaneAddress = %v, want the fabric's own reported value", rs.Provider["controlPlaneAddress"])
 	}
 }
 
