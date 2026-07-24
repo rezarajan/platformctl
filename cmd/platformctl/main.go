@@ -94,7 +94,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// Phase 6.
 	gates.Register("ParallelReconciliation", featuregate.Alpha, false)
 	gates.Register("VaultSecretBackend", featuregate.Alpha, false)
-	gates.Register("SharedStateBackend", featuregate.Alpha, false)    // docs/adr/003-shared-state.md
+	gates.Register("SharedStateBackend", featuregate.Beta, false)     // docs/adr/003-shared-state.md
 	gates.Register("KubernetesSecretBackend", featuregate.Beta, true) // docs/planning/08 B4; graduated with KubernetesRuntime at B9
 	// Phase 6.5: orchestrator-ready infrastructure.
 	// Phase 6.5 providers: graduated Alpha -> Beta at docs/planning/08 Stage A
@@ -117,7 +117,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// gate, enforced by application/registry's runtime decorator
 	// (docs/adr/004-replicas-and-identity.md) since no provider yet
 	// surfaces a schema field that sets Replicas.
-	gates.Register("HighAvailability", featuregate.Alpha, false)
+	gates.Register("HighAvailability", featuregate.Beta, false)
 	// docs/planning/08 D1: Redpanda's built-in Confluent-compatible schema
 	// registry (Provider.spec.configuration.schemaRegistry: enabled) and a
 	// Binding's schema-carrying spec.options.format (avro, protobuf).
@@ -127,26 +127,26 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// docs/planning/08 C6: backup/restore capability (BackupCapableProvider).
 	// Alpha/disabled until restore drills have soaked in CI (§8 graduation
 	// intent).
-	gates.Register("BackupRestore", featuregate.Alpha, false)
+	gates.Register("BackupRestore", featuregate.Beta, false)
 	// docs/planning/08 C9: the prometheus provider (managed monitoring
 	// stack), plus its C9-completion follow-up — postgres/mysql metrics
 	// exporter sidecars and the grafana provider, all gated by this same
 	// gate (it guards the monitoring stack as a class). Alpha/disabled.
-	gates.Register("MonitoringStackProvider", featuregate.Alpha, false)
+	gates.Register("MonitoringStackProvider", featuregate.Beta, false)
 	// docs/planning/08 C7, docs/adr/018: the ingress provider (HTTP routing
 	// on the Connection seam). Alpha/disabled — a new provider exposing a
 	// new network-reachable surface (an HTTP reverse proxy accepting
 	// arbitrary Host headers) defaults off until soaked, matching the
 	// TrinoProvider/JDBCSinkProvider posture (design note 006), not the
 	// Phase 6.5 enabled-Alpha precedent.
-	gates.Register("IngressProvider", featuregate.Alpha, false)
+	gates.Register("IngressProvider", featuregate.Beta, false)
 	// docs/planning/08 C8, docs/adr/018 addendum: TLS termination on the
 	// same ingress provider's Connection seam (Connection.spec.tls).
 	// Alpha/disabled, independent of IngressProvider itself — a Connection
 	// can decline TLS and stay plaintext HTTP even once IngressProvider
 	// graduates, so this needs its own off switch rather than riding
 	// IngressProvider's gate.
-	gates.Register("TLSTermination", featuregate.Alpha, false)
+	gates.Register("TLSTermination", featuregate.Beta, false)
 	// docs/planning/08 I2, docs/adr/025: outbound TLS to a TLS-requiring
 	// external database (Connection.spec.tls.mode on an external
 	// Connection) — the client-side sibling of TLSTermination above.
@@ -161,21 +161,21 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// engine accepting arbitrary SQL from whoever can reach its coordinator
 	// port is a meaningfully different risk profile and defaults off until
 	// reviewed (ADR 006's "Feature gate" section).
-	gates.Register("TrinoProvider", featuregate.Alpha, false)
+	gates.Register("TrinoProvider", featuregate.Beta, false)
 	// docs/planning/08 D3/D4, docs/adr/001 + 009: the two capability seams
 	// (sink -> Source, ingest) modeled with no shipped provider since
 	// v1.0.0. Alpha/disabled — new providers exposing new capability
 	// surfaces default off until soaked, matching the IngressProvider/
 	// TrinoProvider posture (design note 006), not the Phase 6.5
 	// enabled-Alpha precedent.
-	gates.Register("JDBCSinkProvider", featuregate.Alpha, false)
-	gates.Register("IngestProvider", featuregate.Alpha, false)
+	gates.Register("JDBCSinkProvider", featuregate.Beta, false)
+	gates.Register("IngestProvider", featuregate.Beta, false)
 	// docs/planning/08 D5, docs/adr/023: the wireguard tunnel provider —
 	// a managed Connection whose upstream is only reachable through a
 	// WireGuard peer. Alpha/disabled — grants NET_ADMIN and opens a routed
 	// path into a private network, a meaningfully different risk profile
 	// from the Phase 6.5 enabled-Alpha precedent.
-	gates.Register("TunnelProvider", featuregate.Alpha, false)
+	gates.Register("TunnelProvider", featuregate.Beta, false)
 
 	// docs/planning/08 H6, as amended by docs/adr/027: the OpenZiti
 	// mediation provider — docs/adr/027's Layer 1, the authoritative
@@ -186,7 +186,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// is a meaningfully different risk profile from the Phase 6.5
 	// enabled-Alpha precedent, and the owner-scenario dual-runtime accept
 	// suite (docs/planning/08 §7.7 H6) has not yet soaked.
-	gates.Register("MediatedConnections", featuregate.Alpha, false)
+	gates.Register("MediatedConnections", featuregate.Beta, false)
 
 	// docs/planning/08 H7 (docs/adr/026, as amended 2026-07-23): resource-
 	// granular least privilege compiled from the declared reference graph
@@ -196,7 +196,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// network now reaches only what it declared), so this is opt-in until
 	// the dual-runtime negative-proof suite (docs/planning/08 §7.7 H7)
 	// soaks — the same bar ADR 026's own Gate section states.
-	gates.Register("GraphScopedAccess", featuregate.Alpha, false)
+	gates.Register("GraphScopedAccess", featuregate.Beta, false)
 
 	// docs/planning/08 L1 (docs/adr/034): mediation as the DEFAULT
 	// transport for every declared edge, inverting H6's opt-in boundary —
@@ -214,7 +214,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// docs/planning/08 H1 (ADR 020): read-only reporting only — the gate
 	// exists to switch `validate`'s one-line design-findings summary off,
 	// not to hide the `lint` command itself, so it defaults enabled.
-	gates.Register("DesignLints", featuregate.Alpha, true)
+	gates.Register("DesignLints", featuregate.Beta, true)
 
 	// docs/planning/08 H3 (ADR 021): the typed-rule policy engine — unlike
 	// DesignLints, disabled means a full no-op (no directory read, no
@@ -222,7 +222,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// this defaults off until the zero-trust pack has soaked (doc 04 §12's
 	// graduation intent: "Beta after the zero-trust pack soaks in this
 	// repo's own CI").
-	gates.Register("PolicyEngine", featuregate.Alpha, false)
+	gates.Register("PolicyEngine", featuregate.Beta, false)
 
 	// docs/planning/08 Stage K (K2), docs/adr/033: the policy vocabulary's
 	// label-selector generalization (matchEdge.selector, match.selector) —
@@ -231,7 +231,7 @@ func defaultWiring(gates *featuregate.Registry) *registry.Registry {
 	// both runtimes (ADR 033 decision 6); gate-off is byte-identical for
 	// every pre-existing policy rule shape (internal/application/policy.Run's
 	// own doc comment).
-	gates.Register("LabelScopedAccess", featuregate.Alpha, false)
+	gates.Register("LabelScopedAccess", featuregate.Beta, false)
 
 	reg := registry.New(gates)
 	reg.RegisterProvider("noop", func() reconciler.Provider { return noop.New() }, "")
