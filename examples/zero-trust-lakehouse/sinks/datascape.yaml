@@ -1,0 +1,13 @@
+# The sinks plane's member list (docs/adr/035 / M7 — the Helm/Kustomize
+# include pattern). This datascape.yaml declares ONLY spec.resources: the
+# project's single runtime is declared once, at the root. Files load in the
+# order listed.
+apiVersion: datascape.io/v1alpha1
+kind: Project
+metadata:
+  name: zero-trust-lakehouse-sinks
+spec:
+  resources:
+    - 01-providers.yaml
+    - 02-datasets.yaml
+    - 03-bindings.yaml

@@ -36,6 +36,19 @@ type Project struct {
 	// parses and stores this field; no engine behavior reads it yet — M4
 	// wires ZeroTrust default-on behavior from it.
 	ZeroTrust bool
+	// Resources is the explicit member list this project includes
+	// (docs/adr/035 / M7) — the Helm/Kustomize include-members pattern.
+	// Each entry, relative to this datascape.yaml's directory, is either a
+	// FILE (loaded directly) or a DIRECTORY (composed via its OWN
+	// datascape.yaml's spec.resources, recursively). Nothing is
+	// auto-discovered: a project declares exactly what it is composed of,
+	// so a data-platform's planes (platform/, sources/, cdc/, sinks/,
+	// catalog/, query/, lineage/) are named members, and anything not
+	// listed (a policies/ channel, a build context, scratch files) is never
+	// a governed document. Empty means the legacy flat layout: the *.yaml
+	// directly in the project directory, loaded exactly as before
+	// datascape.yaml existed.
+	Resources []string
 }
 
 // FromEnvelope parses a Project's spec, mirroring
@@ -49,12 +62,24 @@ func FromEnvelope(e resource.Envelope) (Project, error) {
 	if v, ok := e.Spec["zeroTrust"].(bool); ok {
 		p.ZeroTrust = v
 	}
-	return p, p.validate(e.Metadata.Name)
+	if raw, ok := e.Spec["resources"].([]any); ok {
+		for _, item := range raw {
+			if s, ok := item.(string); ok && s != "" {
+				p.Resources = append(p.Resources, s)
+			}
+		}
+	}
+	return p, nil
 }
 
-func (p Project) validate(name string) error {
+// RequireRuntime enforces the root-project contract: the datascape.yaml that
+// declares the inventory targets ONE runtime (docs/adr/035 decision 1) must
+// name it. It is checked only for the ROOT project — an included member's
+// datascape.yaml (a plane's, the Helm/Kustomize include pattern) inherits the
+// root runtime and must NOT restate it, so member recursion never calls this.
+func (p Project) RequireRuntime() error {
 	if p.Runtime.Type == "" {
-		return fmt.Errorf("Project %q: spec.runtime.type is required", name)
+		return fmt.Errorf("Project %q: spec.runtime.type is required", p.Name)
 	}
 	return nil
 }

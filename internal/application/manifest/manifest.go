@@ -17,6 +17,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/dataset"
 	"github.com/rezarajan/platformctl/internal/domain/eventstream"
+	"github.com/rezarajan/platformctl/internal/domain/project"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
 	"github.com/rezarajan/platformctl/internal/domain/resource"
 	"github.com/rezarajan/platformctl/internal/domain/secret"
@@ -54,11 +55,14 @@ func Load(path string) ([]resource.Envelope, error) {
 		return nil, err
 	}
 
-	files, err := collectFiles(path)
+	files, err := collectFiles(path, proj)
 	if err != nil {
 		return nil, err
 	}
 	if len(files) == 0 {
+		if proj != nil && len(proj.Resources) > 0 {
+			return nil, fmt.Errorf("the %s at %s declares spec.resources but they resolved to no manifest files (*.yaml, *.yml, *.json)", ProjectFileName, path)
+		}
 		return nil, fmt.Errorf("no manifest files (*.yaml, *.yml, *.json) found under %s", path)
 	}
 
@@ -245,7 +249,22 @@ func stringMap(v any) map[string]string {
 	return out
 }
 
-func collectFiles(path string) ([]string, error) {
+// collectFiles resolves the governed manifest files for a path.
+//
+// When the project declares spec.resources (docs/adr/035 / M7 — the
+// Helm/Kustomize include-members pattern), the set is EXACTLY those declared
+// members, resolved recursively and in declared order: a member is a FILE
+// (loaded) or a DIRECTORY (composed via its OWN datascape.yaml's
+// spec.resources). Nothing is auto-discovered, so a data-platform's planes
+// (platform/, sources/, cdc/, sinks/, ...) are named members and anything not
+// named — a policies/ channel, a build context, scratch files — is never a
+// governed document.
+//
+// With no spec.resources (proj == nil, the legacy no-datascape.yaml layout,
+// or a project that only sets runtime/zeroTrust) the set is the flat
+// *.yaml/*.yml/*.json directly in path, in lexical order — exactly as before
+// datascape.yaml existed.
+func collectFiles(path string, proj *project.Project) ([]string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", path, err)
@@ -253,27 +272,73 @@ func collectFiles(path string) ([]string, error) {
 	if !info.IsDir() {
 		return []string{path}, nil
 	}
-	var files []string
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return nil, fmt.Errorf("read dir %s: %w", path, err)
+	if proj != nil && len(proj.Resources) > 0 {
+		// Declared order is preserved (the author chose it); no sort.
+		return collectResources(path, proj.Resources)
 	}
-	for _, entry := range entries {
-		if entry.IsDir() {
+	files, err := manifestFilesIn(path)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// collectResources resolves an explicit spec.resources member list (relative
+// to baseDir) into manifest files, recursing into directory members through
+// their own datascape.yaml. Declared order is preserved throughout.
+func collectResources(baseDir string, resources []string) ([]string, error) {
+	var files []string
+	for _, r := range resources {
+		full := filepath.Join(baseDir, filepath.FromSlash(r))
+		info, err := os.Stat(full)
+		if err != nil {
+			return nil, fmt.Errorf("%s resource %q: %w", ProjectFileName, r, err)
+		}
+		if !info.IsDir() {
+			switch filepath.Ext(full) {
+			case ".yaml", ".yml", ".json":
+				files = append(files, full)
+			default:
+				return nil, fmt.Errorf("%s resource %q: not a manifest file (*.yaml, *.yml, *.json) or directory", ProjectFileName, r)
+			}
 			continue
 		}
-		// ProjectFileName (datascape.yaml) is a reserved, separate channel
-		// (docs/adr/035 decision 1) — read by LoadProject, never treated
-		// as an ordinary governed-set document (it has no Kind in
-		// manifest.KnownKinds and would otherwise fail as "unknown kind").
-		if entry.Name() == ProjectFileName {
+		sub, err := loadIncludeProject(full)
+		if err != nil {
+			return nil, err
+		}
+		if sub == nil {
+			return nil, fmt.Errorf("%s resource %q is a directory but has no %s to declare its members — a directory member composes via its own %s listing spec.resources (the Helm/Kustomize include pattern)", ProjectFileName, r, ProjectFileName, ProjectFileName)
+		}
+		if len(sub.Resources) == 0 {
+			return nil, fmt.Errorf("%s resource %q: its %s declares no spec.resources (an included directory must list its own members)", ProjectFileName, r, ProjectFileName)
+		}
+		subFiles, err := collectResources(full, sub.Resources)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, subFiles...)
+	}
+	return files, nil
+}
+
+// manifestFilesIn returns the manifest files directly in dir (non-recursive),
+// skipping the reserved datascape.yaml project file. The legacy flat layout.
+func manifestFilesIn(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read dir %s: %w", dir, err)
+	}
+	var files []string
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() == ProjectFileName {
 			continue
 		}
 		switch filepath.Ext(entry.Name()) {
 		case ".yaml", ".yml", ".json":
-			files = append(files, filepath.Join(path, entry.Name()))
+			files = append(files, filepath.Join(dir, entry.Name()))
 		}
 	}
-	sort.Strings(files)
 	return files, nil
 }

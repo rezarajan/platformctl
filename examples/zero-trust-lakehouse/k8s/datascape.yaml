@@ -24,3 +24,13 @@ spec:
     type: kubernetes
     network: datascape-ztl
   zeroTrust: true
+  # The SAME plane members as the Docker root — this file is copied TO the
+  # root to run the Kubernetes leg, so the paths resolve identically.
+  resources:
+    - platform
+    - sources
+    - cdc
+    - sinks
+    - catalog
+    - query
+    - lineage

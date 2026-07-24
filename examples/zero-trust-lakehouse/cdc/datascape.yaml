@@ -1,0 +1,14 @@
+# The cdc plane's member list (docs/adr/035 / M7 — the Helm/Kustomize
+# include pattern). This datascape.yaml declares ONLY spec.resources: the
+# project's single runtime is declared once, at the root. Files load in the
+# order listed.
+apiVersion: datascape.io/v1alpha1
+kind: Project
+metadata:
+  name: zero-trust-lakehouse-cdc
+spec:
+  resources:
+    - 01-redpanda.yaml
+    - 02-debezium.yaml
+    - 03-streams.yaml
+    - 04-bindings.yaml

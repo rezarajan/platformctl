@@ -33,7 +33,49 @@ func LoadProject(path string) (*project.Project, error) {
 	if info, err := os.Stat(path); err == nil && !info.IsDir() {
 		root = filepath.Dir(path)
 	}
-	projectPath := filepath.Join(root, ProjectFileName)
+	proj, err := readProjectFile(root)
+	if err != nil {
+		return nil, err
+	}
+	if proj == nil {
+		return nil, nil
+	}
+	// The ROOT datascape.yaml declares the inventory's single runtime.
+	if err := proj.RequireRuntime(); err != nil {
+		return nil, err
+	}
+	return proj, nil
+}
+
+// loadIncludeProject reads the datascape.yaml of an INCLUDED member directory
+// (docs/adr/035 / M7 — the Helm/Kustomize include pattern): a directory named
+// in a parent's spec.resources composes via its OWN datascape.yaml listing
+// spec.resources. Returns (nil, nil) when the directory has no datascape.yaml
+// (its own error, raised by the caller with member context). Unlike the root
+// LoadProject it does NOT require a runtime — the member inherits the root's —
+// and REFUSES a runtime override, so the single-runtime invariant holds
+// across the whole composed tree, not just among Providers.
+func loadIncludeProject(dir string) (*project.Project, error) {
+	proj, err := readProjectFile(dir)
+	if err != nil {
+		return nil, err
+	}
+	if proj == nil {
+		return nil, nil
+	}
+	if proj.Runtime.Type != "" {
+		return nil, fmt.Errorf("%s: an included member must not declare spec.runtime — a project targets one runtime, declared once at the root datascape.yaml", filepath.Join(dir, ProjectFileName))
+	}
+	return proj, nil
+}
+
+// readProjectFile reads, schema-validates, and parses the datascape.yaml in
+// dir, returning (nil, nil) when absent. It applies every check common to a
+// root project and an included member (exactly-one-document, kind Project,
+// apiVersion), leaving the root/include-specific runtime rules to its two
+// callers above.
+func readProjectFile(dir string) (*project.Project, error) {
+	projectPath := filepath.Join(dir, ProjectFileName)
 
 	data, err := os.ReadFile(projectPath)
 	if err != nil {

@@ -86,11 +86,15 @@
           "type": "boolean",
           "default": true,
           "description": "docs/adr/035 decision 3. Defaults to true. M1 parses and stores this field only — no engine behavior reads it yet; docs/planning/08 M4 wires the ZeroTrust default-on behavior from it."
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The explicit member list this project is composed of (docs/adr/035 / M7 — the Helm/Kustomize include-members pattern). Each entry, relative to this datascape.yaml's directory, is either a FILE (*.yaml/*.yml/*.json, loaded directly) or a DIRECTORY (composed via its OWN datascape.yaml's spec.resources, recursively). Members load in declared order. Nothing is auto-discovered: a data-platform's planes (platform/, sources/, cdc/, sinks/, catalog/, query/, lineage/) are named members, and anything not listed (a policies/ channel, a build context, scratch files) is never a governed document. Omit for the legacy flat layout: the *.yaml directly in this directory, loaded lexically. An INCLUDED member's datascape.yaml carries only spec.resources — it must NOT restate spec.runtime (the project targets one runtime, declared once at the root)."
         }
       },
-      "required": [
-        "runtime"
-      ],
       "additionalProperties": false
     }
   },

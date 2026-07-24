@@ -274,3 +274,88 @@ func TestDatascapeYAMLExcludedFromManifestSet(t *testing.T) {
 		t.Fatalf("expected 'no manifest files', got: %v", err)
 	}
 }
+
+// TestLoadIncludeMembers pins the Helm/Kustomize include-members model
+// (docs/adr/035 / M7): a root datascape.yaml's spec.resources names members —
+// files and/or directories — and a directory member composes recursively via
+// its OWN datascape.yaml's spec.resources. Nothing is auto-discovered: a
+// sibling policies/ directory (the --policies channel) is NEVER loaded as a
+// manifest because it is not a named member, and declared order is preserved.
+func TestLoadIncludeMembers(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite := func(rel, body string) {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res := func(name string) string {
+		return "apiVersion: datascape.io/v1alpha1\nkind: SecretReference\nmetadata: {name: " + name + "}\nspec: {backend: env, keys: [k]}\n"
+	}
+	// Root includes: one directory member (platform/, composed via its own
+	// datascape.yaml) and one direct file member (sources/db.yaml).
+	mustWrite(ProjectFileName, "apiVersion: datascape.io/v1alpha1\nkind: Project\nmetadata: {name: p}\n"+
+		"spec:\n  runtime: {type: docker}\n  resources: [platform, sources/db.yaml]\n")
+	mustWrite("platform/"+ProjectFileName, "apiVersion: datascape.io/v1alpha1\nkind: Project\nmetadata: {name: platform}\n"+
+		"spec:\n  resources: [secrets.yaml]\n")
+	mustWrite("platform/secrets.yaml", res("a"))
+	mustWrite("sources/db.yaml", res("b"))
+	// A sibling policies/ dir that is NOT a declared member — must be ignored.
+	mustWrite("policies/policy.yaml", "apiVersion: datascape.io/v1alpha1\nkind: Policy\nmetadata: {name: pol}\nspec: {}\n")
+
+	envs, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load an include-members project: %v", err)
+	}
+	if len(envs) != 2 {
+		t.Fatalf("loaded %d resources, want 2 (platform/secrets.yaml + sources/db.yaml; policies/ not a member)", len(envs))
+	}
+	for _, e := range envs {
+		if e.Kind == "Policy" {
+			t.Error("policies/ was loaded as a manifest — it is not a declared member (the --policies channel)")
+		}
+	}
+
+	t.Run("directory member without its own datascape.yaml is refused", func(t *testing.T) {
+		bad := t.TempDir()
+		if err := os.WriteFile(filepath.Join(bad, ProjectFileName),
+			[]byte("apiVersion: datascape.io/v1alpha1\nkind: Project\nmetadata: {name: p}\nspec:\n  runtime: {type: docker}\n  resources: [cdc]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(bad, "cdc"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bad, "cdc", "x.yaml"), []byte(res("x")), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(bad)
+		if err == nil || !strings.Contains(err.Error(), "has no "+ProjectFileName) {
+			t.Fatalf("expected a missing-include-file error, got: %v", err)
+		}
+	})
+
+	t.Run("included member declaring its own runtime is refused", func(t *testing.T) {
+		bad := t.TempDir()
+		if err := os.WriteFile(filepath.Join(bad, ProjectFileName),
+			[]byte("apiVersion: datascape.io/v1alpha1\nkind: Project\nmetadata: {name: p}\nspec:\n  runtime: {type: docker}\n  resources: [plane]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(bad, "plane"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bad, "plane", ProjectFileName),
+			[]byte("apiVersion: datascape.io/v1alpha1\nkind: Project\nmetadata: {name: plane}\nspec:\n  runtime: {type: fake}\n  resources: [y.yaml]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bad, "plane", "y.yaml"), []byte(res("y")), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(bad)
+		if err == nil || !strings.Contains(err.Error(), "must not declare spec.runtime") {
+			t.Fatalf("expected a runtime-override refusal, got: %v", err)
+		}
+	})
+}

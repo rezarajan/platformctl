@@ -35,7 +35,25 @@ spec:
     type: docker            # the ONE runtime for every Provider in this project
     network: orders-net     # same shape as a Provider's own spec.runtime — see §4
   zeroTrust: true            # default; docs/planning/08 M4 wires this into engine behavior (not yet read)
+  resources:                 # optional explicit member list — the Helm/Kustomize include pattern
+    - platform               #   a DIRECTORY member: composed via platform/datascape.yaml's spec.resources
+    - sources/orders.yaml    #   a FILE member: loaded directly
 ```
+
+**Explicit composition — `spec.resources` (docs/adr/035 / M7):** by default a project directory
+loads flat — every `*.yaml`/`*.yml`/`*.json` directly in it, in lexical order (the legacy layout,
+unchanged). When `spec.resources` is present, the project is composed of **exactly** those members,
+resolved recursively and **in declared order** — the Helm/Kustomize include-members pattern.
+Each entry, relative to this `datascape.yaml`'s directory, is either a **file** (loaded directly)
+or a **directory** (composed via its OWN `datascape.yaml`'s `spec.resources`). Nothing is
+auto-discovered, so a data-platform's **planes** — `platform/`, `sources/`, `cdc/`, `sinks/`,
+`catalog/`, `query/`, `lineage/` — are named members, and anything not listed (a `policies/`
+channel, a build context, scratch files) is never mistaken for a governed document. An **included
+member's** `datascape.yaml` carries only `spec.resources` and must **not** restate `spec.runtime`:
+the project targets one runtime, declared once at the root (an override there is refused, the same
+single-runtime invariant enforced for Providers). A directory member with no `datascape.yaml`, or
+one whose `datascape.yaml` lists no members, is refused — composition is always explicit. See
+`examples/zero-trust-lakehouse/` for a full plane-structured project.
 
 A project declares exactly **one** runtime (the Go-module shape): every `Provider` under it that
 omits its own `spec.runtime` inherits this one verbatim (`internal/application/manifest.

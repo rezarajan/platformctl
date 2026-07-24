@@ -34,7 +34,6 @@ import (
 // this test should be needed.
 func TestZeroTrustLakehouseExampleValidates(t *testing.T) {
 	t.Parallel()
-	t.Skip("blocked: platformctl does not read manifest directory trees recursively yet (collectFiles skips subdirectories) — see TASK_PROGRESS.md and examples/zero-trust-lakehouse/README.md#known-blocker")
 	gates := "HighAvailability=true,TrinoProvider=true"
 	out, _, err := runSplit(t, "validate", "../../examples/zero-trust-lakehouse",
 		"--feature-gates", gates)
