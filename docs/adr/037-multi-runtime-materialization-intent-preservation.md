@@ -109,18 +109,47 @@ State the preservation obligations as predicates over `(I, M_r(I))`:
 - **IDN (identity):** stable per-ordinal identity (hostname / mount /
   credential per ordinal) is preserved across runtimes.
 - **REACH (reachability):** the who-may-reach-whom relation (ADR 035
-  zero-trust / graph-scoped access) is realized as the *same relation* even
-  where the enforcement substrate differs (K8s NetworkPolicy vs a Docker
-  network). Where a runtime *cannot enforce* it — e.g. a CNI without policy
-  support (found live: minikube's Calico did not enforce NetworkPolicy) —
-  that gap is a **surfaced diagnostic** (ADR 031), because a silently
-  unenforced restriction is itself an intent misrepresentation.
+  zero-trust / graph-scoped access) is realized as the *same relation* on
+  every runtime, and — this is non-negotiable — it is **always enforced**.
+  Zero-trust is security-critical: it is the **one property with no
+  best-effort tier**. A materialization that would leave a declared
+  restriction unenforced is not "degraded," it is *wrong*, and must be
+  refused rather than shipped.
+
+  The design consequence is that enforcement **must not be delegated to an
+  optional substrate feature**. K8s NetworkPolicy is exactly such a feature
+  — a CNI may not enforce it (found live: minikube's Calico installed the
+  CRDs but did not enforce policy, so a deny-all was silently ignored).
+  Relying on it means zero-trust holds only on some clusters, which is no
+  guarantee at all. Instead REACH is enforced by a mechanism the **platform
+  fully owns and can stand up on any substrate**: the **mediation overlay**
+  (ADR 034 — mediation is the default transport). The mesh authorizes every
+  edge by attested identity at the overlay, independent of the CNI, the
+  Docker network driver, or the host; a dark resource is materialized so its
+  *only* usable path is through the mesh (a mesh tunneler/sidecar that denies
+  non-mediated traffic — the enforcement service meshes already rely on,
+  precisely because it does not depend on network-layer policy). Native
+  isolation (NetworkPolicy, an isolated Docker network) is retained as
+  *defense-in-depth*, never as the primary guarantee.
+
+  Because the enforcing mechanism is platform-provisioned infrastructure
+  present on **every** runtime — Kubernetes-in-Docker, Docker-in-Docker,
+  Kubernetes-in-a-VM, bare metal — REACH **always succeeds**: it is never
+  reported-but-unenforced. Materialization VERIFIES it with a **negative
+  probe** (an unauthorized path is confirmed to fail) as part of conformance;
+  a failing probe is a platform defect in the materializer's own enforcement,
+  not an environment limitation to be tolerated. If a materializer cannot
+  guarantee REACH on a target runtime, it does not register for that runtime
+  (Move 2's `Mat_p`) — the platform refuses to run zero-trust where it cannot
+  enforce it, rather than pretending to.
 
 **Best-effort orderings — hold for every `r`, degradation explicit:**
 
 - **TIER:** `tier(M_r(I)) ⊑ tier(I)`; if strict, emit a declared "degraded"
   fact naming requested-vs-delivered. Never resolve a `B_p` shortfall by
-  violating a `C_p` equality (never shrink the volume to fit a tier).
+  violating a `C_p` equality (never shrink the volume to fit a tier). Note
+  the asymmetry with REACH: TIER *may* degrade because a slow disk is still
+  a correct platform; an unenforced zero-trust edge is a *broken* one.
 
 **Formal verification of the translation — two mechanized layers:**
 
@@ -160,10 +189,15 @@ equality starts by changing the model.
   divergence is an explicit, ordered, surfaced fact.
 - **Costs, stated up front.** Authoring the Alloy/TLA+ model and the
   property + differential suites is real work. An external Helm chart lives
-  *outside* our verification boundary, so it must be version-pinned, its
-  value mapping verified, AND followed by a post-materialization assertion
-  (the realized StatefulSet actually has `I.replicas` and `I.storage.size`)
-  — the chart is trusted only as far as that assertion checks.
+  *outside* our verification boundary, so it is trusted only as far as two
+  assertions bracket it: a **rendered assertion** on the chart's output
+  *before* apply (`helm template` with our mapped values → the manifest set
+  is parsed and checked to carry `I.replicas`, `I.storage.size`, the ordinal
+  shape, the mesh enforcement) and a **materialized assertion** on the live
+  objects *after* apply (the realized StatefulSet/PVCs actually match). The
+  chart must be version-pinned; a chart upgrade re-runs both gates. This is
+  the seam where "the math" hands off to an external artifact, and the two
+  assertions are how we keep the hand-off honest.
 - **Risk: over-formalization.** Mitigation: the model covers the *core*
   (`C_p` equalities + reachability); best-effort hints are covered by the
   property suite alone. Pilot on Redpanda + MinIO (the STS/storage-heavy
@@ -189,7 +223,25 @@ Sequence a plan: (1) extract the Intent value types and the `C ⊎ B`
 partition for redpanda/minio/postgres; (2) add the `Materializer` port +
 registry selection by project runtime, keeping the container port as the
 default; (3) author the Alloy model of CAP/REP/IDN/REACH; (4) build the
-property-based + differential conformance suites and gate CI on them;
+property-based + differential conformance suites — including the REACH
+**negative probe** (an unauthorized path must fail) — and gate CI on them;
 (5) pilot a Helm-backed Kubernetes materializer for redpanda behind a
-feature gate; (6) wire the degraded-tier and unenforced-reachability
-diagnostics through the ADR 031 channel.
+feature gate, with the rendered + materialized assertions bracketing it;
+(6) make mesh-overlay enforcement of REACH the primary, substrate-agnostic
+mechanism (NetworkPolicy/Docker-network demoted to defense-in-depth), so
+zero-trust holds on Kubernetes-in-Docker / Docker-in-Docker / K8s-in-VM
+alike; (7) wire the degraded-**tier** fact through the ADR 031 diagnostics
+channel (tier only — REACH never degrades).
+
+**Also folded in — health-probe deadlines vs. cold-start realization.**
+Found live during the K8s bring-up: Marquez, Nessie, and Trino each took
+2–3 minutes to become healthy on a cold cluster (fresh image pulls + JVM
+warmup + resource pressure), exceeding the reconciler's health deadline, so
+they were reported failed even though they came up moments later — the
+successive idempotent re-applies then healed them. A materializer's
+readiness deadline is itself part of intent preservation (a Provider that IS
+eventually healthy must not be reported permanently failed): the deadline
+must be a function of the realization's cold-start cost (image size, JVM,
+replica count), separated from steady-state liveness, and surfaced/tunable
+per Provider — not a single global timeout. Treat this as a first-class
+obligation of the Materializer contract, verified like the others.
