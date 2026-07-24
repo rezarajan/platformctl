@@ -5792,3 +5792,16 @@ one `v1.2.0` tag — Stages A+B+F closed plus C1 and D1 merged;
   makes openziti available; --no-zero-trust refuses it naming the subsumed
   gate). doc 04 §12 table + gate row added. The developer now thinks only
   "zero-trust on (default for a project) or off".
+
+- **M6 Done (2026-07-24):** policy intersection invariant (ADR 035
+  decision 3). The declared graph (Connections+Bindings) is the complete
+  allow-set — already label-free (the openziti base path uses zero
+  policies/labels; graph-scoped derivation + M5 authorize the mediated
+  path from the declared connectionRef alone). Policies are deny/warn
+  only (they can never widen). The one widening vector, spec.access
+  namespace grants, is now REFUSED under zero-trust
+  (checkZeroTrustNoWideGrants): declare a Connection/Binding instead.
+  Legacy (no datascape.yaml, ZeroTrust off) keeps grants working. Proven
+  by TestZeroTrustRefusesWideGrants. So under the project model a
+  developer writes NO labels and NO policies for zero-trust — the graph
+  is the policy; a hand-written deny policy may still narrow, never widen.

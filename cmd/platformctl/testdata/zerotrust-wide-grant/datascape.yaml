@@ -1,0 +1,4 @@
+apiVersion: datascape.io/v1alpha1
+kind: Project
+metadata: { name: ztwg }
+spec: { runtime: { type: docker } }

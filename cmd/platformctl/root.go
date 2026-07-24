@@ -259,6 +259,30 @@ func (a *app) checkExternalGate(envelopes []resource.Envelope) error {
 	return nil
 }
 
+// checkZeroTrustNoWideGrants enforces docs/adr/035 decision 3's policy
+// intersection invariant (M6): under zero-trust the DECLARED graph
+// (Connections + Bindings) is the complete allow-set — a resource reaches
+// exactly what it declared an edge to, and nothing widens that. A
+// spec.access namespace-wide grant is the one widening vector (policies are
+// deny/warn only and can never widen), so under zero-trust it is refused:
+// declare a Connection/Binding to what you need to reach instead of
+// granting namespace access. Legacy manifest sets (no datascape.yaml,
+// ZeroTrust off) keep spec.access working unchanged, so this fires only
+// where the developer opted into the zero-trust project model.
+func (a *app) checkZeroTrustNoWideGrants(envelopes []resource.Envelope) error {
+	if !a.gates.Enabled("ZeroTrust") {
+		return nil
+	}
+	for _, e := range envelopes {
+		if grants, _ := e.Spec["access"].([]any); len(grants) > 0 {
+			return cliutil.Exit(cliutil.ExitValidation, fmt.Errorf(
+				"%s declares spec.access namespace grants, which widen reachability beyond the declared graph — not permitted under zero-trust (docs/adr/035): declare a Connection or Binding to what %s needs to reach, or run with --no-zero-trust to use wide grants",
+				e.Key(), e.Metadata.Name))
+		}
+	}
+	return nil
+}
+
 // checkSchemaRegistryGate covers docs/planning/08 D1: SchemaRegistrySupport
 // is Alpha/disabled by default, so a manifest set using either half of the
 // feature — a Provider enabling the built-in registry, or a Binding
@@ -436,6 +460,9 @@ func (a *app) loadAndValidate(w io.Writer, path string) ([]resource.Envelope, *g
 		return nil, nil, cliutil.Exit(cliutil.ExitValidation, err)
 	}
 	if err := a.checkExternalGate(envelopes); err != nil {
+		return nil, nil, err
+	}
+	if err := a.checkZeroTrustNoWideGrants(envelopes); err != nil {
 		return nil, nil, err
 	}
 	if err := a.checkSchemaRegistryGate(envelopes); err != nil {
