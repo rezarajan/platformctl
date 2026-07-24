@@ -1,0 +1,54 @@
+# zero-trust-lakehouse's own label-scoped policy pack (docs/adr/033, Stage
+# K2's matchEdge.selector — docs/planning/03 §13.1). A distinct governance
+# input, loaded from its own channel (--policies, never from the manifest
+# set it governs): `platformctl validate examples/zero-trust-lakehouse/
+# --policies examples/zero-trust-lakehouse/policies --feature-gates
+# PolicyEngine=true,LabelScopedAccess=true,...` (see README.md#zero-trust).
+apiVersion: policy.datascape.io/v1alpha1
+kind: Policy
+metadata:
+  name: zero-trust-lakehouse
+spec:
+  rules:
+    # The core proof: a gold-tier source (03-sources-datasets-catalog.yaml's
+    # orders Source, labels tier: gold) may only feed a consumer that itself
+    # carries clearance: gold (04-streams-bindings.yaml's orders-events
+    # EventStream). Evaluated over the same graph-derived edges
+    # matchEdge.crossDomain uses (a Binding's sourceRef -> targetRef, or a
+    # connectionRef consumer -> the Connection it references) — here, the
+    # orders-to-events Binding's sourceRef(orders) -> targetRef(orders-events)
+    # edge. Any OTHER Binding/consumer that tries to read the gold source
+    # into a target lacking clearance: gold is denied — see
+    # test-zero-trust.sh's policy-deny proof for a worked, live example.
+    - id: deny-ungoverned-gold-access
+      matchEdge:
+        selector:
+          from:
+            matchLabels:
+              tier: gold
+          to:
+            matchExpressions:
+              - key: clearance
+                operator: NotIn
+                values: [gold]
+      effect: deny
+      exemptible: true
+      message: "a tier:gold source may only feed a consumer labeled clearance:gold (docs/adr/033) — label the consumer clearance:gold, route through an approved path, or exempt with a reason"
+
+    # Label integrity (docs/adr/033's "self-claim pitfall"): closes the
+    # classic label-based-access failure mode where a consumer labels
+    # ITSELF clearance:gold to grant itself audience under the rule above.
+    # Only resources declared alongside this example (namespace "default",
+    # this manifest set's own namespace) may wear the clearance label at
+    # all — tailor to your organization's actual namespace/label before
+    # reuse.
+    - id: who-may-wear-clearance-label
+      match:
+        selector:
+          matchExpressions:
+            - key: clearance
+              operator: Exists
+      assert: { field: metadata.namespace, in: [default, ""] }
+      effect: deny
+      exemptible: true
+      message: "only resources in the default namespace may carry a clearance label in this example (docs/adr/033 label-integrity governance) — tailor to your organization's, or exempt with a reason"
