@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/rezarajan/platformctl/internal/adapters/providers/openziti"
 	k8sruntime "github.com/rezarajan/platformctl/internal/adapters/runtime/kubernetes"
 	envsecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/env"
 	filesecrets "github.com/rezarajan/platformctl/internal/adapters/secrets/file"
@@ -477,6 +478,14 @@ func (a *app) newEngine(stderr io.Writer) (*engine.Engine, error) {
 		Clock:       clock.Real{},
 		Warnings:    stderr,
 		Logger:      newEngineLogger(stderr, a.logFormat),
+		// Fabric is docs/planning/08 L2's engine-owned platform mediation
+		// fabric facility (docs/adr/034) — wired unconditionally, the same
+		// "nil disables, gate/trigger checked inside the engine" pattern
+		// Mediation itself follows; ensureMediationFabric/
+		// maybeDestroyMediationFabric are no-ops whenever MediatedTransport
+		// is off or no mediated edge is declared, so this costs nothing on
+		// the byte-identical-off path.
+		Fabric: openziti.NewFabricProvisioner(),
 	}, nil
 }
 
