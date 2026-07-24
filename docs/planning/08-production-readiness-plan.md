@@ -5342,6 +5342,118 @@ on a second call. PASS in 12.7s, zero residue confirmed via
 - **Accept:** stage criteria 3-4; claims table row cites the chaos
   test and the benchmark by name.
 
+## 7.12 Stage M — The just-works DX (ADR 035)
+
+Theme: realign the developer experience with the Datascape premise —
+declare resources, wire them with Connections, and it JUST WORKS, zero-
+trust by default, no ports/labels/gates/per-provider-runtime to reason
+about. Owner critique (2026-07-24) of the zero-trust-lakehouse capstone.
+Sequencing: M1/M2/M3 are independent foundations; M5 (graph×mediation
+fix) precedes M4 (zero-trust default-on); M6 builds on M4+M5; M7 (the
+rebuilt example) proves it all on both runtimes.
+
+### M1: Project-level runtime — one runtime per project
+
+- **Size:** L. **Depends:** —. **Why:** ADR 035 decision 1. A project
+  targets ONE runtime, declared once.
+- **Do:** a `Project` document (`datascape.yaml` at the project root,
+  loaded before the manifest set) carrying `spec.runtime`. The engine
+  resolves every Provider's runtime from it (populating the existing
+  per-Provider RuntimeType plumbing internally). Providers drop
+  `spec.runtime`; a Provider that still sets one is an explicit override,
+  validated to match the project runtime family or refused. Enforce
+  single-runtime-per-inventory at validate. Schema + doc 03 same commit.
+- **Accept:** an example with no per-Provider runtime applies on the
+  project runtime; a mixed-runtime inventory is refused with a clear
+  message; existing per-Provider-runtime manifests still work (override).
+
+### M2: Auto-provisioned Connection ports
+
+- **Size:** S-M. **Depends:** —. **Why:** ADR 035 decision 2.
+- **Do:** `Connection.spec.port` optional; when omitted, auto-allocate
+  via internal/domain/hostport (the existing deterministic allocator).
+  Consumers already resolve the address from the published fact — verify
+  no consumer path reads a literal port. Schema + doc 03 same commit.
+- **Accept:** a Connection with no port applies; its consumers reach it;
+  a pinned port still works byte-identically.
+
+### M3: Sensible per-provider resource defaults
+
+- **Size:** M. **Depends:** —. **Why:** ADR 035 decision 4 (the owner's
+  stated exception — resources stay an override, but must never be
+  required).
+- **Do:** each provider declares a default resource profile sized to its
+  technology (DB default; JVM default for nessie/marquez/trino/connect;
+  small default for proxy/tunneler), applied at the engine chokepoint
+  (domainRuntime, J5) when the manifest sets none. Explicit resources
+  win. Document the defaults in doc 03.
+- **Accept:** an undecorated manifest gets bounded containers; an
+  explicit override still wins; documented footprint per provider.
+
+### M5: Graph×mediation composition — auto-wire consumer -> tunneler
+
+- **Size:** M-L. **Depends:** —. **Why:** the capstone review's recorded
+  finding + ADR 035's hard prerequisite for zero-trust-by-default. Today
+  GraphScopedAccess + a MediatedConnection do NOT compose: the CDC
+  worker never shares a network with the Connection's tunneler because
+  that path is a realization detail, not a declared manifest edge.
+- **Do:** graph derivation (internal/application/graphaccess) follows a
+  consumer's connectionRef transitively to the realizing mediation
+  tunneler, so the consumer is placed on a network that reaches the
+  tunneler; the target stays dark. Live-prove: a graph-scoped + mediated
+  CDC path reaches RUNNING on Docker AND K8s (the exact case that failed
+  in the capstone).
+- **Accept:** graph-scoped + mediated CDC green both runtimes; the
+  standalone graphscoped and openziti suites stay green.
+
+### M4: Unify zero-trust into one default-on concept
+
+- **Size:** L. **Depends:** M5. **Why:** ADR 035 decision 3 — the
+  developer thinks only "zero-trust on (default)" or "off".
+- **Do:** a single `ZeroTrust` gate (default ENABLED) that turns on
+  mediation + graph-scoped access + policy together; project
+  `spec.zeroTrust: false` and CLI `--no-zero-trust` are the only
+  controls. The four old gates get a one-release deprecation shim
+  mapping onto ZeroTrust. When on with no explicit mediation provider,
+  the engine uses the platform-owned fabric (ADR 034 L2). Every
+  Connection is mediated automatically; no labels required.
+- **Accept:** a Connection declared with zero-trust on (default) is
+  mediated + graph-scoped with no labels/ports/extra manifests;
+  `--no-zero-trust` returns byte-identical pre-zero-trust behavior
+  (pinned); old gate flags still work via the shim with a deprecation
+  warning.
+
+### M6: Auto-compiled policies + intersection semantics
+
+- **Size:** L. **Depends:** M4, M5. **Why:** ADR 035 decision 3's policy
+  half.
+- **Do:** every Connection/Binding auto-generates its zero-trust
+  allowance (the baseline the developer never writes). A user policy
+  INTERSECTS: it may narrow (deny a subset) or annotate an
+  already-declared edge and is accepted; a policy granting access to a
+  resource with NO declared Connection/Binding is REFUSED (cannot widen
+  beyond the graph). Access requires BOTH a declared edge AND admission.
+  `platformctl policy audit` shows auto vs user-authored justifications.
+- **Accept:** a CDC-to-dark-DB allowance exists with zero hand-written
+  policy; a user policy adding a label to a declared edge is accepted; a
+  user policy naming an undeclared edge is refused; the self-claim attack
+  fixture still fails.
+
+### M7: Rebuild the example — planes, HA, both runtimes, zero ceremony
+
+- **Size:** M. **Depends:** M1-M6. **Why:** prove the new DX.
+- **Do:** rebuild examples/zero-trust-lakehouse with a `datascape.yaml`
+  (one runtime), manifests segregated into data-platform PLANES
+  (sources/, cdc/, sinks/, catalog/, query/, lineage/, platform/), NO
+  hard-coded ports, NO labels, NO gate flags (zero-trust is default), HA
+  declared (multi-broker redpanda, s3 nodes, trino/connect workers), and
+  a Kubernetes project variant. The README shows the "just declare and
+  apply" flow. Live-prove: applies to Ready + zero-trust proofs + HA
+  behavior on BOTH runtimes.
+- **Accept:** `apply` with no gate flags brings up a zero-trust HA
+  lakehouse on Docker and on Kubernetes; the zero-trust tests pass; the
+  plane folder structure reads like a data platform.
+
 ## 8. New feature gates introduced by this plan
 
 Append to doc 04 §12 as each lands (Alpha/disabled unless stated):
