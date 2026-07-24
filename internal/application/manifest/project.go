@@ -158,9 +158,26 @@ func ResolveProjectRuntime(envelopes []resource.Envelope, proj *project.Project)
 			continue
 		}
 		rtType, _ := rt["type"].(string)
+		if rtType == "" {
+			// Partial override (docs/planning/08 M7): a Provider may tune
+			// runtime fields — resources above all — WITHOUT pinning a
+			// runtime type. It inherits the project's type/network/... and
+			// layers its own declared fields on top, so the SAME plane stays
+			// portable across runtimes (the Docker project and a sibling
+			// Kubernetes project can share it unchanged; only their root
+			// datascape.yaml's runtime.type differs). The Provider's declared
+			// fields win the merge, so its resources block replaces the
+			// project default rather than deep-merging into it.
+			merged := cloneRuntimeMap(proj.Runtime.Config)
+			for k, v := range rt {
+				merged[k] = v
+			}
+			e.Spec["runtime"] = merged
+			continue
+		}
 		if rtType != proj.Runtime.Type {
 			return fmt.Errorf(
-				"Provider %q declares runtime %s but the project runtime is %s; a project targets one runtime — put %q in its own project folder",
+				"Provider %q declares runtime %s but the project runtime is %s; a project targets one runtime — omit spec.runtime.type to inherit it (keep only the fields you override, e.g. resources), or put %q in its own project folder",
 				e.Metadata.Name, rtType, proj.Runtime.Type, e.Metadata.Name,
 			)
 		}

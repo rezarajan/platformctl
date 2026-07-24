@@ -66,6 +66,36 @@ func TestProjectResolvesProviderRuntime(t *testing.T) {
 	}
 }
 
+// TestProjectPartialRuntimeOverrideInheritsType is the M7 portability fix:
+// a Provider may override runtime FIELDS (resources) without a type, so it
+// inherits the project's type/network and the same plane is portable across
+// runtimes. The Provider's own fields win the merge; project fields it omits
+// are inherited.
+func TestProjectPartialRuntimeOverrideInheritsType(t *testing.T) {
+	t.Parallel()
+	dir := writeManifestFiles(t, map[string]string{
+		ProjectFileName: projectDockerYAML,
+		"providers.yaml": "apiVersion: datascape.io/v1alpha1\nkind: Provider\nmetadata: {name: heavy}\n" +
+			"spec:\n  type: noop\n  runtime:\n    resources: {memory: 2Gi}\n",
+	})
+
+	envelopes, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load refused a type-less resources override: %v", err)
+	}
+	rt := envelopes[0].Spec["runtime"].(map[string]any)
+	if rt["type"] != "docker" {
+		t.Errorf("runtime.type = %v, want inherited docker", rt["type"])
+	}
+	if rt["network"] != "orders-net" {
+		t.Errorf("runtime.network = %v, want inherited orders-net", rt["network"])
+	}
+	res, ok := rt["resources"].(map[string]any)
+	if !ok || res["memory"] != "2Gi" {
+		t.Errorf("runtime.resources = %v, want the Provider's own {memory: 2Gi}", rt["resources"])
+	}
+}
+
 // TestProjectRefusesMismatchedOverride is the M1 accept criterion: "a
 // mixed-runtime inventory is refused with a clear message."
 func TestProjectRefusesMismatchedOverride(t *testing.T) {

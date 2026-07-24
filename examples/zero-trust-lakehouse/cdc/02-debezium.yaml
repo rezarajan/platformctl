@@ -33,7 +33,8 @@ metadata:
 spec:
   type: debezium
   runtime:
-    type: docker
+    # No type: inherits the project runtime (docker OR the k8s
+    # sibling project), overriding only resources — portable across both.
     resources: {memory: 2Gi, memoryReservation: 1Gi}
   configuration:
     image: datascape-s3sink-connect:local

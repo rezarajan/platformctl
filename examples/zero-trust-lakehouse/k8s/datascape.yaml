@@ -1,36 +1,34 @@
-# The Kubernetes variant of this project's ONE runtime declaration
-# (docs/adr/035 decision 1, docs/planning/08 M7). Proves portability: the
-# SAME planes (platform/, sources/, cdc/, sinks/, catalog/, query/,
-# lineage/) apply unmodified against a cluster instead of Docker — only
-# this one file changes. platformctl's project loader reads exactly one
-# datascape.yaml, at the target path's own root (docs/planning/08 M1's
-# LoadProject), so running the Kubernetes leg is a one-line swap, not a
-# parallel copy of every plane:
+# The Kubernetes project — a SECOND runtime for the same data platform
+# (docs/adr/035 decision 1, docs/planning/08 M7). This is its own project
+# folder (the Go-module shape: multiple runtimes = multiple project
+# folders), so it COEXISTS with the Docker project one level up — no file
+# swapping. It declares runtime.type: kubernetes and then includes the
+# EXACT SAME plane folders as the Docker project via ../ paths: the planes
+# are shared, only the runtime differs. Run it directly:
 #
-#   cp datascape.yaml datascape.docker.yaml.bak   # keep the Docker one
-#   cp k8s/datascape.yaml datascape.yaml
-#   platformctl apply . --state-file ./ztl-k8s.state.json --auto-approve \
-#     --feature-gates HighAvailability=true,TrinoProvider=true
-#   mv datascape.docker.yaml.bak datascape.yaml    # swap back when done
+#   platformctl apply examples/zero-trust-lakehouse/k8s \
+#     --state-file examples/zero-trust-lakehouse/ztl-k8s.state.json \
+#     --auto-approve --feature-gates HighAvailability=true,TrinoProvider=true
 #
-# See README.md#kubernetes-variant for the full walkthrough, including what
-# this repo's own dev cluster could and could not prove live.
+# The Docker project (examples/zero-trust-lakehouse) stays applied and
+# untouched. See README.md#kubernetes-variant.
 apiVersion: datascape.io/v1alpha1
 kind: Project
 metadata:
-  name: zero-trust-lakehouse
+  name: zero-trust-lakehouse-k8s
 spec:
   runtime:
     type: kubernetes
     network: datascape-ztl
   zeroTrust: true
-  # The SAME plane members as the Docker root — this file is copied TO the
-  # root to run the Kubernetes leg, so the paths resolve identically.
+  # The SAME plane folders as the Docker project, referenced up one level.
+  # Each plane's own datascape.yaml (an include: no runtime) is shared by
+  # both projects unchanged — only this root's runtime.type differs.
   resources:
-    - platform
-    - sources
-    - cdc
-    - sinks
-    - catalog
-    - query
-    - lineage
+    - ../platform
+    - ../sources
+    - ../cdc
+    - ../sinks
+    - ../catalog
+    - ../query
+    - ../lineage

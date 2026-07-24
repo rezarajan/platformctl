@@ -28,7 +28,7 @@ metadata:
 spec:
   type: s3sink
   runtime:
-    type: docker
+    # No type: inherits the project runtime; overrides only resources.
     resources: {memory: 1536Mi, memoryReservation: 768Mi}
   configuration:
     image: datascape-s3sink-connect:local

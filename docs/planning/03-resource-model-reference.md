@@ -68,6 +68,18 @@ check, with no separate whole-inventory scan needed.
 **Multiple runtimes = multiple project folders**, each with its own `datascape.yaml` — Datascape
 does not wire across runtimes.
 
+**Partial runtime override — plane portability (docs/planning/08 M7):** a Provider may also declare
+`spec.runtime` **without a `type`**, to tune individual fields (`resources` above all) while
+inheriting the project's `type`/`network`/…. `ResolveProjectRuntime` merges the project runtime as
+the base and lets the Provider's declared fields win (its `resources` block replaces the project
+default rather than deep-merging). This keeps a plane portable across runtimes: the same `cdc/`,
+`sinks/`, `query/` folders are shared unchanged by a Docker project and a sibling Kubernetes project
+(see `examples/zero-trust-lakehouse/k8s/datascape.yaml`, which includes them via `../`) — a
+JVM-heavy Provider keeps its `resources: {memory: 2Gi}` override in both because it never pins a
+runtime type. `spec.runtime.type` is thus schema-optional; the "required" enforcement is the domain
+check that fires only when there is no project to inherit from. Two project folders MAY share plane
+folders this way; the planes are runtime-neutral and only each root's `runtime.type` differs.
+
 **Backward compat:** a manifest path with no `datascape.yaml` is untouched by any of the above — a
 `Provider`'s `spec.runtime` remains required exactly as before (`Provider %q: spec.runtime.type is
 required`), and per-Provider runtimes may still diverge freely (e.g.
