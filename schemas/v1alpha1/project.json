@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datascape.io/schemas/v1alpha1/project.json",
+  "title": "Project",
+  "description": "The project root config (docs/adr/035 decision 1, docs/planning/08 M1): a lightweight document, conventionally named datascape.yaml and placed at the manifest path's root, loaded BEFORE the manifest set — not one of the governed resource kinds (it is never returned by a manifest load, never appears in the graph/plan/apply resource list, exactly like Policy is a sibling reference rather than a governed-set kind). Declares the ONE runtime every Provider in the project targets (the Go-module shape): a Provider omitting its own spec.runtime inherits this one; a Provider that DOES declare spec.runtime is an explicit override, validated to match this runtime's type or refused ('a project targets one runtime — put it in its own project folder').",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "const": "datascape.io/v1alpha1"
+    },
+    "kind": {
+      "const": "Project"
+    },
+    "metadata": {
+      "$ref": "meta.json"
+    },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "runtime": {
+          "type": "object",
+          "description": "The project's one runtime. Same shape as a Provider's own spec.runtime (docs/planning/03 §4) — type plus runtime-specific fields (network/access/resources/etc.) — copied verbatim onto every Provider in the project that omits its own spec.runtime.",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "docker",
+                "fake",
+                "kubernetes",
+                "external",
+                "terraform"
+              ],
+              "description": "Mirrors provider.json's spec.runtime.type enum exactly — docker and fake (testing) are implemented; kubernetes is a real, Beta adapter behind the KubernetesRuntime feature gate; external/terraform are accepted for forward compatibility and rejected at registry construction."
+            },
+            "network": {
+              "type": "string",
+              "description": "The shared addressing/isolation domain every Provider in the project joins. docker: the network name (default: datascape). kubernetes: the Namespace name."
+            },
+            "networkPolicy": {
+              "type": "string",
+              "enum": [
+                "none"
+              ],
+              "description": "kubernetes only; see provider.json's identical field for the full default-deny NetworkPolicy behavior this opts out of."
+            },
+            "access": {
+              "type": "string",
+              "enum": [
+                "port-forward",
+                "node-port",
+                "load-balancer",
+                "in-cluster"
+              ],
+              "description": "kubernetes only; see provider.json's identical field."
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Optional resource bounds (docs/planning/08 J5) applied to every long-running container across the project's Providers that don't set their own spec.runtime.resources override.",
+              "properties": {
+                "cpu": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "cpuReservation": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "memory": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(Ki|Mi|Gi)$"
+                },
+                "memoryReservation": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(Ki|Mi|Gi)$"
+                }
+              }
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": true
+        },
+        "zeroTrust": {
+          "type": "boolean",
+          "default": true,
+          "description": "docs/adr/035 decision 3. Defaults to true. M1 parses and stores this field only — no engine behavior reads it yet; docs/planning/08 M4 wires the ZeroTrust default-on behavior from it."
+        }
+      },
+      "required": [
+        "runtime"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "additionalProperties": false
+}

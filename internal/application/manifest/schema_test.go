@@ -48,12 +48,14 @@ func TestSchemaRejectsMalformedManifests(t *testing.T) {
 				"spec:\n  engine: postgres\n  external: true\n",
 			want: "schema validation failed",
 		},
-		{
-			name: "provider without runtime",
-			doc: "apiVersion: datascape.io/v1alpha1\nkind: Provider\nmetadata: {name: p}\n" +
-				"spec:\n  type: redpanda\n",
-			want: "schema validation failed",
-		},
+		// "provider without runtime" moved to
+		// TestProviderWithoutRuntimeNoProject (project_test.go):
+		// docs/adr/035 decision 1 (docs/planning/08 M1) made spec.runtime
+		// schema-optional (a Provider under a project inherits it), so
+		// omitting it no longer fails schema validation — it is now a
+		// Go-level provider.Provider.validate refusal instead ("spec.
+		// runtime.type is required"), reached only when no datascape.yaml
+		// exists to inherit from.
 		{
 			name: "hand-authored status",
 			doc: "apiVersion: datascape.io/v1alpha1\nkind: Dataset\nmetadata: {name: d}\n" +

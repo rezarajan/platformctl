@@ -12,6 +12,51 @@
 - A Kind may exist at multiple `apiVersion`s simultaneously during a graduation window; the CLI
   accepts both and warns on the older one.
 
+### 1.1 Kind: `Project` — the project root config, loaded before the manifest set (docs/adr/035 decision 1, docs/planning/08 M1)
+
+`Project` (`apiVersion: datascape.io/v1alpha1`, `kind: Project`) is a lightweight document,
+conventionally named `datascape.yaml` and placed at the manifest path's root (the directory itself
+when a command is pointed at a directory; that directory's parent when pointed at a single
+manifest file). It is loaded **before** the rest of the manifest set and is **not** one of the
+governed resource kinds documented in the sections below — it never appears in the returned
+envelope list, the dependency graph, or a plan/apply's resource list, exactly as `Policy` (§13) is
+a schema-adjacent sibling reference rather than a governed-set kind. Its schema
+(`schemas/v1alpha1/project.json`) is registered in the same `schemas.KindFiles` map every other
+Kind uses (reusing the compiler and the `meta.json` metadata `$ref`), but `Project` is deliberately
+excluded from `internal/application/manifest.KnownKinds`.
+
+```yaml
+apiVersion: datascape.io/v1alpha1
+kind: Project
+metadata:
+  name: orders-platform
+spec:
+  runtime:
+    type: docker            # the ONE runtime for every Provider in this project
+    network: orders-net     # same shape as a Provider's own spec.runtime — see §4
+  zeroTrust: true            # default; docs/planning/08 M4 wires this into engine behavior (not yet read)
+```
+
+A project declares exactly **one** runtime (the Go-module shape): every `Provider` under it that
+omits its own `spec.runtime` inherits this one verbatim (`internal/application/manifest.
+ResolveProjectRuntime`, run once, right after the manifest set is decoded and before `Validate`).
+A `Provider` that DOES declare `spec.runtime` is an explicit override, refused unless its `type`
+matches the project's — "Provider %q declares runtime %s but the project runtime is %s; a project
+targets one runtime — put %q in its own project folder." Because every Provider is checked against
+the SAME project runtime type this way, no two Providers under one project can ever diverge — the
+single-runtime-per-inventory invariant doc 08 M1 calls for falls directly out of this per-Provider
+check, with no separate whole-inventory scan needed.
+
+**Multiple runtimes = multiple project folders**, each with its own `datascape.yaml` — Datascape
+does not wire across runtimes.
+
+**Backward compat:** a manifest path with no `datascape.yaml` is untouched by any of the above — a
+`Provider`'s `spec.runtime` remains required exactly as before (`Provider %q: spec.runtime.type is
+required`), and per-Provider runtimes may still diverge freely (e.g.
+`examples/cdc-attendance/provider-lineage-fake.yaml`'s `runtime: fake` stand-in alongside sibling
+`docker` Providers, with no project file — exercised live by
+`cmd/platformctl/acceptance_integration_test.go`). The project config is strictly additive.
+
 ## 2. Common envelope
 
 Every manifest shares this shape:
@@ -257,6 +302,13 @@ Declares a technology (`type`) and where it runs (`runtime`). This is the resour
 `DatabaseClass`/`DatabaseInstance`/`ConnectorClass`/`CDCClass`/`CDCInstance` from the
 experimental phase.
 
+`spec.runtime` is **optional** (docs/adr/035 decision 1, docs/planning/08 M1): omitted, a Provider
+inherits the project's one runtime declared in `datascape.yaml` (§1.1) — the common, recommended
+path, and the one every example below is written against for brevity. Declared here, it is an
+explicit override, validated to match the project runtime's `type` or refused. With no
+`datascape.yaml` present at the manifest path's root at all, `spec.runtime` remains required exactly
+as before this ADR — the backward-compat path §1.1 pins.
+
 ```yaml
 apiVersion: datascape.io/v1alpha1
 kind: Provider
@@ -472,6 +524,12 @@ spec:
     name: prod-lake        # a Connection (preferred) or SecretReference; required when external
   secretRefs: [minio-admin] # must list the Connection's own secretRef, resolved and handed to this Provider
 ```
+
+(Note: the inline `# still required by schema` comment above predates docs/adr/035 decision 1 —
+see §1.1/§4's own updated wording: `spec.runtime` is schema-optional as of docs/planning/08 M1,
+inherited from a project's `datascape.yaml` when omitted, and required only in the no-project
+backward-compat path. Shown explicitly here regardless, since `external: true` means nothing is
+created either way.)
 
 Optional, not required for v1.0.0:
 

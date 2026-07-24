@@ -10,6 +10,17 @@ import "embed"
 var FS embed.FS
 
 // KindFiles maps each Kind to its schema path within FS, per apiVersion.
+//
+// Project (docs/adr/035 decision 1, docs/planning/08 M1) is registered
+// here — same apiVersion, same compiler, same meta.json $ref reuse as
+// every other Kind — purely so LoadProject can reuse the existing
+// validateAgainstSchema machinery. It is deliberately NOT added to
+// manifest.KnownKinds: a Project document is loaded from its own
+// reserved filename (datascape.yaml) before the manifest set and never
+// enters the governed envelope list, the graph, or Validate's kind
+// switch — mirroring how Policy is a schema-adjacent but not a
+// governed-set kind (see PolicyFS/PolicyKindFiles below), just sharing
+// this map instead of a parallel one since its apiVersion already matches.
 var KindFiles = map[string]map[string]string{
 	"datascape.io/v1alpha1": {
 		"Provider":        "v1alpha1/provider.json",
@@ -20,6 +31,7 @@ var KindFiles = map[string]map[string]string{
 		"SecretReference": "v1alpha1/secretreference.json",
 		"Catalog":         "v1alpha1/catalog.json",
 		"Connection":      "v1alpha1/connection.json",
+		"Project":         "v1alpha1/project.json",
 	},
 }
 

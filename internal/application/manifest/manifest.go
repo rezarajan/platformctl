@@ -38,7 +38,22 @@ var KnownKinds = map[string]bool{
 
 // Load reads one path (file or directory) and returns validated envelopes.
 // Multi-document YAML files are supported.
+//
+// docs/adr/035 decision 1 (docs/planning/08 M1): before the manifest
+// documents are collected, LoadProject reads the optional project root
+// config (datascape.yaml) at path's root — nil when absent, the total
+// backward-compat no-op. Once every envelope is decoded below,
+// ResolveProjectRuntime populates any Provider's missing spec.runtime
+// from it (or refuses a mismatched override) BEFORE Validate runs, so
+// every caller of Load (this CLI's loadAndValidate, `policy test`,
+// compose) gets a fully runtime-resolved envelope set for free, with no
+// signature change.
 func Load(path string) ([]resource.Envelope, error) {
+	proj, err := LoadProject(path)
+	if err != nil {
+		return nil, err
+	}
+
 	files, err := collectFiles(path)
 	if err != nil {
 		return nil, err
@@ -74,6 +89,10 @@ func Load(path string) ([]resource.Envelope, error) {
 			}
 			envelopes = append(envelopes, env)
 		}
+	}
+
+	if err := ResolveProjectRuntime(envelopes, proj); err != nil {
+		return nil, err
 	}
 
 	if err := Validate(envelopes); err != nil {
@@ -241,6 +260,13 @@ func collectFiles(path string) ([]string, error) {
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {
+			continue
+		}
+		// ProjectFileName (datascape.yaml) is a reserved, separate channel
+		// (docs/adr/035 decision 1) — read by LoadProject, never treated
+		// as an ordinary governed-set document (it has no Kind in
+		// manifest.KnownKinds and would otherwise fail as "unknown kind").
+		if entry.Name() == ProjectFileName {
 			continue
 		}
 		switch filepath.Ext(entry.Name()) {

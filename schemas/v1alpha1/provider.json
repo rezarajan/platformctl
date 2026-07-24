@@ -46,7 +46,7 @@
         },
         "runtime": {
           "type": "object",
-          "description": "Where the provider's backing objects run. Fields beyond type are runtime-specific (e.g. network for docker).",
+          "description": "Where the provider's backing objects run. Fields beyond type are runtime-specific (e.g. network for docker). Optional (docs/adr/035 decision 1, docs/planning/08 M1): omitted, this Provider inherits the project's one runtime, declared once in datascape.yaml at the manifest path's root — the common, recommended path. Declared here, it is an explicit override, validated to match the project runtime's type or refused ('a project targets one runtime — put it in its own project folder'); with no datascape.yaml present at all, spec.runtime is required exactly as before (backward compat — see internal/domain/provider.Provider.validate).",
           "properties": {
             "type": {
               "type": "string",
@@ -144,8 +144,7 @@
         }
       },
       "required": [
-        "type",
-        "runtime"
+        "type"
       ],
       "additionalProperties": false,
       "allOf": [
