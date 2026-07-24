@@ -346,6 +346,12 @@ spec:
                                   # aware JVMs size their default heap from the memory LIMIT. docker: memory/cpu map
                                   # to cgroup bounds, cpuReservation is best-effort CPU shares. Short-lived job
                                   # containers (backup/restore pipelines) are deliberately not bounded by this field.
+                                  # M3 (docs/adr/035 decision 4): resources is OPTIONAL and never required. When
+                                  # omitted, every provider gets a sensible per-technology DEFAULT profile at the
+                                  # engine chokepoint (databases/object-stores ~512Mi, JVM services — nessie/trino/
+                                  # marquez/Kafka-Connect workers — ~1Gi, redpanda ~1Gi, mesh/tunnel/proxy ~256Mi;
+                                  # noop/container get none). An explicit resources block always wins; the default
+                                  # is the floor so an undecorated manifest still yields bounded containers.
   configuration:                 # provider-specific, schema keyed by `type`
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
   secretRefs: []                 # optional list of SecretReference names, resolved and passed to the provider

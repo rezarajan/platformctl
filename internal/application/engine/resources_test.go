@@ -30,7 +30,7 @@ func TestDomainRuntimeInjectsDeclaredResources(t *testing.T) {
 			"memoryReservation": "256Mi",
 		},
 	}
-	d := newDomainRuntime(rt, cfg, env, env, nil, false, false, nil, "fake", nil)
+	d := newDomainRuntime(rt, cfg, env, env, nil, false, false, nil, "fake", "", nil)
 	if _, err := d.EnsureContainer(context.Background(), runtime.ContainerSpec{Name: "w", Image: "img"}); err != nil {
 		t.Fatalf("EnsureContainer: %v", err)
 	}
@@ -57,11 +57,47 @@ func TestDomainRuntimeInjectsDeclaredResources(t *testing.T) {
 	}
 
 	// No resources declared -> nothing injected.
-	d2 := newDomainRuntime(rt, map[string]any{"type": "fake"}, env, env, nil, false, false, nil, "fake", nil)
+	d2 := newDomainRuntime(rt, map[string]any{"type": "fake"}, env, env, nil, false, false, nil, "fake", "", nil)
 	if _, err := d2.EnsureContainer(context.Background(), runtime.ContainerSpec{Name: "w3", Image: "img"}); err != nil {
 		t.Fatalf("EnsureContainer(w3): %v", err)
 	}
 	if spec3, _ := rt.Spec("w3"); spec3.Resources != nil {
 		t.Fatal("Resources injected despite no spec.runtime.resources block")
+	}
+}
+
+// TestDomainRuntimeAppliesProviderDefaultResources pins M3 (docs/adr/035
+// decision 4): a provider that declares no resources anywhere still gets
+// its sensible per-technology default at the chokepoint — an undecorated
+// manifest yields bounded containers. An explicit resources still wins
+// (proven above); a type with no meaningful default stays unbounded.
+func TestDomainRuntimeAppliesProviderDefaultResources(t *testing.T) {
+	t.Parallel()
+	rt := fakeruntime.New()
+	env := resource.Envelope{
+		GroupVersionKind: resource.GroupVersionKind{APIVersion: "datascape.io/v1alpha1", Kind: "Provider"},
+		Metadata:         resource.Metadata{Name: "db"},
+		Spec:             map[string]any{"type": "postgres"},
+	}
+	// providerType "postgres", no resources config at all -> the postgres default.
+	d := newDomainRuntime(rt, map[string]any{"type": "docker"}, env, env, nil, false, false, nil, "docker", "postgres", nil)
+	if _, err := d.EnsureContainer(context.Background(), runtime.ContainerSpec{Name: "pg", Image: "postgres:16"}); err != nil {
+		t.Fatalf("EnsureContainer: %v", err)
+	}
+	spec, _ := rt.Spec("pg")
+	if spec.Resources == nil {
+		t.Fatal("postgres provider got no default resources — M3 floor missing")
+	}
+	if spec.Resources.MemoryLimitBytes != 512<<20 {
+		t.Errorf("postgres default memory limit = %d, want 512Mi", spec.Resources.MemoryLimitBytes)
+	}
+
+	// A type with no meaningful default stays unbounded.
+	d2 := newDomainRuntime(rt, map[string]any{"type": "docker"}, env, env, nil, false, false, nil, "docker", "noop", nil)
+	if _, err := d2.EnsureContainer(context.Background(), runtime.ContainerSpec{Name: "n", Image: "x"}); err != nil {
+		t.Fatalf("EnsureContainer(noop): %v", err)
+	}
+	if spec2, _ := rt.Spec("n"); spec2.Resources != nil {
+		t.Error("noop provider got a default it should not have")
 	}
 }

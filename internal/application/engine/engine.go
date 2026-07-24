@@ -1426,7 +1426,7 @@ func (e *Engine) resolveRequest(ctx context.Context, env resource.Envelope, byKe
 	// unconditionally (a no-op whenever graphScoped is false, since no
 	// grant is ever compiled at all in that case).
 	labelScopedAccessEnabled := e.Registry.GateEnabled("LabelScopedAccess")
-	rt = newDomainRuntime(rt, p.RuntimeConfig, provEnv, env, byKey, graphScoped, labelScopedAccessEnabled, accessEdges, p.RuntimeType, e.warnf)
+	rt = newDomainRuntime(rt, p.RuntimeConfig, provEnv, env, byKey, graphScoped, labelScopedAccessEnabled, accessEdges, p.RuntimeType, p.Type, e.warnf)
 	// facts is the single state snapshot every published-fact lookup below
 	// reads from (docs/planning/08 I9) — taken once, under one lock
 	// acquisition, rather than each resolve* function separately locking

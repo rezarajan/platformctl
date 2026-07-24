@@ -28,7 +28,7 @@ func TestDomainRuntimeUndeclaredDomainIsByteIdenticalNoOp(t *testing.T) {
 	t.Parallel()
 	rt := fakeruntime.New()
 	env := envWithDomain("Provider", "pg", "default", "", nil)
-	d := newDomainRuntime(rt, map[string]any{}, env, env, nil, false, false, nil, "fake", nil)
+	d := newDomainRuntime(rt, map[string]any{}, env, env, nil, false, false, nil, "fake", "", nil)
 
 	if err := d.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "datascape", Labels: runtime.ManagedLabels("default", "Provider", "pg", "pg")}); err != nil {
 		t.Fatalf("EnsureNetwork: %v", err)
@@ -50,7 +50,7 @@ func TestDomainRuntimeScopesTheDefaultToken(t *testing.T) {
 	t.Parallel()
 	rt := fakeruntime.New()
 	env := envWithDomain("Provider", "pg", "default", "payments", nil)
-	d := newDomainRuntime(rt, map[string]any{}, env, env, nil, false, false, nil, "fake", nil)
+	d := newDomainRuntime(rt, map[string]any{}, env, env, nil, false, false, nil, "fake", "", nil)
 
 	if err := d.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "datascape", Labels: runtime.ManagedLabels("default", "Provider", "pg", "pg")}); err != nil {
 		t.Fatalf("EnsureNetwork: %v", err)
@@ -72,7 +72,7 @@ func TestDomainRuntimePinnedOverrideNeverScoped(t *testing.T) {
 	t.Parallel()
 	rt := fakeruntime.New()
 	env := envWithDomain("Provider", "pg", "default", "payments", nil)
-	d := newDomainRuntime(rt, map[string]any{"network": "custom-net"}, env, env, nil, false, false, nil, "fake", nil)
+	d := newDomainRuntime(rt, map[string]any{"network": "custom-net"}, env, env, nil, false, false, nil, "fake", "", nil)
 
 	if err := d.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "custom-net", Labels: runtime.ManagedLabels("default", "Provider", "pg", "pg")}); err != nil {
 		t.Fatalf("EnsureNetwork: %v", err)
@@ -94,7 +94,7 @@ func TestDomainRuntimeNonTokenNamePassesThroughVerbatim(t *testing.T) {
 	t.Parallel()
 	rt := fakeruntime.New()
 	env := envWithDomain("Connection", "bridge", "default", "payments", nil)
-	d := newDomainRuntime(rt, map[string]any{}, env, env, nil, false, false, nil, "fake", nil)
+	d := newDomainRuntime(rt, map[string]any{}, env, env, nil, false, false, nil, "fake", "", nil)
 
 	if err := d.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "datascape-vpc-transit", Labels: runtime.ManagedLabels("default", "Connection", "bridge", "bridge")}); err != nil {
 		t.Fatalf("EnsureNetwork: %v", err)
@@ -128,7 +128,7 @@ func TestDomainRuntimeConnectionOpensHolesForCrossDomainConsumers(t *testing.T) 
 		consumer.Key():   consumer,
 		sameDomain.Key(): sameDomain,
 	}
-	d := newDomainRuntime(rt, map[string]any{}, conn, conn, byKey, false, false, nil, "fake", nil)
+	d := newDomainRuntime(rt, map[string]any{}, conn, conn, byKey, false, false, nil, "fake", "", nil)
 
 	if err := d.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "datascape", Labels: runtime.ManagedLabels("default", "Provider", "pg", "pg")}); err != nil {
 		t.Fatalf("EnsureNetwork: %v", err)
@@ -168,7 +168,7 @@ func TestDomainRuntimeUsesProviderDomainOfRecord(t *testing.T) {
 	provEnv := envWithDomain("Provider", "broker", "default", "infra", nil)
 	esEnv := envWithDomain("EventStream", "events", "default", "analytics", nil)
 
-	d := newDomainRuntime(rt, map[string]any{}, provEnv, esEnv, nil, false, false, nil, "fake", nil)
+	d := newDomainRuntime(rt, map[string]any{}, provEnv, esEnv, nil, false, false, nil, "fake", "", nil)
 	if err := d.EnsureNetwork(context.Background(), runtime.NetworkSpec{Name: "datascape", Labels: runtime.ManagedLabels("default", "Provider", "broker", "broker")}); err != nil {
 		t.Fatalf("EnsureNetwork: %v", err)
 	}
@@ -204,14 +204,14 @@ func TestDomainRuntimeQualifyTargetAddress(t *testing.T) {
 
 	// Non-namespaced (fake stands in for docker): verbatim pass-through
 	// even across domains.
-	dDocker := newDomainRuntime(fakeruntime.New(), map[string]any{}, caller, caller, nil, false, false, nil, "fake", nil).(*domainRuntime)
+	dDocker := newDomainRuntime(fakeruntime.New(), map[string]any{}, caller, caller, nil, false, false, nil, "fake", "", nil).(*domainRuntime)
 	if got, err := dDocker.QualifyTargetAddress(ctx, target, caller, "xd-pg:5432"); err != nil || got != "xd-pg:5432" {
 		t.Errorf("docker-shaped runtime: QualifyTargetAddress = (%q, %v), want verbatim pass-through", got, err)
 	}
 
 	// Kubernetes, cross-domain: qualified to the target's domain-scoped
 	// namespace FQDN.
-	dK8s := newDomainRuntime(fakeruntime.New(), map[string]any{}, caller, caller, nil, false, false, nil, "kubernetes", nil).(*domainRuntime)
+	dK8s := newDomainRuntime(fakeruntime.New(), map[string]any{}, caller, caller, nil, false, false, nil, "kubernetes", "", nil).(*domainRuntime)
 	if got, err := dK8s.QualifyTargetAddress(ctx, target, caller, "xd-pg:5432"); err != nil || got != "xd-pg.datascape-payments.svc.cluster.local:5432" {
 		t.Errorf("kubernetes cross-domain: QualifyTargetAddress = (%q, %v), want xd-pg.datascape-payments.svc.cluster.local:5432", got, err)
 	}
@@ -239,7 +239,7 @@ func TestDomainRuntimeQualifyTargetAddress(t *testing.T) {
 	// through verbatim in every domain (translate()'s rule), so on
 	// Kubernetes every domain shares the one pinned namespace — a bare
 	// name already resolves there, and "<pinned>-<domain>" never exists.
-	dPinned := newDomainRuntime(fakeruntime.New(), map[string]any{"network": "custom-net"}, caller, caller, nil, false, false, nil, "kubernetes", nil).(*domainRuntime)
+	dPinned := newDomainRuntime(fakeruntime.New(), map[string]any{"network": "custom-net"}, caller, caller, nil, false, false, nil, "kubernetes", "", nil).(*domainRuntime)
 	if got, err := dPinned.QualifyTargetAddress(ctx, target, caller, "xd-pg:5432"); err != nil || got != "xd-pg:5432" {
 		t.Errorf("pinned network: QualifyTargetAddress = (%q, %v), want verbatim pass-through (every domain shares the pinned namespace)", got, err)
 	}
@@ -270,7 +270,7 @@ func TestDomainRuntimeLabelScopedAccessEnabledIsRawGateRegardlessOfGraphScoped(t
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			d := newDomainRuntime(fakeruntime.New(), map[string]any{}, env, env, nil, tc.graphScoped, tc.labelScoped, nil, "fake", nil).(*domainRuntime)
+			d := newDomainRuntime(fakeruntime.New(), map[string]any{}, env, env, nil, tc.graphScoped, tc.labelScoped, nil, "fake", "", nil).(*domainRuntime)
 			q, ok := runtime.ContainerRuntime(d).(runtime.LabelScopedAccessQuery)
 			if !ok {
 				t.Fatal("domainRuntime does not implement runtime.LabelScopedAccessQuery")

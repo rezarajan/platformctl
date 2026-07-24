@@ -55,6 +55,10 @@ type domainRuntime struct {
 	// warn is the engine's diagnostics channel (docs/adr/031, Engine.warnf)
 	// — nil in tests wrapped via WrapDomainRuntimeForTest.
 	warn func(format string, args ...any)
+	// providerType is the realizing Provider's spec.type (M3, docs/adr/035
+	// decision 4) — the key for a sensible default resource profile applied
+	// when the manifest sets no resources anywhere.
+	providerType string
 	// containerResources is spec.runtime.resources parsed once at
 	// construction — injected into every EnsureContainer spec that
 	// carries none (J5). Distinct from resources below (the byKey map).
@@ -165,13 +169,14 @@ type domainRuntime struct {
 // current state, resolved once per resolveRequest by the caller exactly
 // like graphScoped — see the labelScopedAccessEnabled field doc for what it
 // controls (selector-bearing spec.access grants only).
-func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any, provEnv, env resource.Envelope, byKey map[resource.Key]resource.Envelope, graphScoped bool, labelScopedAccessEnabled bool, edges []graphaccess.Edge, runtimeType string, warn func(format string, args ...any)) runtime.ContainerRuntime {
+func newDomainRuntime(rt runtime.ContainerRuntime, runtimeConfig map[string]any, provEnv, env resource.Envelope, byKey map[resource.Key]resource.Envelope, graphScoped bool, labelScopedAccessEnabled bool, edges []graphaccess.Edge, runtimeType, providerType string, warn func(format string, args ...any)) runtime.ContainerRuntime {
 	token, pinned := networkToken(runtimeConfig)
 	d := &domainRuntime{
 		ContainerRuntime: rt,
 		token:            token,
 		pinned:           pinned,
 		domain:           resource.NormalizeDomain(provEnv.Metadata.Domain),
+		providerType:     providerType,
 		warn:             warn,
 	}
 	d.containerResources = parseRuntimeResources(runtimeConfig)
@@ -296,6 +301,13 @@ func (d *domainRuntime) EnsureContainer(ctx context.Context, spec runtime.Contai
 	// none do.
 	if spec.Resources == nil && d.containerResources != nil {
 		spec.Resources = d.containerResources
+	}
+	// M3 (docs/adr/035 decision 4): with no resources declared anywhere,
+	// apply the provider's sensible default profile — an undecorated
+	// manifest still gets bounded containers. An explicit resources
+	// (above) always wins; the default is the floor, never an override.
+	if spec.Resources == nil {
+		spec.Resources = defaultResourcesForProvider(d.providerType)
 	}
 	nets := d.translateAll(spec.Networks)
 	for _, holeNet := range d.holeNetworks() {
@@ -608,4 +620,39 @@ func parseQuantityBytes(s string) int64 {
 		return 0
 	}
 	return n * mult
+}
+
+// defaultResourcesForProvider returns the sensible per-technology resource
+// default (docs/adr/035 decision 4) — sized by what the provider actually
+// runs: databases and object stores get moderate memory, JVM services
+// (Nessie, Trino, Kafka Connect workers, Marquez) get more, mesh/tunnel/
+// proxy sidecars get little. Returns nil for types with no meaningful
+// default (noop/container/fake test shapes), leaving them unbounded as
+// before. These are LIMITS a manifest's own spec.runtime.resources
+// overrides wholesale; they exist so "just declare it" yields bounded
+// containers without the developer sizing anything.
+func defaultResourcesForProvider(providerType string) *runtime.Resources {
+	const mi = 1 << 20
+	switch providerType {
+	// Databases.
+	case "postgres", "mysql", "mariadb":
+		return &runtime.Resources{MemoryLimitBytes: 512 * mi, MemoryReservationBytes: 256 * mi}
+	// Object stores.
+	case "s3", "minio":
+		return &runtime.Resources{MemoryLimitBytes: 512 * mi, MemoryReservationBytes: 256 * mi}
+	// Message broker.
+	case "redpanda":
+		return &runtime.Resources{MemoryLimitBytes: 1024 * mi, MemoryReservationBytes: 512 * mi}
+	// JVM services: catalog, query, lineage, and every Kafka Connect worker.
+	case "nessie", "trino", "openlineage", "debezium", "s3sink", "jdbcsink", "s3source":
+		return &runtime.Resources{MemoryLimitBytes: 1024 * mi, MemoryReservationBytes: 512 * mi}
+	// Monitoring.
+	case "prometheus", "grafana":
+		return &runtime.Resources{MemoryLimitBytes: 512 * mi, MemoryReservationBytes: 256 * mi}
+	// Mesh / tunnel / proxy sidecars — small.
+	case "openziti", "wireguard", "proxy", "ingress":
+		return &runtime.Resources{MemoryLimitBytes: 256 * mi, MemoryReservationBytes: 128 * mi}
+	default:
+		return nil
+	}
 }

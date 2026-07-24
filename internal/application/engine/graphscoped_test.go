@@ -88,7 +88,7 @@ func ensureWorkedExampleContainer(t *testing.T, rt runtime.ContainerRuntime, env
 // path.
 func ensureWorkedExampleContainerLabelScoped(t *testing.T, rt runtime.ContainerRuntime, env resource.Envelope, byKey map[resource.Key]resource.Envelope, edges []graphaccess.Edge, labelScopedAccessEnabled bool) {
 	t.Helper()
-	d := newDomainRuntime(rt, map[string]any{}, env, env, byKey, true, labelScopedAccessEnabled, edges, "fake", nil)
+	d := newDomainRuntime(rt, map[string]any{}, env, env, byKey, true, labelScopedAccessEnabled, edges, "fake", "", nil)
 	ctx := context.Background()
 	labels := runtime.ManagedLabels(env.Metadata.Namespace, env.Kind, env.Metadata.Name, env.Metadata.Name)
 	if err := d.EnsureNetwork(ctx, runtime.NetworkSpec{Name: "datascape", Labels: labels}); err != nil {
@@ -220,7 +220,7 @@ func TestGraphScopedAccessGateOffIsByteIdentical(t *testing.T) {
 
 	ctx := context.Background()
 	for _, p := range []resource.Envelope{r1, x} {
-		d := newDomainRuntime(rt, map[string]any{}, p, p, byKey, false, false, nil, "fake", nil)
+		d := newDomainRuntime(rt, map[string]any{}, p, p, byKey, false, false, nil, "fake", "", nil)
 		labels := runtime.ManagedLabels(p.Metadata.Namespace, p.Kind, p.Metadata.Name, p.Metadata.Name)
 		if err := d.EnsureNetwork(ctx, runtime.NetworkSpec{Name: "datascape", Labels: labels}); err != nil {
 			t.Fatalf("EnsureNetwork(%s): %v", p.Key(), err)

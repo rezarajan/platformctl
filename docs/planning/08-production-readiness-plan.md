@@ -5696,3 +5696,13 @@ action: cut the v1.1/v1.2 tags (or collapse them into one v1.2 release)
 so `main.version` stops under-reporting. *(Done 2026-07-21: collapsed into
 one `v1.2.0` tag — Stages A+B+F closed plus C1 and D1 merged;
 `main.version` bumped.)*
+
+- **M3 Done (2026-07-24):** per-provider sensible resource defaults
+  (ADR 035 decision 4). `defaultResourcesForProvider(type)` in the engine
+  returns a per-technology profile (DB/object-store 512Mi, JVM services
+  1Gi, redpanda 1Gi, monitoring 512Mi, mesh/tunnel/proxy 256Mi, noop/
+  container none), applied at the domainRuntime chokepoint (the J5
+  injection point) only when no resources are declared anywhere — an
+  explicit spec.runtime.resources always wins. providerType threaded
+  through newDomainRuntime from p.Type. Pinned by
+  TestDomainRuntimeAppliesProviderDefaultResources. doc 03 note additive.
