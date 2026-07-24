@@ -158,6 +158,80 @@ func VerifyDatabaseConnection(ctx context.Context, engine, host string, port int
 	}
 }
 
+// preflightReachTimeout bounds the mediated/managed-Connection preflight —
+// long enough to cover a fresh port-forward tunnel plus a mediated
+// entrypoint's first Ziti circuit warming up, across several attempts.
+const preflightReachTimeout = 45 * time.Second
+
+// PreflightDatabaseVia runs the CDC/sink preflight against a database reached
+// through a managed/mediated Connection whose address is resolved at dial
+// time (a Kubernetes port-forward tunnel to the forwarder pod). It
+// re-resolves a FRESH tunnel on every attempt (rt.EnsureReachable) rather
+// than dialing one static tunnel for the whole window: a port-forward tunnel
+// goes silently dead for the rest of its life if the forwarder pod churns
+// (eviction, a rolled Deployment) or was still settling when it opened
+// (docs/planning/09 Class 2, the same rationale as runtime.WithReachable),
+// so retrying a single static tunnel burns the whole window dialing a corpse
+// — the deterministic CI k8s-scenarios-apps "connection refused" this fixes.
+// Auth/TLS verdicts still fail fast (no retry, no lockout hammering); only
+// transport-class failures — a dead/settling tunnel, a warming Ziti circuit —
+// retry, each against a newly resolved tunnel.
+func PreflightDatabaseVia(ctx context.Context, rt runtime.ContainerRuntime, connName string, port int, engine, dbName, user, pass string, tlsPosture *DatabaseTLS) error {
+	return preflightWithRefresh(ctx, preflightReachTimeout, 2*time.Second,
+		func(ctx context.Context) (string, func() error, error) {
+			return rt.EnsureReachable(ctx, connName, port)
+		},
+		func(ctx context.Context, addr string) error {
+			host, p, ok := splitHostPort(addr)
+			if !ok {
+				return fmt.Errorf("reachable address %q for Connection %q is not a valid host:port", addr, connName)
+			}
+			return verifyDatabaseConnectionOnce(ctx, engine, host, p, dbName, user, pass, tlsPosture)
+		})
+}
+
+// preflightWithRefresh is PreflightDatabaseVia's testable core: resolve a
+// fresh reachable address, verify once, and — only on a transient transport
+// failure — retry with another freshly resolved address until the deadline.
+// A non-transient verify result (an auth/TLS verdict, a malformed address)
+// returns immediately. resolve and verify are injected so the retry/refresh
+// behavior is unit-testable without a real database.
+func preflightWithRefresh(
+	ctx context.Context,
+	timeout, interval time.Duration,
+	resolve func(context.Context) (string, func() error, error),
+	verify func(context.Context, string) error,
+) error {
+	deadline := time.Now().Add(runtime.ScaledWait(timeout))
+	var lastErr error
+	for {
+		addr, closeAddr, rerr := resolve(ctx)
+		if rerr != nil {
+			lastErr = rerr // tunnel/pod not up yet — transient, retry fresh
+		} else {
+			verr := verify(ctx, addr)
+			if closeAddr != nil {
+				_ = closeAddr()
+			}
+			if verr == nil {
+				return nil
+			}
+			if !isTransientConnError(verr) {
+				return verr // auth/TLS verdict or malformed address — fail fast
+			}
+			lastErr = verr
+		}
+		if time.Now().After(deadline) {
+			return lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
+
 func verifyDatabaseConnectionOnce(ctx context.Context, engine, host string, port int, dbName, user, pass string, tlsPosture *DatabaseTLS) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

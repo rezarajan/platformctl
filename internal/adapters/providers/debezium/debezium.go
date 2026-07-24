@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
-	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -491,19 +490,13 @@ func (p *Provider) reconcileConnector(ctx context.Context, req reconciler.Reques
 			return st, fmt.Errorf("Binding %q: database connection preflight failed before registering connector: %w", res.Metadata.Name, err)
 		}
 	} else if d.preflightConnectionName != "" {
-		addr, closeAddr, err := rt.EnsureReachable(ctx, d.preflightConnectionName, d.preflightPort)
-		if err != nil {
-			return st, fmt.Errorf("Binding %q: resolve reachable address for Connection %q: %w", res.Metadata.Name, d.preflightConnectionName, err)
-		}
-		host, port, ok := hostPort(addr)
-		if ok {
-			err = providerkit.VerifyDatabaseConnection(ctx, d.engine, host, port, d.dbName, d.credsUser, d.credsPass, d.tlsPosture)
-		}
-		closeAddr()
-		if !ok {
-			return st, fmt.Errorf("Binding %q: reachable address %q for Connection %q is not a valid host:port", res.Metadata.Name, addr, d.preflightConnectionName)
-		}
-		if err != nil {
+		// Reached through a managed/mediated Connection: resolve a FRESH
+		// reachable tunnel per attempt (providerkit.PreflightDatabaseVia)
+		// rather than dialing one static port-forward for the whole window —
+		// a k8s tunnel dies silently if the forwarder pod churns, and the old
+		// single-tunnel retry burned the window on a corpse (the deterministic
+		// k8s-scenarios-apps "connection refused").
+		if err := providerkit.PreflightDatabaseVia(ctx, rt, d.preflightConnectionName, d.preflightPort, d.engine, d.dbName, d.credsUser, d.credsPass, d.tlsPosture); err != nil {
 			return st, fmt.Errorf("Binding %q: database connection preflight failed before registering connector: %w", res.Metadata.Name, err)
 		}
 	}
@@ -643,18 +636,6 @@ func applyLineage(config map[string]string, ep lineage.LineageEndpoint) {
 	if ep.Namespace != "" {
 		config["openlineage.integration.job.namespace"] = ep.Namespace
 	}
-}
-
-func hostPort(address string) (string, int, bool) {
-	host, portText, err := net.SplitHostPort(address)
-	if err != nil {
-		return "", 0, false
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil {
-		return "", 0, false
-	}
-	return host, port, true
 }
 
 // applyTLSConfig sets the Debezium connector's outbound TLS properties for

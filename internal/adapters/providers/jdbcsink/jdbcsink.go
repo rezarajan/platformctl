@@ -33,7 +33,6 @@ package jdbcsink
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/url"
 	"regexp"
 	"sort"
@@ -615,19 +614,10 @@ func (p *Provider) reconcileConnector(ctx context.Context, req reconciler.Reques
 			return st, fmt.Errorf("Binding %q: target database connection preflight failed before registering connector: %w", res.Metadata.Name, err)
 		}
 	} else if d.preflightConnectionName != "" {
-		addr, closeAddr, err := rt.EnsureReachable(ctx, d.preflightConnectionName, d.preflightPort)
-		if err != nil {
-			return st, fmt.Errorf("Binding %q: resolve reachable address for Connection %q: %w", res.Metadata.Name, d.preflightConnectionName, err)
-		}
-		host, port, ok := hostPort(addr)
-		if ok {
-			err = providerkit.VerifyDatabaseConnection(ctx, d.engine, host, port, d.dbName, d.credsUser, d.credsPass, d.tlsPosture)
-		}
-		closeAddr()
-		if !ok {
-			return st, fmt.Errorf("Binding %q: reachable address %q for Connection %q is not a valid host:port", res.Metadata.Name, addr, d.preflightConnectionName)
-		}
-		if err != nil {
+		// Managed/mediated Connection: fresh reachable tunnel per attempt
+		// (providerkit.PreflightDatabaseVia) — see the debezium sibling for
+		// why a single static k8s port-forward is the wrong shape here.
+		if err := providerkit.PreflightDatabaseVia(ctx, rt, d.preflightConnectionName, d.preflightPort, d.engine, d.dbName, d.credsUser, d.credsPass, d.tlsPosture); err != nil {
 			return st, fmt.Errorf("Binding %q: target database connection preflight failed before registering connector: %w", res.Metadata.Name, err)
 		}
 	}
@@ -657,18 +647,6 @@ func (p *Provider) reconcileConnector(ctx context.Context, req reconciler.Reques
 		"insertMode": config["insert.mode"],
 	}
 	return st, nil
-}
-
-func hostPort(address string) (string, int, bool) {
-	host, portText, err := net.SplitHostPort(address)
-	if err != nil {
-		return "", 0, false
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil {
-		return "", 0, false
-	}
-	return host, port, true
 }
 
 func (p *Provider) Destroy(ctx context.Context, req reconciler.Request) error {
