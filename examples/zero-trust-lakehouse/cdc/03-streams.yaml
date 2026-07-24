@@ -1,0 +1,26 @@
+# partitions: 3 / replication: 3 match lake-redpanda's HA broker count
+# (sinks/01-providers.yaml, brokers: 3) — a meaningfully replicated topic,
+# not just a scaled-up cluster with replication: 1 topics on it.
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: orders-events
+spec:
+  providerRef:
+    name: lake-redpanda
+  partitions: 3
+  replication: 3
+  retention:
+    duration: 3d
+---
+apiVersion: datascape.io/v1alpha1
+kind: EventStream
+metadata:
+  name: events-events
+spec:
+  providerRef:
+    name: lake-redpanda
+  partitions: 3
+  replication: 3
+  retention:
+    duration: 3d

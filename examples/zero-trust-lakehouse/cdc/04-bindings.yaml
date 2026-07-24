@@ -1,0 +1,51 @@
+# CDC leg 1: the mediated, dark orders database — Debezium never touches it
+# directly, only ever dials the orders-db-mediated Connection's Ziti-tunneled
+# entrypoint (platform/01-mesh.yaml). observers hands lake-lineage's
+# endpoint to Debezium's native OpenLineage integration.
+#
+# No options.format: plain JSON (the schemaless default). This project's
+# lake-redpanda runs multi-broker HA (brokers: 3, sinks/01-providers.yaml)
+# — redpanda does not yet support its built-in schema registry combined
+# with a multi-broker deployment (a documented follow-up gap, not a bug:
+# "spec.configuration.schemaRegistry: enabled is not yet supported
+# together with spec.configuration.brokers"), so this example picked HA
+# over Avro/schema-registry-backed CDC. "Multiple lake formats" is still
+# proven — raw JSON landing (sinks/) *and* Iceberg tables queried through
+# Trino (query/) — just not Parquet-via-Avro on the CDC leg specifically;
+# see README.md#known-adaptations.
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: orders-to-events
+  observers:
+    - name: lake-lineage
+spec:
+  mode: cdc
+  sourceRef:
+    name: orders
+  targetRef:
+    name: orders-events
+  providerRef:
+    name: lake-debezium
+  options:
+    tables: [orders]
+    snapshotMode: initial
+---
+# CDC leg 2: the managed MySQL events database — the second source.
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: events-to-events
+  observers:
+    - name: lake-lineage
+spec:
+  mode: cdc
+  sourceRef:
+    name: events
+  targetRef:
+    name: events-events
+  providerRef:
+    name: lake-debezium
+  options:
+    tables: [clicks]
+    snapshotMode: initial

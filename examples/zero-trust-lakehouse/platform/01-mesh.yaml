@@ -1,0 +1,46 @@
+# The crown jewel: the orders database is DARK. It runs on an isolated
+# Docker network (ztl-orders-vpc) that nothing else in this project — not
+# Debezium, not any other Provider — ever joins. The ONLY path in is this
+# openziti-realized Connection: an identity-attested, per-edge-authorized
+# Ziti service (docs/adr/022 Ring 2, docs/adr/027 Layer 1), never a plain
+# forwarder. mesh's router crosses INTO ztl-orders-vpc via
+# configuration.targetNetworks so it alone can reach the raw postgres
+# fixture (stood up by setup-external-db.sh — a pre-existing production
+# database, not something platformctl creates or destroys), mirroring
+# cmd/platformctl/testdata/openziti-scenario's own proven pattern.
+#
+# Zero-trust is on by default for this project (datascape.yaml,
+# docs/adr/035 decision 3) — no --feature-gates, no labels, no
+# hand-written policy anywhere in this example. Declaring this Connection
+# IS the grant: sources/02-sources.yaml's orders Source references it via
+# connectionRef, and that is the only edge that authorizes reaching the
+# dark database — graph-scoped derivation follows the reference straight
+# to cdc/'s Debezium worker automatically (docs/planning/08 M5).
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: mesh
+spec:
+  type: openziti
+  secretRefs: [mesh-admin]
+  configuration:
+    adminSecretRef: mesh-admin
+    targetNetworks: [ztl-orders-vpc]
+---
+# Consumers (Debezium, in cdc/) address orders-db-mediated on the shared
+# platform network — every hop underneath is mutually authenticated by
+# Ziti; the real database address (ztl-orders-db:5432, only resolvable on
+# ztl-orders-vpc) never appears anywhere a consumer can read it. No port:
+# auto-allocated (docs/adr/035 decision 2) — consumers resolve the address
+# from the published endpoint fact, never a literal.
+apiVersion: datascape.io/v1alpha1
+kind: Connection
+metadata:
+  name: orders-db-mediated
+spec:
+  providerRef:
+    name: mesh
+  scheme: tcp
+  target: ztl-orders-db:5432
+  secretRef:
+    name: orders-db-replication

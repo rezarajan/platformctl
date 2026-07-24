@@ -1,0 +1,14 @@
+# The Iceberg catalog, as a provider-agnostic noun (docs/planning/03 §8.1).
+# warehouseRef wires the warehouse Dataset (sinks/02-datasets.yaml) as this
+# catalog's Iceberg warehouse — no nessie-provider-level warehouseS3*
+# fields needed.
+apiVersion: datascape.io/v1alpha1
+kind: Catalog
+metadata:
+  name: lakehouse-catalog
+spec:
+  engine: nessie
+  providerRef:
+    name: catalog-svc
+  warehouseRef:
+    name: warehouse

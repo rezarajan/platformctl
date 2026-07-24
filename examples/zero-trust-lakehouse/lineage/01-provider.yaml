@@ -1,0 +1,10 @@
+# lineage/ — Marquez (OpenLineage) receives lineage from every CDC binding
+# that names it as an observer (cdc/03-bindings.yaml). Runs its own
+# dedicated Postgres metadata store internally, never published to the
+# host — both containers bounded by this one Provider's resources.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lake-lineage
+spec:
+  type: openlineage

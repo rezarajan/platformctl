@@ -1,32 +1,44 @@
 #!/usr/bin/env bash
-# test-zero-trust.sh — proves the three zero-trust mechanisms this example
-# wires (README.md#zero-trust), with REAL commands against a live,
-# `platformctl apply`'d stack:
+# test-zero-trust.sh — proves zero-trust live against a `platformctl
+# apply`'d stack, with REAL commands (README.md#zero-trust):
 #
-#   1. Mediated-source canary: a container holding a DIFFERENT, unauthorized
-#      Ziti identity, enrolled against the SAME mesh controller and sitting
-#      on the SAME platform network as the legitimate dial-side tunneler, is
-#      REFUSED when it tries to dial the dark orders database's service.
-#      This is the identity check itself, not a network-reachability
-#      artifact (adapted from cmd/platformctl/openziti_integration_test.go's
+#   1. Positive proof: the legitimate CDC path (through the mediated
+#      Connection) reaches connector state RUNNING.
+#   2. Mediated-source canary: a container holding a DIFFERENT,
+#      unauthorized Ziti identity, enrolled against the SAME mesh
+#      controller and sitting on the SAME platform network as the
+#      legitimate dial-side tunneler, is REFUSED when it tries to dial the
+#      dark orders database's service. This is the identity check itself,
+#      not a network-reachability artifact (adapted from
+#      cmd/platformctl/openziti_integration_test.go's
 #      proveWrongIdentityRefused to shell + curl + docker).
-#   2. Policy deny: an unauthorized consumer, labeled to grab the gold-tier
-#      orders source without carrying clearance:gold, is denied by
-#      `platformctl validate` — named deny rule and all.
-#   3. Positive proof: the legitimate CDC path (through the SAME mediation)
-#      reaches connector state RUNNING.
+#   3. Dark-source posture: the external orders database has NO published
+#      host port and is on NO network any platformctl-managed container
+#      shares — the only path in is the mediated Connection above.
 #
-# Run AFTER `platformctl apply` has brought the stack up (see README.md#run-it).
+# There is no policy-deny proof here (unlike the prior build) — this
+# project has no policy file at all. Under zero-trust the declared graph
+# (Connections + Bindings) IS the complete allow-set (docs/planning/08 M6)
+# with nothing to narrow; there is nothing to test a hand-written policy
+# denying, because there is no hand-written policy.
+#
+# Run AFTER `platformctl apply` has brought the stack up (see
+# README.md#run-it). NOTE (2026-07-24): apply itself is blocked today —
+# see README.md's "Known blocker" section — so this script is unverified
+# live; it is written correct-for-target and will run as soon as the CLI
+# can load the plane-folder manifest set.
 #
 # Usage: ./test-zero-trust.sh [path to platformctl binary]
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORMCTL="${1:-${PLATFORMCTL:-platformctl}}"
-FEATURE_GATES="SchemaRegistrySupport=true,MediatedConnections=true,PolicyEngine=true,LabelScopedAccess=true,TrinoProvider=true"
+FEATURE_GATES="HighAvailability=true,TrinoProvider=true"
+STATE="${ZTL_STATE:-${HERE}/ztl.state.json}"
 
 PLATFORM_NETWORK="${PLATFORM_NETWORK:-datascape}"
-DEBEZIUM_CONNECT_URL="${DEBEZIUM_CONNECT_URL:-http://127.0.0.1:16893}"
+VPC_NETWORK="${ZTL_ORDERS_VPC:-ztl-orders-vpc}"
+DB_CONTAINER="${ZTL_ORDERS_DB:-ztl-orders-db}"
 
 pass=0
 fail=0
@@ -34,18 +46,38 @@ ok()   { pass=$((pass+1)); printf '\033[32mPASS\033[0m %s\n' "$1"; }
 bad()  { fail=$((fail+1)); printf '\033[31mFAIL\033[0m %s\n' "$1"; }
 info() { printf '\033[36m--- %s ---\033[0m\n' "$1"; }
 
+# Debezium's REST endpoint has no pinned host port (docs/adr/035 decision
+# 2 — every port auto-allocates except query/'s Trino, README#known-
+# adaptations) — discover it from recorded state via `platformctl
+# inventory`, never a literal.
+debezium_url="$("$PLATFORMCTL" inventory "$HERE" --state-file "$STATE" --feature-gates "$FEATURE_GATES" -o json 2>/dev/null \
+  | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for e in data.get("endpoints") or []:
+    if e.get("component") == "default/Provider/lake-debezium" and e.get("host") and e["host"] != "(in-network only)":
+        print(f"{e[\"scheme\"]}://{e[\"host\"]}")
+        break
+')"
+
 # ============================================================================
 # 1. Positive proof: the legitimate CDC path reaches RUNNING through the
 #    mediated Connection (Debezium never touches the dark database directly
-#    — it only ever dials orders-db-mediated:16891, the Ziti-tunneled
-#    entrypoint).
+#    — it only ever dials orders-db-mediated, the Ziti-tunneled entrypoint).
 # ============================================================================
 info "1/3 positive proof — mediated CDC connector state"
-state="$(curl -fsS "${DEBEZIUM_CONNECT_URL}/connectors/orders-to-events/status" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["connector"]["state"])' 2>/dev/null)"
-if [ "$state" = "RUNNING" ]; then
-  ok "connector orders-to-events state=RUNNING (reached the dark orders DB only through mesh + orders-db-mediated)"
+if [ -z "$debezium_url" ]; then
+  bad "could not discover lake-debezium's REST endpoint from \`platformctl inventory\` — is the stack applied?"
 else
-  bad "connector orders-to-events state=${state:-<unreachable>}, want RUNNING"
+  state="$(curl -fsS "${debezium_url}/connectors/orders-to-events/status" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["connector"]["state"])' 2>/dev/null)"
+  if [ "$state" = "RUNNING" ]; then
+    ok "connector orders-to-events state=RUNNING (reached the dark orders DB only through mesh + orders-db-mediated)"
+  else
+    bad "connector orders-to-events state=${state:-<unreachable>}, want RUNNING"
+  fi
 fi
 
 # ============================================================================
@@ -58,9 +90,13 @@ fi
 # ============================================================================
 info "2/3 mediated-source canary — wrong identity must be refused"
 
-ctrl_addr="$(docker port mesh-ctrl 16890/tcp 2>/dev/null | head -1 | sed 's/0\.0\.0\.0/127.0.0.1/')"
+# The controller's container-internal port defaults to 1280 (no
+# configuration.controllerPort override in platform/01-mesh.yaml —
+# omitted, per the zero-ceremony rule; its HOST-published port is still
+# auto-allocated and discoverable the same way).
+ctrl_addr="$(docker port mesh-ctrl 1280/tcp 2>/dev/null | head -1 | sed 's/0\.0\.0\.0/127.0.0.1/')"
 if [ -z "$ctrl_addr" ]; then
-  bad "mesh-ctrl controller port not published — is the stack applied? (docker port mesh-ctrl 16890/tcp)"
+  bad "mesh-ctrl controller port not published — is the stack applied? (docker port mesh-ctrl 1280/tcp)"
 else
   admin_user="${DATASCAPE_SECRET_MESH_ADMIN_USERNAME:?export DATASCAPE_SECRET_MESH_ADMIN_USERNAME first}"
   admin_pass="${DATASCAPE_SECRET_MESH_ADMIN_PASSWORD:?export DATASCAPE_SECRET_MESH_ADMIN_PASSWORD first}"
@@ -130,61 +166,39 @@ else
 fi
 
 # ============================================================================
-# 3. Policy deny: an unauthorized consumer labeled to grab the gold-tier
-#    orders source, without clearance:gold, must fail `platformctl validate`
-#    with the named deny rule.
+# 3. Dark-source posture: the external orders database has no host port and
+#    shares no network with any platformctl-managed container — the mesh
+#    router is the ONLY thing that ever crosses into its isolated VPC.
 # ============================================================================
-info "3/3 policy deny — unauthorized gold-source consumer"
+info "3/3 dark-source posture — no host port, no shared network"
 
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
-cp "$HERE"/*.yaml "$tmpdir"/
-cat > "$tmpdir/99-rogue-consumer.yaml" <<'EOF'
-# Injected by test-zero-trust.sh: an unauthorized consumer that labels
-# itself to read the gold-tier orders Source into a target that does NOT
-# carry clearance: gold — exactly the edge policies/zero-trust-lakehouse.yaml
-# denies.
-apiVersion: datascape.io/v1alpha1
-kind: EventStream
-metadata:
-  name: rogue-analytics-events
-spec:
-  providerRef:
-    name: lake-redpanda
-  partitions: 1
-  retention:
-    duration: 1d
----
-apiVersion: datascape.io/v1alpha1
-kind: Binding
-metadata:
-  name: rogue-siphon
-spec:
-  mode: cdc
-  sourceRef:
-    name: orders
-  targetRef:
-    name: rogue-analytics-events
-  providerRef:
-    name: lake-debezium
-  options:
-    tables: [orders]
-    snapshotMode: initial
-    format: avro
-EOF
-
-echo "+ ${PLATFORMCTL} validate ${tmpdir} --policies ${HERE}/policies --feature-gates ${FEATURE_GATES}"
-validate_out="$("$PLATFORMCTL" validate "$tmpdir" --policies "$HERE/policies" --feature-gates "$FEATURE_GATES" 2>&1)"
-validate_code=$?
-echo "$validate_out"
-
-if [ "$validate_code" -eq 0 ]; then
-  bad "validate exited 0 on a manifest set with an unauthorized gold-source consumer — the policy deny is not enforcing"
-elif printf '%s' "$validate_out" | grep -q 'deny-ungoverned-gold-access'; then
-  ok "validate exited ${validate_code} and named the firing rule (deny-ungoverned-gold-access)"
+published="$(docker port "$DB_CONTAINER" 2>/dev/null)"
+if [ -n "$published" ]; then
+  bad "${DB_CONTAINER} publishes a host port (${published}) — it must have none"
 else
-  bad "validate exited ${validate_code} but did not name deny-ungoverned-gold-access — check the output above"
+  ok "${DB_CONTAINER} publishes no host port"
 fi
+
+db_networks="$(docker inspect "$DB_CONTAINER" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null)"
+if [ -z "$db_networks" ]; then
+  bad "could not inspect ${DB_CONTAINER}'s networks — is setup-external-db.sh applied?"
+elif [ "$db_networks" = "${VPC_NETWORK} " ]; then
+  ok "${DB_CONTAINER} is on ${VPC_NETWORK} only — no shared network with any platform container"
+else
+  bad "${DB_CONTAINER} is on unexpected network(s): ${db_networks}(want exactly ${VPC_NETWORK})"
+fi
+
+# The mesh router is the one, sanctioned exception — it alone crosses into
+# the VPC (configuration.targetNetworks, platform/01-mesh.yaml).
+router_networks="$(docker inspect mesh-router --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null)"
+case "$router_networks" in
+  *"$VPC_NETWORK"*)
+    ok "mesh-router is on ${VPC_NETWORK} (the sanctioned mediator) — nothing else needs to be"
+    ;;
+  *)
+    bad "mesh-router is NOT on ${VPC_NETWORK} — the mediated path cannot reach the dark DB at all (networks: ${router_networks:-<none>})"
+    ;;
+esac
 
 info "summary"
 echo "pass=${pass} fail=${fail}"

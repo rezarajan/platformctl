@@ -7,8 +7,8 @@
 # self-contained demo we stand up a stand-in here: a Postgres on an
 # ISOLATED Docker network (ztl-orders-vpc) that nothing in the platform
 # manifest set ever joins. The ONLY path to it is the openziti-mediated
-# Connection (01-mesh.yaml), whose router alone crosses into this network
-# via configuration.targetNetworks.
+# Connection (platform/01-mesh.yaml), whose router alone crosses into this
+# network via configuration.targetNetworks.
 #
 # The credential here MUST match the `orders-db-replication` SecretReference
 # your environment provides (see .env.example): the mediated Connection

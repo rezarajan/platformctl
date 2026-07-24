@@ -1,0 +1,41 @@
+# cdc/ — change data capture. ONE shared Kafka Connect worker realizes BOTH
+# CDC bindings below (the orders mediated-Postgres leg and the events MySQL
+# leg): Debezium's SupportedSourceEngines covers postgres/mysql/mariadb/
+# mongodb on a single worker, and each connector's config is set at
+# registration time. configuration.replicationSecretRef is the credential
+# fallback for a Binding whose Source has no connectionRef of its own
+# (events, here); the orders binding's Source carries its own
+# connectionRef (platform/'s mediated Connection) and never falls back to
+# this field.
+#
+# No spec.access: docs/planning/08 M5 closed the gap that used to require
+# one here — graph-scoped derivation now follows a consumer's
+# connectionRef transitively to the realizing mediation tunneler on its
+# own, so this worker reaches the dark orders database automatically
+# because sources/02-sources.yaml's orders Source declares the
+# connectionRef. Under zero-trust an explicit spec.access grant would in
+# fact be REFUSED outright (it would widen reachability beyond the
+# declared graph) — see docs/adr/035 decision 3.
+#
+# Explicit resources kept (M3's per-technology default is 1Gi/512Mi for
+# debezium): this worker runs TWO connectors concurrently (orders +
+# events), which needs more Kafka Connect heap than the single-connector
+# default sizes for — the one deliberate override in this example.
+# spec.runtime.type: docker is NOT ceremony we chose to keep — the schema
+# requires it whenever spec.runtime appears at all (so an override can be
+# validated against the project's own runtime family, docs/planning/08
+# M1); every OTHER field on this provider (and every other provider in
+# this project) has no spec.runtime block at all.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lake-debezium
+spec:
+  type: debezium
+  runtime:
+    type: docker
+    resources: {memory: 2Gi, memoryReservation: 1Gi}
+  configuration:
+    image: datascape-s3sink-connect:local
+    replicationSecretRef: events-db-root
+  secretRefs: [events-db-root, orders-db-replication]

@@ -1,0 +1,40 @@
+# Raw JSON landing zone for the orders CDC leg (see cdc/03-bindings.yaml
+# for why this is JSON rather than Parquet-via-Avro in this HA build).
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: orders-raw
+spec:
+  providerRef:
+    name: lake-minio
+  bucket: orders-raw
+  prefix: orders/
+  format: json
+---
+# Raw JSON landing zone for the events CDC leg.
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: events-raw
+spec:
+  providerRef:
+    name: lake-minio
+  bucket: events-raw
+  prefix: events/
+  format: json
+---
+# The Iceberg warehouse bucket catalog/'s lakehouse-catalog derives its
+# NESSIE_CATALOG_* config from (docs/planning/08 D8) — what Trino (query/)
+# and an external Dagster deployment write Iceberg tables into. This is
+# the platform's second lake format, independent of the CDC/sink path
+# above: Trino creates and queries Iceberg tables directly over SQL.
+apiVersion: datascape.io/v1alpha1
+kind: Dataset
+metadata:
+  name: warehouse
+spec:
+  providerRef:
+    name: lake-minio
+  bucket: warehouse
+  prefix: iceberg/
+  format: parquet

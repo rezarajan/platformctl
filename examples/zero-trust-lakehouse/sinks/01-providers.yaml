@@ -1,0 +1,36 @@
+# sinks/ — the data lake's landing zone. lake-minio runs HA: nodes: 4 opts
+# into a distributed, erasure-coded MinIO cluster (docs/planning/08 C4) —
+# requires --feature-gates HighAvailability=true. No configuration.port:
+# a host-port pin cannot be combined with configuration.nodes (each
+# ordinal's host port is auto-assigned by design — "spec.configuration.
+# port cannot be combined with spec.configuration.nodes"), so the S3
+# endpoint an external Dagster deployment connects to is discovered via
+# `platformctl inventory`, not a literal in this manifest; see
+# README.md#connect-an-orchestrator and #known-adaptations.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lake-minio
+spec:
+  type: minio
+  configuration: {nodes: 4, rootSecretRef: lake-minio-root}
+  secretRefs: [lake-minio-root]
+---
+# ONE shared Kafka Connect worker realizes BOTH sink bindings (orders ->
+# raw JSON, events -> raw JSON) into lake-minio. Explicit resources kept
+# (M3's per-technology default is 1Gi/512Mi for s3sink) for the same
+# reason as cdc/'s lake-debezium: two concurrent sink connectors need more
+# heap than the single-connector default sizes for.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lake-s3sink
+spec:
+  type: s3sink
+  runtime:
+    type: docker
+    resources: {memory: 1536Mi, memoryReservation: 768Mi}
+  configuration:
+    image: datascape-s3sink-connect:local
+    credentialsSecretRef: lake-minio-root
+  secretRefs: [lake-minio-root]

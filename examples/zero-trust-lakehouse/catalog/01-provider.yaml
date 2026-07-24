@@ -1,0 +1,13 @@
+# catalog/ — the Iceberg REST catalog fronting the MinIO warehouse.
+# secretRefs lists lake-minio-root so the warehouseRef derivation below
+# (Catalog.spec.warehouseRef -> the warehouse Dataset -> lake-minio's
+# published "s3" endpoint fact, docs/planning/08 D8) can resolve real
+# credentials for Nessie's Iceberg REST personality — no manual
+# defaultWarehouseLocation/warehouseS3Endpoint ceremony needed.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: catalog-svc
+spec:
+  type: nessie
+  secretRefs: [lake-minio-root]

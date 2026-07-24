@@ -1,0 +1,25 @@
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: orders-events-to-lake
+spec:
+  mode: sink
+  sourceRef:
+    name: orders-events
+  targetRef:
+    name: orders-raw
+  providerRef:
+    name: lake-s3sink
+---
+apiVersion: datascape.io/v1alpha1
+kind: Binding
+metadata:
+  name: events-events-to-lake
+spec:
+  mode: sink
+  sourceRef:
+    name: events-events
+  targetRef:
+    name: events-raw
+  providerRef:
+    name: lake-s3sink

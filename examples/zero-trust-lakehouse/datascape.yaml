@@ -1,0 +1,17 @@
+# The project root config (docs/adr/035 decision 1, docs/planning/08 M1).
+# ONE runtime for every Provider under this directory tree — no Provider
+# below sets its own spec.runtime. zeroTrust defaults to true; it is spelled
+# out here only for clarity (docs/adr/035 decision 3): every Connection in
+# this project is identity-mediated and graph-scoped automatically, with no
+# --feature-gates and no labels. See k8s/datascape.yaml for the Kubernetes
+# variant — swap it in (README.md#kubernetes-variant) to retarget the SAME
+# planes at a cluster instead of Docker; the runtime is the only thing that
+# changes.
+apiVersion: datascape.io/v1alpha1
+kind: Project
+metadata:
+  name: zero-trust-lakehouse
+spec:
+  runtime:
+    type: docker
+  zeroTrust: true

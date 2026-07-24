@@ -5805,3 +5805,54 @@ one `v1.2.0` tag — Stages A+B+F closed plus C1 and D1 merged;
   by TestZeroTrustRefusesWideGrants. So under the project model a
   developer writes NO labels and NO policies for zero-trust — the graph
   is the policy; a hand-written deny policy may still narrow, never widen.
+
+- **M7 BLOCKED (2026-07-24):** rebuilt `examples/zero-trust-lakehouse`
+  into data-platform planes (folders — `platform/`, `sources/`, `cdc/`,
+  `sinks/`, `catalog/`, `query/`, `lineage/`, plus a `k8s/datascape.yaml`
+  runtime-swap variant) exactly per this task's shape: ONE
+  `datascape.yaml` (docker), every Provider's `spec.runtime` dropped
+  (three explicit exceptions keep `spec.runtime.resources` — and, because
+  the schema requires `type` alongside any `spec.runtime` block at all,
+  `type: docker` — documented in each file), every port auto-allocated
+  except `query/`'s Trino coordinator (the one Dagster-facing port that
+  composes with `workers > 1`; MinIO's S3 and Redpanda's Kafka bootstrap
+  do NOT — see below), no labels, no policy file, no `--feature-gates` for
+  zero-trust (on by default via the project). HA declared as asked:
+  `brokers: 3` (Redpanda), `nodes: 4` (MinIO), `workers: 2` (Trino) —
+  `--feature-gates HighAvailability=true` plus `TrinoProvider=true` (a
+  provider-technology gate, unrelated to this ADR, still Alpha/disabled).
+  All 26 resources verified schema/graph/gate-valid (`validate`/`plan`/
+  `lint`, zero errors) by flattening every plane file into one temp
+  directory — proof the manifest content itself is correct.
+  **Cannot be proven live and the plane-folder deliverable cannot be
+  exercised as designed**: `internal/application/manifest/manifest.go`'s
+  `collectFiles` skips every directory entry (`if entry.IsDir() {
+  continue }`) — always has, since M1 introduced it — and every
+  manifest-path command (`validate`/`plan`/`apply`/`status`/`destroy`/...)
+  is `cobra.MaximumNArgs(1)` with no recursive or multi-path form. So
+  `platformctl apply examples/zero-trust-lakehouse` finds **zero**
+  manifest files today: "no manifest files (*.yaml, *.yml, *.json) found
+  under examples/zero-trust-lakehouse." This is the task's own stated
+  premise ("platformctl reads a directory tree recursively") turning out
+  false against the current code — a missing capability, not a manifest
+  defect. Per this task's own instruction ("if you find a PRODUCT defect,
+  STOP and report"), no Docker live-apply, no HA kill-test, no Dagster
+  endpoint check, and no Kubernetes leg were attempted; the fast-tier
+  guard test (`TestZeroTrustLakehouseExampleValidates`) is `t.Skip`-ed
+  with this same reason rather than left red. Two more findings recorded
+  along the way, both deliberate product behavior (not bugs) that reshaped
+  the design: (1) a pinned host port cannot combine with
+  `configuration.brokers`/`configuration.nodes` at all (each ordinal's
+  host port is auto-assigned by design), so only Trino stays pinned;
+  MinIO/Redpanda's endpoints are auto-allocated-but-stable, discoverable
+  via `platformctl inventory`; (2) `schemaRegistry: enabled` is refused
+  together with `configuration.brokers` (a documented ADR 017 follow-up
+  gap), so this HA build's two CDC legs land as plain JSON rather than the
+  prior build's Avro→Parquet leg. Full detail, evidence, and the exact
+  unblock needed: `TASK_PROGRESS.md` (repo root, at the commit that
+  recorded this) and `examples/zero-trust-lakehouse/README.md`'s "Known
+  blocker" / "Known adaptations" sections. Unblock path: make
+  `collectFiles` walk subdirectories (with a clear, documented ordering
+  rule across levels) or give `apply`/`validate`/etc. a multi-path/glob
+  form — then un-skip the guard test and run the live proof this task
+  specifies.

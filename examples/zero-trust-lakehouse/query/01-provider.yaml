@@ -1,0 +1,33 @@
+# query/ — the Iceberg query engine (Alpha, gate TrinoProvider — a
+# provider-technology gate, unrelated to zero-trust or HA). workers: 2
+# gives the coordinator two query-execution workers (StableIdentity: false
+# — pure compute, no per-replica storage) — requires
+# --feature-gates HighAvailability=true, docs/planning/08 D10.
+#
+# configuration.port IS pinned — one of the three deliberate exceptions to
+# "no explicit ports" in this example (README.md#connect-an-orchestrator):
+# a Dagster deployment needs a fixed Trino endpoint. Unlike lake-minio's
+# nodes/lake-redpanda's brokers, workers > 1 has no such conflict: only
+# the ONE coordinator publishes a host port; workers are pure internal
+# compute and never take one, so pinning the coordinator's port composes
+# cleanly with HA here.
+#
+# Explicit resources kept: the M3 default (1Gi/512Mi) undersizes a
+# coordinator running Iceberg query planning across 2 workers — this is
+# the level proven stable in this example's earlier single-container
+# build.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lake-trino
+spec:
+  type: trino
+  runtime:
+    type: docker
+    resources: {memory: 1536Mi, memoryReservation: 768Mi}
+  configuration:
+    workers: 2
+    port: 16900
+    catalogRef: {name: lakehouse-catalog}
+    warehouseProviderRef: {name: lake-minio}
+  secretRefs: [lake-minio-root]

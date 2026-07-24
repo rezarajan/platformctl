@@ -1,0 +1,28 @@
+# The orders Source is External, integrated through platform/'s mediated
+# Connection — platformctl never creates or destroys it. No labels: under
+# zero-trust the declared graph (this connectionRef) is the complete
+# allow-set (docs/adr/035 decision 3, docs/planning/08 M6) — nothing else
+# needs to be marked to authorize the CDC leg that reads it.
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: orders
+spec:
+  engine: postgres
+  external: true
+  connectionRef:
+    name: orders-db-mediated
+  postgres:
+    database: ordersdb
+    schema: public
+---
+apiVersion: datascape.io/v1alpha1
+kind: Source
+metadata:
+  name: events
+spec:
+  engine: mysql
+  providerRef:
+    name: events-mysql
+  mysql:
+    database: eventsdb

@@ -1,0 +1,19 @@
+# The streaming backbone every EventStream below (03-streams.yaml) is
+# realized against. brokers: 3 opts into a multi-broker HA cluster of
+# stable-identity ordinals (docs/adr/017) — requires
+# --feature-gates HighAvailability=true. No configuration.kafkaPort: a
+# host-port pin cannot be combined with configuration.brokers (each
+# broker's host port is auto-assigned by design), so the Kafka bootstrap
+# endpoint an external Dagster deployment connects to is discovered via
+# `platformctl inventory`, not a literal in this manifest — see
+# README.md#connect-an-orchestrator and #known-adaptations. The same
+# constraint is why this provider has no schemaRegistry: enabled (not yet
+# supported together with multi-broker — see cdc/04-bindings.yaml).
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: lake-redpanda
+spec:
+  type: redpanda
+  configuration:
+    brokers: 3

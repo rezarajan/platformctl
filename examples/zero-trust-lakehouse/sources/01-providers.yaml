@@ -1,0 +1,14 @@
+# sources/ — the platform's ingestion origins. Only ONE managed database
+# Provider lives here: events-mysql. The orders database has no Provider of
+# its own — it is external (a pre-existing production system this project
+# never creates or destroys) and dark, reached only through platform/'s
+# openziti-mediated Connection. See 02-sources.yaml for both Source
+# declarations.
+apiVersion: datascape.io/v1alpha1
+kind: Provider
+metadata:
+  name: events-mysql
+spec:
+  type: mysql
+  configuration: {rootSecretRef: events-db-root}
+  secretRefs: [events-db-root]
