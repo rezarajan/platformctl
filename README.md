@@ -13,7 +13,7 @@ of YAML.*
 [![CI](https://github.com/rezarajan/platformctl/actions/workflows/ci.yml/badge.svg)](https://github.com/rezarajan/platformctl/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/go-1.22%2B-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Runtime](https://img.shields.io/badge/runtime-Docker%20%C2%B7%20Kubernetes-2496ED?logo=docker&logoColor=white)](#%EF%B8%8F-running-against-kubernetes)
-[![Version](https://img.shields.io/badge/release-v1.2.0-blue)](docs/planning/08-production-readiness-plan.md)
+[![Version](https://img.shields.io/badge/release-v1.3.0-blue)](docs/planning/08-production-readiness-plan.md)
 
 </div>
 
