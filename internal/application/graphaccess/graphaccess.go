@@ -152,6 +152,86 @@ type MediatedConnection struct {
 // bind side and only compile dial authorization in that case; recorded as
 // the expected shape, not an error, mirroring graph.Build's own leniency
 // there.
+// MediatedConsumerEdges is docs/planning/08 M5's fix for the graph×mediation
+// composition gap docs/planning/11's 2026-07-23 capstone finding recorded:
+// GraphScopedAccess + a MediatedConnection did NOT compose, because
+// DeriveEdges flattens only the DECLARED manifest edges, and a consumer's
+// need to reach the mediation TUNNELER is a REALIZATION detail reached
+// transitively (Binding.sourceRef -> Source.connectionRef -> Connection),
+// never a direct edge naming the Connection's REALIZING (mediation)
+// Provider — the container that actually hosts the dial-side tunneler
+// (docs/adr/022 Ring 2's router-hosted terminator,
+// internal/adapters/providers/openziti/connection.go's
+// tunnelContainerName). None of Binding/Source is itself a "container"
+// ContainerOf ever collapses onto anything but itself (no providerRef of
+// its own), so the consumer's realizing container and the tunneler's own
+// domainRuntime self (docs/application/engine/domainruntime.go's
+// newDomainRuntime: a Connection's own reconcile resolves self from ITS
+// OWN providerRef — the mediation Provider, never the Connection's own
+// key) never landed on a shared per-edge network (Docker) or NetworkPolicy
+// peer (Kubernetes).
+//
+// The fix is additive, not a rewrite of ContainerOf/EgressPeers/
+// IngressPeers/MembershipEdges: for each MediatedConnection, walk its FULL
+// transitive dependent set (graph.Dependents(mc.Connection) — broader than
+// CompileMediatedConnections' own Consumers field, which is a deliberate
+// ONE-HOP slice reserved for openziti's identity-minting use, see that
+// function's doc comment) and collapse each dependent to the first
+// Provider-kind container it resolves to via ContainerOf. For every such
+// container, emit ONE synthetic Edge{From: container, To: mediation
+// Provider}. Both endpoints of that edge are ALREADY literal, self-
+// resolving container keys (ContainerOf(anyProvider) == itself), so the
+// EXISTING EgressPeers (self == From) and IngressPeers (self == To) scans
+// pick up both directions from this one edge with no further change:
+// the consumer's own EgressPeers discovers the mediation Provider, and the
+// mediation Provider's own IngressPeers discovers the consumer — exactly
+// the pair that must share a network for the tunneler to be reachable.
+// A dependent that resolves to no container at all (e.g. another
+// pass-through Source with no consumer of its own) contributes nothing,
+// matching ContainerOf's own "no container, no exposure" default.
+//
+// The Connection's own TARGET side (mc.Targets, the dark backend) is never
+// touched here — only the dial side, keeping the target dark exactly as
+// docs/adr/026's mediated-entrypoint model requires.
+func MediatedConsumerEdges(g *graph.Graph, resources map[resource.Key]resource.Envelope, capable MediationCapable) []Edge {
+	seen := make(map[Edge]bool)
+	var out []Edge
+	for _, mc := range CompileMediatedConnections(g, resources, capable) {
+		connEnv, ok := resources[mc.Connection]
+		if !ok {
+			continue
+		}
+		provEnv, ok := resolveProviderRef(connEnv, resources)
+		if !ok {
+			continue
+		}
+		provKey := provEnv.Key()
+		for dep := range g.Dependents(mc.Connection) {
+			container := ContainerOf(dep, resources)
+			if container == provKey {
+				continue
+			}
+			containerEnv, ok := resources[container]
+			if !ok || containerEnv.Kind != "Provider" {
+				continue
+			}
+			e := Edge{From: container, To: provKey}
+			if seen[e] {
+				continue
+			}
+			seen[e] = true
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].From != out[j].From {
+			return out[i].From.String() < out[j].From.String()
+		}
+		return out[i].To.String() < out[j].To.String()
+	})
+	return out
+}
+
 func CompileMediatedConnections(g *graph.Graph, resources map[resource.Key]resource.Envelope, capable MediationCapable) []MediatedConnection {
 	reverse := make(map[resource.Key][]resource.Key)
 	for from, tos := range g.Edges {

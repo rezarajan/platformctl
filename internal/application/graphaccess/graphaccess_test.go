@@ -159,6 +159,84 @@ func TestCompileMediatedConnectionsIsDeterministic(t *testing.T) {
 	}
 }
 
+// TestMediatedConsumerEdgesFollowsConnectionRefTransitively is docs/planning/08
+// M5's compiler-level accept bar: buildScenario's Binding "cdc-orders"
+// reaches the mediated Connection ONLY transitively — sourceRef -> Source
+// "orders-db" -> Source.providerRef "pg" is the NON-mediated shape; this
+// test instead builds the M5 shape (Binding.sourceRef -> Source ->
+// Source.connectionRef -> mediated Connection) directly, since
+// buildScenario's own Binding already uses the one-hop
+// Binding.connectionRef shape CompileMediatedConnections' Consumers field
+// already covered pre-M5.
+func TestMediatedConsumerEdgesFollowsConnectionRefTransitively(t *testing.T) {
+	t.Parallel()
+	zitiProv := env("payments", "Provider", "ziti", map[string]any{})
+	dbzProv := env("analytics", "Provider", "dbz", map[string]any{})
+	pgProv := env("payments", "Provider", "pg", map[string]any{})
+	source := env("payments", "Source", "orders-db", map[string]any{
+		"external":      true,
+		"connectionRef": map[string]any{"name": "orders-mediated"},
+	})
+	mediated := env("payments", "Connection", "orders-mediated", map[string]any{
+		"providerRef": map[string]any{"name": "ziti"},
+		"target":      "pg:5432",
+		"port":        5432,
+	})
+	binding := env("analytics", "Binding", "cdc-orders", map[string]any{
+		"mode":        "cdc",
+		"providerRef": map[string]any{"name": "dbz"},
+		"sourceRef":   map[string]any{"namespace": "payments", "name": "orders-db"},
+	})
+	all := []resource.Envelope{zitiProv, dbzProv, pgProv, source, mediated, binding}
+	g, err := graph.Build(all)
+	if err != nil {
+		t.Fatalf("graph.Build: %v", err)
+	}
+	resources := make(map[resource.Key]resource.Envelope, len(all))
+	for _, e := range all {
+		resources[e.Key()] = e
+	}
+
+	got := MediatedConsumerEdges(g, resources, zitiOnly(zitiProv.Key()))
+	want := Edge{From: dbzProv.Key(), To: zitiProv.Key()}
+	found := false
+	for _, e := range got {
+		if e == want {
+			found = true
+		}
+		if e.To == pgProv.Key() || e.From == pgProv.Key() {
+			t.Fatalf("MediatedConsumerEdges must never name the dark target %v: got %v", pgProv.Key(), e)
+		}
+	}
+	if !found {
+		t.Fatalf("MediatedConsumerEdges = %v, want it to contain %v (the transitive consumer's own container -> the mediation Provider)", got, want)
+	}
+
+	// Deterministic across calls.
+	second := MediatedConsumerEdges(g, resources, zitiOnly(zitiProv.Key()))
+	if len(got) != len(second) {
+		t.Fatalf("non-deterministic length: %d vs %d", len(got), len(second))
+	}
+	for i := range got {
+		if got[i] != second[i] {
+			t.Fatalf("non-deterministic order at %d: %v vs %v", i, got[i], second[i])
+		}
+	}
+}
+
+// TestMediatedConsumerEdgesEmptyWhenNoMediationCapableProvider pins the
+// gate-off-equivalent shape: when capable never matches, no mediated
+// Connection is ever compiled, so no synthetic edges are produced —
+// mirrors TestMediatedSubsetEmptyWhenNoProviderIsMediationCapable.
+func TestMediatedConsumerEdgesEmptyWhenNoMediationCapableProvider(t *testing.T) {
+	t.Parallel()
+	g, resources, _, _, _, _, _ := buildScenario(t)
+	got := MediatedConsumerEdges(g, resources, func(resource.Envelope) bool { return false })
+	if len(got) != 0 {
+		t.Fatalf("MediatedConsumerEdges = %v, want empty when no provider is mediation-capable", got)
+	}
+}
+
 func TestCompileMediatedConnectionsNoTargetsWhenTargetIsExternal(t *testing.T) {
 	t.Parallel()
 	zitiProv := env("payments", "Provider", "ziti", map[string]any{})
