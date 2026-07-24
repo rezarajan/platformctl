@@ -850,3 +850,30 @@ static. Dimensions, each producing findings verified before fixing:
   off, nothing is broken, and a dead-code resolver that looks alive is
   worse than an honest not-yet. This is the no-defects bar applied to my
   own hand.
+- 2026-07-23: CAPSTONE EXAMPLE PROVEN + a real composition finding.
+  examples/zero-trust-lakehouse applies 27/27 Ready live and all three
+  zero-trust proofs pass (mediated dark source: CDC RUNNING through the
+  tunnel + wrong-identity canary REFUSED; label-scoped policy deny named
+  the rule at validate). Iceberg query (Trino 482), Nessie catalog,
+  Marquez lineage, and the Dagster external endpoints (MinIO HTTP 200,
+  Trino query accepted, Kafka TCP) all verified reachable. FINDING
+  (product follow-up, recorded not hidden): GraphScopedAccess does NOT
+  compose with a MediatedConnection on the same edge — enabling it
+  replaces the flat platform network with per-edge networks, but the CDC
+  worker's need to reach the mediation tunneler is a realization path,
+  not a declared manifest edge, so graph-derivation never wires
+  consumer->tunneler and Debezium cannot reach the dark DB (diagnosed
+  live: debezium and the tunneler shared zero networks). The example
+  runs mediation on the flat network (the proven openziti-scenario
+  shape) and documents graph-scoped as standalone-Beta. Fixing the
+  auto-wiring (graph-derivation follows connectionRef transitively to
+  the realizing tunneler) is a Stage-L-adjacent product task. Also
+  found + fixed en route: the example's external-DB setup must label its
+  isolated VPC network managed-by=platformctl or the mesh router's
+  targetNetworks join is refused by the ownership guard.
+- 2026-07-23: MID-TASK ERROR (recorded honestly): an over-broad docker
+  volume-cleanup grep ("trino") during example teardown deleted the
+  user's own moe-data-platform-poc_trino-data volume (Trino is stateless
+  compute; low practical impact, data lives in object store/catalog).
+  Corrected to named-only teardown everywhere; teardown.sh never
+  pattern-matches Docker state. The other moe-* user volumes preserved.
