@@ -24,6 +24,93 @@ func workerEnvelope(name string, configuration map[string]any) resource.Envelope
 	return e
 }
 
+func eventStreamEnvelope(name string, replication int) resource.Envelope {
+	e := resource.Envelope{}
+	e.APIVersion = "datascape.io/v1alpha1"
+	e.Kind = "EventStream"
+	e.Metadata.Name = name
+	e.Metadata.Namespace = "default"
+	e.Spec = map[string]any{
+		"providerRef": map[string]any{"name": "broker"},
+		"partitions":  replication,
+		"replication": replication,
+	}
+	return e
+}
+
+// TestClusterReplicationFactor pins the worker-internal-topic HA derivation
+// (docs/planning/08 HA leg): the max EventStream replication in the graph,
+// or 1 when none declares HA (byte-identical to the pre-HA hardcoded "1").
+func TestClusterReplicationFactor(t *testing.T) {
+	t.Parallel()
+	none := map[resource.Key]resource.Envelope{}
+	if got := clusterReplicationFactor(none); got != 1 {
+		t.Errorf("no EventStreams: got %d, want 1", got)
+	}
+	mixed := map[resource.Key]resource.Envelope{
+		{Namespace: "default", Kind: "EventStream", Name: "a"}: eventStreamEnvelope("a", 1),
+		{Namespace: "default", Kind: "EventStream", Name: "b"}: eventStreamEnvelope("b", 3),
+		{Namespace: "default", Kind: "Provider", Name: "p"}:    workerEnvelope("p", nil),
+	}
+	if got := clusterReplicationFactor(mixed); got != 3 {
+		t.Errorf("mixed graph: got %d, want 3 (max EventStream replication)", got)
+	}
+}
+
+// TestReconcileWorkerInternalTopicsInheritHA proves the Connect worker's own
+// state topics (config/offset/status) are replicated to match the HA streams
+// it serves — the fix for the live-found HA defect where those topics were
+// hardcoded RF=1 and a single broker loss could strand committed offsets even
+// with replicated data topics.
+func TestReconcileWorkerInternalTopicsInheritHA(t *testing.T) {
+	t.Parallel()
+	rt := fakeruntime.New()
+	env := workerEnvelope("cdc", map[string]any{
+		"replicationSecretRef": "creds",
+		"bootstrapServers":     "broker:29092",
+	})
+	p := New()
+	req := reconciler.Request{
+		Resource: env, Provider: env, Runtime: rt,
+		Resources: map[resource.Key]resource.Envelope{
+			{Namespace: "default", Kind: "EventStream", Name: "orders-events"}: eventStreamEnvelope("orders-events", 3),
+		},
+	}
+	if _, err := p.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	ctrState, found, err := rt.Inspect(context.Background(), "cdc")
+	if err != nil || !found {
+		t.Fatalf("Inspect: found=%v err=%v", found, err)
+	}
+	for _, k := range []string{"CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR", "CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR", "CONNECT_STATUS_STORAGE_REPLICATION_FACTOR"} {
+		if got := ctrState.Env[k]; got != "3" {
+			t.Errorf("%s = %q, want \"3\" (inherit the graph's HA replication)", k, got)
+		}
+	}
+}
+
+// TestReconcileWorkerInternalTopicsDefaultSingleBroker guards the zero-
+// behavior-change bar: with no HA EventStream in the graph, the worker's
+// internal-topic replication stays "1" — byte-identical to before the fix.
+func TestReconcileWorkerInternalTopicsDefaultSingleBroker(t *testing.T) {
+	t.Parallel()
+	rt := fakeruntime.New()
+	env := workerEnvelope("cdc", map[string]any{
+		"replicationSecretRef": "creds",
+		"bootstrapServers":     "broker:29092",
+	})
+	p := New()
+	req := reconciler.Request{Resource: env, Provider: env, Runtime: rt}
+	if _, err := p.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	ctrState, _, _ := rt.Inspect(context.Background(), "cdc")
+	if got := ctrState.Env["CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR"]; got != "1" {
+		t.Errorf("OFFSET_STORAGE_REPLICATION_FACTOR = %q, want \"1\" (no HA declared)", got)
+	}
+}
+
 // TestReconcileWorkerBootstrapServersInferred covers docs/planning/08 E2:
 // when spec.configuration.bootstrapServers is unset, the worker container
 // starts with req.KafkaBootstrapServers (the engine's graph-inferred

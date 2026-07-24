@@ -18,6 +18,7 @@ import (
 	"github.com/rezarajan/platformctl/internal/domain/binding"
 	"github.com/rezarajan/platformctl/internal/domain/connection"
 	"github.com/rezarajan/platformctl/internal/domain/endpoint"
+	"github.com/rezarajan/platformctl/internal/domain/eventstream"
 	"github.com/rezarajan/platformctl/internal/domain/lineage"
 	"github.com/rezarajan/platformctl/internal/domain/naming"
 	"github.com/rezarajan/platformctl/internal/domain/provider"
@@ -94,6 +95,34 @@ func workersDeclared(cfg provider.Provider) (int, bool) {
 	return 0, true
 }
 
+// clusterReplicationFactor derives the replication factor a Connect worker
+// should use for the topics it creates on the Kafka cluster — its own
+// internal state topics (config/offset/status) — from the graph's declared
+// EventStreams: the maximum replication any EventStream requests, or 1 when
+// none asks for more. Each EventStream's replication was already validated
+// against the broker count by the realizing provider's
+// StreamReplicationValidator (docs/adr/017 §a.7), so this can never exceed
+// the cluster's capacity. A single-broker project (no replication declared)
+// stays at 1 — byte-identical to before HA. This is the worker-level proxy
+// for cluster HA; a connector's own data topics instead use their specific
+// target EventStream's replication (see reconcile's dataRF).
+func clusterReplicationFactor(resources map[resource.Key]resource.Envelope) int {
+	rf := 1
+	for _, env := range resources {
+		if env.Kind != "EventStream" {
+			continue
+		}
+		es, err := eventstream.FromEnvelope(env)
+		if err != nil {
+			continue
+		}
+		if es.Replication > rf {
+			rf = es.Replication
+		}
+	}
+	return rf
+}
+
 // workerURLs resolves every currently-reachable Connect worker's REST base
 // URL for this Provider (docs/planning/08 C3) — the input to
 // kafkaconnect's multi-address failover. workers <= 1 (undeclared) is the
@@ -142,6 +171,7 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 	if workersDecl && workers < 1 {
 		return st, fmt.Errorf("Provider %q (type: debezium): spec.configuration.workers must be a positive integer, got %v", name, cfg.Configuration["workers"])
 	}
+	internalRF := strconv.Itoa(clusterReplicationFactor(req.Resources))
 	ctrState, err := providerkit.EnsureInstance(ctx, rt, providerkit.InstanceSpec{
 		Namespace: req.Provider.Metadata.Namespace,
 		Name:      name,
@@ -175,13 +205,31 @@ func (p *Provider) reconcileWorker(ctx context.Context, req reconciler.Request) 
 				"CONFIG_STORAGE_TOPIC":                     name + "-configs",
 				"OFFSET_STORAGE_TOPIC":                     name + "-offsets",
 				"STATUS_STORAGE_TOPIC":                     name + "-status",
-				"CONFIG_STORAGE_REPLICATION_FACTOR":        "1",
-				"OFFSET_STORAGE_REPLICATION_FACTOR":        "1",
-				"STATUS_STORAGE_REPLICATION_FACTOR":        "1",
-				"KEY_CONVERTER":                            "org.apache.kafka.connect.json.JsonConverter",
-				"VALUE_CONVERTER":                          "org.apache.kafka.connect.json.JsonConverter",
-				"CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE":     "false",
-				"CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE":   "false",
+				// A Connect worker's OWN state topics (config/offset/status)
+				// must be as replicated as the streams it serves, or a single
+				// broker loss can strand the connector's committed offsets
+				// even when the data topics survive (docs/planning/08 HA leg).
+				// Derived from the graph's declared EventStream replication;
+				// 1 for a single-broker project, byte-identical to before.
+				//
+				// These MUST be CONNECT_-prefixed: the quay.io/debezium/connect
+				// launcher only translates a fixed set of BARE vars (the
+				// storage-topic names, bootstrap, group id) into properties —
+				// a bare *_STORAGE_REPLICATION_FACTOR is silently dropped (found
+				// live: the container had the bare var set to 3 yet the worker
+				// log still showed config.storage.replication.factor = 1). Every
+				// property the launcher sets comes from a CONNECT_<PROP> var, so
+				// CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR ->
+				// config.storage.replication.factor is the reliable channel; the
+				// pre-existing bare "1" was a no-op that only matched the image
+				// default.
+				"CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR": internalRF,
+				"CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR": internalRF,
+				"CONNECT_STATUS_STORAGE_REPLICATION_FACTOR": internalRF,
+				"KEY_CONVERTER":                          "org.apache.kafka.connect.json.JsonConverter",
+				"VALUE_CONVERTER":                        "org.apache.kafka.connect.json.JsonConverter",
+				"CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE":   "false",
+				"CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE": "false",
 			},
 			Ports: connectPorts(cfg, name, workers),
 			// CA trust files (docs/planning/08 I2): every secretRef this
@@ -339,6 +387,26 @@ func buildDesiredConnector(req reconciler.Request) (desiredConnector, error) {
 	topicPrefix := b.TargetRef // topics become <EventStream name>.<schema>.<table>
 	connectorName := res.Metadata.Name
 
+	// The per-table CDC topics Connect auto-creates must inherit the target
+	// EventStream's declared HA shape (docs/adr/017 §a.7, docs/planning/08 HA
+	// leg): replication so a single broker loss can't strand the data topic
+	// (the "killing one broker keeps the CDC path serving" claim rests on
+	// this), and partitions so downstream parallelism matches the declared
+	// stream. Both default to 1 when the target declares neither — the
+	// single-broker shape, byte-identical to before.
+	dataRF, dataPartitions := 1, 1
+	tgtRef := resource.RefFromSpec(res.Spec, "targetRef")
+	if tgtEnv, ok := req.Resources[tgtRef.Key(res.Metadata.Namespace, "EventStream")]; ok {
+		if es, err := eventstream.FromEnvelope(tgtEnv); err == nil {
+			if es.Replication > 0 {
+				dataRF = es.Replication
+			}
+			if es.Partitions > 0 {
+				dataPartitions = es.Partitions
+			}
+		}
+	}
+
 	config := map[string]string{
 		"connector.class":   connectorClass,
 		"database.hostname": dbHost,
@@ -346,10 +414,11 @@ func buildDesiredConnector(req reconciler.Request) (desiredConnector, error) {
 		"database.user":     creds["username"],
 		"database.password": creds["password"],
 		"topic.prefix":      topicPrefix,
-		// Redpanda does not auto-create topics by default; let Connect create
-		// per-table CDC topics itself (single-node replication).
-		"topic.creation.default.replication.factor": "1",
-		"topic.creation.default.partitions":         "1",
+		// Redpanda does not auto-create topics by default; Connect creates the
+		// per-table CDC topics, replicated/partitioned to the target
+		// EventStream's declared HA shape (see dataRF/dataPartitions above).
+		"topic.creation.default.replication.factor": strconv.Itoa(dataRF),
+		"topic.creation.default.partitions":         strconv.Itoa(dataPartitions),
 	}
 	format, _ := b.Options["format"].(string)
 	converterOverride, _ := b.Options["converter"].(string)
