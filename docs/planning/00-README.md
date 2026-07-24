@@ -42,6 +42,13 @@ assume the current `internal/` layout, resource-kind list, or CLI surface surviv
    that close each class for all providers at once, the production-plane
    analysis, and the definition of done for segregating core from
    provider-specific logic (Phase 8 readiness).
+10. **[12-path-to-production.md](12-path-to-production.md)** — the actionable
+   plan from "runs on a dev machine" to "tech firms rely on it": the four
+   confidence pillars (design/DX/value/stability), the phased sequencing with
+   gates, and the full task backlog (formal-verification spine from ADR 037,
+   runtime breadth, reliability, security, DX, value, release). Every task is
+   pick-up-ready for a human or an agent. Read this to find what to work on
+   *next*, toward 1.0-GA.
 
 ## The one diagram that explains everything else
 
